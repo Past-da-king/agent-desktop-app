@@ -7,6 +7,7 @@ import type {
   Decision,
   EntityMap,
   EntityName,
+  HotkeyStatus,
   ProviderInfo,
   RowInput,
   RunState,
@@ -92,6 +93,7 @@ const api: AgentApi = {
     isMaximized: () => call<boolean>(CHANNELS.window.isMaximized),
     onMaximizeChange: (callback) => on<boolean>(EVENTS.maximize, callback),
     onQuickAsk: (callback) => on<null>(EVENTS.quickAsk, () => callback()),
+    onHotkeyStatus: (callback) => on<HotkeyStatus>(EVENTS.hotkey, callback),
   },
 
   files: {

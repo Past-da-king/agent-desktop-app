@@ -207,6 +207,13 @@ export interface RunState {
 
 export type Decision = 'approve' | 'decline'
 
+/** Whether the Quick Ask shortcut is live. A failure is explained in Settings. */
+export interface HotkeyStatus {
+  accelerator: string
+  ok: boolean
+  message: string
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The api
 // ---------------------------------------------------------------------------------------------------------------
@@ -273,6 +280,8 @@ export interface AgentApi {
     onMaximizeChange(cb: (maximized: boolean) => void): Unsubscribe
     /** Quick Ask overlay: the main process shows/hides it; the renderer listens. */
     onQuickAsk(cb: () => void): Unsubscribe
+    /** The global shortcut was registered, or could not be. Settings shows the message. */
+    onHotkeyStatus(cb: (status: HotkeyStatus) => void): Unsubscribe
   }
 
   files: {

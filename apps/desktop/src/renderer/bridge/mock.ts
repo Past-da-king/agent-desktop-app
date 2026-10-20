@@ -6,6 +6,7 @@ import type {
   Decision,
   EntityMap,
   EntityName,
+  HotkeyStatus,
   RowInput,
   RunState,
   Settings,
@@ -458,6 +459,9 @@ export const mockAgent: AgentApi = {
       return () => undefined
     },
     onQuickAsk(_callback: () => void): Unsubscribe {
+      return () => undefined
+    },
+    onHotkeyStatus(_callback: (status: HotkeyStatus) => void): Unsubscribe {
       return () => undefined
     },
   },
