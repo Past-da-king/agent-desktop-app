@@ -23,6 +23,7 @@ tests_with_min() { # minTotal [substr minSub]
 }
 
 smoke() {
+  if [ -n "${GATE_SKIP_SMOKE:-}" ]; then echo "SKIPPED: electron smoke is checked later on a machine with a display"; return 0; fi
   [ -f apps/desktop/out/main/index.js ] || { echo "no main build at apps/desktop/out/main/index.js"; return 1; }
   local out code
   out=$(cd apps/desktop && timeout 120 xvfb-run -a npx electron . --smoke --no-sandbox 2>&1); code=$?
@@ -36,10 +37,56 @@ smoke() {
 
 shoot() { node scripts/shoot.mjs --only "$1"; }
 
+
+# A green build of an unchanged tree must not pass: each milestone has to have produced what it was asked to.
+need_files() { local f ok=0; for f in "$@"; do [ -s "$f" ] || { echo "MISSING required file: $f"; ok=1; }; done; return $ok; }
+need_grep() { grep -rqE "$1" "$2" 2>/dev/null || { echo "MISSING: nothing in $2 matches /$1/ ($3)"; return 1; }; }
+need_report() { [ -s "tasks/reports/$1.md" ] && [ "$(wc -c < "tasks/reports/$1.md")" -ge 400 ] || { echo "MISSING: tasks/reports/$1.md (at least 400 bytes, written by the milestone)"; return 1; }; }
+deliverables() {
+  local R=apps/desktop/src/renderer MN=apps/desktop/src/main rc=0
+  need_report "$M" || rc=1
+  case "$N" in
+    4) need_files $R/shell/Palette.tsx $R/shell/QuickAsk.tsx $R/shell/Rail.tsx $R/shell/Shell.tsx $R/views/Home.tsx $R/views/Chat.tsx $R/views/Tasks.tsx $R/views/Memory.tsx $R/views/Routines.tsx $R/views/Connections.tsx $R/views/Settings.tsx $R/onboarding/SignIn.tsx $R/onboarding/Sync.tsx $R/onboarding/Ai.tsx $R/onboarding/Style.tsx $R/ui/Mascot.tsx $R/bridge/seed.ts || rc=1 ;;
+    5) need_grep 'firstSync' $R/onboarding "sync step must call account.firstSync" || rc=1
+       need_grep 'checkKey' $R/onboarding "AI step must call settings.checkKey" || rc=1
+       need_grep 'setApiKey' $R/onboarding "AI step must call settings.setApiKey" || rc=1
+       need_grep 'account\.signIn|\.signIn\(' $R/onboarding "sign-in must call account.signIn" || rc=1 ;;
+    6a) need_files $MN/runtime/runner.ts $MN/runtime/prompt.ts $MN/runtime/toolset.ts $MN/tools/memory.ts $MN/tools/tasks.ts $MN/tools/core.ts || rc=1 ;;
+    6b) need_grep 'chat\.send' $R "Chat must send through window.agent.chat" || rc=1
+        need_grep 'chat\.decide' $R "approval cards must call chat.decide" || rc=1
+        need_grep 'chat\.answer' $R "question cards must call chat.answer" || rc=1
+        need_grep 'chat\.stop' $R "stop button must call chat.stop" || rc=1 ;;
+    7a) need_files $MN/runtime/scheduler.ts || rc=1
+        need_grep 'routine_create' $MN "routine tools missing" || rc=1
+        need_grep 'routines.*runNow|runNow' $MN "routines.runNow handler missing" || rc=1 ;;
+    7b) need_grep 'routines\.runNow' $R "Routines view must call routines.runNow" || rc=1
+        need_grep 'data\.remove|\.remove\(' $R/views "views must delete through the bridge" || rc=1
+        need_grep 'data\.upsert|\.upsert\(' $R/views "views must save through the bridge" || rc=1 ;;
+    8a) need_files $MN/tray.ts $MN/hotkey.ts $MN/tools/files.ts $MN/tools/shell.ts $MN/tools/code.ts || rc=1
+        need_grep 'shell_run' $MN "shell tool missing" || rc=1 ;;
+    8b) need_grep 'pathsFor' $R "drag-and-drop must resolve paths with files.pathsFor" || rc=1
+        need_grep 'grantedFolders' $R/views "Settings must edit granted folders" || rc=1
+        need_grep 'quick-window' $R "quick window route missing" || rc=1 ;;
+    9a) need_files $MN/browser/browser.ts || rc=1
+        need_grep 'browser_open' $MN "browser tools missing" || rc=1
+        need_grep 'browser_handoff' $MN "handoff tool missing" || rc=1
+        need_grep 'setBounds' $MN "browser.setBounds handler missing" || rc=1 ;;
+    9b) need_grep 'setBounds' $R "panel must report its bounds" || rc=1 ;;
+    10a) need_files $MN/runtime/helpers.ts || rc=1
+        need_grep 'helper_steer' $MN "helper tools missing" || rc=1
+        need_grep "'delegate'|\"delegate\"" $MN "delegate tool missing" || rc=1 ;;
+    10b) need_grep '[Ss]top all helpers' $R "palette entry missing" || rc=1
+        need_grep "kind === 'helper'|kind==='helper'|\"helper\"|'helper'" $R "helper cards missing" || rc=1 ;;
+    11) need_files apps/desktop/electron-builder.yml || rc=1 ;;
+  esac
+  return $rc
+}
+
 # --- always
 check "typecheck" npm run typecheck
 check "build" npm run build
 check "repo rules" node scripts/lint-checks.mjs
+check "deliverables" deliverables
 
 case "$N" in
   0) check "tests" tests_with_min 1
