@@ -1,7 +1,8 @@
-import type { Attachment, ChatEvent, ChatItem } from '@agent/core'
-import { useEffect, useRef, useState } from 'react'
+import { attachmentProblem, type Attachment, type ChatEvent, type ChatItem } from '@agent/core'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
+import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { openCards } from '../lib/cards'
 import { short } from '../lib/format'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
@@ -34,6 +35,61 @@ const TOOL_ICONS: Record<string, IconName> = {
 
 function toolIcon(tool: string): IconName {
   return TOOL_ICONS[tool] ?? 'bolt'
+}
+
+function useThumbnail(file: Attachment): string | null {
+  const [src, setSrc] = useState<string | null>(null)
+  const image = isImageFile(file)
+
+  useEffect(() => {
+    if (!image) {
+      setSrc(null)
+      return
+    }
+    let live = true
+    agent.files
+      .thumbnail(file.path)
+      .then((url) => {
+        if (live) setSrc(url)
+      })
+      .catch(() => {
+        // A thumbnail is a nicety: a file that cannot be read still attaches by path.
+      })
+    return () => {
+      live = false
+    }
+  }, [file.path, image])
+
+  return src
+}
+
+function AttachmentChip({ file, onRemove }: { file: Attachment; onRemove: () => void }): JSX.Element {
+  const src = useThumbnail(file)
+  return (
+    <button type="button" className="chip on att" onClick={onRemove} aria-label={`Remove ${file.name}`}>
+      {src !== null ? <img className="thumb" src={src} alt="" /> : <Icon name="clip" size={14} />}
+      <span className="att-name">{file.name}</span>
+      <Icon name="x" size={14} />
+    </button>
+  )
+}
+
+function MessageAttachment({ file }: { file: Attachment }): JSX.Element {
+  const src = useThumbnail(file)
+  if (isImageFile(file) && src !== null) {
+    return (
+      <div className="u-file">
+        <img src={src} alt={file.name} />
+        <span>{file.name}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="u-file plain">
+      <Icon name="clip" size={18} />
+      <span>{file.name}</span>
+    </div>
+  )
 }
 
 function threadItems(items: ChatItem[]): ChatItem[] {
@@ -188,10 +244,26 @@ function HelperRow({ item }: { item: ChatItem }): JSX.Element {
   )
 }
 
+function UserRow({ item }: { item: ChatItem }): JSX.Element {
+  const files = attachmentsFromMeta(parseMeta(item.meta)['attachments'])
+  return (
+    <div className="u-msg">
+      {files.length > 0 ? (
+        <div className="u-files">
+          {files.map((file) => (
+            <MessageAttachment key={`${file.path}-${file.name}`} file={file} />
+          ))}
+        </div>
+      ) : null}
+      {item.text}
+    </div>
+  )
+}
+
 function renderItem(item: ChatItem): JSX.Element {
   switch (item.kind) {
     case 'user':
-      return <div className="u-msg">{item.text}</div>
+      return <UserRow item={item} />
     case 'agent':
       return (
         <div className="a-msg">
@@ -228,9 +300,12 @@ export function Chat(): JSX.Element {
   const navigate = useUi((state) => state.navigate)
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [attachProblem, setAttachProblem] = useState('')
+  const [dragging, setDragging] = useState(false)
   const [running, setRunning] = useState(false)
   const thread = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
+  const dragDepth = useRef(0)
 
   const messages = threadItems(items)
   const cards = openCards(items, true)
@@ -275,25 +350,95 @@ export function Chat(): JSX.Element {
     if (value === '') return
     setText('')
     setAttachments([])
+    setAttachProblem('')
     void chat.send(value, attachments)
+  }
+
+  const accept = (incoming: Attachment[]): void => {
+    if (incoming.length === 0) return
+    setAttachments((current) => {
+      const known = new Set(current.map((item) => item.path))
+      return [...current, ...incoming.filter((item) => !known.has(item.path))]
+    })
   }
 
   const pickFiles = async (): Promise<void> => {
     try {
       const picked = await agent.files.pick()
-      if (picked.length > 0) {
-        setAttachments((current) => {
-          const known = new Set(current.map((item) => item.path))
-          return [...current, ...picked.filter((item) => !known.has(item.path))]
-        })
+      const problems: string[] = []
+      const allowed: Attachment[] = []
+      for (const file of picked) {
+        const problem = file.size === undefined ? null : attachmentProblem(file.name, file.size)
+        if (problem !== null) problems.push(problem)
+        else allowed.push(file)
       }
-    } catch {
-      // Files arrive in M8. The mock returns an empty list, so nothing to add.
+      accept(allowed)
+      setAttachProblem(problems[0] ?? '')
+    } catch (error) {
+      setAttachProblem(error instanceof Error ? error.message : 'Could not open the file picker.')
     }
   }
 
+  const hasFiles = (event: DragEvent): boolean =>
+    Array.from(event.dataTransfer.types).includes('Files')
+
+  const onDragEnter = (event: DragEvent): void => {
+    if (!hasFiles(event)) return
+    event.preventDefault()
+    dragDepth.current += 1
+    setDragging(true)
+  }
+
+  const onDragOver = (event: DragEvent): void => {
+    if (!hasFiles(event)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+
+  const onDragLeave = (event: DragEvent): void => {
+    if (!hasFiles(event)) return
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragging(false)
+  }
+
+  const onDrop = (event: DragEvent): void => {
+    if (!hasFiles(event)) return
+    event.preventDefault()
+    dragDepth.current = 0
+    setDragging(false)
+
+    const dropped = Array.from(event.dataTransfer.files)
+    if (dropped.length === 0) return
+    const paths = agent.files.pathsFor(dropped)
+    const problems: string[] = []
+    const allowed: Attachment[] = []
+    dropped.forEach((file, index) => {
+      const problem = attachmentProblem(file.name, file.size)
+      if (problem !== null) {
+        problems.push(problem)
+        return
+      }
+      const path = paths[index]
+      if (path === undefined || path === '') return
+      allowed.push({
+        path,
+        name: file.name,
+        mime: file.type === '' ? 'application/octet-stream' : file.type,
+        size: file.size,
+      })
+    })
+    accept(allowed)
+    setAttachProblem(problems[0] ?? '')
+  }
+
   return (
-    <div className="chat">
+    <div
+      className="chat"
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       <div className="chat-h">
         <Mascot id={settings?.mascot ?? 'scout'} size={40} busy={cards.length === 0} />
         <div className="ttl">
@@ -355,16 +500,21 @@ export function Chat(): JSX.Element {
       </div>
 
       <div className="compose">
+        {attachProblem !== '' ? (
+          <div className="banner warn attach-warn" role="alert">
+            {attachProblem}
+          </div>
+        ) : null}
         {attachments.length > 0 ? (
           <div className="attach-row">
             {attachments.map((file) => (
-              <Chip
+              <AttachmentChip
                 key={file.path}
-                icon={<Icon name="clip" size={14} />}
-                onClick={() => setAttachments((current) => current.filter((item) => item.path !== file.path))}
-              >
-                {file.name}
-              </Chip>
+                file={file}
+                onRemove={() => {
+                  setAttachments((current) => current.filter((item) => item.path !== file.path))
+                }}
+              />
             ))}
           </div>
         ) : null}
@@ -372,7 +522,6 @@ export function Chat(): JSX.Element {
           <IconButton
             icon="clip"
             label="Attach a file"
-            comingSoon={agent.platform !== 'web'}
             onClick={() => {
               void pickFiles()
             }}
@@ -422,6 +571,16 @@ export function Chat(): JSX.Element {
           </span>
         </div>
       </div>
+
+      {dragging ? (
+        <div className="drop" role="status" aria-live="polite">
+          <span className="drop-i">
+            <Icon name="clip" size={28} />
+          </span>
+          <div className="drop-t">Drop to attach</div>
+          <div className="drop-s">Images show as thumbnails. Files up to 20 MB.</div>
+        </div>
+      ) : null}
     </div>
   )
 }
