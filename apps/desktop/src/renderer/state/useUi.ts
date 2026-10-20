@@ -18,6 +18,8 @@ interface UiState {
   memKind: MemoryFilter
   /** Bumped when New chat or a palette action should put the cursor in the composer. */
   composerFocus: number
+  /** Text to put in the composer the next time it takes focus (a recent chat picked from the rail). */
+  composerDraft: string
   /** Bumped when New chat should bring the newest part of the thread back into view. */
   chatScroll: number
   navigate: (route: Route) => void
@@ -33,6 +35,7 @@ interface UiState {
   setMemoryQuery: (query: string) => void
   setMemoryKind: (kind: MemoryFilter) => void
   focusComposer: () => void
+  draftComposer: (text: string) => void
   scrollChat: () => void
 }
 
@@ -46,6 +49,7 @@ export const useUi = create<UiState>((set) => ({
   memQuery: '',
   memKind: 'all',
   composerFocus: 0,
+  composerDraft: '',
   chatScroll: 0,
 
   navigate: (route) => {
@@ -79,6 +83,8 @@ export const useUi = create<UiState>((set) => ({
   setMemoryQuery: (memQuery) => set({ memQuery }),
   setMemoryKind: (memKind) => set({ memKind }),
   focusComposer: () => set((state) => ({ composerFocus: state.composerFocus + 1, overlay: null })),
+  draftComposer: (composerDraft) =>
+    set((state) => ({ composerDraft, composerFocus: state.composerFocus + 1, overlay: null })),
   scrollChat: () => set((state) => ({ chatScroll: state.chatScroll + 1 })),
 }))
 

@@ -59,6 +59,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const route = useRoute()
   const navigate = useUi((state) => state.navigate)
+  const draftComposer = useUi((state) => state.draftComposer)
   const items = useEntity('chat_item')
   const goals = useEntity('goal')
   const chats = recentChats(items)
@@ -127,8 +128,12 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
             key={chat.id}
             type="button"
             className={`chatrow${chat.active && route.page === 'chat' ? ' on' : ''}`}
-            onClick={() => navigate({ page: 'chat' })}
-            title={chat.title}
+            onClick={() => {
+              navigate({ page: 'chat' })
+              // One thread holds every chat. Picking an older one starts a message that brings it back.
+              if (!chat.active) draftComposer(`Let's pick up "${chat.title}" again.`)
+            }}
+            title={chat.active ? chat.title : `Pick up ${chat.title}`}
           >
             <Icon name={chat.device === 'phone' ? 'phone' : 'monitor'} size={16} />
             <span className="ct">{chat.title}</span>
