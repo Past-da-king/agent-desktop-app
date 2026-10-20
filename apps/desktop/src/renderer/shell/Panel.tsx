@@ -13,6 +13,7 @@ import { Button } from '../ui/Button'
 import { IconButton } from '../ui/bits'
 import { Chip } from '../ui/Chip'
 import { Icon, type IconName } from '../ui/Icon'
+import { HelpersPanel } from './HelpersPanel'
 
 const VIEW_CHOICES: Array<{ mode: Exclude<BrowserViewMode, 'fit'>; label: string; icon: IconName }> = [
   { mode: 'desktop', label: 'Desktop', icon: 'monitor' },
@@ -346,6 +347,7 @@ function PanelBody(): JSX.Element {
         }}
       />
 
+      <HelpersPanel />
       <section>
         <div className="panel-h">
           <div className="sec" style={{ margin: 0 }}>

@@ -656,6 +656,7 @@ export class HelperManager implements HelperHost {
   private context(run: HelperRun, signal: AbortSignal): ToolContext {
     return {
       agentLabel: run.label,
+      owner: `helper:${run.id}`,
       activity: async (text, meta) => {
         const id = ++this.activitySeq
         const row = await this.store.upsert('chat_item', {

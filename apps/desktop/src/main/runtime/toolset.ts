@@ -23,6 +23,7 @@ import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
 import { browserRunner, webAppTools } from '../tools/webapps'
 import { budgeted, type StepBudget } from './budget'
+import { browserOwner } from '../browser/owner'
 import type { DataStore } from './data'
 import type { EnvironmentService } from './environment'
 import { helperTools } from '../tools/helpers'
@@ -82,10 +83,18 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
 ])
 
 /** Everything a helper may use: all the working groups, never delegate or helper_*. */
+/** Every tool runs as its agent, so the browser gives each agent (main, routine, each helper) its own tab. */
+function asOwner(tools: Tool[]): Tool[] {
+  return tools.map((tool) => ({
+    spec: tool.spec,
+    run: (input, ctx) => browserOwner.run({ owner: ctx.owner ?? ctx.agentLabel }, () => tool.run(input, ctx)),
+  }))
+}
+
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
   const settings = deps.settings ?? { get: () => DEFAULT_SETTINGS }
   const name = deps.agentName
-  return [
+  return asOwner([
     ...coreTools(deps), // now, ask_user, request_approval, notify_user, web_fetch, report
     ...memoryTools(deps.store), // memory_search, memory_get, memory_save, memory_update
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
@@ -113,7 +122,7 @@ export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
     ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)).filter((tool) => tool.spec.name !== 'browser_eval'), // webapp_*, browser_network
     ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
 
-  ]
+  ])
 }
 
 export function buildToolset(deps: ToolsetDeps): Tool[] {

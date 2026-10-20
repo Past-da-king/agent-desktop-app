@@ -59,7 +59,7 @@ describe('helper cards', () => {
     ]
 
     const thread = threadItems(items)
-    expect(thread.map((item) => item.id)).toEqual(['u1', 'h1', 'main-a'])
+    expect(thread.map((item) => item.id)).toEqual(['u1', 'main-a']) // helpers live in the side panel, not the thread
 
     const view = helperView(items[1] as ChatItem, items)
     expect(view).toMatchObject({ id: 'h1', state: 'working', summary: 'Checking The Palms' })
@@ -97,7 +97,7 @@ describe('helper cards', () => {
 
     expect(working.length).toBeGreaterThan(0)
     expect(helpers.length).toBeGreaterThan(working.length)
-    expect(threadItems(rows).some((item) => item.kind === 'helper')).toBe(true)
+    expect(threadItems(rows).some((item) => item.kind === 'helper')).toBe(false) // the side panel shows them
     expect(threadItems(rows).some((item) => item.kind === 'activity' && 'helper' in JSON.parse(item.meta))).toBe(false)
     expect(workingHelpers(rows).length).toBe(working.length)
   })
