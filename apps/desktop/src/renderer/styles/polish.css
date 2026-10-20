@@ -68,7 +68,7 @@
 .todo .box:active{transform:scale(.88)}
 
 /* A visible, consistent focus ring, offset so it never touches the pill it belongs to. */
-:focus-visible{outline:2px solid var(--primary);outline-offset:3px;border-radius:inherit}
+:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
 input:focus-visible,textarea:focus-visible{outline:none}
 
 @media (prefers-reduced-motion:reduce){
@@ -201,3 +201,24 @@ button.model:hover{background:var(--s-highest)}
 .panel-w .br-view{border:1px solid var(--outline-v);border-radius:0 0 var(--r-md) var(--r-md)}
 .btn.text[disabled]{background:transparent;opacity:.55}
 .pill{white-space:nowrap;flex:none}
+.ob-keyrow .btn{flex:none;white-space:nowrap}
+.btn{white-space:nowrap}
+.ob .steps{padding:14px 18px;gap:10px}
+
+/* ---------- form controls look like the app, not like the operating system ---------- */
+.field .err:empty{display:none}
+select.input,.dialog select{appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:44px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--on-sv) 50%),linear-gradient(135deg,var(--on-sv) 50%,transparent 50%);
+  background-position:calc(100% - 24px) 52%,calc(100% - 18px) 52%;background-size:6px 6px,6px 6px;background-repeat:no-repeat}
+select.input:hover,.input:hover:not(:focus){border-color:var(--on-sv)}
+input.input::-webkit-calendar-picker-indicator{opacity:.7;cursor:pointer;border-radius:8px;padding:4px}
+input.input::-webkit-calendar-picker-indicator:hover{opacity:1;background:var(--s-high)}
+.textarea:hover:not(:focus){border-color:var(--on-sv)}
+@media (max-width:520px){.task-grid{grid-template-columns:minmax(0,1fr)}}
+
+/* ---------- a row with an inner main button wears the focus ring on the whole row ---------- */
+.todo-body:focus-visible,.hrow .hmain:focus-visible{outline:none}
+.todo:has(.todo-body:focus-visible),.hrow:has(.hmain:focus-visible){outline:2px solid var(--primary);outline-offset:2px}
+.cb:focus-visible{outline-offset:2px;border-radius:8px}
+.br-tab-title:focus-visible{outline-offset:-2px;border-radius:999px}
+details:not([open])>:not(summary){display:none}
