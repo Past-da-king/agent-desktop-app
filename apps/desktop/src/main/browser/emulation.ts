@@ -26,6 +26,11 @@ export interface ViewSpec {
   mobile: boolean
   /** A user agent to send instead of the mode's own. Empty means the mode's own. */
   userAgent: string
+  /**
+   * True when the agent asked for an exact size or aspect. A plain desktop view is not fixed: it takes the
+   * shape of wherever it is shown (see shapedView), so it always fills the panel and the full screen.
+   */
+  fixed?: boolean
 }
 
 export interface Rect {
@@ -89,8 +94,10 @@ export function resolveView(
     else if (request.height !== undefined && request.width === undefined) width = height * ratio
     else height = width / ratio
   }
+  const asked = request.width !== undefined || request.height !== undefined || ratio !== null
   const next: ViewSpec = {
     ...base,
+    fixed: request.mode !== undefined && request.mode !== current.mode ? asked : asked || current.fixed === true,
     width: base.mode === 'fit' ? 0 : clampSide(width),
     height: base.mode === 'fit' ? 0 : clampSide(height),
     dpr: clampNumber(request.dpr ?? base.dpr, 0.5, 4),
@@ -99,6 +106,22 @@ export function resolveView(
     userAgent: request.userAgent !== undefined ? request.userAgent.trim().slice(0, 512) : base.userAgent,
   }
   return next
+}
+
+/** Below this the desktop page keeps a real desktop width and is drawn scaled down. */
+export const DESKTOP_MIN_WIDTH = 1280
+
+/**
+ * A desktop view that was not given an exact size takes the shape of its slot: in a big slot (the full
+ * screen) the page lays out at the slot's own size, drawn 1:1; in a small slot (the side panel) it keeps
+ * a desktop width and takes the slot's height, so the scaled page fills the slot with no empty bands.
+ */
+export function shapedView(view: ViewSpec, slot: Rect): ViewSpec {
+  if (view.mode !== 'desktop' || view.fixed === true || slot.width <= 0 || slot.height <= 0) return view
+  const zoom = view.zoom > 0 ? view.zoom : 1
+  const width = slot.width >= DESKTOP_MIN_WIDTH ? Math.round(slot.width / zoom) : Math.max(PRESETS.desktop.width, DESKTOP_MIN_WIDTH)
+  const height = Math.round((width * slot.height) / slot.width)
+  return { ...view, width: clampSide(width), height: clampSide(height) }
 }
 
 /** "16:9", "16/9", "1.6" or "9x16". Null when it is not a ratio. */
