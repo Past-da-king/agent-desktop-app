@@ -12,7 +12,9 @@ The four data screens now run entirely on `window.agent.data`. They share the ex
 
 ## Tests
 
-`apps/desktop/test/data-views.test.ts` covers memory search and link resolution, task ordering, date input round trips, routine schedule labels and toast expiry. Full suite: 185 tests passing. `npm run typecheck`, `npm run build`, `shoot.mjs --only screens` and `shoot.mjs --only data` all pass locally. The interaction paths (add, edit, delete, undo, search, create-page, edit routine, run now) were also exercised against the built renderer in headless Chromium.
+`apps/desktop/test/data-views.test.ts` covers memory search and link resolution, task ordering, date input round trips, routine schedule labels and toast expiry. Full suite: 185 tests passing and `bash scripts/gate.sh M7b` prints GATE M7b PASSED. `npm run typecheck`, `npm run build`, `shoot.mjs --only screens` and `shoot.mjs --only data` all pass locally. The interaction paths (add, edit, delete, undo, search, create-page, edit routine, run now) were also exercised against the built renderer in headless Chromium.
+
+A later gate run failed one core sync test (`SyncClient` long-poll timeout) because it measured elapsed time with `Date.now()`. The host wall clock was corrected backwards during the wait, so the test saw a negative elapsed value. The test now uses the monotonic `performance.now()`, which measures the wait correctly regardless of a clock adjustment. It passed five repeated runs and the full gate afterwards.
 
 ## Not finished / notes for the next milestone
 
