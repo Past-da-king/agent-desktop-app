@@ -12,6 +12,7 @@ import {
   type Attachment,
   type BrowserBounds,
   type BrowserState,
+  type BrowserViewMode,
   type Decision,
   type EntityMap,
   type EntityName,
@@ -88,6 +89,8 @@ export interface BrowserControl {
   takeOver(): void
   giveBack(): void
   openInSystem(): Promise<void>
+  /** Optional so older fakes keep compiling; AgentBrowser has it. */
+  setViewMode?(mode: BrowserViewMode): Promise<void>
 }
 
 export interface IpcDeps {
@@ -303,6 +306,13 @@ export function registerIpc(deps: IpcDeps): () => void {
     deps.browser?.giveBack()
   })
 
+  handle(CHANNELS.browser.setView, async (_event, rawMode) => {
+    const mode = requireString(rawMode, 'view', 16)
+    if (mode !== 'desktop' && mode !== 'tablet' && mode !== 'phone' && mode !== 'fit') {
+      throw new Error('view must be desktop, tablet, phone or fit')
+    }
+    await deps.browser?.setViewMode?.(mode)
+  })
   handle(CHANNELS.browser.openInSystem, async () => {
     await deps.browser?.openInSystem()
   })

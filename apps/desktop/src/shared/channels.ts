@@ -46,6 +46,7 @@ export const CHANNELS = {
     takeOver: 'agent:browser.takeOver',
     giveBack: 'agent:browser.giveBack',
     openInSystem: 'agent:browser.openInSystem',
+    setView: 'agent:browser.setView',
   },
   helpers: {
     stop: 'agent:helpers.stop',

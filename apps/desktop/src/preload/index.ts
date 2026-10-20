@@ -98,6 +98,7 @@ const api: AgentApi = {
     takeOver: () => call<void>(CHANNELS.browser.takeOver),
     giveBack: () => call<void>(CHANNELS.browser.giveBack),
     openInSystem: () => call<void>(CHANNELS.browser.openInSystem),
+    setView: (mode) => call<void>(CHANNELS.browser.setView, mode),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
   },
 

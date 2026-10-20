@@ -3,6 +3,7 @@ import type {
   AgentApi,
   BrowserBounds,
   BrowserState,
+  BrowserViewMode,
   ChatEvent,
   ChatItem,
   Decision,
@@ -226,12 +227,21 @@ const mockBrowser: BrowserState = {
   agentActive: demoBrowser,
   needsUser: false,
   handoffReason: '',
+  view: { mode: 'desktop', label: 'Desktop 1440x900', width: 1440, height: 900, scale: 0.28 },
+}
+
+const MOCK_VIEWS: Record<BrowserViewMode, NonNullable<BrowserState['view']>> = {
+  desktop: { mode: 'desktop', label: 'Desktop 1440x900', width: 1440, height: 900, scale: 0.28 },
+  tablet: { mode: 'tablet', label: 'Tablet 820x1180', width: 820, height: 1180, scale: 0.29 },
+  phone: { mode: 'phone', label: 'Phone 390x844', width: 390, height: 844, scale: 0.4 },
+  fit: { mode: 'fit', label: 'Fits the panel', width: 0, height: 0, scale: 1 },
 }
 
 function notifyBrowser(): void {
   const snapshot: BrowserState = {
     ...mockBrowser,
     tabs: mockBrowser.tabs.map((tab) => ({ ...tab })),
+    ...(mockBrowser.view === undefined ? {} : { view: { ...mockBrowser.view } }),
   }
   for (const listener of browserListeners) listener(snapshot)
 }
@@ -529,6 +539,10 @@ export const mockAgent: AgentApi = {
     },
     async openInSystem() {
       return undefined
+    },
+    async setView(viewMode: BrowserViewMode) {
+      mockBrowser.view = { ...MOCK_VIEWS[viewMode] }
+      notifyBrowser()
     },
     onState(callback: (state: BrowserState) => void): Unsubscribe {
       browserListeners.add(callback)
