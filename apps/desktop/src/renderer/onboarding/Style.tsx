@@ -1,6 +1,7 @@
 import type { MascotId } from '@agent/core'
 import { useState } from 'react'
 
+import { clearLocalOnly } from '../state/onboarding'
 import { applyAccent, ACCENTS } from '../state/theme'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -35,6 +36,7 @@ export function Style(): JSX.Element {
         mascot,
         onboarded: true,
       })
+      clearLocalOnly()
       navigate({ page: 'home' })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not save your choices.')
@@ -42,8 +44,10 @@ export function Style(): JSX.Element {
     }
   }
 
+  const callName = name.trim()
+
   return (
-    <OnboardingLayout step="style">
+    <OnboardingLayout step="style" onBack={() => navigate({ page: 'onboarding', step: 'ai' })}>
       <div className="ob-col">
         <div>
           <div className="eyebrow">MAKE IT YOURS</div>
@@ -124,7 +128,10 @@ export function Style(): JSX.Element {
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
             <Mascot id={mascot} size={34} busy />
             <div>
-              <div className="small muted">Browsing, 2 helpers</div>
+              <div className="small muted">
+                {agentName.trim() || 'Your agent'}
+                {callName ? `, for ${callName}` : ''}
+              </div>
               <div style={{ marginTop: 4, lineHeight: 1.5 }}>
                 On it. Three with good Wi-Fi, all under 10 minutes away.
               </div>
