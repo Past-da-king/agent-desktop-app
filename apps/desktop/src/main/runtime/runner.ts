@@ -15,6 +15,7 @@ import {
   trimFit,
   userMsg,
   type AgentEvent,
+  type AgentProfileInfo,
   type Attachment,
   type ChatEvent,
   type Decision,
@@ -84,6 +85,8 @@ export interface RunnerDeps {
   cli?: CliHost
   /** Opens a web address in the person's own browser (sign-in pages). */
   openUrl?: (url: string) => void
+  /** The person's profiles and learned app names, for the main agent's PROFILES section. */
+  profiles?: () => { profiles: AgentProfileInfo[]; learnedNames: Record<string, string> }
 }
 
 interface ActivityRow {
@@ -111,6 +114,7 @@ export class Runner {
   private readonly environment: () => EnvironmentReport | null
   private readonly cli: CliHost | undefined
   private readonly openUrl: (url: string) => void
+  private readonly profilesView: RunnerDeps['profiles']
 
   private running = false
   private controller: AbortController | null = null
@@ -142,6 +146,7 @@ export class Runner {
     this.budget = deps.budget
     this.cli = deps.cli
     this.openUrl = deps.openUrl ?? (() => undefined)
+    this.profilesView = deps.profiles
     this.environment = deps.environment ?? (() => null)
   }
 
@@ -469,6 +474,7 @@ export class Runner {
       role: 'main',
       helperModel: model,
       liveHelpers: this.helpers?.live() ?? [],
+      ...this.profilePrompt(),
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
@@ -497,6 +503,16 @@ export class Runner {
 
   // ---- running on an installed AI tool (the person's own plan) ---------------------------------
 
+  /** The PROFILES section's input for the main agent, or nothing when there are no profiles. */
+  private profilePrompt(): { profiles?: AgentProfileInfo[]; learnedNames?: Record<string, string> } {
+    if (this.profilesView === undefined) return {}
+    try {
+      return this.profilesView()
+    } catch {
+      return {}
+    }
+  }
+
   private async cliSystem(text: string, role: 'main' | 'routine', routineName?: string): Promise<string> {
     const current = this.settings.get()
     return buildSystemPrompt({
@@ -511,6 +527,7 @@ export class Runner {
       ...(routineName === undefined ? {} : { routineName }),
       helperModel: current.cli === 'codex' ? 'Codex' : 'Claude',
       liveHelpers: this.helpers?.live() ?? [],
+      ...this.profilePrompt(),
       canDelegate: this.helpers !== undefined,
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),

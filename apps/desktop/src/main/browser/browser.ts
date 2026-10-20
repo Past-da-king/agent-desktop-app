@@ -60,6 +60,7 @@ import {
   type Resolved,
 } from './snapshot'
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, ViewRequest } from './types'
+import { pickTab } from './tab-pick'
 import { checkBrowserUrl } from './url-policy'
 import {
   PAGE_WORLD_ID,
@@ -84,6 +85,8 @@ const EMPTY_BOUNDS: BrowserBounds = { x: 0, y: 0, width: 0, height: 0, visible: 
 
 interface Tab {
   id: string
+  /** The session partition: General's original one, or a profile's own (its cookies and sign-ins). */
+  partition: string
   view: WebContentsView
   cdp: Cdp
   /** The emulation is set up (the debugger can only attach once a document exists). */
@@ -111,6 +114,8 @@ export interface AgentBrowserOptions {
 export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private window: BrowserWindow | null
   private readonly partition: string
+  /** The partition the agent works in now (profiles.ts partitionFor). Tabs of others stay open, untouched. */
+  private current: string
   private readonly maxTabs: number
   private readonly onState: (state: BrowserState) => void
   private readonly openExternal: (url: string) => Promise<void>
@@ -131,7 +136,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private agentDriving = true
   private handoffReason = ''
   private blockedReason = ''
-  private sessionReady = false
+  /** Partitions whose session is set up: one header listener and one download handler per session. */
+  private readonly sessionsReady = new Set<string>()
   private injectingInput = false
   private tabSeq = 0
   private shotSeq = 0
@@ -148,6 +154,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   constructor(options: AgentBrowserOptions) {
     this.window = options.window
     this.partition = options.partition ?? PARTITION
+    this.current = this.partition
     this.maxTabs = Math.max(1, options.maxTabs ?? MAX_TABS)
     this.onState = options.onState ?? (() => undefined)
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
@@ -187,7 +194,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   state(): BrowserState {
-    const active = this.activeTab()
+    // The panel shows the tab in front, whichever profile it belongs to.
+    const active = this.shownTab()
     const tabs: BrowserTab[] = this.tabs.map((tab) => ({
       id: tab.id,
       title: safeTitle(tab.view),
@@ -244,15 +252,18 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   async reload(): Promise<void> {
-    const tab = this.activeTab()
+    const tab = this.shownTab()
     if (tab === null) return
     tab.view.webContents.reload()
     this.emit()
   }
 
   selectTab(id: string): void {
-    if (!this.tabs.some((tab) => tab.id === id)) return
+    const picked = this.tabs.find((tab) => tab.id === id)
+    if (picked === undefined) return
     this.activeId = id
+    // The person picked a tab: the agent's next step works in that tab's sign-ins too.
+    this.current = picked.partition
     this.layout()
     this.emit()
   }
@@ -1216,14 +1227,32 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   // ---- tabs and the window ----------------------------------------------------------------
 
   private activeTab(): Tab | null {
+    return pickTab(this.tabs, this.activeId, this.current)
+  }
+
+  /** The tab in front of the person, whichever partition it is in. */
+  private shownTab(): Tab | null {
     return this.tabs.find((tab) => tab.id === this.activeId) ?? this.tabs[0] ?? null
   }
 
-  private createTab(initialUrl?: string): Tab | null {
+  /** Profiles: the agent browses in this partition from now on (see BrowserDriver.usePartition). */
+  usePartition(partition: string): void {
+    const next = partition.trim() === '' ? this.partition : partition
+    if (next === this.current) return
+    this.current = next
+    const tab = pickTab(this.tabs, this.activeId, next)
+    if (tab !== null && tab.id !== this.activeId) {
+      this.activeId = tab.id
+      this.layout()
+    }
+    this.emit()
+  }
+
+  private createTab(initialUrl?: string, partition: string = this.current): Tab | null {
     if (this.tabs.length >= this.maxTabs) return null
     const view = new WebContentsView({
       webPreferences: {
-        partition: this.partition,
+        partition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -1234,6 +1263,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
     const tab: Tab = {
       id: `tab-${++this.tabSeq}`,
+      partition,
       view,
       cdp: new Cdp(view.webContents.debugger),
       ready: false,
@@ -1245,7 +1275,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
     this.tabs.push(tab)
     this.activeId = tab.id
-    this.configureSession(view.webContents.session)
+    this.configureSession(view.webContents.session, partition)
     this.wireTab(tab)
 
     if (this.window !== null) {
@@ -1294,7 +1324,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         this.emit()
         return { action: 'deny' }
       }
-      this.createTab(policy.url)
+      // A popup opens with its opener's sign-ins.
+      this.createTab(policy.url, tab.partition)
       return { action: 'deny' }
     })
 
@@ -1348,9 +1379,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     wc.on('destroyed', () => this.emit())
   }
 
-  private configureSession(session: Session): void {
-    if (this.sessionReady) return
-    this.sessionReady = true
+  private configureSession(session: Session, partition: string): void {
+    if (this.sessionsReady.has(partition)) return
+    this.sessionsReady.add(partition)
 
     session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
     session.setPermissionCheckHandler(() => false)
