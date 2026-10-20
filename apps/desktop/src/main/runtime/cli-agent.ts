@@ -15,6 +15,8 @@ import { readFileSync } from 'node:fs'
 
 import type { AgentEvent, JsonObject } from '@agent/core'
 
+import { SDK_TOOLS } from './sdk-permissions'
+
 export type CliId = 'claude' | 'codex'
 
 export interface CliTurn {
@@ -33,6 +35,8 @@ export interface CliTurn {
   workDir: string
   signal: AbortSignal
   onEvent: (event: AgentEvent) => Promise<void>
+  /** Claude: asked before each of Claude Code's own tools runs (see sdk-permissions.ts). */
+  permission?: (name: string, input: Record<string, unknown>) => Promise<{ allow: true } | { allow: false; message: string }>
 }
 
 export interface CliResult {
@@ -45,6 +49,8 @@ export interface CliResult {
 const TOOL_PREFIX = 'mcp__agent__'
 /** The engine's own bookkeeping steps, which mean nothing to the person. */
 const INTERNAL_TOOLS = new Set(['ToolSearch', 'TodoWrite', 'ExitPlanMode'])
+/** Claude Code's own tools whose step the chat shows like any other tool. */
+export const NATIVE_LABELS: Record<string, string> = { Bash: 'Ran a command', PowerShell: 'Ran a command', Read: 'Read a file', Write: 'Wrote a file', Edit: 'Edited a file', Glob: 'Looked for files', Grep: 'Searched in files' }
 
 const CLI_RULES = [
   'HOW YOU RUN',
@@ -159,13 +165,40 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         settingSources: [],
         // Only the app's own MCP server: none of the person's other MCP servers or claude.ai connectors.
         strictMcpConfig: true,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        // Only the app's tools plus web search and fetch exist for the agent: none of Claude Code's own
-        // tools (shell, files, workflows, subagents) can act around the app's approvals.
-        tools: ['WebSearch', 'WebFetch'],
+        // Claude Code's own shell and file tools, each asking the app first (canUseTool below): the person's
+        // approvals, Shell setting and granted folders decide. Nothing else of Claude Code's is offered.
+        tools: SDK_TOOLS,
+        permissionMode: 'default',
         allowedTools: ['mcp__agent', 'WebSearch', 'WebFetch'],
-        disallowedTools: ['Bash', 'Edit', 'Write', 'NotebookEdit', 'KillShell', 'Task', 'Agent', 'Read', 'Glob', 'Grep'],
+        disallowedTools: ['Task', 'Agent', 'KillShell', 'NotebookEdit'],
+        // Every one of Claude Code's own tool calls is decided by the app BEFORE it runs. A PreToolUse hook
+        // fires for every call, including the "safe-looking" commands Claude Code would otherwise auto-approve
+        // without asking (canUseTool alone is skipped for those).
+        hooks: {
+          PreToolUse: [
+            {
+              hooks: [
+                async (input: unknown) => {
+                  const hook = input as { tool_name?: string; tool_input?: unknown }
+                  const name = String(hook.tool_name ?? '')
+                  if (name.startsWith(TOOL_PREFIX) || name === 'WebSearch' || name === 'WebFetch') return {}
+                  const args = (hook.tool_input ?? {}) as Record<string, unknown>
+                  const verdict =
+                    turn.permission === undefined ? { allow: false as const, message: 'Not allowed here.' } : await turn.permission(name, args)
+                  return {
+                    hookSpecificOutput: {
+                      hookEventName: 'PreToolUse' as const,
+                      permissionDecision: verdict.allow ? ('allow' as const) : ('deny' as const),
+                      ...(verdict.allow ? {} : { permissionDecisionReason: verdict.message }),
+                    },
+                  }
+                },
+              ],
+              // Approval cards wait for the person.
+              timeout: 6 * 60 * 60,
+            },
+          ],
+        },
         mcpServers: {
           agent: { type: 'http', url: turn.mcp.url, headers: { Authorization: `Bearer ${turn.mcp.token}` } },
         },

@@ -504,7 +504,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     })
   const budget = new StepBudget()
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
-  cliHost = new CliHost(join(app.getPath('userData'), 'cli'), app.getAppPath())
+  cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
   const helpers = new HelperManager({
     store,
     cli: cliHost,
