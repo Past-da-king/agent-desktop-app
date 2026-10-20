@@ -58,4 +58,5 @@ export const EVENTS = {
   chat: 'agent:evt:chat.event',
   maximize: 'agent:evt:window.maximized',
   quickAsk: 'agent:evt:window.quickAsk',
+  hotkey: 'agent:evt:window.hotkey',
 } as const

@@ -8,6 +8,8 @@ import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { AccountService } from '../src/main/account'
 import { Store } from '../src/main/db'
 import { registerIpc, type IpcMainLike } from '../src/main/ipc'
+import { Runner } from '../src/main/runtime/runner'
+import { buildToolset } from '../src/main/runtime/toolset'
 import { Secrets, type SafeStorageLike } from '../src/main/secrets'
 import { SettingsStore } from '../src/main/settings'
 import { CHANNELS, EVENTS } from '../src/shared/channels'
@@ -19,6 +21,7 @@ let store: Store
 let settings: SettingsStore
 let secrets: Secrets
 let account: AccountService
+let runner: Runner
 let handlers: Map<string, Handler>
 let sent: Array<{ channel: string; payload: unknown }>
 let dispose: (() => void) | null = null
@@ -47,11 +50,21 @@ beforeEach(() => {
     },
   }
 
+  runner = new Runner({
+    store,
+    settings,
+    secrets,
+    tools: buildToolset({ store }),
+    providerFactory: () => null,
+    emit: (event) => sent.push({ channel: EVENTS.chat, payload: event }),
+  })
+
   dispose = registerIpc({
     store,
     settings,
     secrets,
     account,
+    chat: runner,
     ipcMain,
     windows: {
       minimize: () => windowCalls.push('minimize'),
@@ -60,12 +73,17 @@ beforeEach(() => {
       isMaximized: () => true,
     },
     broadcast: (channel, payload) => sent.push({ channel, payload }),
+    dialogs: {
+      pickFiles: async () => [{ path: '/tmp/report.txt', name: 'report.txt', mime: 'text/plain' }],
+      pickFolder: async () => '/tmp/box',
+    },
   })
 })
 
 afterEach(async () => {
   dispose?.()
   dispose = null
+  runner.dispose()
   account.dispose()
   store.close()
   await fakeAi?.close()
@@ -164,9 +182,27 @@ describe('registerIpc', () => {
     expect(windowCalls).toEqual(['minimize', 'toggleMaximize', 'close'])
   })
 
-  it('answers not implemented yet for chat, routines and files', async () => {
-    await expect(invoke(CHANNELS.chat.send, 'hello')).rejects.toThrow('not implemented yet')
+  it('sends a chat message and answers with a notice when there is no key', async () => {
+    await invoke(CHANNELS.chat.send, 'hello', [])
+    const items = await store.list('chat_item')
+    expect(items[0]).toMatchObject({ kind: 'user', text: 'hello' })
+    expect(items.some((item) => item.kind === 'notice' && item.text.includes('Add an AI key'))).toBe(true)
+    expect(sent.some((event) => event.channel === EVENTS.chat)).toBe(true)
+    expect(await invoke(CHANNELS.chat.state)).toMatchObject({ running: false })
+  })
+
+  it('rejects a bad chat message and answers not implemented yet for routines', async () => {
+    await expect(invoke(CHANNELS.chat.send, 42)).rejects.toThrow('message must be text')
+    await expect(invoke(CHANNELS.chat.decide, 'x', 'maybe')).rejects.toThrow(
+      'decision must be approve or decline',
+    )
     await expect(invoke(CHANNELS.routines.runNow, 'x')).rejects.toThrow('not implemented yet')
-    await expect(invoke(CHANNELS.files.pick)).rejects.toThrow('not implemented yet')
+  })
+
+  it('opens the real file and folder pickers through the injected dialogs', async () => {
+    expect(await invoke(CHANNELS.files.pick)).toEqual([
+      { path: '/tmp/report.txt', name: 'report.txt', mime: 'text/plain' },
+    ])
+    expect(await invoke(CHANNELS.files.pickFolder)).toBe('/tmp/box')
   })
 })
