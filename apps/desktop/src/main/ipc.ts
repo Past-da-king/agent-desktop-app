@@ -27,6 +27,9 @@ import { arch as osArch, hostname as osHostname, platform as osPlatform } from '
 import { APP_NAME, LICENCES_URL } from './app-info'
 
 import type { AccountService, SignInArgs } from './account'
+import { POPULAR_APPS } from './apps/catalog'
+import type { AppsService } from './apps/service'
+import { isRule } from './apps/store'
 import type { Store } from './db'
 import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
@@ -112,6 +115,8 @@ export interface IpcDeps {
   appInfo?: () => AppInfo
   openLogsFolder?: () => void | Promise<void>
   openLicences?: () => void | Promise<void>
+  /** Connected apps and learned apps. Without it, Connections shows no key and no learned apps. */
+  apps?: AppsService
 }
 
 const NOT_IMPLEMENTED = 'not implemented yet'
@@ -401,18 +406,68 @@ export function registerIpc(deps: IpcDeps): () => void {
     await deps.openLicences?.()
   })
 
+  // ---- connected apps and learned apps ----
+
+  handle(CHANNELS.apps.status, async () =>
+    deps.apps === undefined
+      ? { hasKey: false, keyKind: '', accounts: [], connecting: [], message: '' }
+      : deps.apps.status(),
+  )
+
+  handle(CHANNELS.apps.setKey, async (_event, rawKey) => {
+    const key = requireString(rawKey, 'key', MAX_KEY)
+    if (deps.apps === undefined) return { ok: false, message: 'Not available in this build.' }
+    return deps.apps.setKey(key)
+  })
+
+  handle(CHANNELS.apps.catalog, async () => POPULAR_APPS)
+
+  handle(CHANNELS.apps.connect, async (_event, rawApp) => {
+    const app = requireString(rawApp, 'app', 64).trim().toLowerCase()
+    if (!/^[a-z0-9_]{2,60}$/.test(app)) throw new Error('Invalid app')
+    if (deps.apps === undefined) return { ok: false, message: 'Not available in this build.' }
+    return deps.apps.connect(app)
+  })
+
+  handle(CHANNELS.apps.disconnect, async (_event, rawId) => {
+    const id = requireString(rawId, 'accountId', 200)
+    await deps.apps?.disconnect(id)
+  })
+
+  handle(CHANNELS.apps.setRules, async (_event, rawId, rawRules) => {
+    const id = requireString(rawId, 'accountId', 200)
+    const rules = requireObject(rawRules, 'rules') as Record<string, unknown>
+    const read = rules['read']
+    const change = rules['change']
+    if (!isRule(read) || !isRule(change)) throw new Error('Invalid rules')
+    deps.apps?.setRules(id, { read, change })
+  })
+
+  handle(CHANNELS.apps.learned, async () => deps.apps?.learnedApps() ?? [])
+
+  handle(CHANNELS.apps.removeLearned, async (_event, rawId) => {
+    deps.apps?.removeLearned(requireString(rawId, 'id', 64))
+  })
+
+  handle(CHANNELS.apps.setTrusted, async (_event, rawId, rawOn) => {
+    if (typeof rawOn !== 'boolean') throw new Error('Invalid trusted')
+    deps.apps?.setTrusted(requireString(rawId, 'id', 64), rawOn)
+  })
+
   // ---- events out ----
 
   const offSettings = settings.onChange((next) => send(EVENTS.settings, next))
   const offStatus = account.onStatus((status) => send(EVENTS.accountStatus, status))
   const offProgress = account.onProgress((progress) => send(EVENTS.accountProgress, progress))
   const offData = store.onChange((entity) => send(EVENTS.data, entity))
+  const offApps = deps.apps?.onChange(() => send(EVENTS.apps, null)) ?? (() => undefined)
 
   return () => {
     offSettings()
     offStatus()
     offProgress()
     offData()
+    offApps()
   }
 }
 
