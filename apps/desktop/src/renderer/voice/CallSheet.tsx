@@ -139,28 +139,30 @@ export function CallSheet(): JSX.Element | null {
       </div>
 
       <footer className="call-bar">
+        {call.state === 'error' ? null : (
+          <button
+            type="button"
+            className={`call-btn mute${call.muted ? ' on' : ''}`}
+            aria-pressed={call.muted}
+            aria-label={call.muted ? 'Unmute' : 'Mute'}
+            title={call.muted ? 'Unmute' : 'Mute'}
+            disabled={!live}
+            onClick={() => useCall.getState().toggleMute()}
+          >
+            {call.muted ? <VoiceIcon name="micoff" size={24} /> : <Icon name="mic" size={24} />}
+            <span>{call.muted ? 'Unmute' : 'Mute'}</span>
+          </button>
+        )}
         <button
           type="button"
-          className={`call-btn mute${call.muted ? ' on' : ''}`}
-          aria-pressed={call.muted}
-          aria-label={call.muted ? 'Unmute' : 'Mute'}
-          title={call.muted ? 'Unmute' : 'Mute'}
-          disabled={!live}
-          onClick={() => useCall.getState().toggleMute()}
-        >
-          {call.muted ? <VoiceIcon name="micoff" size={24} /> : <Icon name="mic" size={24} />}
-          <span>{call.muted ? 'Unmute' : 'Mute'}</span>
-        </button>
-        <button
-          type="button"
-          className="call-btn hang"
+          className={`call-btn ${live ? 'hang' : 'close'}`}
           aria-label={live ? 'Hang up' : 'Close'}
           title={live ? 'Hang up (Esc)' : 'Close (Esc)'}
           onClick={() => {
             void useCall.getState().hangUp()
           }}
         >
-          <VoiceIcon name="hangup" size={26} />
+          {live ? <VoiceIcon name="hangup" size={26} /> : <Icon name="x" size={24} />}
           <span>{live ? 'Hang up' : 'Close'}</span>
         </button>
       </footer>
