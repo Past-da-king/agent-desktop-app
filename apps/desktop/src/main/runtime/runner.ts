@@ -33,6 +33,7 @@ import {
 import type { DataStore } from './data'
 import type { StepBudget } from './budget'
 import type { HelperHost } from './helpers'
+import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
 
 export interface SettingsView {
@@ -79,6 +80,8 @@ export interface RunnerDeps {
   budget?: StepBudget
   /** What is on this computer, from the cached scan. */
   environment?: () => EnvironmentReport | null
+  /** Runs turns through an installed AI tool on the person's own plan (Claude Code). */
+  cli?: CliHost
 }
 
 interface ActivityRow {
@@ -104,6 +107,7 @@ export class Runner {
   private readonly helpers: HelperHost | undefined
   private readonly budget: StepBudget | undefined
   private readonly environment: () => EnvironmentReport | null
+  private readonly cli: CliHost | undefined
 
   private running = false
   private controller: AbortController | null = null
@@ -133,6 +137,7 @@ export class Runner {
     this.timeZone = deps.timeZone
     this.helpers = deps.helpers
     this.budget = deps.budget
+    this.cli = deps.cli
     this.environment = deps.environment ?? (() => null)
   }
 
@@ -296,6 +301,7 @@ export class Runner {
   }
 
   private async runRoutineTurn(trigger: TriggerRow): Promise<RoutineRunResult> {
+    if (this.settings.get().mode === 'subscription') return this.runCliRoutine(trigger)
     const resolved = this.resolveModel()
     if (!resolved.ok) return { text: resolved.message, waiting: false }
 
@@ -432,6 +438,7 @@ export class Runner {
     images: string[],
     signal: AbortSignal,
   ): Promise<string | undefined> {
+    if (this.settings.get().mode === 'subscription') return this.runCliTurn(text, images, signal)
     const resolved = this.resolveModel()
     if (!resolved.ok) {
       await this.notice(resolved.message)
@@ -481,6 +488,108 @@ export class Runner {
       const message = friendlyError(error)
       await this.notice(message)
       return message
+    }
+  }
+
+  // ---- running on an installed AI tool (the person's own plan) ---------------------------------
+
+  private async cliSystem(text: string, role: 'main' | 'routine', routineName?: string): Promise<string> {
+    const current = this.settings.get()
+    return buildSystemPrompt({
+      settings: current,
+      now: new Date(this.now()),
+      platform: process.platform,
+      memories: await this.store.list('memory'),
+      goals: await this.store.list('goal'),
+      tasks: await this.store.list('task'),
+      latestUserText: text,
+      role,
+      ...(routineName === undefined ? {} : { routineName }),
+      helperModel: 'Claude Code',
+      liveHelpers: [],
+      environment: this.environment(),
+      ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
+    })
+  }
+
+  private async runCliTurn(text: string, images: string[], signal: AbortSignal): Promise<string | undefined> {
+    if (this.cli === undefined) {
+      await this.notice('This build cannot run on a subscription. Add an AI key in Settings to start.')
+      return undefined
+    }
+    const current = this.settings.get()
+    const prompt = images.length === 0 ? text : `${text}\n\nAttached files on this computer:\n${images.map((path) => `- ${path}`).join('\n')}`
+    this.emit({ type: 'thinking', step: 1 })
+    const result = await this.cli.turn({
+      cli: current.cli === '' ? 'claude' : current.cli,
+      thread: 'main',
+      system: await this.cliSystem(text, 'main'),
+      prompt,
+      context: this.toolContext(signal),
+      signal,
+      onEvent: (event) => this.render(event),
+      onCall: (call) => this.startActivity({ t: 'call', id: call.id, name: call.name, input: call.input }),
+      onResult: (call, result, isError) =>
+        this.finishActivity({ t: 'call', id: call.id, name: call.name, input: call.input }, result, isError),
+    })
+    if (signal.aborted) {
+      await this.notice('Stopped')
+      return undefined
+    }
+    if (result.error !== undefined) {
+      await this.notice(result.error)
+      return result.error
+    }
+    return undefined
+  }
+
+  private async runCliRoutine(trigger: TriggerRow): Promise<RoutineRunResult> {
+    if (this.cli === undefined) return { text: 'This build cannot run routines on a subscription.', waiting: false }
+    const current = this.settings.get()
+    const controller = new AbortController()
+    this.routineController = controller
+    const result = await this.cli.turn({
+      cli: current.cli === '' ? 'claude' : current.cli,
+      thread: 'routine',
+      system: await this.cliSystem(trigger.prompt, 'routine', trigger.name),
+      prompt: trigger.prompt,
+      context: this.toolContext(controller.signal, 'routine'),
+      signal: controller.signal,
+      onEvent: async () => undefined,
+      onCall: async () => undefined,
+      onResult: async () => undefined,
+    })
+    if (this.routineWaiting) return { text: WAITING_FOR_USER, waiting: true }
+    if (result.error !== undefined) return { text: result.error, waiting: false }
+    const summary = result.text.trim()
+    return { text: summary === '' ? 'The routine finished without a summary.' : summary, waiting: false }
+  }
+
+  /** One tiny real turn, so onboarding and Settings can say whether the installed tool works. */
+  async checkCli(): Promise<{ ok: boolean; message: string }> {
+    if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a subscription.' }
+    if (this.cli.program('claude') === null) {
+      return { ok: false, message: 'Claude Code was not found on this computer.' }
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 90_000)
+    try {
+      const result = await this.cli.turn({
+        cli: 'claude',
+        thread: 'routine',
+        system: 'Reply with exactly the word OK and nothing else.',
+        prompt: 'Reply with exactly the word OK.',
+        context: this.toolContext(controller.signal, 'routine'),
+        signal: controller.signal,
+        onEvent: async () => undefined,
+        onCall: async () => undefined,
+        onResult: async () => undefined,
+      })
+      if (controller.signal.aborted) return { ok: false, message: 'Claude Code took too long to answer. Try again.' }
+      if (result.error !== undefined) return { ok: false, message: result.error }
+      return { ok: true, message: 'Claude Code is signed in and working on your plan.' }
+    } finally {
+      clearTimeout(timer)
     }
   }
 

@@ -83,3 +83,35 @@ details.adv>summary{list-style:none;display:flex;align-items:center;gap:10px;cur
 details.adv>summary::-webkit-details-marker{display:none}
 details.adv>summary::before{content:"";width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform var(--t-slow) var(--spatial);margin-left:2px}
 details.adv[open]>summary::before{transform:rotate(45deg)}
+
+/* ---------- the real window is the frame ---------- */
+.native body{padding:0;background:var(--bg)}
+.native .win{border-radius:0;box-shadow:none;min-height:0}
+
+/* ---------- scrollbars: a slim thumb, no arrows, no track ---------- */
+::-webkit-scrollbar{width:12px;height:12px;background:transparent}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-button{display:none;width:0;height:0}
+::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--on-sv) 28%,transparent);border-radius:999px;border:4px solid transparent;background-clip:padding-box;min-height:40px}
+::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--on-sv) 45%,transparent);border-width:3px;background-clip:padding-box}
+.br-tabs::-webkit-scrollbar{display:none}
+
+/* ---------- AI step: the plan panel ---------- */
+.ob-plan{display:flex;flex-direction:column;gap:6px;background:var(--s-low);border-radius:var(--r-lg);padding:6px}
+.ob-plan .ob-note{margin:6px 12px 8px}
+.rowc .ri.ok{background:var(--okc);color:var(--ok)}
+
+/* ---------- onboarding fits a 1080p screen at 125% scaling without scrolling ---------- */
+.ob-col{gap:14px}
+.ob-col .h1{font-size:32px}
+.ob-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.ob .mascots{gap:8px;flex-wrap:nowrap}
+.ob .mk{width:44px;height:44px;border-radius:14px}
+.ob .mk svg{width:32px;height:32px}
+.ob .sw{width:38px;height:38px}
+.ob .preview{padding:14px 16px;gap:10px}
+.ob .field .err:empty{display:none}
+@media (max-width:820px){
+  .ob-two{grid-template-columns:minmax(0,1fr)}
+  .ob .mascots{flex-wrap:wrap}
+}

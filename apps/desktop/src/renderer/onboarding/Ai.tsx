@@ -1,5 +1,5 @@
 import { PROVIDERS } from '@agent/core'
-import type { ProviderId, ProviderInfo } from '@agent/core'
+import type { Found, ProviderId, ProviderInfo } from '@agent/core'
 import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
@@ -8,6 +8,7 @@ import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
 import { Icon } from '../ui/Icon'
+import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
 import { OnboardingLayout } from './OnboardingLayout'
 
@@ -36,6 +37,53 @@ export function Ai(): JSX.Element {
   const [message, setMessage] = useState('')
   const [ok, setOk] = useState(settings?.hasKey ?? false)
   const [busy, setBusy] = useState(false)
+  // Two ways to power the agent: the person's own Claude plan through Claude Code, or an API key.
+  const [way, setWay] = useState<'plan' | 'key'>(settings?.mode === 'api_key' ? 'key' : 'plan')
+  const [claude, setClaude] = useState<Found | null | undefined>(undefined)
+  const [others, setOthers] = useState<Found[]>([])
+  const [planOk, setPlanOk] = useState(settings?.mode === 'subscription')
+  const [planMessage, setPlanMessage] = useState('')
+
+  useEffect(() => {
+    let live = true
+    void agent.environment
+      .scan()
+      .then((report) => {
+        if (!live) return
+        const found = report.aiTools.find((tool) => tool.id === 'claude')
+        setClaude(found?.found === true ? found : null)
+        setOthers(report.aiTools.filter((tool) => tool.id !== 'claude' && tool.found))
+        if (found?.found !== true && settings?.mode !== 'subscription') setWay('key')
+      })
+      .catch(() => {
+        if (live) setClaude(null)
+      })
+    return () => {
+      live = false
+    }
+    // Scan once when the step opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const usePlan = async (): Promise<void> => {
+    if (planOk) {
+      navigate({ page: 'onboarding', step: 'style' })
+      return
+    }
+    setBusy(true)
+    setPlanMessage('')
+    try {
+      await save({ mode: 'subscription', cli: 'claude' })
+      const result = await agent.settings.checkCli()
+      setPlanOk(result.ok)
+      setPlanMessage(result.message)
+      if (result.ok) navigate({ page: 'onboarding', step: 'style' })
+    } catch (cause) {
+      setPlanMessage(cause instanceof Error ? cause.message : 'Could not reach Claude Code.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     let live = true
@@ -125,38 +173,92 @@ export function Ai(): JSX.Element {
             Who should do the thinking?
           </h1>
           <p className="muted" style={{ marginTop: 8, fontSize: 15 }}>
-            Your agent runs on an AI service you already pay for. You are only ever billed by them.
+            Use the Claude plan you already pay for, or bring an API key. You are only ever billed by them.
           </p>
         </div>
 
-        <div>
-          <div className="eyebrow mute" style={{ marginBottom: 8 }}>
-            USE A SUBSCRIPTION YOU ALREADY HAVE
-          </div>
-          <div className="card mid" style={{ padding: 6 }}>
-            <div className="rowc" title="Coming soon">
-              <div className="ri">
-                <Icon name="bolt" size={22} />
-              </div>
-              <div className="rt">
-                <b>Claude subscription</b>
-                <span>Sign in once in your browser</span>
-              </div>
-              <span className="pill mute">Coming soon</span>
-            </div>
-            <div className="rowc" title="Coming soon">
-              <div className="ri">
-                <Icon name="bolt" size={22} />
-              </div>
-              <div className="rt">
-                <b>ChatGPT subscription</b>
-                <span>Sign in once in your browser</span>
-              </div>
-              <span className="pill mute">Coming soon</span>
-            </div>
-          </div>
-        </div>
+        <Segmented
+          ariaLabel="How your agent thinks"
+          value={way}
+          onChange={(value) => setWay(value)}
+          options={[
+            { value: 'plan', label: 'Your Claude plan', icon: <Icon name="bolt" size={18} /> },
+            { value: 'key', label: 'An API key', icon: <Icon name="key" size={18} /> },
+          ]}
+        />
 
+        {way === 'plan' ? (
+          <div className="ob-plan">
+            {claude === undefined ? (
+              <div className="rowc">
+                <div className="ri">
+                  <Icon name="search" size={22} />
+                </div>
+                <div className="rt">
+                  <b>Looking for Claude Code</b>
+                  <span>Checking what is installed on this computer</span>
+                </div>
+              </div>
+            ) : claude === null ? (
+              <div className="rowc">
+                <div className="ri">
+                  <Icon name="bolt" size={22} />
+                </div>
+                <div className="rt">
+                  <b>Claude Code is not on this computer</b>
+                  <span>
+                    Install it, sign in once with your Claude account, then come back. Or use an API key instead.
+                  </span>
+                </div>
+                <Button
+                  variant="tonal"
+                  size="sm"
+                  onClick={() => {
+                    void agent.shell.openExternal('https://claude.com/claude-code')
+                  }}
+                >
+                  Get Claude Code
+                </Button>
+              </div>
+            ) : (
+              <div className="rowc">
+                <div className="ri ok">
+                  <Icon name="check" size={22} />
+                </div>
+                <div className="rt">
+                  <b>Claude Code{claude.version !== undefined ? ` ${claude.version}` : ''}</b>
+                  <span>Found on this computer. Your agent thinks on your Claude plan, with no API key.</span>
+                </div>
+                <span className="pill ok">Found</span>
+              </div>
+            )}
+            {others.map((tool) => (
+              <div className="rowc" key={tool.id} title="Coming soon">
+                <div className="ri">
+                  <Icon name="bolt" size={22} />
+                </div>
+                <div className="rt">
+                  <b>{tool.label}</b>
+                  <span>Found on this computer. Support is on the way.</span>
+                </div>
+                <span className="pill mute">Coming soon</span>
+              </div>
+            ))}
+            {planMessage !== '' ? (
+              <p className={planOk ? 'ob-note' : 'ob-note warn'} role="status">
+                {planMessage}
+              </p>
+            ) : (
+              <p className="ob-note">
+                Everything still goes through the app: it asks before anything leaves this computer, and it only
+                uses the folders you allow.
+              </p>
+            )}
+          </div>
+        ) : null}
+
+        {way === 'key' ? (
+          <>
         <div>
           <div className="eyebrow mute" style={{ marginBottom: 10 }}>
             OR BRING AN API KEY
@@ -273,9 +375,17 @@ export function Ai(): JSX.Element {
           </li>
         </ol>
 
+          </>
+        ) : null}
+
         <div className="ob-cta">
-          <Button size="lg" block disabled={busy} onClick={() => void cont()}>
-            {busy ? 'Checking your key...' : 'Continue'}
+          <Button
+            size="lg"
+            block
+            disabled={busy || (way === 'plan' && claude === null)}
+            onClick={() => void (way === 'plan' ? usePlan() : cont())}
+          >
+            {busy ? (way === 'plan' ? 'Checking Claude Code...' : 'Checking your key...') : 'Continue'}
             <Icon name="arrow" size={20} />
           </Button>
           <Button variant="text" onClick={() => void skip()} style={{ alignSelf: 'center' }}>

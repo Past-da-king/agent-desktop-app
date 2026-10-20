@@ -23,6 +23,7 @@ const INVALID = Symbol('invalid')
 
 const STRING_ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
   mode: ['none', 'api_key', 'subscription'],
+  cli: ['claude', ''],
   provider: ['anthropic', 'openai', 'gemini', 'deepseek', 'opencode_go', 'opencode_zen', 'openrouter', 'custom'],
   theme: ['system', 'light', 'dark'],
   mascot: ['scout', 'ghost', 'clover', 'bloom', 'puff', 'gem', 'pebble', 'heart', 'bun'],

@@ -33,6 +33,7 @@ import { HelperManager } from './runtime/helpers'
 import { Runner } from './runtime/runner'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
+import { CliHost } from './runtime/cli-host'
 import { Secrets } from './secrets'
 import { SettingsStore } from './settings'
 import { createTray, type TrayHandle } from './tray'
@@ -102,6 +103,7 @@ let store: Store | null = null
 let settingsStore: SettingsStore | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+let cliHost: CliHost | null = null
 let scheduler: Scheduler | null = null
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
@@ -531,12 +533,25 @@ async function startServices(win: BrowserWindow): Promise<void> {
     mainBudget: budget,
     environment,
   })
+  // On a subscription the installed AI tool gets the full worker toolset (no main-agent step budget,
+  // no helpers: the CLI does that work itself), with the same file picks and approvals.
+  const cliTools = buildWorkerToolset({
+    store,
+    settings,
+    filePicks,
+    pickFiles: pickFilePaths,
+    browser: agentBrowser,
+    agentName: () => settings.get().agentName,
+    environment,
+  })
+  cliHost = new CliHost(() => cliTools, join(app.getPath('userData'), 'cli'))
   runner = new Runner({
     store,
     settings,
     secrets,
     tools,
     helpers,
+    cli: cliHost,
     budget,
     environment: () => environment.current(),
     providerFactory: factory,

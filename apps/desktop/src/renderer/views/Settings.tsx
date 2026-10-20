@@ -125,6 +125,20 @@ function foundName(item: Found): string {
 
 export function Settings(): JSX.Element {
   const settings = useSettings((state) => state.settings)
+  const navigateTo = useUi((state) => state.navigate)
+  const [cliStatus, setCliStatus] = useState('')
+  const [cliBusy, setCliBusy] = useState(false)
+  const checkCli = async (): Promise<void> => {
+    setCliBusy(true)
+    try {
+      const result = await agent.settings.checkCli()
+      setCliStatus(result.message)
+    } catch (cause) {
+      setCliStatus(cause instanceof Error ? cause.message : 'Could not reach Claude Code.')
+    } finally {
+      setCliBusy(false)
+    }
+  }
   const save = useSettings((state) => state.save)
   const navigate = useUi((state) => state.navigate)
   const status = useAccountStatus()
@@ -314,31 +328,57 @@ export function Settings(): JSX.Element {
           <section>
             <SectionHeader eyebrow="YOUR AI" line="The service that does the thinking" />
             <div className="card" style={{ padding: 10 }}>
+              {settings?.mode === 'subscription' ? (
+                <div className="rowc">
+                  <div className="ri ok">
+                    <Icon name="bolt" size={22} />
+                  </div>
+                  <div className="rt">
+                    <b>Claude Code, on your Claude plan</b>
+                    <span>{cliStatus === '' ? 'No API key needed. Billed by your plan, not by the app.' : cliStatus}</span>
+                  </div>
+                  <Button variant="tonal" size="sm" disabled={cliBusy} onClick={() => void checkCli()}>
+                    {cliBusy ? 'Checking...' : 'Check'}
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="rowc">
+                    <div className="ri">
+                      <Icon name="bolt" size={22} />
+                    </div>
+                    <div className="rt">
+                      <b>{provider?.label ?? 'No provider yet'}</b>
+                      <span>Model: {model}</span>
+                    </div>
+                  </div>
+                  <div className="rowc">
+                    <div className="ri">
+                      <Icon name="key" size={22} />
+                    </div>
+                    <div className="rt">
+                      <b>API key</b>
+                      <span>
+                        {settings?.hasKey
+                          ? 'Stored by your operating system, never shown in this window.'
+                          : 'No key on this computer yet.'}
+                      </span>
+                    </div>
+                    <Pill tone={settings?.hasKey ? 'ok' : 'mute'}>{settings?.hasKey ? 'Works' : 'Not yet'}</Pill>
+                  </div>
+                </>
+              )}
               <div className="rowc">
                 <div className="ri">
-                  <Icon name="bolt" size={22} />
+                  <Icon name="sync" size={22} />
                 </div>
                 <div className="rt">
-                  <b>{provider?.label ?? 'No provider yet'}</b>
-                  <span>Model: {model}</span>
+                  <b>Change how your agent thinks</b>
+                  <span>Switch between your Claude plan and an API key</span>
                 </div>
-                <Button variant="tonal" size="sm" comingSoon>
+                <Button variant="tonal" size="sm" onClick={() => navigateTo({ page: 'onboarding', step: 'ai' })}>
                   Change
                 </Button>
-              </div>
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="key" size={22} />
-                </div>
-                <div className="rt">
-                  <b>API key</b>
-                  <span>
-                    {settings?.hasKey
-                      ? 'Stored by your operating system, never shown in this window.'
-                      : 'No key on this computer yet.'}
-                  </span>
-                </div>
-                <Pill tone={settings?.hasKey ? 'ok' : 'mute'}>{settings?.hasKey ? 'Works' : 'Not yet'}</Pill>
               </div>
             </div>
           </section>

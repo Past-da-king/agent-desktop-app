@@ -51,6 +51,7 @@ const api: AgentApi = {
     providers: () => call<ProviderInfo[]>(CHANNELS.settings.providers),
     setApiKey: (key) => call<void>(CHANNELS.settings.setApiKey, key),
     checkKey: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.checkKey),
+    checkCli: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.checkCli),
     reset: () => call<void>(CHANNELS.settings.reset),
     onChanged: (callback) => on<Settings>(EVENTS.settings, callback),
   },

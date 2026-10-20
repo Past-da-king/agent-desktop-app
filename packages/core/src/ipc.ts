@@ -22,6 +22,8 @@ export type MascotId = 'scout' | 'ghost' | 'clover' | 'bloom' | 'puff' | 'gem' |
 /** Everything non-secret. The API key and the sync token never appear here (only `hasKey` / `signedIn`). */
 export interface Settings {
   mode: PowerMode
+  /** With mode 'subscription': the installed AI tool that does the thinking on the person's own plan. */
+  cli: 'claude' | ''
   provider: ProviderId
   model: string
   hasKey: boolean
@@ -50,6 +52,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'none',
+  cli: '',
   provider: 'anthropic',
   model: '',
   hasKey: false,
@@ -338,6 +341,8 @@ export interface AgentApi {
     setApiKey(key: string): Promise<void>
     /** Makes one tiny real completion call with the stored key and chosen model. */
     checkKey(): Promise<{ ok: boolean; message: string }>
+    /** Makes one tiny real turn through the installed AI tool (Claude Code) on the person's own plan. */
+    checkCli(): Promise<{ ok: boolean; message: string }>
     /** Wipes local data and settings (not the account on the server). Used by "Start again". */
     reset(): Promise<void>
     onChanged(cb: (s: Settings) => void): Unsubscribe

@@ -16,7 +16,9 @@
     "make:icons": "node ../../scripts/make-icons.mjs"
   },
   "dependencies": {
-    "@fontsource-variable/roboto-flex": "^5.3.0"
+    "@anthropic-ai/claude-agent-sdk": "^0.3.304",
+    "@fontsource-variable/roboto-flex": "^5.3.0",
+    "@openai/codex-sdk": "^0.163.0"
   },
   "devDependencies": {
     "@agent/core": "*",

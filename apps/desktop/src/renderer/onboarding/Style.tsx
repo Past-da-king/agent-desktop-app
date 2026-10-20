@@ -56,28 +56,30 @@ export function Style(): JSX.Element {
           </h1>
         </div>
 
-        <Field
-          label="Your name"
-          value={name}
-          onChange={(value) => {
-            setName(value)
-            setError('')
-          }}
-          placeholder="Sam"
-          error={error}
-          onEnter={() => {
-            void finish()
-          }}
-        />
-        <Field
-          label="Agent name"
-          value={agentName}
-          onChange={setAgentName}
-          placeholder="Nova"
-          onEnter={() => {
-            void finish()
-          }}
-        />
+        <div className="ob-two">
+          <Field
+            label="Your name"
+            value={name}
+            onChange={(value) => {
+              setName(value)
+              setError('')
+            }}
+            placeholder="Sam"
+            error={error}
+            onEnter={() => {
+              void finish()
+            }}
+          />
+          <Field
+            label="Agent name"
+            value={agentName}
+            onChange={setAgentName}
+            placeholder="Nova"
+            onEnter={() => {
+              void finish()
+            }}
+          />
+        </div>
 
         <div>
           <div className="eyebrow mute" style={{ marginBottom: 10 }}>
