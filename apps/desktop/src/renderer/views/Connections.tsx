@@ -11,6 +11,7 @@ import { Button } from '../ui/Button'
 import { Icon, type IconName } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
+import { ConnectedAppsSection } from './ConnectedApps'
 
 function Row({
   icon,
@@ -146,7 +147,7 @@ export function Connections(): JSX.Element {
         <div>
           <span className="eyebrow">CONNECTIONS</span>
           <h1 className="h1">On this computer</h1>
-          <p className="lead">What your agent can reach from this computer.</p>
+          <p className="lead">What your agent can reach from this computer, and the apps it can use for you.</p>
         </div>
       </div>
 
@@ -222,6 +223,8 @@ export function Connections(): JSX.Element {
         </div>
 
         <div className="stack">
+          <ConnectedAppsSection />
+
           <section>
             <SectionHeader
               eyebrow="MACHINES"
@@ -249,21 +252,6 @@ export function Connections(): JSX.Element {
             </div>
             <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
               Your agent only sees the names. Addresses, passwords and keys stay encrypted on this computer.
-            </p>
-          </section>
-
-          <section>
-            <SectionHeader eyebrow="ACCOUNTS" line="Sites your agent has learned to use" />
-            <div className="list" style={{ padding: 6 }}>
-              <Row
-                icon="globe"
-                title="Web accounts"
-                line="Sign in once in the agent's browser and it stays signed in there"
-                right={<span className="pill mute">In the browser</span>}
-              />
-            </div>
-            <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
-              Apps like Gmail and Calendar connect directly in a later version. For now the agent uses them through its browser, with your approval.
             </p>
           </section>
 
@@ -339,7 +327,7 @@ export function Connections(): JSX.Element {
               </div>
               <div style={{ flex: 1 }}>
                 <div className="h3">Work</div>
-                <div className="small muted">Slack, Outlook and Teams. Coming soon.</div>
+                <div className="small muted">Group your work accounts. Coming soon.</div>
               </div>
               <Button variant="tonal" size="sm" comingSoon>
                 Open
@@ -351,7 +339,7 @@ export function Connections(): JSX.Element {
               </div>
               <div style={{ flex: 1 }}>
                 <div className="h3">Personal</div>
-                <div className="small muted">Gmail. Coming soon.</div>
+                <div className="small muted">Group your personal accounts. Coming soon.</div>
               </div>
               <Button variant="tonal" size="sm" comingSoon>
                 Open
