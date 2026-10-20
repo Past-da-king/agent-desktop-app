@@ -189,6 +189,8 @@ export interface Attachment {
   path: string
   name: string
   mime: string
+  /** Bytes, when the caller knows them. The 20 MB rule uses it. */
+  size?: number
 }
 
 /** What the main process pushes while the agent works. The renderer re-reads `data.list('chat_item')` on `chat_changed`. */
@@ -219,6 +221,14 @@ export interface HotkeyStatus {
   accelerator: string
   ok: boolean
   message: string
+}
+
+/** What the app knows about this machine. `platform` is 'web' in the browser mock. */
+export interface SystemInfo {
+  platform: string
+  arch: string
+  hostname: string
+  appVersion: string
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -299,6 +309,13 @@ export interface AgentApi {
     /** Resolve dropped File objects (from a drag-drop event) to absolute paths. */
     pathsFor(files: File[]): string[]
     pickFolder(): Promise<string | null>
+    /** A small data URL for an image attachment, or null when no preview is available. */
+    thumbnail(path: string): Promise<string | null>
+  }
+
+  /** About the computer the app is running on. */
+  system: {
+    info(): Promise<SystemInfo>
   }
 
   shell: {

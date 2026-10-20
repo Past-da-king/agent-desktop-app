@@ -16,6 +16,7 @@ import type {
   SignInResult,
   SyncProgress,
   SyncStatus,
+  SystemInfo,
   Unsubscribe,
 } from '@agent/core'
 
@@ -100,11 +101,17 @@ const api: AgentApi = {
 
   files: {
     pick: () => call<Attachment[]>(CHANNELS.files.pick),
-    pathsFor: (files: File[]) =>
-      files
-        .map((file) => webUtils.getPathForFile(file))
-        .filter((path) => path !== ''),
+    pathsFor: (files: File[]) => {
+      const paths = files.map((file) => webUtils.getPathForFile(file)).filter((path) => path !== '')
+      if (paths.length > 0) void call<void>(CHANNELS.files.register, paths)
+      return paths
+    },
     pickFolder: () => call<string | null>(CHANNELS.files.pickFolder),
+    thumbnail: (path: string) => call<string | null>(CHANNELS.files.thumbnail, path),
+  },
+
+  system: {
+    info: () => call<SystemInfo>(CHANNELS.system.info),
   },
 
   shell: {

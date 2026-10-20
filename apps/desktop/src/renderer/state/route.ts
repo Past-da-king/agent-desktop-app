@@ -14,7 +14,10 @@ export const ONBOARDING_STEPS = ['signin', 'sync', 'ai', 'style'] as const
 
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number]
 
-export type Route = { page: AppPage } | { page: 'onboarding'; step: OnboardingStep }
+export type Route =
+  | { page: AppPage }
+  | { page: 'onboarding'; step: OnboardingStep }
+  | { page: 'quick-window' }
 
 export function isAppPage(value: string): value is AppPage {
   return (APP_PAGES as readonly string[]).includes(value)
@@ -32,12 +35,15 @@ export function parseHash(hash: string): Route | null {
   if (first === 'onboarding') {
     return { page: 'onboarding', step: second && isOnboardingStep(second) ? second : 'signin' }
   }
+  if (first === 'quick-window') return { page: 'quick-window' }
   if (first && isAppPage(first)) return { page: first }
   return null
 }
 
 export function hashFor(route: Route): string {
-  return route.page === 'onboarding' ? `#/onboarding/${route.step}` : `#/${route.page}`
+  if (route.page === 'onboarding') return `#/onboarding/${route.step}`
+  if (route.page === 'quick-window') return '#/quick-window'
+  return `#/${route.page}`
 }
 
 const LAST_KEY = 'agent.lastView'

@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { hostname as osHostname } from 'node:os'
 import { basename, join } from 'node:path'
 
 import {
@@ -337,7 +338,15 @@ async function pickOneFolder(): Promise<string | null> {
 const dialogs: DialogLike = {
   async pickFiles(): Promise<Attachment[]> {
     const paths = await pickFilePaths()
-    return paths.map((path) => ({ path, name: basename(path), mime: mimeForFile(path) }))
+    return paths.map((path) => {
+      let size: number | undefined
+      try {
+        size = statSync(path).size
+      } catch {
+        // A file that vanished between picking and reading it simply has no size.
+      }
+      return { path, name: basename(path), mime: mimeForFile(path), ...(size !== undefined ? { size } : {}) }
+    })
   },
   pickFolder: pickOneFolder,
 }
@@ -438,6 +447,12 @@ async function startServices(): Promise<void> {
       showItemInFolder: (path) => shell.showItemInFolder(path),
     },
     dialogs,
+    systemInfo: {
+      platform: process.platform,
+      arch: process.arch,
+      hostname: osHostname(),
+      appVersion: app.getVersion(),
+    },
   })
 
   applyLoginItem(settings.get())

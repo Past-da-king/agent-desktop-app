@@ -14,6 +14,7 @@ import type {
   SignInResult,
   SyncProgress,
   SyncStatus,
+  SystemInfo,
   Unsubscribe,
 } from '@agent/core'
 
@@ -472,14 +473,50 @@ export const mockAgent: AgentApi = {
 
   files: {
     async pick() {
-      // A harmless example file so the attach button and chips work in the browser preview.
-      return [{ path: 'C:\\Users\\You\\Documents\\brief.pdf', name: 'brief.pdf', mime: 'application/pdf' }]
+      // Example files so the attach button, the 20 MB rule and image thumbnails all show in the browser preview.
+      return [
+        {
+          path: 'C:\\Users\\You\\Pictures\\whiteboard.png',
+          name: 'whiteboard.png',
+          mime: 'image/png',
+          size: 240_000,
+        },
+        {
+          path: 'C:\\Users\\You\\Documents\\brief.pdf',
+          name: 'brief.pdf',
+          mime: 'application/pdf',
+          size: 820_000,
+        },
+      ]
     },
-    pathsFor() {
-      return []
+    pathsFor(files: File[]) {
+      return files.map((file) => `C:\\Users\\You\\Downloads\\${file.name}`)
     },
     async pickFolder() {
       return 'C:\\Users\\You\\Documents'
+    },
+    async thumbnail(path) {
+      if (!/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(path)) return null
+      const raw = path.split(/[\\/]/).pop() ?? 'image'
+      const name = raw.replace(/[<>&"]/g, '').slice(0, 24)
+      const svg =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">` +
+        `<rect width="96" height="96" rx="16" fill="#E4E0FF"/>` +
+        `<rect x="16" y="22" width="64" height="42" rx="8" fill="#4A3FD1"/>` +
+        `<text x="48" y="82" font-family="Roboto,sans-serif" font-size="11" fill="#1C1466" text-anchor="middle">${name}</text>` +
+        `</svg>`
+      return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+    },
+  },
+
+  system: {
+    async info(): Promise<SystemInfo> {
+      return {
+        platform: 'web',
+        arch: 'x64',
+        hostname: 'This computer',
+        appVersion: '0.0.0',
+      }
     },
   },
 
