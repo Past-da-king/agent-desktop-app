@@ -5,10 +5,11 @@ import { agent } from '../bridge'
 import { folderName } from '../lib/files'
 import { timeAgo } from '../lib/format'
 import { acceleratorFromEvent, formatAccelerator } from '../lib/hotkey'
-import { machineSummary } from '../lib/system'
+import { machineSummary, scanSummary } from '../lib/system'
 import { ACCENTS, applyAccent } from '../state/theme'
 import { useAccountStatus } from '../state/useAccount'
 import { useSettings } from '../state/useSettings'
+import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Avatar, IconButton, Pill } from '../ui/bits'
 import { Button } from '../ui/Button'
@@ -188,7 +189,11 @@ export function Settings(): JSX.Element {
   const scanAgain = async (): Promise<void> => {
     setScanning(true)
     try {
-      setEnvironment(await agent.environment.scan(true))
+      const report = await agent.environment.scan(true)
+      setEnvironment(report)
+      toast(scanSummary(report))
+    } catch (cause: unknown) {
+      toast(cause instanceof Error ? cause.message : 'The scan could not finish.')
     } finally {
       setScanning(false)
     }
