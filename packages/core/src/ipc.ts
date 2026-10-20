@@ -578,6 +578,11 @@ export interface AgentApi {
     answer(itemId: string, answer: string): Promise<void>
     /** Approve or decline an `approval` card. */
     decide(itemId: string, decision: Decision): Promise<void>
+    /**
+     * A tap on a button the agent drew in its message `itemId`: goes to the agent quietly, as a button tap, never as a
+     * message the person typed. `label` is the button's words, `message` what the tap asks (with the item it names).
+     */
+    tap(itemId: string, label: string, message: string): Promise<void>
     onEvent(cb: (e: ChatEvent) => void): Unsubscribe
   }
 

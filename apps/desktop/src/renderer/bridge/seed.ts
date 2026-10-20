@@ -9,6 +9,8 @@ import {
   type TriggerRow,
 } from '@agent/core'
 
+import { openUiDemo } from './openui-demo'
+
 export type DemoMode = 'fresh' | 'demo' | 'empty' | 'big'
 
 export interface SeedResult {
@@ -450,6 +452,8 @@ export function demoRows(): SeedResult['rows'] {
         by: 'Airline comparison',
       }),
     },
+    // Answers drawn as cards (OpenUI), the way the agent writes them.
+    ...openUiDemo(now),
   ]
 
   return {

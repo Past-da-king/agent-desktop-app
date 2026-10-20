@@ -7,6 +7,7 @@
  */
 import type { EnvironmentReport, Found, GoalRow, MemoryRow, Settings, TaskRow } from '@agent/core'
 
+import { OPENUI_PROMPT } from './openui-prompt'
 import { formatMemory, rank } from './recall'
 import { formatDateTime, localTimeZone } from './time'
 
@@ -188,6 +189,12 @@ export function buildSystemPrompt(input: PromptInput): string {
       ? 'STYLE: TLDR, always. Lead with the answer in one or two short lines, then at most a few short bullets if they truly help. Never an essay, never a report in the chat, no headings, no recap of what you did. Plain, warm words. No emoji. No em dashes.'
       : 'STYLE: short. Lead with the answer. Use short bullets for lists. No walls of text. Plain words. No emoji. No em dashes.',
   )
+
+  // Cards in the chat (OpenUI), as on the phone: the main agent and routines draw them, helpers report in text.
+  if (main) {
+    lines.push('')
+    lines.push(OPENUI_PROMPT)
+  }
 
   const computerLines = thisComputerLines(input.environment ?? null)
   if (computerLines.length > 0) {

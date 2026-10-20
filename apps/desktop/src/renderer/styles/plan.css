@@ -34,3 +34,4 @@
 .tool-sum-row:hover{background:var(--s-high)}
 .tool-sum-row i{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--s-high);color:var(--on-sv)}
 .tool-list{display:flex;flex-direction:column;gap:4px;padding-left:12px;border-left:1px solid var(--outline-v);margin-left:16px}
+.a-msg-wrap{display:flex;flex-direction:column;gap:4px;min-width:0}

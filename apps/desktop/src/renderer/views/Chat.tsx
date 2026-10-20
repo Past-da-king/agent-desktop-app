@@ -27,6 +27,8 @@ import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
+import { AgentMessage, AskCard } from '../openui/AgentMessage'
+import { withNo } from '../../shared/ask-options'
 import { ModelPicker } from '../ui/ModelPicker'
 import { Mascot } from '../ui/Mascot'
 import { Skeleton } from '../ui/Skeleton'
@@ -240,6 +242,11 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
           <button type="button" className="ans" disabled={sending} onClick={() => answer('Skip')}>
             Skip
           </button>
+          {withNo(options).includes('No') && !options.includes('No') ? (
+            <button type="button" className="ans" disabled={sending} onClick={() => answer('No')}>
+              No
+            </button>
+          ) : null}
         </div>
         <div className="hint">The page is yours while this card is open. Finish the step, then carry on.</div>
       </div>
@@ -247,21 +254,9 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   }
 
   return (
-    <div className="appr">
-      <div className="eyebrow">
-        <Icon name="bolt" size={14} />
-        QUESTION
-      </div>
-      <div className="tt">{item.text}</div>
-      {options.length > 0 ? (
-        <div className="acts">
-          {options.map((option) => (
-            <button key={option} type="button" className="ans" disabled={sending} onClick={() => answer(option)}>
-              {option}
-            </button>
-          ))}
-        </div>
-      ) : null}
+    <div className="appr ask">
+      {/* An OpenUI ask card as on the phone: one button per answer, and always a No. */}
+      <AskCard question={item.text} options={options.length > 0 ? options : ['Yes']} disabled={sending} onPick={answer} />
       <form
         className="free"
         onSubmit={(event) => {
@@ -486,10 +481,16 @@ function renderItem(
     case 'user':
       return <UserRow item={item} />
     case 'agent': {
+      // A visual a voice call put on screen keeps its own card; everything else is text plus OpenUI cards.
       const visual = visualFromMeta(parseMeta(item.meta))
-      return (
+      return visual === null ? (
+        <div className="a-msg-wrap">
+          <AgentMessage item={item} />
+          <ReadAloud id={item.id} text={item.text} />
+        </div>
+      ) : (
         <div className="a-msg">
-          {visual === null ? <Markdown text={item.text} /> : <VisualCard visual={visual} compact />}
+          <VisualCard visual={visual} compact />
           <ReadAloud id={item.id} text={item.text} />
         </div>
       )
