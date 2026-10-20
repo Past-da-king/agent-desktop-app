@@ -174,7 +174,7 @@ async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
 
 /** The methods the renderer can call: everything except its local `on*` subscriptions. */
 const METHODS: Record<string, string[]> = {
-  settings: ['get', 'save', 'providers', 'setApiKey', 'checkKey', 'checkCli', 'reset'],
+  settings: ['get', 'save', 'providers', 'setApiKey', 'checkKey', 'checkCli', 'cliLogin', 'reset'],
   account: ['signIn', 'signOut', 'firstSync', 'syncNow', 'status'],
   data: ['list', 'upsert', 'remove'],
   chat: ['send', 'stop', 'state', 'answer', 'decide'],

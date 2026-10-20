@@ -69,6 +69,7 @@ export interface ChatRunner {
   decide(itemId: string, decision: Decision): Promise<void>
   /** Optional: only the real runner can drive an installed AI tool. */
   checkCli?(): Promise<{ ok: boolean; message: string }>
+  cliLogin?(): Promise<{ ok: boolean; message: string }>
 }
 
 export interface RoutineService {
@@ -164,6 +165,9 @@ export function registerIpc(deps: IpcDeps): () => void {
   })
 
   handle(CHANNELS.settings.checkKey, async () => checkKey(deps))
+  handle(CHANNELS.settings.cliLogin, async () =>
+    deps.chat.cliLogin === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.cliLogin(),
+  )
   handle(CHANNELS.settings.checkCli, async () =>
     deps.chat.checkCli === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.checkCli(),
   )

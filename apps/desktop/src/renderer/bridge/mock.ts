@@ -258,6 +258,10 @@ export const mockAgent: AgentApi = {
       saveSettings({ hasKey: true })
       return { ok: true, message: 'Key works.' }
     },
+    async cliLogin() {
+      await delay(1200)
+      return { ok: true, message: 'Signed in.' }
+    },
     async checkCli() {
       await delay(900)
       return { ok: true, message: 'Claude Code is signed in and working on your plan.' }

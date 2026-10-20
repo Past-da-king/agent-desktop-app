@@ -6,3 +6,4 @@
 .plan-opt.on .rt span{color:color-mix(in srgb,var(--on-pc) 78%,transparent)}
 .plan-opt.on .ri{background:var(--primary);color:var(--on-primary)}
 .plan-opt .linkish{white-space:nowrap}
+.plan-msg{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 12px 8px}.plan-msg .ob-note{margin:0}

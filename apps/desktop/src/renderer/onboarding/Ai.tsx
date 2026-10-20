@@ -68,6 +68,22 @@ export function Ai(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const signIn = async (): Promise<void> => {
+    setBusy(true)
+    setPlanMessage(`Finish signing in to ${cli === 'claude' ? 'Claude' : 'ChatGPT'} in your browser, then come back here.`)
+    try {
+      await save({ mode: 'subscription', cli })
+      const result = await agent.settings.cliLogin()
+      setPlanOk(result.ok)
+      setPlanMessage(result.message)
+      if (result.ok) navigate({ page: 'onboarding', step: 'style' })
+    } catch (cause) {
+      setPlanMessage(cause instanceof Error ? cause.message : 'The sign-in did not finish.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const usePlan = async (): Promise<void> => {
     if (planOk) {
       navigate({ page: 'onboarding', step: 'style' })
@@ -247,9 +263,16 @@ export function Ai(): JSX.Element {
               )
             })}
             {planMessage !== '' ? (
-              <p className={planOk ? 'ob-note' : 'ob-note warn'} role="status">
-                {planMessage}
-              </p>
+              <div className="plan-msg">
+                <p className={planOk ? 'ob-note' : 'ob-note warn'} role="status">
+                  {planMessage}
+                </p>
+                {!planOk && !busy ? (
+                  <Button variant="tonal" size="sm" onClick={() => void signIn()}>
+                    Sign in to {cli === 'claude' ? 'Claude' : 'ChatGPT'}
+                  </Button>
+                ) : null}
+              </div>
             ) : (
               <p className="ob-note">
                 No API key and no extra bill: it runs on the plan you already pay for. Everything still goes through

@@ -552,6 +552,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
     tools,
     helpers,
     cli: cliHost,
+    openUrl: (url) => {
+      void shell.openExternal(url)
+    },
     budget,
     environment: () => environment.current(),
     providerFactory: factory,

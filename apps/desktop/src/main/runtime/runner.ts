@@ -82,6 +82,8 @@ export interface RunnerDeps {
   environment?: () => EnvironmentReport | null
   /** Runs turns through an installed AI tool on the person's own plan (Claude Code). */
   cli?: CliHost
+  /** Opens a web address in the person's own browser (sign-in pages). */
+  openUrl?: (url: string) => void
 }
 
 interface ActivityRow {
@@ -108,6 +110,7 @@ export class Runner {
   private readonly budget: StepBudget | undefined
   private readonly environment: () => EnvironmentReport | null
   private readonly cli: CliHost | undefined
+  private readonly openUrl: (url: string) => void
 
   private running = false
   private controller: AbortController | null = null
@@ -138,6 +141,7 @@ export class Runner {
     this.helpers = deps.helpers
     this.budget = deps.budget
     this.cli = deps.cli
+    this.openUrl = deps.openUrl ?? (() => undefined)
     this.environment = deps.environment ?? (() => null)
   }
 
@@ -563,6 +567,15 @@ export class Runner {
     if (result.error !== undefined) return { text: result.error, waiting: false }
     const summary = result.text.trim()
     return { text: summary === '' ? 'The routine finished without a summary.' : summary, waiting: false }
+  }
+
+  /** The chosen plan's own sign-in, then the same tiny check. */
+  async cliLogin(): Promise<{ ok: boolean; message: string }> {
+    if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a subscription.' }
+    const chosen = this.settings.get().cli
+    const signedIn = await this.cli.login(chosen === '' ? 'claude' : chosen, (url) => this.openUrl(url))
+    if (!signedIn.ok) return signedIn
+    return this.checkCli()
   }
 
   /** One tiny real turn, so onboarding and Settings can say whether the person's plan works here. */
