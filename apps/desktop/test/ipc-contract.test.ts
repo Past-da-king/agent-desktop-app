@@ -73,6 +73,10 @@ beforeEach(() => {
       isMaximized: () => true,
     },
     broadcast: (channel, payload) => sent.push({ channel, payload }),
+    dialogs: {
+      pickFiles: async () => [{ path: '/tmp/report.txt', name: 'report.txt', mime: 'text/plain' }],
+      pickFolder: async () => '/tmp/box',
+    },
   })
 })
 
@@ -187,12 +191,18 @@ describe('registerIpc', () => {
     expect(await invoke(CHANNELS.chat.state)).toMatchObject({ running: false })
   })
 
-  it('rejects a bad chat message and answers not implemented yet for routines and files', async () => {
+  it('rejects a bad chat message and answers not implemented yet for routines', async () => {
     await expect(invoke(CHANNELS.chat.send, 42)).rejects.toThrow('message must be text')
     await expect(invoke(CHANNELS.chat.decide, 'x', 'maybe')).rejects.toThrow(
       'decision must be approve or decline',
     )
     await expect(invoke(CHANNELS.routines.runNow, 'x')).rejects.toThrow('not implemented yet')
-    await expect(invoke(CHANNELS.files.pick)).rejects.toThrow('not implemented yet')
+  })
+
+  it('opens the real file and folder pickers through the injected dialogs', async () => {
+    expect(await invoke(CHANNELS.files.pick)).toEqual([
+      { path: '/tmp/report.txt', name: 'report.txt', mime: 'text/plain' },
+    ])
+    expect(await invoke(CHANNELS.files.pickFolder)).toBe('/tmp/box')
   })
 })
