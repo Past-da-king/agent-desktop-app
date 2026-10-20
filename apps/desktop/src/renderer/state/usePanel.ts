@@ -26,6 +26,10 @@ interface PanelState {
   setCollapsed: (collapsed: boolean) => void
   toggle: () => void
   resetWidth: () => void
+  /** A helper opened full size over the window; closing it gives the panel back at its own width. */
+  helper: string | null
+  openHelper: (id: string) => void
+  closeHelper: () => void
 }
 
 export const usePanel = create<PanelState>((set, get) => ({
@@ -38,6 +42,9 @@ export const usePanel = create<PanelState>((set, get) => ({
     writePanelPrefs({ width: get().width, collapsed }, prefStore())
   },
   toggle: () => get().setCollapsed(!get().collapsed),
+  helper: null,
+  openHelper: (id) => set({ helper: id }),
+  closeHelper: () => set({ helper: null }),
   resetWidth: () => {
     set({ width: PANEL_DEFAULT_WIDTH })
     writePanelPrefs({ width: PANEL_DEFAULT_WIDTH, collapsed: get().collapsed }, prefStore())

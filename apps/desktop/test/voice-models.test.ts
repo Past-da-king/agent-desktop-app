@@ -10,7 +10,8 @@ describe('chooseModels', () => {
       'gemini-3.8-flash-tts', 'gemini-4.1-flash-tts-preview', 'gemini-4.1-flash-tts',
       'gemini-3.8-live', 'gemini-4.2-live-preview', 'text-embedding-004', 'imagen-5',
     ])
-    expect(choice).toEqual({ live: 'gemini-4.2-live-preview', tts: 'gemini-4.1-flash-tts', transcribe: 'gemini-4.0-flash-lite' })
+    expect(choice).toMatchObject({ live: 'gemini-4.2-live-preview', tts: 'gemini-4.1-flash-tts', transcribe: 'gemini-4.0-flash-lite' })
+    expect(choice.speech?.[0]).toBe('gemini-4.1-flash-tts')
   })
 
   it('falls back to the known names only when the key lists nothing that fits', () => {

@@ -27,6 +27,8 @@ export interface ModelChoice {
   live: string
   tts: string
   transcribe: string
+  /** Every speech model the key lists, newest first: each has its own quota, so a note can move along them. */
+  speech?: string[]
 }
 
 export const DEFAULT_CHOICE: ModelChoice = {
@@ -102,6 +104,20 @@ async function firstThatAnswers<T>(models: string[], run: (model: string) => Pro
   throw last
 }
 
+/** Like firstThatAnswers, moving on for each status in `skip`. */
+async function eachModel<T>(models: string[], skip: number[], run: (model: string) => Promise<T>): Promise<T> {
+  let last: unknown = new GeminiError(404, 'No model')
+  for (const model of models) {
+    try {
+      return await run(model)
+    } catch (error) {
+      last = error
+      if (!(error instanceof GeminiError) || !skip.includes(error.status)) throw error
+    }
+  }
+  throw last
+}
+
 function preferring(choice: string, list: string[]): string[] {
   return choice === '' ? list : [choice, ...list.filter((model) => model !== choice)]
 }
@@ -134,6 +150,7 @@ export function chooseModels(listed: string[]): ModelChoice {
     live: live[0] ?? fallback(LIVE_MODELS),
     tts: tts[0] ?? fallback(TTS_MODELS),
     transcribe: transcribe ?? fallback(TRANSCRIBE_MODELS),
+    speech: tts.length > 0 ? tts : TTS_MODELS,
   }
 }
 
@@ -199,6 +216,98 @@ export async function speak(deps: GeminiDeps, text: string, voice: string, choic
     if (data === null) throw new GeminiError(502, 'No audio came back')
     return stripWav(Buffer.from(data, 'base64'))
   })
+}
+
+/** Vocal tags such as <short pause> or <laugh>: performed by newer speech models, spoken aloud by older ones. */
+export function stripTags(script: string): string {
+  return script.replace(/<[a-z][a-z ]{1,24}>/gi, ' ').replace(/\s{2,}/g, ' ').trim()
+}
+
+/** A voice note is at most about four minutes: the voice speaks roughly eleven characters a second. */
+export const MAX_NOTE_CHARS = 2_800
+
+/**
+ * A voice note: the agent's own spoken script, said in `style` (a delivery direction such as "warm, unhurried"
+ * that is applied, never spoken). It goes through the Interactions API first, where speech models perform
+ * vocal tags and take the style as speech metadata. A model that does not take that request gets the plain
+ * script through generateContent, tags stripped, so nothing like "<laugh>" is ever read out.
+ * Returns raw 24 kHz mono PCM16.
+ */
+export async function voiceNoteAudio(
+  deps: GeminiDeps,
+  script: string,
+  voice: string,
+  style: string,
+  choice: ModelChoice,
+): Promise<{ pcm: Buffer; model: string }> {
+  const said = script.trim().slice(0, MAX_NOTE_CHARS)
+  if (said === '') throw new GeminiError(400, 'Nothing to say')
+  const key = deps.key()
+  if (key === null || key.trim() === '') throw new GeminiError(401, 'No key')
+  const fetcher = deps.fetchImpl ?? fetch
+  // Each speech model has its own daily quota, so a model that is out of quota hands over to the next one.
+  return eachModel(preferring(choice.tts, choice.speech ?? TTS_MODELS), [404, 429], async (model) => {
+    let response: Response | null = null
+    try {
+      response = await fetcher(`${GEMINI_BASE}/v1beta/interactions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': key.trim() },
+        body: JSON.stringify({
+          model,
+          input: [
+            {
+              type: 'user_input',
+              content: [{ type: 'text', text: said, ...(style.trim() === '' ? {} : { annotations: [{ type: 'speech_metadata', style: style.trim().slice(0, 300) }] }) }],
+            },
+          ],
+          response_format: { type: 'audio' },
+          generation_config: { speech_config: [{ voice }] },
+        }),
+        signal: AbortSignal.timeout(240_000),
+      })
+    } catch {
+      response = null
+    }
+    if (response !== null && response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { steps?: Array<{ type?: string; content?: Array<{ type?: string; data?: string }> }> }
+      const audio = (body.steps ?? [])
+        .filter((step) => step.type === 'model_output')
+        .flatMap((step) => step.content ?? [])
+        .filter((part) => part.type === 'audio' && typeof part.data === 'string')
+        .pop()
+      if (audio?.data !== undefined) return { pcm: stripWav(Buffer.from(audio.data, 'base64')), model }
+    }
+    if (response !== null && (response.status === 401 || response.status === 403 || response.status === 429)) {
+      throw new GeminiError(response.status, errorMessage(await response.text().catch(() => '')))
+    }
+    // This model does not take the Interactions request: the plain script, with no tags to read out.
+    const body = await post(deps, model, {
+      contents: [{ role: 'user', parts: [{ text: stripTags(said) }] }],
+      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
+    })
+    const data = inlineAudio(body)
+    if (data === null) throw new GeminiError(502, 'No audio came back')
+    return { pcm: stripWav(Buffer.from(data, 'base64')), model }
+  })
+}
+
+/** 24 kHz mono PCM16 in a WAV container, which every player opens. */
+export function wavOf(pcm: Buffer, rate = OUTPUT_RATE): Buffer {
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0, 'ascii')
+  header.writeUInt32LE(36 + pcm.length, 4)
+  header.write('WAVE', 8, 'ascii')
+  header.write('fmt ', 12, 'ascii')
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20)
+  header.writeUInt16LE(1, 22)
+  header.writeUInt32LE(rate, 24)
+  header.writeUInt32LE(rate * 2, 28)
+  header.writeUInt16LE(2, 32)
+  header.writeUInt16LE(16, 34)
+  header.write('data', 36, 'ascii')
+  header.writeUInt32LE(pcm.length, 40)
+  return Buffer.concat([header, pcm])
 }
 
 /** Dictation: the whole recording in one call, transcribed word for word. */
