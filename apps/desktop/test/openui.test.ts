@@ -373,3 +373,12 @@ describe('What the agent is taught', () => {
     expect(buildSystemPrompt({ ...base, role: 'helper', helper: { label: 'Prices', brief: 'check prices' } })).not.toContain('GENERATIVE UI')
   })
 })
+
+describe('Button icons read whole words', () => {
+  it('Book viewing is a booking, not an OK, and No preference is a no', () => {
+    expect(iconForAction('Book viewing')).toBe('event')
+    expect(iconForAction('OK')).toBe('check')
+    expect(iconForAction('Piano lessons')).toBeNull()
+    expect(iconForAction('No preference')).toBe('close')
+  })
+})
