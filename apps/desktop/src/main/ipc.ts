@@ -9,6 +9,7 @@ import {
   PROVIDERS,
   ProviderException,
   isEntityName,
+  mimeForFile,
   providerFor,
   type Attachment,
   type Decision,
@@ -17,7 +18,10 @@ import {
   type RowInput,
   type RunState,
   type Settings,
+  type SystemInfo,
 } from '@agent/core'
+import { readFile, stat } from 'node:fs/promises'
+import { arch as osArch, hostname as osHostname, platform as osPlatform } from 'node:os'
 
 import type { AccountService, SignInArgs } from './account'
 import type { Store } from './db'
@@ -73,6 +77,8 @@ export interface IpcDeps {
   shell?: ShellLike
   dialogs?: DialogLike
   fetchImpl?: typeof fetch
+  /** Filled by `index.ts` from Electron; tests fall back to this machine's own values. */
+  systemInfo?: SystemInfo
 }
 
 const NOT_IMPLEMENTED = 'not implemented yet'
@@ -81,10 +87,13 @@ const MAX_KEY = 8192
 const MAX_MESSAGE = 20_000
 const MAX_ANSWER = 4_000
 const MAX_ATTACHMENTS = 20
+const MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024
 
 export function registerIpc(deps: IpcDeps): () => void {
   const { store, settings, secrets, account, chat, ipcMain, windows } = deps
   const send: Broadcast = deps.broadcast ?? (() => undefined)
+  // Only files the person picked or dropped may be read back for a thumbnail.
+  const previewPaths = new Set<string>()
 
   const handle = (
     channel: string,
@@ -202,11 +211,37 @@ export function registerIpc(deps: IpcDeps): () => void {
   handle(CHANNELS.files.pick, async () => {
     if (deps.dialogs === undefined) return notImplemented()
     const picked = await deps.dialogs.pickFiles()
-    return picked.slice(0, MAX_ATTACHMENTS).map((attachment) => ({
-      path: requireString(attachment.path, 'attachment path', MAX_STRING),
-      name: requireString(attachment.name, 'attachment name', MAX_STRING),
-      mime: requireString(attachment.mime, 'attachment type', MAX_STRING),
-    }))
+    return picked.slice(0, MAX_ATTACHMENTS).map((attachment) => {
+      const path = requireString(attachment.path, 'attachment path', MAX_STRING)
+      previewPaths.add(path)
+      return {
+        path,
+        name: requireString(attachment.name, 'attachment name', MAX_STRING),
+        mime: requireString(attachment.mime, 'attachment type', MAX_STRING),
+        ...(typeof attachment.size === 'number' ? { size: attachment.size } : {}),
+      }
+    })
+  })
+
+  handle(CHANNELS.files.register, async (_event, rawPaths) => {
+    if (!Array.isArray(rawPaths)) throw new Error('paths must be a list')
+    if (rawPaths.length > MAX_ATTACHMENTS) throw new Error('too many files')
+    for (const rawPath of rawPaths) previewPaths.add(requireString(rawPath, 'path', MAX_STRING))
+  })
+
+  handle(CHANNELS.files.thumbnail, async (_event, rawPath) => {
+    const path = requireString(rawPath, 'path', MAX_STRING)
+    if (!previewPaths.has(path)) return null
+    const mime = mimeForFile(path)
+    if (!mime.startsWith('image/')) return null
+    try {
+      const info = await stat(path)
+      if (!info.isFile() || info.size > MAX_THUMBNAIL_BYTES) return null
+      const bytes = await readFile(path)
+      return `data:${mime};base64,${bytes.toString('base64')}`
+    } catch {
+      return null
+    }
   })
 
   handle(CHANNELS.files.pickFolder, async () => {
@@ -215,6 +250,10 @@ export function registerIpc(deps: IpcDeps): () => void {
     if (folder === null) return null
     return requireString(folder, 'folder', MAX_STRING)
   })
+
+  // ---- system ----
+
+  handle(CHANNELS.system.info, async () => deps.systemInfo ?? thisMachine())
 
   // ---- window ----
 
@@ -302,6 +341,15 @@ function notImplemented(): never {
   throw new Error(NOT_IMPLEMENTED)
 }
 
+function thisMachine(): SystemInfo {
+  return {
+    platform: osPlatform(),
+    arch: osArch(),
+    hostname: osHostname(),
+    appVersion: '0.0.0',
+  }
+}
+
 function requireObject(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`${name} must be an object`)
@@ -325,6 +373,9 @@ function requireAttachments(value: unknown): Attachment[] {
       path: requireString(row['path'], 'attachment path', MAX_STRING),
       name: requireString(row['name'], 'attachment name', MAX_STRING),
       mime: requireString(row['mime'], 'attachment type', MAX_STRING),
+      ...(typeof row['size'] === 'number' && Number.isFinite(row['size'])
+        ? { size: row['size'] }
+        : {}),
     }
   })
 }

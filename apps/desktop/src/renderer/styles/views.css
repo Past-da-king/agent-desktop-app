@@ -179,3 +179,21 @@
 .danger{color:var(--err)}
 .kbds{display:flex;gap:6px;align-items:center}
 .linkish{color:var(--primary);font-weight:500;text-decoration:underline;text-underline-offset:2px;background:none;border:0;padding:0;font:inherit;display:inline}
+
+/* ---------- attachments and the drop target (M8) ---------- */
+.chat{position:relative}
+.attach-row{display:flex;gap:8px;flex-wrap:wrap;padding:0 2px 8px;max-width:860px;margin:0 auto}
+.attach-warn{max-width:860px;margin:0 auto 8px}
+.chip.att{max-width:280px}
+.chip.att .att-name{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip.att .thumb{width:24px;height:24px;border-radius:8px;object-fit:cover;flex:none}
+.u-files{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.u-file{display:flex;align-items:center;gap:8px;background:color-mix(in srgb,var(--on-pc) 10%,transparent);border-radius:12px;padding:6px 10px;font-size:12px;max-width:260px}
+.u-file img{width:72px;height:72px;border-radius:10px;object-fit:cover;display:block}
+.u-file.plain{min-height:36px}
+.u-file span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drop{position:absolute;inset:12px;z-index:20;pointer-events:none;border:2px dashed var(--primary);border-radius:var(--r-lg);background:color-mix(in srgb,var(--s-lowest) 88%,transparent);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;padding:20px}
+.drop-i{width:58px;height:58px;border-radius:50%;background:var(--pc);color:var(--on-pc);display:grid;place-items:center}
+.drop-t{font:500 22px/1.2 'Roboto Flex','Roboto',sans-serif;color:var(--on-bg)}
+.drop-s{font-size:13px;color:var(--on-sv)}
+.kbds{flex-wrap:wrap}

@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 
 import { Onboarding } from './onboarding/Onboarding'
 import { useGlobalKeys } from './state/keys'
-import { lastView, parseHash } from './state/route'
+import { lastView, parseHash, type Route } from './state/route'
 import { useSettings } from './state/useSettings'
 import { useRoute, useUi } from './state/useUi'
 import { Chat, ChatPanel } from './views/Chat'
@@ -14,6 +14,7 @@ import { Settings } from './views/Settings'
 import { Tasks } from './views/Tasks'
 import { Palette } from './shell/Palette'
 import { QuickAsk } from './shell/QuickAsk'
+import { QuickWindow } from './shell/QuickWindow'
 import { Shell } from './shell/Shell'
 import { TitleBar } from './shell/TitleBar'
 
@@ -56,6 +57,8 @@ function Page(): JSX.Element {
           <Settings />
         </Shell>
       )
+    case 'quick-window':
+      return <QuickWindow />
     case 'home':
     default:
       return (
@@ -66,12 +69,27 @@ function Page(): JSX.Element {
   }
 }
 
+/** The main window: title bar, shell, overlays and the keyboard shortcuts that belong to it. */
+function Main({ route }: { route: Route }): JSX.Element {
+  useGlobalKeys()
+  const onboarding = route.page === 'onboarding'
+
+  return (
+    <div className="win">
+      <TitleBar onboarding={onboarding} />
+      <div className="stage">{onboarding ? <Onboarding step={route.step} /> : <Page />}</div>
+      <div className="overlay">
+        <Palette />
+        <QuickAsk />
+      </div>
+    </div>
+  )
+}
+
 export function App(): JSX.Element {
   const ready = useSettings((state) => state.ready)
   const load = useSettings((state) => state.load)
   const route = useRoute()
-
-  useGlobalKeys()
 
   useEffect(() => {
     void load()
@@ -87,6 +105,10 @@ export function App(): JSX.Element {
     if (!ready) return
     const settings = useSettings.getState().settings
     const parsed = parseHash(window.location.hash)
+    if (parsed?.page === 'quick-window') {
+      useUi.getState().applyHash(window.location.hash)
+      return
+    }
     if (!settings?.onboarded) {
       const step = parsed?.page === 'onboarding' ? parsed.step : 'signin'
       useUi.getState().navigate({ page: 'onboarding', step })
@@ -98,6 +120,10 @@ export function App(): JSX.Element {
     }
     useUi.getState().navigate({ page: lastView() })
   }, [ready])
+
+  if (route.page === 'quick-window') {
+    return <QuickWindow />
+  }
 
   if (!ready) {
     return (
@@ -112,16 +138,5 @@ export function App(): JSX.Element {
     )
   }
 
-  const onboarding = route.page === 'onboarding'
-
-  return (
-    <div className="win">
-      <TitleBar onboarding={onboarding} />
-      <div className="stage">{onboarding ? <Onboarding step={route.step} /> : <Page />}</div>
-      <div className="overlay">
-        <Palette />
-        <QuickAsk />
-      </div>
-    </div>
-  )
+  return <Main route={route} />
 }

@@ -43,6 +43,11 @@ export const CHANNELS = {
   files: {
     pick: 'agent:files.pick',
     pickFolder: 'agent:files.pickFolder',
+    register: 'agent:files.register',
+    thumbnail: 'agent:files.thumbnail',
+  },
+  system: {
+    info: 'agent:system.info',
   },
   shell: {
     openExternal: 'agent:shell.openExternal',

@@ -1,7 +1,11 @@
-import type { ReactNode } from 'react'
+import type { SystemInfo } from '@agent/core'
+import { useEffect, useState, type ReactNode } from 'react'
 
 import { agent } from '../bridge'
+import { formatAccelerator } from '../lib/hotkey'
+import { machineSummary } from '../lib/system'
 import { useSettings } from '../state/useSettings'
+import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Icon, type IconName } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
@@ -32,24 +36,31 @@ function Row({
   )
 }
 
-function hotkeyKeys(hotkey: string, platform: string): string[] {
-  return hotkey
-    .split('+')
-    .map((part) => {
-      if (part === 'CommandOrControl') return platform === 'darwin' ? 'Cmd' : 'Ctrl'
-      if (part === 'Control') return 'Ctrl'
-      if (part === 'Space') return 'Space'
-      return part
-    })
-    .filter(Boolean)
-}
-
 export function Connections(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
+  const navigate = useUi((state) => state.navigate)
+  const [system, setSystem] = useState<SystemInfo | null>(null)
   const allowed = settings?.grantedFolders ?? []
-  const keys = hotkeyKeys(settings?.quickAskHotkey || 'CommandOrControl+Shift+Space', agent.platform)
+  const keys = formatAccelerator(settings?.quickAskHotkey || 'CommandOrControl+Shift+Space', agent.platform)
   const device = settings?.deviceName || 'This computer'
+  const machine = system ? machineSummary(system) : 'This computer'
+  const folderLine = `${allowed.length} ${allowed.length === 1 ? 'folder' : 'folders'} granted`
+
+  useEffect(() => {
+    let live = true
+    agent.system
+      .info()
+      .then((info) => {
+        if (live) setSystem(info)
+      })
+      .catch(() => {
+        // The machine line falls back to "This computer" when the main process cannot answer.
+      })
+    return () => {
+      live = false
+    }
+  }, [])
 
   const askForFolder = async (): Promise<void> => {
     try {
@@ -58,7 +69,7 @@ export function Connections(): JSX.Element {
       const current = settings?.grantedFolders ?? []
       if (!current.includes(folder)) await save({ grantedFolders: [...current, folder] })
     } catch {
-      // Folder picking arrives with the desktop-native milestone; nothing to add yet.
+      // A cancelled or refused picker leaves the granted list as it was.
     }
   }
 
@@ -74,6 +85,44 @@ export function Connections(): JSX.Element {
 
       <div className="two">
         <div className="stack">
+          <section>
+            <SectionHeader eyebrow="THIS COMPUTER" line="What your agent can use here" />
+            <div className="card" style={{ padding: 10 }}>
+              <Row
+                icon="monitor"
+                title={device}
+                line={machine}
+                right={<span className="pill ok">Online</span>}
+              />
+              <Row
+                icon="folder"
+                title="Granted folders"
+                line={
+                  allowed.length === 0
+                    ? 'None yet. Your agent asks before touching a file.'
+                    : `${folderLine}. Your agent can read and write there without asking.`
+                }
+                right={
+                  <Button
+                    variant="tonal"
+                    size="sm"
+                    onClick={() => {
+                      navigate({ page: 'settings' })
+                    }}
+                  >
+                    Manage
+                  </Button>
+                }
+              />
+              <Row
+                icon="shield"
+                title="Shell commands"
+                line={settings?.shell === 'never' ? 'Never run on this computer' : 'Ask before every command'}
+                right={<span className="pill mute">{settings?.shell === 'never' ? 'Off' : 'Ask first'}</span>}
+              />
+            </div>
+          </section>
+
           <section>
             <SectionHeader eyebrow="BUILT IN" line="On this computer, plus the machines you add" />
             <div className="list" style={{ padding: 6 }}>
@@ -109,7 +158,6 @@ export function Connections(): JSX.Element {
                   <Button
                     variant="tonal"
                     size="sm"
-                    comingSoon={agent.platform !== 'web'}
                     onClick={() => {
                       void askForFolder()
                     }}
@@ -121,8 +169,8 @@ export function Connections(): JSX.Element {
               <Row
                 icon="clip"
                 title="Drop zone"
-                line="Drag any file onto the window or the tray icon"
-                right={<span className="pill mute">Coming soon</span>}
+                line="Drag files onto a chat to attach them, up to 20 MB each"
+                right={<span className="pill ok">Ready</span>}
               />
               <Row
                 icon="bolt"
@@ -184,7 +232,7 @@ export function Connections(): JSX.Element {
               <Row
                 icon="monitor"
                 title="This computer"
-                line={`${device}, runs jobs while the app is open`}
+                line={`${machine}, ${folderLine}. Runs jobs while the app is open.`}
                 right={<span className="pill ok">Online</span>}
               />
               <Row

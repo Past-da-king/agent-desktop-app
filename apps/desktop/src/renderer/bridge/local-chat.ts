@@ -51,7 +51,7 @@ export function localChat(api: AgentApi): AgentApi['chat'] {
     async send(text, attachments) {
       const value = text.trim()
       if (value === '') return
-      await insert('user', value, JSON.stringify({ attachments: attachments?.length ?? 0 }))
+      await insert('user', value, JSON.stringify({ attachments: attachments ?? [] }))
       running = true
       emit({ type: 'run_started' })
       emit({ type: 'thinking', step: 1 })
