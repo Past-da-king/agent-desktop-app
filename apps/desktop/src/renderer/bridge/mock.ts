@@ -1,7 +1,10 @@
-import { DEFAULT_SETTINGS, PROVIDERS } from '@agent/core'
+import { DEFAULT_SETTINGS, GENERAL_PROFILE, PROFILE_COLORS, PROVIDERS } from '@agent/core'
 import type {
   AccountRules,
   AgentApi,
+  AgentProfileInfo,
+  ProfileAccount,
+  ProfileDraft,
   AppChoice,
   AppsStatus,
   ConnectedAccount,
@@ -323,6 +326,54 @@ const appsListeners = new Set<() => void>()
 
 function emitApps(): void {
   for (const listener of appsListeners) listener()
+}
+
+// ---- profiles: General (no accounts), and in the demo Work and Personal ----
+
+function profileAccount(id: string): ProfileAccount | null {
+  const account = appsAccounts.find((each) => each.id === id)
+  return account === undefined ? null : { id: account.id, app: account.app, label: account.label }
+}
+
+let profiles: AgentProfileInfo[] = [
+  { id: 'general', name: GENERAL_PROFILE, color: 'graphite', accounts: [], browser: '', general: true },
+  ...(seededApps
+    ? [
+        {
+          id: 'p_work',
+          name: 'Work',
+          color: 'ocean' as const,
+          accounts: [
+            { id: 'ca_work_gmail', app: 'gmail', label: 'ana@example.com' },
+            { id: 'ca_calendar', app: 'googlecalendar', label: 'ana@example.com' },
+            { id: 'ca_slack', app: 'slack', label: 'Example Studio workspace' },
+          ],
+          browser: '',
+          general: false,
+        },
+        {
+          id: 'p_personal',
+          name: 'Personal',
+          color: 'ember' as const,
+          accounts: [{ id: 'ca_home_gmail', app: 'gmail', label: 'ana.home@example.org' }],
+          browser: '',
+          general: false,
+        },
+      ]
+    : []),
+]
+const profileListeners = new Set<() => void>()
+
+function emitProfiles(): void {
+  for (const listener of profileListeners) listener()
+}
+
+function nextProfileColor(): AgentProfileInfo['color'] {
+  return PROFILE_COLORS.find((color) => color !== 'graphite' && !profiles.some((p) => p.color === color)) ?? 'iris'
+}
+
+function cleanProfileName(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').slice(0, 40)
 }
 
 function appName(slug: string): string {
@@ -725,6 +776,8 @@ export const mockAgent: AgentApi = {
     async disconnect(accountId: string) {
       const gone = appsAccounts.find((account) => account.id === accountId)
       appsAccounts = appsAccounts.filter((account) => account.id !== accountId)
+      profiles = profiles.map((p) => ({ ...p, accounts: p.accounts.filter((a) => a.id !== accountId) }))
+      emitProfiles()
       if (gone && !appsAccounts.some((account) => account.app === gone.app && account.status === 'pending')) {
         appsConnecting.delete(gone.app)
       }
@@ -751,6 +804,75 @@ export const mockAgent: AgentApi = {
       appsListeners.add(callback)
       return () => {
         appsListeners.delete(callback)
+      }
+    },
+  },
+
+  profiles: {
+    async list() {
+      return copy(profiles)
+    },
+    async create(draft: ProfileDraft) {
+      const name = cleanProfileName(draft.name)
+      if (name === '') return { ok: false, message: 'Give the profile a name.' }
+      if (profiles.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+        return { ok: false, message: `There is already a profile called ${name}.` }
+      }
+      const accounts = (draft.accounts ?? []).map(profileAccount).filter((a): a is ProfileAccount => a !== null)
+      const profile: AgentProfileInfo = {
+        id: newId('p'),
+        name,
+        color: draft.color ?? nextProfileColor(),
+        accounts,
+        browser: draft.browser ?? '',
+        general: false,
+      }
+      profiles = [...profiles, profile]
+      emitProfiles()
+      return { ok: true, message: `Made ${name}.`, profile: copy(profile) }
+    },
+    async update(id: string, patch: Partial<ProfileDraft>) {
+      const current = profiles.find((p) => p.id === id)
+      if (current === undefined) return { ok: false, message: 'That profile is gone.' }
+      const name = patch.name === undefined ? current.name : cleanProfileName(patch.name)
+      if (name === '') return { ok: false, message: 'Give the profile a name.' }
+      if (current.general && name !== current.name) return { ok: false, message: 'General keeps its name.' }
+      if (profiles.some((p) => p.id !== id && p.name.toLowerCase() === name.toLowerCase())) {
+        return { ok: false, message: `There is already a profile called ${name}.` }
+      }
+      const accounts = current.general
+        ? []
+        : patch.accounts === undefined
+          ? current.accounts
+          : patch.accounts.map(profileAccount).filter((a): a is ProfileAccount => a !== null)
+      profiles = profiles.map((p) =>
+        p.id === id
+          ? { ...p, name, color: patch.color ?? p.color, accounts, browser: patch.browser ?? p.browser }
+          : p,
+      )
+      emitProfiles()
+      return { ok: true, message: 'Saved.' }
+    },
+    async remove(id: string) {
+      if (profiles.find((p) => p.id === id)?.general === true) return
+      profiles = profiles
+        .filter((p) => p.id !== id)
+        .map((p) => (p.browser === id ? { ...p, browser: '' } : p))
+      emitProfiles()
+    },
+    async setMember(profileId: string, accountId: string, member: boolean) {
+      const account = profileAccount(accountId)
+      profiles = profiles.map((p) => {
+        if (p.id !== profileId || p.general) return p
+        const rest = p.accounts.filter((a) => a.id !== accountId)
+        return { ...p, accounts: member && account !== null ? [...rest, account] : rest }
+      })
+      emitProfiles()
+    },
+    onChanged(callback: () => void): Unsubscribe {
+      profileListeners.add(callback)
+      return () => {
+        profileListeners.delete(callback)
       }
     },
   },
