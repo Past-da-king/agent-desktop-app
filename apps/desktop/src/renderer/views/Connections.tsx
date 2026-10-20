@@ -3,8 +3,9 @@ import { useEffect, useState, type ReactNode } from 'react'
 
 import { agent } from '../bridge'
 import { formatAccelerator } from '../lib/hotkey'
-import { machineSummary } from '../lib/system'
+import { machineSummary, scanSummary } from '../lib/system'
 import { useSettings } from '../state/useSettings'
+import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Icon, type IconName } from '../ui/Icon'
@@ -118,7 +119,11 @@ export function Connections(): JSX.Element {
   const scanAgain = async (): Promise<void> => {
     setScanning(true)
     try {
-      setEnvironment(await agent.environment.scan(true))
+      const report = await agent.environment.scan(true)
+      setEnvironment(report)
+      toast(scanSummary(report))
+    } catch (cause: unknown) {
+      toast(cause instanceof Error ? cause.message : 'The scan could not finish.')
     } finally {
       setScanning(false)
     }
