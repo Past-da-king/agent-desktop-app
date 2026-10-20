@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
+import '@fontsource-variable/roboto-flex/full.css'
 import './styles/index.css'
 
 const container = document.getElementById('root')

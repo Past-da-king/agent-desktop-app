@@ -237,21 +237,16 @@ export function SignIn(): JSX.Element {
 
         <div className="or">or</div>
 
-        <div className="qr">
+        <div className="qr soon" aria-disabled="true">
           <div className="qrbox" aria-hidden="true">
-            <Icon name="phone" size={40} />
+            <Icon name="phone" size={30} />
           </div>
-          <div>
-            <div className="h3">Sign in with your phone</div>
-            <p className="muted small" style={{ margin: '6px 0 10px', lineHeight: 1.5 }}>
-              Open Agent on your phone, tap your picture, then Add a computer, and scan the code. Nothing to type.
-            </p>
-            <Button variant="tonal" size="sm" comingSoon>
-              I scanned it
-            </Button>
-            <div style={{ marginTop: 8 }}>
+          <div className="qr-t">
+            <div className="qr-head">
+              <div className="h3">Sign in with your phone</div>
               <span className="pill mute">Coming soon</span>
             </div>
+            <p className="muted small">Scan a code from the Agent app on your phone. Nothing to type.</p>
           </div>
         </div>
 

@@ -4,7 +4,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--on-bg);
-  font: 500 13px/1 'Roboto Flex', 'Roboto', system-ui, sans-serif;
+  font: 500 13px/1 'Roboto Flex', var(--font);
   padding: 10px 16px;
   cursor: pointer;
 }
@@ -33,7 +33,7 @@
 
 .about-title {
   margin: 0 0 8px;
-  font: 500 22px/1.2 'Roboto Flex', 'Roboto', system-ui, sans-serif;
+  font: 500 22px/1.2 'Roboto Flex', var(--font);
 }
 
 .about-line {
@@ -53,7 +53,7 @@
   border-radius: 999px;
   background: transparent;
   color: inherit;
-  font: 500 13px/1 'Roboto Flex', 'Roboto', system-ui, sans-serif;
+  font: 500 13px/1 'Roboto Flex', var(--font);
   padding: 10px 14px;
   cursor: pointer;
 }
