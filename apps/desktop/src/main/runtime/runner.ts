@@ -30,6 +30,8 @@ import {
 } from '@agent/core'
 
 import type { DataStore } from './data'
+import type { StepBudget } from './budget'
+import type { HelperHost } from './helpers'
 import { buildSystemPrompt } from './prompt'
 
 export interface SettingsView {
@@ -70,6 +72,10 @@ export interface RunnerDeps {
   now?: () => number
   /** Tests pin a zone; production uses the computer's own. */
   timeZone?: string
+  /** Handing work to helpers (M10). */
+  helpers?: HelperHost
+  /** The main agent's action-step budget, shared by the tools built in toolset.ts. */
+  budget?: StepBudget
 }
 
 interface ActivityRow {
@@ -92,6 +98,8 @@ export class Runner {
   private readonly isFocused: () => boolean
   private readonly now: () => number
   private readonly timeZone: string | undefined
+  private readonly helpers: HelperHost | undefined
+  private readonly budget: StepBudget | undefined
 
   private running = false
   private controller: AbortController | null = null
@@ -119,6 +127,8 @@ export class Runner {
     this.isFocused = deps.isFocused ?? (() => true)
     this.now = deps.now ?? Date.now
     this.timeZone = deps.timeZone
+    this.helpers = deps.helpers
+    this.budget = deps.budget
   }
 
   // ---- the person's side ------------------------------------------------------------------
@@ -153,11 +163,29 @@ export class Runner {
     return { running: this.running, waiting: [...this.waiting] }
   }
 
+  /**
+   * A finished helper's result, as a new main turn. There is no user bubble: the note is the turn's
+   * first message. While a turn is running it joins that run as a steering note instead.
+   */
+  async deliver(text: string): Promise<void> {
+    const clean = text.trim()
+    if (clean === '') return
+    if (this.running) {
+      this.steer.push(clean)
+      this.emit({ type: 'chat_changed' })
+      return
+    }
+    await this.begin(clean, [], null)
+  }
+
   /** Answer a question card, now or after a restart. */
   async answer(itemId: string, answer: string): Promise<void> {
     const row = await this.store.get('chat_item', itemId)
     if (row === null || row.kind !== 'question') return
     const meta = parseMeta(row.meta)
+    if (typeof meta['helper'] === 'string' && this.helpers?.answer !== undefined) {
+      if (await this.helpers.answer(itemId, answer)) return
+    }
     const answered = typeof meta['answer'] === 'string' && meta['answer'] !== ''
     const waiter = this.askWaiters.get(itemId)
 
@@ -183,6 +211,9 @@ export class Runner {
     const row = await this.store.get('chat_item', itemId)
     if (row === null || row.kind !== 'approval') return
     const meta = parseMeta(row.meta)
+    if (typeof meta['helper'] === 'string' && this.helpers?.decide !== undefined) {
+      if (await this.helpers.decide(itemId, decision)) return
+    }
     const decided = typeof meta['decision'] === 'string' && meta['decision'] !== ''
     const waiter = this.decisionWaiters.get(itemId)
     const summary = typeof meta['summary'] === 'string' ? meta['summary'] : row.text
@@ -210,6 +241,7 @@ export class Runner {
    * are re-armed so answering one still carries the conversation on.
    */
   async restore(): Promise<void> {
+    await this.helpers?.restore?.()
     const items = await this.store.list('chat_item')
     let changed = false
 
@@ -306,6 +338,8 @@ export class Runner {
     user: { text: string; meta: string } | null,
   ): Promise<void> {
     this.running = true
+    // A message the person sent starts a fresh action budget. A helper's result does not.
+    if (user !== null) this.budget?.reset()
     const controller = new AbortController()
     this.controller = controller
     this.emit({ type: 'run_started' })
@@ -415,6 +449,9 @@ export class Runner {
       goals,
       tasks,
       latestUserText: text,
+      role: 'main',
+      helperModel: model,
+      liveHelpers: this.helpers?.live() ?? [],
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
     const context = this.toolContext(signal)
