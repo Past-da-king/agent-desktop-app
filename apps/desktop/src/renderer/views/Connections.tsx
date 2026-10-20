@@ -129,8 +129,8 @@ export function Connections(): JSX.Element {
               <Row
                 icon="globe"
                 title="Agent's browser"
-                line="A real browser it uses while you do other things"
-                right={<span className="pill mute">Coming soon</span>}
+                line="Its own browser, with its own cookies. It shows in Chat while it works, and hands over to you when a page needs you"
+                right={<span className="pill ok">Ready</span>}
               />
               <Row
                 icon="bell"
@@ -253,26 +253,15 @@ export function Connections(): JSX.Element {
               <Row
                 icon="globe"
                 title="Web accounts"
-                line="Sites the agent signs in to for you"
-                right={<span className="pill mute">Coming soon</span>}
+                line="Sign in once in the agent's browser and it stays signed in there"
+                right={<span className="pill mute">In the browser</span>}
               />
             </div>
             <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
-              Connected accounts arrive after the browser does. Nothing is connected today.
+              Apps like Gmail and Calendar connect directly in a later version. For now the agent uses them through its browser, with your approval.
             </p>
           </section>
 
-          <section>
-            <SectionHeader eyebrow="SHELL" line="Commands are always approved first" />
-            <div className="list" style={{ padding: 6 }}>
-              <Row
-                icon="shield"
-                title="Shell commands"
-                line={settings?.shell === 'never' ? 'Never run on this computer' : 'Ask before every command'}
-                right={<span className="pill mute">{settings?.shell === 'never' ? 'Off' : 'Ask first'}</span>}
-              />
-            </div>
-          </section>
         </div>
       </div>
     </div>
