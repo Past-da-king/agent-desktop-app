@@ -145,6 +145,57 @@ function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
   )
 }
 
+type Segment = { kind: 'item'; item: ChatItem } | { kind: 'tools'; id: string; items: ChatItem[] }
+
+/** Back-to-back tool steps become ONE row: the live step while it runs, then a single summary. */
+function segmentsOf(messages: ChatItem[]): Segment[] {
+  const out: Segment[] = []
+  for (const item of messages) {
+    const last = out[out.length - 1]
+    if (item.kind === 'activity' && last !== undefined && last.kind === 'tools') last.items.push(item)
+    else if (item.kind === 'activity') out.push({ kind: 'tools', id: item.id, items: [item] })
+    else out.push({ kind: 'item', item })
+  }
+  return out
+}
+
+function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const statuses = items.map((item) => metaText(parseMeta(item.meta), 'status') || 'done')
+  const running = live && statuses.includes('running')
+  const failed = statuses.filter((status) => status === 'error').length
+  const current = [...items].reverse().find((_, index) => statuses[items.length - 1 - index] === 'running') ?? items[items.length - 1]
+  if (running && current !== undefined) {
+    return (
+      <div className="tool-live">
+        <ActivityRow item={current} />
+        {items.length > 1 ? <span className="tool-count">Step {items.length}</span> : null}
+      </div>
+    )
+  }
+  if (items.length === 1 && items[0] !== undefined) return <ActivityRow item={items[0]} />
+  return (
+    <div className="tool-group">
+      <button type="button" className="tool-sum-row" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <i>
+          <Icon name={failed > 0 ? 'x' : 'check'} size={16} />
+        </i>
+        <span>
+          Used {items.length} tools{failed > 0 ? `, ${failed} failed` : ''}
+        </span>
+        <Icon name={open ? 'chevd' : 'chev'} size={16} />
+      </button>
+      {open ? (
+        <div className="tool-list">
+          {items.map((item) => (
+            <ActivityRow key={item.id} item={item} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   const meta = parseMeta(item.meta)
   const options = metaStrings(meta, 'options')
@@ -493,6 +544,7 @@ export function Chat(): JSX.Element {
   const dragDepth = useRef(0)
 
   const messages = useMemo(() => threadItems(items), [items])
+  const segments = useMemo(() => segmentsOf(messages), [messages])
   const title = threadTitle(items)
   const cards = openCards(items, true)
   const needsYou = waiting.length > 0 || cards.length > 0
@@ -711,11 +763,15 @@ export function Chat(): JSX.Element {
           </div>
         ) : (
           <div className="thread-in">
-            {messages.map((item) => (
-              <div key={item.id} style={{ display: 'contents' }}>
-                {renderItem(item, items, (row) => setReader(row), agentName)}
-              </div>
-            ))}
+            {segments.map((segment, index) =>
+              segment.kind === 'tools' ? (
+                <ToolSteps key={segment.id} items={segment.items} live={running && index === segments.length - 1} />
+              ) : (
+                <div key={segment.item.id} style={{ display: 'contents' }}>
+                  {renderItem(segment.item, items, (row) => setReader(row), agentName)}
+                </div>
+              ),
+            )}
             {thinking ? (
               <div className="a-msg think" role="status" aria-live="polite">
                 <Mascot id={settings?.mascot ?? 'scout'} size={30} busy />

@@ -25,3 +25,12 @@
 .model-custom label{font-size:12px;color:var(--on-sv)}
 .model-custom .row{display:flex;gap:8px}
 .model-custom .input{height:40px;padding:0 12px;font-size:14px}
+
+/* Tool steps: one row, never a stack. */
+.tool-live{display:flex;align-items:center;gap:10px}
+.tool-live .tool-count{font-size:12px;color:var(--on-sv);font-variant-numeric:tabular-nums}
+.tool-group{display:flex;flex-direction:column;gap:4px}
+.tool-sum-row{display:inline-flex;align-items:center;gap:10px;align-self:flex-start;height:34px;padding:0 12px 0 6px;border-radius:999px;color:var(--on-sv);font:500 13px/1 var(--font);transition:background var(--t-fast,160ms) var(--effects)}
+.tool-sum-row:hover{background:var(--s-high)}
+.tool-sum-row i{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--s-high);color:var(--on-sv)}
+.tool-list{display:flex;flex-direction:column;gap:4px;padding-left:12px;border-left:1px solid var(--outline-v);margin-left:16px}
