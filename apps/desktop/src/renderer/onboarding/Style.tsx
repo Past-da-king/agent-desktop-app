@@ -139,10 +139,12 @@ export function Style(): JSX.Element {
           </div>
         </div>
 
-        <Button size="lg" block onClick={() => void finish()} disabled={busy}>
-          {busy ? 'One moment...' : 'Open Agent'}
-          <Icon name="arrow" size={20} />
-        </Button>
+        <div className="ob-cta">
+          <Button size="lg" block onClick={() => void finish()} disabled={busy}>
+            {busy ? 'One moment...' : 'Open Agent'}
+            <Icon name="arrow" size={20} />
+          </Button>
+        </div>
       </div>
     </OnboardingLayout>
   )

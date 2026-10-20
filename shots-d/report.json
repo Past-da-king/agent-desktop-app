@@ -1,0 +1,43 @@
+{
+  "only": "chat",
+  "failures": [],
+  "warnings": [],
+  "report": [
+    {
+      "tag": "chat-full@1440-light",
+      "file": "shots-d/chat-full-1440-light.png",
+      "tiny": 0,
+      "contrast": 0
+    },
+    {
+      "tag": "chat-full@1440-dark",
+      "file": "shots-d/chat-full-1440-dark.png",
+      "tiny": 0,
+      "contrast": 0
+    },
+    {
+      "tag": "chat-full@390-light",
+      "file": "shots-d/chat-full-390-light.png",
+      "tiny": 0,
+      "contrast": 0
+    },
+    {
+      "tag": "chat-empty@1440-light",
+      "file": "shots-d/chat-empty-1440-light.png",
+      "tiny": 0,
+      "contrast": 0
+    },
+    {
+      "tag": "chat-empty@1440-dark",
+      "file": "shots-d/chat-empty-1440-dark.png",
+      "tiny": 0,
+      "contrast": 0
+    },
+    {
+      "tag": "chat-empty@390-light",
+      "file": "shots-d/chat-empty-390-light.png",
+      "tiny": 0,
+      "contrast": 0
+    }
+  ]
+}

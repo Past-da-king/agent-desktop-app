@@ -11,16 +11,16 @@
 .rail{display:flex;flex-direction:column;gap:4px;min-height:0;overflow:auto;padding:2px 4px 4px;scrollbar-width:thin}
 .me{display:flex;align-items:center;gap:12px;padding:6px 8px 12px;text-align:left;border-radius:var(--r-md)}
 .me:hover{background:var(--s-mid)}
-.me .nm{font:500 18px/1.2 'Roboto Flex','Roboto',sans-serif}
+.me .nm{font:500 18px/1.2 var(--font)}
 .me .st{font-size:12px;color:var(--on-sv);margin-top:2px}
 .me .st.warn{color:var(--tert);font-weight:500}
 .newchat{margin:0 4px 10px}
-.nav{display:flex;align-items:center;gap:14px;height:48px;padding:0 18px;border-radius:999px;color:var(--on-sv);font:500 14px/1 'Roboto',sans-serif;text-align:left;width:100%;transition:background .2s var(--effects),border-radius .45s var(--spatial)}
+.nav{display:flex;align-items:center;gap:14px;height:48px;padding:0 18px;border-radius:999px;color:var(--on-sv);font:500 14px/1 var(--font);text-align:left;width:100%;transition:background .2s var(--effects),border-radius .45s var(--spatial)}
 .nav:hover{background:var(--s-mid)}
 .nav.on{background:var(--sc);color:var(--on-sc)}
 .nav:active{border-radius:16px}
 .nav .lbl{flex:1}
-.badge{min-width:22px;height:22px;padding:0 7px;border-radius:999px;background:var(--tc);color:var(--on-tc);font:700 12px/22px 'Roboto',sans-serif;text-align:center}
+.badge{min-width:22px;height:22px;padding:0 7px;border-radius:999px;background:var(--tc);color:var(--on-tc);font:700 12px/22px var(--font);text-align:center}
 .rail .grp{margin:16px 12px 6px}
 .chatrow{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:var(--r-md);text-align:left;width:100%;color:var(--on-bg);transition:background .2s}
 .chatrow:hover{background:var(--s-mid)}
@@ -30,7 +30,7 @@
 .chatrow svg{color:var(--on-sv)}
 .rail .spacer{flex:1;min-height:12px}
 .acct{display:flex;align-items:center;gap:12px;padding:10px 10px;border-radius:var(--r-md);margin-top:6px;border-top:1px solid var(--outline-v);border-radius:0;padding-top:14px}
-.avatar{width:36px;height:36px;border-radius:50%;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;font:700 14px/1 'Roboto',sans-serif;flex:none}
+.avatar{width:36px;height:36px;border-radius:50%;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;font:700 14px/1 var(--font);flex:none}
 .badge.pos{display:none}
 .col .badge.pos{display:block}
 .col .lbl,.col .grp,.col .chatlist,.col .acct .who,.col .me .who,.col .newchat span,.col .badge.inline{display:none}

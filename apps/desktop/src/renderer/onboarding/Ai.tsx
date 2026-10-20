@@ -66,11 +66,11 @@ export function Ai(): JSX.Element {
     void save({ provider: value, model: next?.defaultModel ?? '' })
   }
 
-  const check = async (): Promise<void> => {
+  const check = async (): Promise<boolean> => {
     const current = key.trim()
     if (current === '' && !settings?.hasKey) {
       setMessage('Paste your key first.')
-      return
+      return false
     }
     setBusy(true)
     setMessage('')
@@ -89,8 +89,10 @@ export function Ai(): JSX.Element {
       setOk(result.ok)
       setMessage(result.message)
       if (result.ok) await save({ mode: 'api_key', provider })
+      return result.ok
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : 'Could not check that key.')
+      return false
     } finally {
       setBusy(false)
     }
@@ -102,7 +104,8 @@ export function Ai(): JSX.Element {
   }
 
   const cont = async (): Promise<void> => {
-    if (!ok) return
+    // One primary action: if the key has not been checked yet, check it first and only move on when it works.
+    if (!ok && !(await check())) return
     await save({
       mode: 'api_key',
       provider,
@@ -209,6 +212,13 @@ export function Ai(): JSX.Element {
           }}
         />
 
+        <div className="ob-keyrow">
+          <Button variant="tonal" size="sm" onClick={() => void check()} disabled={busy}>
+            {busy ? 'Checking...' : 'Check key'}
+          </Button>
+          <span>One tiny request to {label}, so you know it works before you go on.</span>
+        </div>
+
         {custom ? (
           <div className="card" style={{ padding: 16 }}>
             <Field
@@ -263,16 +273,15 @@ export function Ai(): JSX.Element {
           </li>
         </ol>
 
-        <Button size="lg" block onClick={() => void check()} disabled={busy}>
-          {busy ? 'Checking...' : 'Check key'}
-        </Button>
-        <Button size="lg" block disabled={!ok || busy} onClick={() => void cont()}>
-          Continue
-          <Icon name="arrow" size={20} />
-        </Button>
-        <Button variant="text" onClick={() => void skip()} style={{ alignSelf: 'center' }}>
-          Skip, I will add it later
-        </Button>
+        <div className="ob-cta">
+          <Button size="lg" block disabled={busy} onClick={() => void cont()}>
+            {busy ? 'Checking your key...' : 'Continue'}
+            <Icon name="arrow" size={20} />
+          </Button>
+          <Button variant="text" onClick={() => void skip()} style={{ alignSelf: 'center' }}>
+            Skip, I will add it later
+          </Button>
+        </div>
       </div>
     </OnboardingLayout>
   )

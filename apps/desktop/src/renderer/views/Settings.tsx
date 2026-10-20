@@ -6,7 +6,7 @@ import { folderName } from '../lib/files'
 import { timeAgo } from '../lib/format'
 import { acceleratorFromEvent, formatAccelerator } from '../lib/hotkey'
 import { machineSummary } from '../lib/system'
-import { ACCENTS, applyAccent, isDarkNow } from '../state/theme'
+import { ACCENTS, applyAccent } from '../state/theme'
 import { useAccountStatus } from '../state/useAccount'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -139,7 +139,6 @@ export function Settings(): JSX.Element {
 
   const provider = PROVIDERS.find((item) => item.id === settings?.provider)
   const model = settings?.model.trim() || provider?.defaultModel || 'No model chosen'
-  const dark = isDarkNow()
   const signedIn = settings?.signedIn ?? false
   const userName = settings?.userName.trim() || 'You'
   const email = settings?.syncEmail ?? ''
@@ -304,15 +303,16 @@ export function Settings(): JSX.Element {
 
         <div className="stack">
           <section>
-            <SectionHeader eyebrow="LOOK" line="Light or dark, your colour, your sidekick" />
+            <SectionHeader eyebrow="LOOK" line="Light, dark or the same as your computer, your colour, your sidekick" />
             <div className="card">
               <Segmented
                 ariaLabel="Theme"
-                value={dark ? 'dark' : 'light'}
+                value={settings?.theme ?? 'system'}
                 onChange={(value) => {
                   void save({ theme: value })
                 }}
                 options={[
+                  { value: 'system', label: 'System', icon: <Icon name="monitor" size={18} /> },
                   { value: 'light', label: 'Light', icon: <Icon name="sun" size={18} /> },
                   { value: 'dark', label: 'Dark', icon: <Icon name="moon" size={18} /> },
                 ]}

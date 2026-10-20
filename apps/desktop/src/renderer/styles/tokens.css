@@ -12,6 +12,7 @@
   --ok:#1E6B3A; --on-ok:#F4FFF6; --okc:#CFEBD7;
   --mascot:#F29A2E; --eye:#3A1F00;
   --desk:#E4E0EC; --shadow:0 24px 70px rgba(40,30,110,.20), 0 2px 8px rgba(40,30,110,.10);
+  --font:'Roboto Flex Variable','Roboto Flex',Roboto,system-ui,'Segoe UI',sans-serif;
   --r-sm:12px; --r-md:20px; --r-lg:28px; --r-xl:36px;
   --effects:cubic-bezier(.2,0,0,1);
   --spatial:cubic-bezier(.34,1.45,.64,1);

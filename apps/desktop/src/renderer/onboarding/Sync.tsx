@@ -174,15 +174,17 @@ export function Sync(): JSX.Element {
           </>
         ) : null}
 
-        <Button
-          size="lg"
-          block
-          disabled={fresh ? false : !ready}
-          onClick={() => navigate({ page: 'onboarding', step: 'ai' })}
-        >
-          {fresh ? 'Continue' : ready ? 'Continue' : busy ? 'Syncing...' : 'Continue'}
-          <Icon name="arrow" size={20} />
-        </Button>
+        <div className="ob-cta">
+          <Button
+            size="lg"
+            block
+            disabled={fresh ? false : !ready}
+            onClick={() => navigate({ page: 'onboarding', step: 'ai' })}
+          >
+            {fresh ? 'Continue' : ready ? 'Continue' : busy ? 'Syncing...' : 'Continue'}
+            <Icon name="arrow" size={20} />
+          </Button>
+        </div>
       </div>
     </OnboardingLayout>
   )

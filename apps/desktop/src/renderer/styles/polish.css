@@ -1,0 +1,85 @@
+/* ---------- the finishing layer ----------
+   Loaded last. Everything here refines the port without changing its structure: depth for overlays, warmer dark
+   "needs you" surfaces, actions that never fall below the fold, motion that says what changed, and feedback on press.
+   Spatial movement uses --spatial (an overshooting spring), colour and opacity use --effects (no overshoot). */
+
+:root{
+  --elev-1:0 1px 2px color-mix(in srgb,var(--on-bg) 8%,transparent);
+  --elev-3:0 2px 6px color-mix(in srgb,#1c1466 10%,transparent),0 18px 48px color-mix(in srgb,#1c1466 18%,transparent);
+  --scrim:color-mix(in srgb,#120f2a 34%,transparent);
+  --hair-amber:color-mix(in srgb,var(--tert) 30%,transparent);
+  --t-fast:160ms; --t-mid:240ms; --t-slow:420ms;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --elev-3:0 0 0 1px color-mix(in srgb,#fff 7%,transparent),0 24px 64px rgba(0,0,0,.55);
+    --scrim:color-mix(in srgb,#05040a 58%,transparent);
+    /* The phone's dark amber container reads as mud over big areas. A deep umber keeps "needs you" unmistakably
+       warm while staying calm next to the iris surfaces. */
+    --tc:#43300F; --on-tc:#FFE2C0;
+    --pc:#322A8F;
+  }
+}
+:root[data-theme="dark"]{
+  --elev-3:0 0 0 1px color-mix(in srgb,#fff 7%,transparent),0 24px 64px rgba(0,0,0,.55);
+  --scrim:color-mix(in srgb,#05040a 58%,transparent);
+  --tc:#43300F; --on-tc:#FFE2C0;
+  --pc:#322A8F;
+}
+
+/* Amber cards get a hairline in their own colour, so in dark they separate from the sheet without a heavy fill. */
+.need,.appr{box-shadow:inset 0 0 0 1px var(--hair-amber)}
+
+/* ---------- overlays: a real layer above the app ---------- */
+.scrim{background:var(--scrim);-webkit-backdrop-filter:blur(3px) saturate(.9);backdrop-filter:blur(3px) saturate(.9)}
+.palette,.quick,.dialog:not(.quick-dialog){box-shadow:var(--elev-3)}
+:root[data-theme="dark"] .palette,:root[data-theme="dark"] .quick,:root[data-theme="dark"] .dialog:not(.quick-dialog){background:var(--s-high)}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) .palette,:root:not([data-theme="light"]) .quick,:root:not([data-theme="light"]) .dialog:not(.quick-dialog){background:var(--s-high)}
+}
+.pi{transition:background var(--t-fast) var(--effects)}
+.toast{box-shadow:var(--elev-3);animation:toast-in var(--t-slow) var(--spatial)}
+@keyframes toast-in{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
+
+/* ---------- onboarding: the next step is always in reach ---------- */
+.ob-col{min-height:100%}
+.ob-cta{position:sticky;bottom:-28px;margin-top:auto;padding:22px 0 28px;display:flex;flex-direction:column;gap:6px;z-index:2;
+  background:linear-gradient(to bottom,color-mix(in srgb,var(--bg) 0%,transparent),var(--bg) 22px)}
+.ob-keyrow{display:flex;align-items:center;gap:14px;margin-top:-2px}
+.ob-keyrow span{font-size:12px;line-height:1.45;color:var(--on-sv)}
+.qr.soon{padding:14px 16px;gap:14px;background:var(--s-low)}
+.qr.soon .qrbox{width:52px;height:52px;border-radius:16px}
+.qr.soon .qr-t{display:flex;flex-direction:column;gap:4px;min-width:0}
+.qr.soon .qr-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.qr.soon p{margin:0;line-height:1.45}
+
+/* ---------- chat: the header is a surface, the thread scrolls under it ---------- */
+.chat-h{position:relative;z-index:3;background:var(--bg)}
+.chat-h::after{content:"";position:absolute;left:0;right:0;bottom:-14px;height:14px;pointer-events:none;
+  background:linear-gradient(to bottom,var(--bg),color-mix(in srgb,var(--bg) 0%,transparent))}
+
+/* ---------- motion: a view arrives, it does not just appear ---------- */
+.sheet>*{animation:view-in var(--t-mid) var(--effects) both}
+@keyframes view-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* Press feedback everywhere a finger or cursor commits to something (spatial, so it overshoots and settles). */
+.chip,.pi,.nav,.tb-btn,.ib,.seg button,.prov button,.swatches button,.mascots button,.todo .box{transition:transform var(--t-slow) var(--spatial),background var(--t-fast) var(--effects),color var(--t-fast) var(--effects),border-color var(--t-fast) var(--effects)}
+.chip:active,.nav:active,.tb-btn:active,.ib:active,.seg button:active,.prov button:active,.swatches button:active,.mascots button:active{transform:scale(.96)}
+.todo .box:active{transform:scale(.88)}
+
+/* A visible, consistent focus ring, offset so it never touches the pill it belongs to. */
+:focus-visible{outline:2px solid var(--primary);outline-offset:3px;border-radius:inherit}
+input:focus-visible,textarea:focus-visible{outline:none}
+
+@media (prefers-reduced-motion:reduce){
+  .sheet>*,.toast{animation:none}
+}
+
+/* The icon inside the coming-soon phone card is an icon, not the old QR plate. */
+.qr.soon .qrbox svg{width:30px;height:30px;padding:0;background:none;border-radius:0}
+
+/* Disclosures look like the app, not like a browser: a rotating chevron, a real hit area. */
+details.adv>summary{list-style:none;display:flex;align-items:center;gap:10px;cursor:pointer;-webkit-user-select:none;user-select:none}
+details.adv>summary::-webkit-details-marker{display:none}
+details.adv>summary::before{content:"";width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform var(--t-slow) var(--spatial);margin-left:2px}
+details.adv[open]>summary::before{transform:rotate(45deg)}

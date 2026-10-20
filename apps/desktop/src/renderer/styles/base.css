@@ -2,7 +2,7 @@
 html,body,#root{height:100%}
 body{
   margin:0; background:var(--desk); color:var(--on-bg);
-  font:400 14px/1.45 'Roboto',system-ui,sans-serif;
+  font:400 14px/1.45 var(--font);
   padding-block:16px;
   padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px));
   -webkit-font-smoothing:antialiased;
@@ -20,11 +20,11 @@ ul{margin:0;padding:0;list-style:none}
 /* ---------- window ---------- */
 .win{height:100%;min-height:620px;background:var(--bg);border-radius:14px;box-shadow:var(--shadow);overflow:hidden;display:grid;grid-template-rows:auto minmax(0,1fr);position:relative}
 .titlebar{height:46px;display:flex;align-items:center;gap:12px;padding:0 0 0 16px;-webkit-user-select:none;user-select:none}
-.tb-brand{display:flex;align-items:center;gap:10px;font:500 13px/1 'Roboto Flex','Roboto',sans-serif;color:var(--on-sv);min-width:200px}
+.tb-brand{display:flex;align-items:center;gap:10px;font:500 13px/1 var(--font);color:var(--on-sv);min-width:200px}
 .cmdbar{flex:0 1 480px;margin:0 auto;height:34px;border-radius:999px;background:var(--s-high);color:var(--on-sv);display:flex;align-items:center;gap:10px;padding:0 6px 0 14px;font-size:13px;text-align:left;transition:background .2s var(--effects)}
 .cmdbar:hover{background:var(--s-highest)}
 .cmdbar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-kbd{font:500 12px/1 'Roboto',sans-serif;padding:4px 7px;border-radius:8px;background:var(--bg);color:var(--on-sv);border:1px solid var(--outline-v)}
+kbd{font:500 12px/1 var(--font);padding:4px 7px;border-radius:8px;background:var(--bg);color:var(--on-sv);border:1px solid var(--outline-v)}
 .tb-right{display:flex;align-items:center;min-width:200px;justify-content:flex-end}
 .syncpill{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-radius:999px;font-size:12px;font-weight:500;color:var(--on-sv);margin-right:6px;white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
@@ -39,22 +39,22 @@ kbd{font:500 12px/1 'Roboto',sans-serif;padding:4px 7px;border-radius:8px;backgr
 .wc.close:hover{color:#fff}
 
 /* ---------- type ---------- */
-.eyebrow{font:700 11px/16px 'Roboto',sans-serif;letter-spacing:.12em;text-transform:uppercase;color:var(--primary)}
+.eyebrow{font:700 11px/16px var(--font);letter-spacing:.12em;text-transform:uppercase;color:var(--primary)}
 .eyebrow.mute{color:var(--on-sv)}
 .sec{display:flex;flex-direction:column;gap:2px;margin-bottom:12px}
 .sec-line{font-size:13px;color:var(--on-sv)}
 .sec-row{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:12px}
 .sec-row .sec{margin:0}
-.h1{font:500 clamp(30px,3.1vw,42px)/1.12 'Roboto Flex','Roboto',sans-serif;letter-spacing:-.5px;text-wrap:balance}
-.h2{font:500 24px/1.25 'Roboto Flex','Roboto',sans-serif}
-.h3{font:600 16px/1.3 'Roboto',sans-serif}
+.h1{font:500 clamp(30px,3.1vw,42px)/1.12 var(--font);letter-spacing:-.5px;text-wrap:balance}
+.h2{font:500 24px/1.25 var(--font)}
+.h3{font:600 16px/1.3 var(--font)}
 .lead{font-size:16px;line-height:1.55;color:var(--on-sv)}
 .muted{color:var(--on-sv)}
 .small{font-size:12px}
 .num{font-variant-numeric:tabular-nums}
 
 /* ---------- buttons ---------- */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:48px;padding:0 24px;border-radius:999px;font:500 14px/1 'Roboto',sans-serif;letter-spacing:.1px;transition:border-radius .45s var(--spatial),background .2s var(--effects),transform .45s var(--spatial)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:48px;padding:0 24px;border-radius:999px;font:500 14px/1 var(--font);letter-spacing:.1px;transition:border-radius .45s var(--spatial),background .2s var(--effects),transform .45s var(--spatial)}
 .btn:active{border-radius:14px;transform:scale(.985)}
 .btn.fill{background:var(--primary);color:var(--on-primary)}
 .btn.fill:hover{background:color-mix(in srgb,var(--primary) 88%,var(--on-primary))}
@@ -74,24 +74,24 @@ kbd{font:500 12px/1 'Roboto',sans-serif;padding:4px 7px;border-radius:8px;backgr
 .ib:hover{background:var(--s-high)}
 .ib.tonal{background:var(--s-high)}
 .ib:active{border-radius:14px}
-.chip{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:999px;border:1px solid var(--outline-v);font:500 13px/1 'Roboto',sans-serif;color:var(--on-sv);background:transparent;transition:background .2s var(--effects),border-radius .45s var(--spatial)}
+.chip{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:999px;border:1px solid var(--outline-v);font:500 13px/1 var(--font);color:var(--on-sv);background:transparent;transition:background .2s var(--effects),border-radius .45s var(--spatial)}
 .chip:hover{background:var(--s-high)}
 .chip.on{background:var(--sc);color:var(--on-sc);border-color:transparent}
 .chip:active{border-radius:12px}
 .chip[disabled]{cursor:not-allowed;opacity:.7}
-.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;border-radius:999px;font:700 11px/1 'Roboto',sans-serif;letter-spacing:.06em;text-transform:uppercase}
+.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;border-radius:999px;font:700 11px/1 var(--font);letter-spacing:.06em;text-transform:uppercase}
 .pill.ok{background:var(--okc);color:var(--ok)}
 .pill.warn{background:var(--tc);color:var(--on-tc)}
 .pill.pri{background:var(--pc);color:var(--on-pc)}
 .pill.mute{background:var(--s-high);color:var(--on-sv)}
 .seg{display:flex;padding:4px;gap:4px;border-radius:999px;background:var(--s-mid)}
-.seg button{display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:1;height:42px;border-radius:999px;font:500 13px/1 'Roboto',sans-serif;color:var(--on-sv);transition:background .25s var(--effects),border-radius .45s var(--spatial)}
+.seg button{display:inline-flex;align-items:center;justify-content:center;gap:8px;flex:1;height:42px;border-radius:999px;font:500 13px/1 var(--font);color:var(--on-sv);transition:background .25s var(--effects),border-radius .45s var(--spatial)}
 .seg button.on{background:var(--primary);color:var(--on-primary)}
 .seg button:not(.on):hover{background:var(--s-high)}
 
 /* ---------- fields ---------- */
 .field{display:block;position:relative}
-.field label{display:block;font:500 12px/1 'Roboto',sans-serif;color:var(--on-sv);margin:0 0 8px 4px}
+.field label{display:block;font:500 12px/1 var(--font);color:var(--on-sv);margin:0 0 8px 4px}
 .input{width:100%;height:56px;border-radius:var(--r-md);border:1.5px solid var(--outline);background:var(--s-lowest);color:var(--on-bg);padding:0 52px 0 18px;font-size:16px;transition:border-color .2s var(--effects),box-shadow .2s var(--effects)}
 .input::placeholder{color:var(--on-sv);opacity:.75}
 .input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 25%,transparent)}
@@ -123,6 +123,6 @@ kbd{font:500 12px/1 'Roboto',sans-serif;padding:4px 7px;border-radius:8px;backgr
 .sk-row.short{width:45%}
 @keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
 .boot{height:100%;display:grid;place-items:center}
-.boot-wordmark{font:500 28px/1.2 'Roboto Flex','Roboto',sans-serif;letter-spacing:-.5px;color:var(--on-bg)}
+.boot-wordmark{font:500 28px/1.2 var(--font);letter-spacing:-.5px;color:var(--on-bg)}
 .eyes ellipse{transform-box:fill-box;transform-origin:center;animation:blink 5.5s infinite}
 @keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
