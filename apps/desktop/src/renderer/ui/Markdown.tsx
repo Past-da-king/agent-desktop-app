@@ -1,8 +1,8 @@
 import { Fragment, type ReactNode } from 'react'
 
-/** Very small markdown: headings, bold, inline code, paragraphs, numbered and bulleted lists. */
-function inline(text: string, keyPrefix: string): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+/** Very small markdown: headings, bold, inline code, paragraphs, numbered and bulleted lists, and memory links. */
+function inline(text: string, keyPrefix: string, onWikiLink?: (name: string) => void): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[\[[^\]]+\]\])/g)
   return parts.map((part, index) => {
     const key = `${keyPrefix}-${index}`
     if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
@@ -11,11 +11,30 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
     if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
       return <code key={key}>{part.slice(1, -1)}</code>
     }
+    const link = /^\[\[([^\]]+)\]\]$/.exec(part)
+    if (link) {
+      const name = link[1]?.trim() ?? ''
+      if (onWikiLink && name !== '') {
+        return (
+          <button key={key} type="button" className="linkish" onClick={() => onWikiLink(name)}>
+            {name}
+          </button>
+        )
+      }
+      return <Fragment key={key}>{name}</Fragment>
+    }
     return <Fragment key={key}>{part}</Fragment>
   })
 }
 
-export function Markdown({ text }: { text: string }): JSX.Element {
+export function Markdown({
+  text,
+  onWikiLink,
+}: {
+  text: string
+  /** When given, `[[Page]]` becomes a real button that navigates to (or creates) that memory page. */
+  onWikiLink?: (name: string) => void
+}): JSX.Element {
   const blocks: ReactNode[] = []
   let paragraph: string[] = []
   let numbered: string[] = []
@@ -29,7 +48,7 @@ export function Markdown({ text }: { text: string }): JSX.Element {
         {paragraph.map((line, index) => (
           <Fragment key={`${key}-${index}`}>
             {index > 0 ? <br /> : null}
-            {inline(line, `${key}-${index}`)}
+            {inline(line, `${key}-${index}`, onWikiLink)}
           </Fragment>
         ))}
       </p>,
@@ -43,7 +62,7 @@ export function Markdown({ text }: { text: string }): JSX.Element {
     blocks.push(
       <ol key={key}>
         {numbered.map((item, index) => (
-          <li key={`${key}-${index}`}>{inline(item, `${key}-${index}`)}</li>
+          <li key={`${key}-${index}`}>{inline(item, `${key}-${index}`, onWikiLink)}</li>
         ))}
       </ol>,
     )
@@ -56,7 +75,7 @@ export function Markdown({ text }: { text: string }): JSX.Element {
     blocks.push(
       <ul key={key}>
         {bulleted.map((item, index) => (
-          <li key={`${key}-${index}`}>{inline(item, `${key}-${index}`)}</li>
+          <li key={`${key}-${index}`}>{inline(item, `${key}-${index}`, onWikiLink)}</li>
         ))}
       </ul>,
     )
@@ -76,7 +95,7 @@ export function Markdown({ text }: { text: string }): JSX.Element {
       const level = heading[1]?.length ?? 1
       blocks.push(
         <div className={level > 2 ? 'md-h sub' : 'md-h'} key={`h-${blocks.length}`}>
-          {inline(heading[2] ?? '', `h-${blocks.length}`)}
+          {inline(heading[2] ?? '', `h-${blocks.length}`, onWikiLink)}
         </div>,
       )
       continue
