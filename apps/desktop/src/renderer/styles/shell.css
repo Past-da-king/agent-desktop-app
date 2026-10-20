@@ -3,9 +3,11 @@
 .overlay{position:absolute;inset:0;z-index:30;pointer-events:none}
 .overlay .scrim{pointer-events:auto}
 .shell{display:grid;grid-template-columns:272px minmax(0,1fr);gap:12px;padding:0 12px 12px;min-height:0}
-.shell.panel{grid-template-columns:272px minmax(0,1fr) 380px}
+.shell.panel{grid-template-columns:272px minmax(0,1fr) var(--panel-w,380px)}
 .shell.col{grid-template-columns:76px minmax(0,1fr)}
-.shell.col.panel{grid-template-columns:76px minmax(0,1fr) 380px}
+.shell.col.panel{grid-template-columns:76px minmax(0,1fr) var(--panel-w,380px)}
+.shell.panel-collapsed{grid-template-columns:272px minmax(0,1fr) 56px}
+.shell.col.panel-collapsed{grid-template-columns:76px minmax(0,1fr) 56px}
 .rail{display:flex;flex-direction:column;gap:4px;min-height:0;overflow:auto;padding:2px 4px 4px;scrollbar-width:thin}
 .me{display:flex;align-items:center;gap:12px;padding:6px 8px 12px;text-align:left;border-radius:var(--r-md)}
 .me:hover{background:var(--s-mid)}

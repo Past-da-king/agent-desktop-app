@@ -1,8 +1,8 @@
 /* ---------- phone-width: same system, the phone layout ---------- */
 .mnav{display:none}
 @media (max-width:1180px){
-  .shell.panel{grid-template-columns:76px minmax(0,1fr)}
-  .shell.panel .panel-w{display:none}
+  .shell.panel,.shell.panel-collapsed{grid-template-columns:76px minmax(0,1fr)}
+  .shell.panel .panel-w,.shell.panel-collapsed .panel-w{display:none}
   .shell:not(.col){grid-template-columns:76px minmax(0,1fr)}
   .shell .rail .lbl,.shell .rail .grp,.shell .rail .chatlist,.shell .rail .who,.shell .newchat span,.shell .badge.inline{display:none}
   .shell .nav{justify-content:center;padding:0}
@@ -27,7 +27,7 @@
   .tb-brand,.syncpill,.wc,.tb-btn.hide-m{display:none}
   .cmdbar{flex:1;margin:0}
   .tb-right{min-width:0}
-  .win .shell,.win .shell.panel,.win .shell.col,.win .shell.col.panel,.win .shell:not(.col){grid-template-columns:minmax(0,1fr);padding:0;gap:0}
+  .win .shell,.win .shell.panel,.win .shell.panel-collapsed,.win .shell.col,.win .shell.col.panel,.win .shell.col.panel-collapsed,.win .shell:not(.col){grid-template-columns:minmax(0,1fr);padding:0;gap:0}
   .rail{display:none}
   .sheet{border-radius:var(--r-lg) var(--r-lg) 0 0}
   .page{padding:20px 16px 120px}
