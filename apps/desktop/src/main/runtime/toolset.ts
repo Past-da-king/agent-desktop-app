@@ -14,6 +14,7 @@ import type { LearnedStore } from '../apps/store'
 import { appTools } from '../tools/apps'
 import { codeTools } from '../tools/code'
 import { browserTools } from '../tools/browser'
+import { browserProTools } from '../tools/browser-pro'
 import { coreTools, type CoreToolDeps } from '../tools/core'
 import { fileTools } from '../tools/files'
 import { memoryTools } from '../tools/memory'
@@ -108,7 +109,9 @@ export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
       ...(name === undefined ? {} : { agentName: name }),
     }), // browser_open through browser_show_user
     ...appTools(deps.apps), // apps_connected, apps_find_tools, apps_run, apps_connect
-    ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)), // webapp_*, browser_eval, browser_network
+    // browser_eval comes from browser-pro (value plus a log); learned apps keep browser_network and webapp_*
+    ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)).filter((tool) => tool.spec.name !== 'browser_eval'), // webapp_*, browser_network
+    ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
 
   ]
 }

@@ -495,7 +495,37 @@ async function startServices(win: BrowserWindow): Promise<void> {
     window: win,
     onState: (state) => broadcast(EVENTS.browser, state),
     openExternal: (url) => shell.openExternal(url),
+    sitesFile: join(app.getPath('userData'), 'browser-sites.json'),
   })
+  // The real-Electron browser proof opens a local test page here; never set in normal use.
+  const probeUrl = process.env['AGENT_BROWSER_PROBE_URL']?.trim() ?? ''
+  if (probeUrl !== '') {
+    setTimeout(() => {
+      const browser = agentBrowser
+      if (browser === null) return
+      void (async () => {
+        console.log(`BROWSER PROBE opened\n${await browser.probeOpen(probeUrl)}`)
+        if (process.env['AGENT_BROWSER_PROBE_ACT'] !== '1') return
+        // Trusted input by name, at desktop size and again at phone size (where the view is drawn scaled).
+        console.log(`BROWSER PROBE click\n${await browser.act({ action: 'click', name: 'Press me' })}`)
+        console.log(`BROWSER PROBE type\n${await browser.act({ action: 'type', name: 'Search here', text: 'hello world' })}`)
+        console.log(`BROWSER PROBE eval\n${await browser.evaluate("({ button: document.getElementById('go').textContent, field: document.getElementById('q').value })", 10)}`)
+        await browser.view({ mode: 'phone', remember: false })
+        await browser.evaluate("document.getElementById('go').textContent = 'Press me'", 5)
+        console.log(`BROWSER PROBE phone click\n${await browser.act({ action: 'click', name: 'Press me' })}`)
+        console.log(`BROWSER PROBE phone eval\n${await browser.evaluate("({ button: document.getElementById('go').textContent, w: innerWidth, ts: window.__ts || 'none', pd: window.__pd || 'none', btn: JSON.stringify(document.getElementById('go').getBoundingClientRect()) })", 10)}`)
+        await browser.view({ mode: 'desktop', remember: false })
+        console.log('BROWSER PROBE done')
+        const handoffMs = Number(process.env['AGENT_BROWSER_PROBE_HANDOFF_MS'] ?? '')
+        if (Number.isFinite(handoffMs) && handoffMs > 0) {
+          setTimeout(() => {
+            browser.setAgentDriving(false, 'Sign in to the test page, then press Done, carry on.')
+            console.log('BROWSER PROBE handoff')
+          }, handoffMs)
+        }
+      })()
+    }, 2500)
+  }
 
   const learned = new LearnedStore(join(dir, 'learned-apps.json'))
   const apps = new AppsService({

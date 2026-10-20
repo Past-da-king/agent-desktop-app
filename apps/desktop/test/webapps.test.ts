@@ -27,7 +27,7 @@ function fakeBrowser(page: Record<string, unknown> = {}) {
     },
     currentUrl: () => url,
     hasPage: () => url !== '',
-    async evaluate(code) {
+    async evaluateRaw(code) {
       return runInNewContext(code, { location: { href: url }, ...page })
     },
   }

@@ -46,8 +46,8 @@ export interface PageRunner {
 
 export function browserRunner(browser: BrowserDriver): PageRunner {
   const evaluate = async (code: string): Promise<unknown> => {
-    if (browser.evaluate === undefined) throw new Error('The browser is not open right now.')
-    return browser.evaluate(code)
+    if (browser.evaluateRaw === undefined) throw new Error('The browser is not open right now.')
+    return browser.evaluateRaw(code)
   }
   return {
     async ensure(app) {

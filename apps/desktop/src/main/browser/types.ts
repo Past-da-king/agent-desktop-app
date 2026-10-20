@@ -26,7 +26,7 @@ export interface BrowserDriver {
    * Learned apps: run script text in the page's own world (so the site's fetch, cookies and globals are
    * there) and resolve with its JSON-able result. Optional so small test fakes need not implement it.
    */
-  evaluate?(code: string, timeoutMs?: number): Promise<unknown>
+  evaluateRaw?(code: string, timeoutMs?: number): Promise<unknown>
   /** The address of the active tab, or ''. */
   currentUrl?(): string
 }
@@ -71,5 +71,108 @@ export const unavailableBrowser: BrowserDriver = {
   },
   hasPage() {
     return false
+  },
+}
+
+// ---- the stronger controls: emulation, fixes per site, snapshot by role and name, trusted input ----
+
+export interface ViewRequest {
+  mode?: 'desktop' | 'tablet' | 'phone' | 'fit'
+  width?: number
+  height?: number
+  /** "16:9", "9:16", "4:3" */
+  aspect?: string
+  dpr?: number
+  zoom?: number
+  touch?: boolean
+  userAgent?: string
+  /** Back to the default view (and forget this site's view). */
+  reset?: boolean
+  /** Also use this view for sites the browser has not learned yet. */
+  asDefault?: boolean
+  /** Remember this view for the current site. Default true. */
+  remember?: boolean
+}
+
+export type FixAction = 'css' | 'js' | 'clear_data' | 'headers' | 'user_agent' | 'retry' | 'forget' | 'list'
+
+export interface FixRequest {
+  action: FixAction
+  css?: string
+  js?: string
+  headers?: Record<string, string>
+  userAgent?: string
+  /** Keep it for every later visit to the site. Default true. */
+  persist?: boolean
+}
+
+export type ActAction =
+  | 'click'
+  | 'double_click'
+  | 'right_click'
+  | 'type'
+  | 'select'
+  | 'check'
+  | 'uncheck'
+  | 'hover'
+  | 'focus'
+  | 'press'
+  | 'hold'
+  | 'drag'
+  | 'scroll'
+
+export interface ActRequest {
+  action: ActAction
+  index?: number
+  name?: string
+  role?: string
+  nth?: number
+  text?: string
+  submit?: boolean
+  key?: string
+  /** Page coordinates in screenshot pixels, for canvases and cross-origin frames. */
+  at?: { x: number; y: number }
+  to?: { x: number; y: number }
+  ms?: number
+  dy?: number
+}
+
+export interface BrowserProDriver {
+  view(request: ViewRequest): Promise<string>
+  fix(request: FixRequest): Promise<string>
+  snapshotPro(options: { filter?: string; deep?: boolean }): Promise<string>
+  act(request: ActRequest): Promise<string>
+  evaluate(code: string, seconds: number, signal?: AbortSignal): Promise<string>
+}
+
+export function isBrowserPro(value: unknown): value is BrowserProDriver {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<Record<keyof BrowserProDriver, unknown>>
+  return (
+    typeof candidate.view === 'function' &&
+    typeof candidate.fix === 'function' &&
+    typeof candidate.snapshotPro === 'function' &&
+    typeof candidate.act === 'function' &&
+    typeof candidate.evaluate === 'function'
+  )
+}
+
+const NOT_OPEN = 'The browser is not open right now.'
+
+export const unavailableBrowserPro: BrowserProDriver = {
+  async view() {
+    return NOT_OPEN
+  },
+  async fix() {
+    return NOT_OPEN
+  },
+  async snapshotPro() {
+    return NOT_OPEN
+  },
+  async act() {
+    return NOT_OPEN
+  },
+  async evaluate() {
+    return NOT_OPEN
   },
 }
