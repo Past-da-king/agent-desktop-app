@@ -53,3 +53,8 @@
 .adv .field{margin-top:14px}
 .ob-note{font-size:12px;line-height:1.5;color:var(--on-sv)}
 .ob-note.warn{color:var(--tert);font-weight:500}
+.ob-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.ob-top .dots{margin-bottom:0}
+.ob-check{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:14px}
+.ob-check span{font-size:13px;line-height:1.4;color:var(--on-sv)}
+.ob-alt{display:flex;flex-wrap:wrap;align-items:center;gap:12px;justify-content:center}

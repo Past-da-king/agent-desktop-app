@@ -1,6 +1,6 @@
 import { PROVIDERS } from '@agent/core'
-import type { ProviderId } from '@agent/core'
-import { useState } from 'react'
+import type { ProviderId, ProviderInfo } from '@agent/core'
+import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
 import { useSettings } from '../state/useSettings'
@@ -8,11 +8,8 @@ import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
 import { Icon } from '../ui/Icon'
+import { Switch } from '../ui/Switch'
 import { OnboardingLayout } from './OnboardingLayout'
-
-const SHOWN_PROVIDERS = PROVIDERS.filter((item) =>
-  ['anthropic', 'openai', 'gemini', 'deepseek', 'openrouter', 'custom'].includes(item.id),
-)
 
 const CONSOLE_URLS: Partial<Record<ProviderId, string>> = {
   anthropic: 'https://console.anthropic.com',
@@ -28,37 +25,66 @@ export function Ai(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   const navigate = useUi((state) => state.navigate)
-  const [provider, setProvider] = useState<ProviderId>(settings?.provider ?? 'anthropic')
+  const [providers, setProviders] = useState<ProviderInfo[]>(PROVIDERS)
+  const initialProvider = settings?.provider ?? 'anthropic'
+  const initialInfo = PROVIDERS.find((item) => item.id === initialProvider)
+  const [provider, setProvider] = useState<ProviderId>(initialProvider)
+  const [model, setModel] = useState(settings?.model || initialInfo?.defaultModel || '')
+  const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? '')
+  const [allowHttp, setAllowHttp] = useState(settings?.allowHttp ?? false)
   const [key, setKey] = useState('')
   const [message, setMessage] = useState('')
   const [ok, setOk] = useState(settings?.hasKey ?? false)
   const [busy, setBusy] = useState(false)
 
-  const info = PROVIDERS.find((item) => item.id === provider)
+  useEffect(() => {
+    let live = true
+    void agent.settings
+      .providers()
+      .then((list) => {
+        if (live && list.length > 0) setProviders(list)
+      })
+      .catch(() => {
+        // The built-in catalogue is a safe fallback if the main process cannot answer.
+      })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  const info = providers.find((item) => item.id === provider) ?? PROVIDERS.find((item) => item.id === provider)
   const label = info?.label ?? 'Provider'
   const consoleUrl = CONSOLE_URLS[provider]
+  const custom = provider === 'custom'
 
   const choose = (value: ProviderId): void => {
     setProvider(value)
     setOk(false)
     setMessage('')
-    const next = PROVIDERS.find((item) => item.id === value)
+    const next = providers.find((item) => item.id === value) ?? PROVIDERS.find((item) => item.id === value)
+    setModel(next?.defaultModel ?? '')
     void save({ provider: value, model: next?.defaultModel ?? '' })
   }
 
   const check = async (): Promise<void> => {
-    if (ok) {
-      navigate({ page: 'onboarding', step: 'style' })
-      return
-    }
-    if (key.trim() === '') {
+    const current = key.trim()
+    if (current === '' && !settings?.hasKey) {
       setMessage('Paste your key first.')
       return
     }
     setBusy(true)
     setMessage('')
     try {
-      await agent.settings.setApiKey(key.trim())
+      await save({
+        provider,
+        model: model.trim() || info?.defaultModel || '',
+        baseUrl: custom ? baseUrl.trim() : '',
+        allowHttp,
+      })
+      if (current !== '') {
+        await agent.settings.setApiKey(current)
+        setKey('')
+      }
       const result = await agent.settings.checkKey()
       setOk(result.ok)
       setMessage(result.message)
@@ -70,8 +96,25 @@ export function Ai(): JSX.Element {
     }
   }
 
+  const skip = async (): Promise<void> => {
+    await save({ mode: ok ? 'api_key' : 'none', provider, model: model.trim() || info?.defaultModel || '' })
+    navigate({ page: 'onboarding', step: 'style' })
+  }
+
+  const cont = async (): Promise<void> => {
+    if (!ok) return
+    await save({
+      mode: 'api_key',
+      provider,
+      model: model.trim() || info?.defaultModel || '',
+      baseUrl: custom ? baseUrl.trim() : '',
+      allowHttp,
+    })
+    navigate({ page: 'onboarding', step: 'style' })
+  }
+
   return (
-    <OnboardingLayout step="ai">
+    <OnboardingLayout step="ai" onBack={() => navigate({ page: 'onboarding', step: 'sync' })}>
       <div className="ob-col" style={{ gap: 12 }}>
         <div>
           <div className="eyebrow">YOUR AI</div>
@@ -116,7 +159,7 @@ export function Ai(): JSX.Element {
             OR BRING AN API KEY
           </div>
           <div className="prov" role="radiogroup" aria-label="Provider">
-            {SHOWN_PROVIDERS.map((item) => (
+            {providers.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -133,7 +176,7 @@ export function Ai(): JSX.Element {
         </div>
 
         <Field
-          label={`${label} API key`}
+          label="API key"
           type="password"
           revealable
           revealLabel="key"
@@ -143,7 +186,7 @@ export function Ai(): JSX.Element {
             setMessage('')
             setOk(false)
           }}
-          placeholder="Paste your key"
+          placeholder={settings?.hasKey ? 'A key is already saved on this computer' : 'Paste your key'}
           autoComplete="off"
           error={ok ? '' : message}
           ok={ok ? message : ''}
@@ -151,6 +194,46 @@ export function Ai(): JSX.Element {
             void check()
           }}
         />
+
+        <Field
+          label="Model"
+          value={model}
+          onChange={(value) => {
+            setModel(value)
+            setOk(false)
+            setMessage('')
+          }}
+          placeholder={info?.defaultModel ?? 'Model name'}
+          onEnter={() => {
+            void check()
+          }}
+        />
+
+        {custom ? (
+          <div className="card" style={{ padding: 16 }}>
+            <Field
+              label="Base URL"
+              type="url"
+              value={baseUrl}
+              onChange={(value) => {
+                setBaseUrl(value)
+                setOk(false)
+              }}
+              placeholder="https://api.example.com/v1"
+            />
+            <div className="ob-check">
+              <span>Allow unencrypted HTTP</span>
+              <Switch
+                label="Allow unencrypted HTTP"
+                on={allowHttp}
+                onToggle={(next) => {
+                  setAllowHttp(next)
+                  setOk(false)
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
 
         <ol className="steps">
           <li>
@@ -181,11 +264,14 @@ export function Ai(): JSX.Element {
         </ol>
 
         <Button size="lg" block onClick={() => void check()} disabled={busy}>
-          {busy ? 'Checking...' : ok ? 'Continue' : 'Check key'}
-          {ok ? <Icon name="arrow" size={20} /> : null}
+          {busy ? 'Checking...' : 'Check key'}
         </Button>
-        <Button variant="text" onClick={() => navigate({ page: 'onboarding', step: 'style' })} style={{ alignSelf: 'center' }}>
-          Skip for now
+        <Button size="lg" block disabled={!ok || busy} onClick={() => void cont()}>
+          Continue
+          <Icon name="arrow" size={20} />
+        </Button>
+        <Button variant="text" onClick={() => void skip()} style={{ alignSelf: 'center' }}>
+          Skip, I will add it later
         </Button>
       </div>
     </OnboardingLayout>
