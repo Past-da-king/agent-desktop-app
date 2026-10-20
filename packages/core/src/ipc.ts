@@ -24,6 +24,8 @@ export interface Settings {
   mode: PowerMode
   /** With mode 'subscription': the installed AI tool that does the thinking on the person's own plan. */
   cli: 'claude' | 'codex' | ''
+  /** The model on the person's plan ('' = the plan's default; Claude takes opus, sonnet, haiku, fable). */
+  cliModel: string
   provider: ProviderId
   model: string
   hasKey: boolean
@@ -53,6 +55,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'none',
   cli: '',
+  cliModel: '',
   provider: 'anthropic',
   model: '',
   hasKey: false,

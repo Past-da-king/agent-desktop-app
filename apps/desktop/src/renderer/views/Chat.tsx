@@ -18,6 +18,7 @@ import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
+import { ModelPicker } from '../ui/ModelPicker'
 import { Mascot } from '../ui/Mascot'
 import { Skeleton } from '../ui/Skeleton'
 
@@ -477,7 +478,6 @@ export function Chat(): JSX.Element {
   const cards = openCards(items, true)
   const needsYou = waiting.length > 0 || cards.length > 0
   const agentName = settings?.agentName.trim() || 'Your agent'
-  const model = settings?.model.trim() || 'No model chosen'
 
   useEffect(() => {
     let alive = true
@@ -637,11 +637,7 @@ export function Chat(): JSX.Element {
             {needsYou ? 'Waiting for you' : running ? 'Working' : 'Ready'}
           </span>
         </div>
-        <span className="model" title="Change the model in Settings">
-          <Icon name="bolt" size={16} />
-          <span>{model}</span>
-          <Icon name="chevd" size={16} />
-        </span>
+        <ModelPicker />
         <IconButton icon="phone" label="Talk" comingSoon size={22} />
       </div>
 
