@@ -47,6 +47,8 @@
   .detail{padding:22px 20px}
   .next{padding:22px 20px}
   .ob-col .h1{font-size:30px}
+  .rowc{flex-wrap:wrap;gap:10px 12px}
+  .rowc .rt{flex:1 1 150px}
   .scrim{padding-top:8vh}
   .cfoot{display:none}
   .model{display:none}

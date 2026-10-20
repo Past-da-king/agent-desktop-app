@@ -136,7 +136,7 @@ describe('AccountService', () => {
       mode: 'login',
     })
 
-    expect(result).toEqual({ ok: false, error: 'That email and password did not match.' })
+    expect(result).toEqual({ ok: false, error: 'That email and password do not match.' })
   })
 
   it('signing out clears the token but keeps local data', async () => {

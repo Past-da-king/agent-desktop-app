@@ -64,16 +64,27 @@ function Dots({ step }: { step: OnboardingStep }): JSX.Element {
 
 export function OnboardingLayout({
   step,
+  onBack,
   children,
 }: {
   step: OnboardingStep
+  onBack?: () => void
   children: ReactNode
 }): JSX.Element {
   return (
     <div className="ob">
       <Hero />
       <main className="ob-main">
-        <Dots step={step} />
+        <div className="ob-top">
+          {onBack ? (
+            <button type="button" className="btn text sm" onClick={onBack}>
+              Back
+            </button>
+          ) : (
+            <span />
+          )}
+          <Dots step={step} />
+        </div>
         {children}
       </main>
     </div>

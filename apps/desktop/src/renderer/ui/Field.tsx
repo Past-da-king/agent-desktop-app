@@ -1,9 +1,11 @@
-import { useId, useState } from 'react'
+import { useId, useState, type RefObject } from 'react'
 
 import { Icon } from './Icon'
 
 export interface FieldProps {
   label: string
+  /** Optional handle so a step can focus the field when its value is missing. */
+  inputRef?: RefObject<HTMLInputElement>
   value: string
   onChange: (value: string) => void
   type?: 'text' | 'email' | 'password' | 'url'
@@ -21,6 +23,7 @@ export interface FieldProps {
 
 export function Field({
   label,
+  inputRef,
   value,
   onChange,
   type = 'text',
@@ -44,6 +47,7 @@ export function Field({
       <div className="wrap">
         <input
           id={id}
+          ref={inputRef}
           className={`input${error ? ' bad' : ''}`}
           type={actualType}
           value={value}
