@@ -105,6 +105,7 @@ do_one() { # id, dir, branch, deps...
   fi
   local ok=0 attempt
   for attempt in 1 2 3; do
+    [ "$dir" != "$REPO" ] && cp "$REPO"/scripts/{gate.sh,lint-checks.mjs,count-tests.mjs,shoot.mjs} "$dir/scripts/"   # always the current judge
     (cd "$dir" && bash scripts/gate.sh "$id") >"$REPO/logs/$id.gate$attempt.log" 2>&1
     if tail -n 3 "$REPO/logs/$id.gate$attempt.log" | grep -q "GATE $id PASSED"; then ok=1; break; fi
     log "$id: gate failed (attempt $attempt)"
