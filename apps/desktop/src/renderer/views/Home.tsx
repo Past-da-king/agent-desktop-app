@@ -22,6 +22,7 @@ import { SectionHeader } from '../ui/SectionHeader'
 import { Skeleton } from '../ui/Skeleton'
 import { Wave } from '../ui/Wave'
 import { TaskDialog } from './TaskDialog'
+import { withNo } from '../../shared/ask-options'
 
 /** Home shows the soonest few; the Tasks view holds the whole list. */
 const HOME_TODOS = 6
@@ -57,7 +58,8 @@ function goalProgress(goal: GoalRow | null, tasks: TaskRow[]): { steps: TaskRow[
 
 function QuestionCard({ item, agentName }: { item: ChatItem; agentName: string }): JSX.Element {
   const meta = parseMeta(item.meta)
-  const options = metaStrings(meta, 'options')
+  // Always a way to say no, last, as in the chat (shared/ask-options).
+  const options = withNo(metaStrings(meta, 'options'))
   const navigate = useUi((state) => state.navigate)
 
   return (

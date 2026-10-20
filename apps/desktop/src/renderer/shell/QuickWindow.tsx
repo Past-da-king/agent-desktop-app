@@ -5,6 +5,7 @@ import { agent, chat } from '../bridge'
 import { useSettings } from '../state/useSettings'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
+import { plainText } from '../openui/lang'
 
 /**
  * The small frameless window the global Quick Ask shortcut opens (`#/quick-window`).
@@ -34,7 +35,8 @@ export function QuickWindow(): JSX.Element {
         const reply = rows
           .filter((row) => row.createdAt >= since && (row.kind === 'agent' || row.kind === 'notice'))
           .sort((a, b) => b.createdAt - a.createdAt)[0]
-        if (reply) setAnswer(reply.text)
+        // Cards cannot be drawn in the small window: a card answer shows as the titles of what it holds.
+        if (reply) setAnswer(reply.kind === 'agent' ? plainText(reply.text) : reply.text)
         setBusy(false)
       } catch {
         setBusy(false)

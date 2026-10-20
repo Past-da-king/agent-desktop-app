@@ -32,6 +32,7 @@ export const CHANNELS = {
     state: 'agent:chat.state',
     answer: 'agent:chat.answer',
     decide: 'agent:chat.decide',
+    tap: 'agent:chat.tap',
   },
   routines: {
     runNow: 'agent:routines.runNow',

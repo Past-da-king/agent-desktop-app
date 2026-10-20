@@ -5,6 +5,7 @@
 import { bool, enumOf, int, schema, str, type Tool } from '@agent/core'
 
 import { checkBrowserUrl } from '../browser/url-policy'
+import { NO, TURNED_DOWN } from '../../shared/ask-options'
 import type { BrowserDriver } from '../browser/types'
 
 export interface BrowserToolDeps {
@@ -249,8 +250,10 @@ function handoffTool(deps: BrowserToolDeps): Tool {
         const answer = await ctx.ask(`${name} needs you in the browser: ${reason}`, [
           HANDOFF_DONE,
           HANDOFF_SKIP,
+          NO,
         ])
         if (answer === null) return 'No one is around to help right now.'
+        if (answer === NO) return TURNED_DOWN
         if (answer === HANDOFF_SKIP) return 'The user skipped it.'
         return 'The user says they are done. Read the page to check.'
       } finally {

@@ -35,6 +35,7 @@ import type { StepBudget } from './budget'
 import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
+import { quietTapNote } from './openui-prompt'
 
 export interface SettingsView {
   get(): Settings
@@ -248,6 +249,37 @@ export class Runner {
     if (decided) return
     const verb = decision === 'approve' ? 'approved' : 'declined'
     await this.continueAfterCard(`The user ${verb} your request: ${summary}`)
+  }
+
+  /**
+   * A tap on a button the agent drew (OpenUI). It goes to the agent quietly: no bubble from the person, the model
+   * is told it was a button tap, and the message remembers the tap so the button keeps saying Sent. As on the
+   * phone (AgentRuntime.sendQuiet). While a run is active it joins that run as a steering note.
+   */
+  async tap(itemId: string, label: string, message: string): Promise<void> {
+    const clean = message.trim()
+    if (clean === '') return
+    const row = await this.store.get('chat_item', itemId)
+    if (row === null || row.kind !== 'agent') return
+    const meta = parseMeta(row.meta)
+    const taps = Array.isArray(meta['taps']) ? meta['taps'].filter((t): t is string => typeof t === 'string') : []
+    if (!taps.includes(clean)) {
+      await this.store.upsert('chat_item', {
+        id: row.id,
+        kind: row.kind,
+        text: row.text,
+        meta: JSON.stringify({ ...meta, taps: [...taps, clean].slice(-50) }),
+      })
+      this.emit({ type: 'chat_changed' })
+    }
+    const note = quietTapNote(label, clean)
+    if (this.running) {
+      this.steer.push(note)
+      return
+    }
+    // A tap is the person acting, so it starts a fresh action budget like a typed message.
+    this.budget?.reset()
+    await this.begin(note, [], null)
   }
 
   /**
