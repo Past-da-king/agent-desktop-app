@@ -50,6 +50,12 @@ export interface Settings {
   grantedFolders: string[]
   /** Shell commands: always ask first, or never run. There is no "always allow". */
   shell: 'ask' | 'never'
+  /** Voice: true once a Gemini key is in the secrets module. The key itself never appears here. */
+  hasVoiceKey: boolean
+  /** The Gemini prebuilt voice the call and read-aloud use (see VOICES). */
+  voiceName: string
+  /** Speak each finished agent reply aloud with Gemini TTS. */
+  speakReplies: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -77,6 +83,9 @@ export const DEFAULT_SETTINGS: Settings = {
   notifications: true,
   grantedFolders: [],
   shell: 'ask',
+  hasVoiceKey: false,
+  voiceName: 'Kore',
+  speakReplies: false,
 }
 
 export interface ProviderInfo {
@@ -419,6 +428,93 @@ export interface AppsApi {
 // The api
 // ---------------------------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------------------------
+// Voice: dictation, the live call, read-aloud. The Gemini key and connection live in the main process only.
+// ---------------------------------------------------------------------------------------------------------------
+
+export interface VoiceOption {
+  id: string
+  /** One or two words on how it sounds, from Gemini's own catalogue. */
+  feel: string
+}
+
+/** Gemini's prebuilt voices, the ones worth offering first. */
+export const VOICES: VoiceOption[] = [
+  { id: 'Kore', feel: 'Firm' },
+  { id: 'Puck', feel: 'Upbeat' },
+  { id: 'Charon', feel: 'Informative' },
+  { id: 'Zephyr', feel: 'Bright' },
+  { id: 'Aoede', feel: 'Breezy' },
+  { id: 'Leda', feel: 'Youthful' },
+  { id: 'Orus', feel: 'Firm' },
+  { id: 'Fenrir', feel: 'Excitable' },
+  { id: 'Sulafat', feel: 'Warm' },
+  { id: 'Achird', feel: 'Friendly' },
+  { id: 'Vindemiatrix', feel: 'Gentle' },
+  { id: 'Algenib', feel: 'Gravelly' },
+]
+
+export type VoiceResult<T> = ({ ok: true } & T) | { ok: false; error: string }
+
+/** Something the voice agent put on screen during a call. It lands in the chat as an agent message too. */
+export interface CallVisual {
+  id: string
+  kind: 'list' | 'image' | 'card'
+  title: string
+  /** list: the points. */
+  items?: string[]
+  /** image: an https address. */
+  imageUrl?: string
+  /** card: a short body and an optional footnote. */
+  body?: string
+  footnote?: string
+  at: number
+}
+
+export type CallState = 'connecting' | 'listening' | 'thinking' | 'speaking' | 'waiting' | 'ended' | 'error'
+
+export interface CallLine {
+  id: string
+  who: 'you' | 'agent' | 'note'
+  text: string
+  at: number
+}
+
+/** What the main process pushes during a live call. */
+export type CallEvent =
+  | { type: 'state'; state: CallState; message?: string }
+  /** 24 kHz mono PCM16, base64. The renderer plays it and meters it for the orb. */
+  | { type: 'audio'; data: string }
+  /** The text so far of one caption line; the same id grows until `final`. */
+  | { type: 'caption'; line: CallLine; final: boolean }
+  | { type: 'visual'; visual: CallVisual }
+  /** The person spoke over the agent: drop any queued audio. */
+  | { type: 'interrupted' }
+
+export interface CallSummary {
+  itemId: string
+  durationMs: number
+  lines: number
+}
+
+export interface VoiceApi {
+  /** Stores the Gemini key in the secrets module only. Pass '' to clear. */
+  setKey(key: string): Promise<void>
+  /** One tiny real call with the stored key. */
+  check(): Promise<{ ok: boolean; message: string }>
+  /** 16 kHz mono PCM16 audio of a whole dictation, as bytes. */
+  transcribe(pcm: Uint8Array): Promise<VoiceResult<{ text: string }>>
+  /** Speak text with Gemini TTS. Returns 24 kHz mono PCM16, base64. */
+  speak(text: string): Promise<VoiceResult<{ data: string }>>
+  callStart(): Promise<{ ok: boolean; message: string }>
+  /** One chunk of 16 kHz mono PCM16 from the microphone. Fire and forget. */
+  callAudio(pcm: Uint8Array): void
+  callMute(muted: boolean): Promise<void>
+  /** Ends the call and writes its transcript to the chat. Null when no call was live. */
+  callEnd(): Promise<CallSummary | null>
+  onCall(cb: (event: CallEvent) => void): Unsubscribe
+}
+
 export type Unsubscribe = () => void
 
 /** 'web' means the mock bridge in a plain browser. */
@@ -551,6 +647,9 @@ export interface AgentApi {
     /** Reveal a path in the OS file manager. */
     reveal(path: string): Promise<void>
   }
+
+  /** Dictation, the live voice call and read-aloud. */
+  voice: VoiceApi
 
   /** Identity and housekeeping for the About dialog. */
   app: {

@@ -41,6 +41,9 @@ import { SettingsStore } from './settings'
 import { createTray, type TrayHandle } from './tray'
 import { startUpdates } from './updates'
 import { EVENTS } from '../shared/channels'
+import { registerVoiceIpc } from './voice/ipc'
+import { allowMicrophone } from './voice/permissions'
+import { VoiceService } from './voice/service'
 
 const isSmoke = process.argv.includes('--smoke')
 const smokeTimeoutMs = 30_000
@@ -105,6 +108,7 @@ let store: Store | null = null
 let settingsStore: SettingsStore | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+let voice: VoiceService | null = null
 let cliHost: CliHost | null = null
 let scheduler: Scheduler | null = null
 let tray: TrayHandle | null = null
@@ -676,6 +680,19 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
   })
 
+  // Voice: the Gemini key and the live call stay here; the window only streams microphone audio.
+  allowMicrophone(win.webContents.session, (id) => id === win.webContents.id)
+  voice = new VoiceService({
+    secrets,
+    settings,
+    store,
+    runner,
+    emit: (event) => broadcast(EVENTS.voiceCall, event),
+    platform: process.platform,
+    environment: () => environment.current(),
+  })
+  registerVoiceIpc(voice, ipcMain)
+
   applyLoginItem(settings.get())
 }
 
@@ -720,6 +737,8 @@ if (!app.requestSingleInstanceLock()) {
     hotkey?.dispose()
     hotkey = null
     globalShortcut.unregisterAll()
+    void voice?.callEnd()
+    voice = null
     runner?.dispose()
     runner = null
     agentBrowser?.destroy()

@@ -187,6 +187,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     settings.reset()
     secrets.delete('apiKey')
     secrets.delete('syncToken')
+    secrets.delete('geminiKey')
   })
 
   // ---- account ----
