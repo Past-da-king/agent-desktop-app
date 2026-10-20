@@ -84,6 +84,12 @@ export function parseKey(raw: string): { spec: KeySpec; modifiers: number } | nu
 export class Cdp {
   private readonly dbg: DebuggerLike
   private readonly timeoutMs: number
+  /**
+   * True while the page emulates a touch device. Mouse events then hang in Chromium's touch
+   * emulation (measured on Electron 44: Input.dispatchMouseEvent never answers), and a phone site
+   * expects taps anyway, so input goes out as touch events instead.
+   */
+  touch = false
 
   constructor(dbg: DebuggerLike, timeoutMs = 10_000) {
     this.dbg = dbg
@@ -119,6 +125,13 @@ export class Cdp {
     const p = toView(at, scale)
     const button = options.button ?? 'left'
     const clickCount = options.clickCount ?? 1
+    if (this.touch && button === 'left') {
+      for (let n = 1; n <= clickCount; n++) {
+        await this.tap(p)
+        if (n < clickCount) await sleep(60)
+      }
+      return
+    }
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
     for (let n = 1; n <= clickCount; n++) {
       await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button, buttons: 1, clickCount: n })
@@ -127,13 +140,27 @@ export class Cdp {
     }
   }
 
+  /** One finger down and up at a point already in view pixels. */
+  private async tap(p: Point): Promise<void> {
+    await this.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p.x, y: p.y }] })
+    await sleep(40)
+    await this.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  }
+
   async hover(at: Point, scale: number): Promise<void> {
+    if (this.touch) return
     const p = toView(at, scale)
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
   }
 
   async hold(at: Point, scale: number, ms: number): Promise<void> {
     const p = toView(at, scale)
+    if (this.touch) {
+      await this.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p.x, y: p.y }] })
+      await sleep(ms)
+      await this.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      return
+    }
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
     await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 })
     await sleep(ms)
@@ -144,6 +171,17 @@ export class Cdp {
   async drag(from: Point, to: Point, scale: number, steps = 16): Promise<void> {
     const a = toView(from, scale)
     const b = toView(to, scale)
+    if (this.touch) {
+      await this.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: a.x, y: a.y }] })
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps
+        const ease = t * t * (3 - 2 * t)
+        await this.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: a.x + (b.x - a.x) * ease, y: a.y + (b.y - a.y) * ease }] })
+        await sleep(16)
+      }
+      await this.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      return
+    }
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: a.x, y: a.y, buttons: 0 })
     await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: a.x, y: a.y, button: 'left', buttons: 1, clickCount: 1 })
     for (let i = 1; i <= steps; i++) {
@@ -163,6 +201,11 @@ export class Cdp {
 
   async wheel(at: Point, scale: number, deltaY: number): Promise<void> {
     const p = toView(at, scale)
+    if (this.touch) {
+      // A finger swipe: moving up scrolls the page down.
+      await this.send('Input.synthesizeScrollGesture', { x: p.x, y: p.y, yDistance: -deltaY * scale, speed: 1200, gestureSourceType: 'touch' })
+      return
+    }
     await this.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: p.x, y: p.y, deltaX: 0, deltaY })
   }
 

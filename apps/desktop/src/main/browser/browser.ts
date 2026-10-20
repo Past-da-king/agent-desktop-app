@@ -118,7 +118,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private readonly downloadsDir: string
   private readonly screenshotsDir: string
   private readonly tabs: Tab[] = []
-  private readonly inputCss = new Map<string, string>()
+  /** The pointer guard per tab: its insertCSS key once inserted, and a token so a stale insert removes itself. */
+  private readonly inputCss = new Map<string, { token: number; key: string | null }>()
+  /** How many agent actions are under way per tab with the guard lifted. */
+  private readonly lifted = new Map<string, number>()
+  private guardSeq = 0
   private readonly downloads: string[] = []
   private readonly sessionCleanups: Array<() => void> = []
 
@@ -356,7 +360,18 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async open(raw: string, asked: ViewRequest | null = null): Promise<string> {
     if (!this.agentDriving) return this.pausedLine()
-    const policy = checkBrowserUrl(raw)
+    return this.openChecked(checkBrowserUrl(raw), asked)
+  }
+
+  /**
+   * Test hook for the real-Electron proof: opens a page the person could open (a local test page)
+   * through the same adaptive path the agent uses. Only index.ts calls it, only when a probe is asked for.
+   */
+  async probeOpen(raw: string): Promise<string> {
+    return this.openChecked(checkBrowserUrl(raw, { personTyped: true }), null)
+  }
+
+  private async openChecked(policy: ReturnType<typeof checkBrowserUrl>, asked: ViewRequest | null): Promise<string> {
     if (!policy.ok) return policy.reason
     const tab = this.activeTab() ?? this.createTab()
     if (tab === null) return 'I could not open another browser tab.'
@@ -777,7 +792,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return 'Say which element: its name (best, it survives re-renders) or its [number] from the snapshot, or at:{x,y}.'
     }
 
-    return (
+    try {
+      return (
       (await this.liftGuard(tab, async () => {
         const resolved = parseResolved(
           await this.run(
@@ -796,7 +812,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         }
         return this.actOn(tab, resolved, request, scale)
       })) ?? 'The page went away while I was acting on it.'
-    )
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return `The page did not take that: ${message}. Take a new snapshot; if it keeps failing, try at:{x,y} from a screenshot.`
+    }
   }
 
   private async actOn(tab: Tab, target: Resolved, request: ActRequest, scale: number): Promise<string> {
@@ -1007,6 +1027,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     } catch {
       // Already gone.
     }
+    tab.cdp.touch = view.touch && tab.ready
     tab.applied = { ...view }
     tab.view.setBackgroundColor(view.mode === 'fit' ? '#ffffff' : '#00000000')
   }
@@ -1126,24 +1147,26 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   /** The page ignores the person's pointer while the agent drives; lift that for the agent's own input. */
   private async liftGuard<T>(tab: Tab, action: () => Promise<T>): Promise<T | null> {
-    const wc = tab.view.webContents
-    const key = this.inputCss.get(tab.id)
-    if (key !== undefined) {
-      this.inputCss.delete(tab.id)
-      await wc.removeInsertedCSS(key).catch(() => undefined)
-    }
+    this.lifted.set(tab.id, (this.lifted.get(tab.id) ?? 0) + 1)
+    await this.refreshInputGuard(tab)
     try {
       return await action()
-    } catch {
-      return null
     } finally {
-      if (key !== undefined) void this.refreshInputGuard(tab)
+      const left = (this.lifted.get(tab.id) ?? 1) - 1
+      if (left <= 0) this.lifted.delete(tab.id)
+      else this.lifted.set(tab.id, left)
+      void this.refreshInputGuard(tab)
     }
   }
 
+
   private async trusted<T>(tab: Tab, action: () => Promise<T>): Promise<T | null> {
     if (!tab.cdp.ensure()) return null
-    return this.liftGuard(tab, async () => this.trustedInput(action))
+    try {
+      return await this.liftGuard(tab, async () => this.trustedInput(action))
+    } catch {
+      return null
+    }
   }
 
   private async trustedInput<T>(action: () => Promise<T>): Promise<T> {
@@ -1367,21 +1390,34 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private async refreshInputGuard(tab: Tab): Promise<void> {
     const wc = tab.view.webContents
     if (wc.isDestroyed()) return
-    const existing = this.inputCss.get(tab.id)
-    try {
-      if (this.agentDriving) {
-        if (existing === undefined) {
-          const key = await wc.insertCSS('html,body{pointer-events:none !important}')
-          this.inputCss.set(tab.id, key)
+    const wanted = (): boolean => this.agentDriving && (this.lifted.get(tab.id) ?? 0) === 0
+    const current = this.inputCss.get(tab.id)
+    if (wanted()) {
+      if (current !== undefined) return
+      const token = ++this.guardSeq
+      this.inputCss.set(tab.id, { token, key: null })
+      try {
+        const key = await wc.insertCSS('html,body{pointer-events:none !important}')
+        const now = this.inputCss.get(tab.id)
+        if (now?.token === token && wanted()) {
+          now.key = key
+          return
         }
-      } else if (existing !== undefined) {
-        this.inputCss.delete(tab.id)
-        await wc.removeInsertedCSS(existing)
+        // Things changed while it was being inserted (a navigation, the agent acting, a handover).
+        await wc.removeInsertedCSS(key).catch(() => undefined)
+        if (now?.token === token) {
+          this.inputCss.delete(tab.id)
+          void this.refreshInputGuard(tab)
+        }
+      } catch {
+        if (this.inputCss.get(tab.id)?.token === token) this.inputCss.delete(tab.id)
       }
-    } catch {
-      // A page that navigated while the CSS was being applied does not need the old key.
+    } else if (current !== undefined) {
+      this.inputCss.delete(tab.id)
+      if (current.key !== null) await wc.removeInsertedCSS(current.key).catch(() => undefined)
     }
   }
+
 
   // ---- page helpers -----------------------------------------------------------------------
 
