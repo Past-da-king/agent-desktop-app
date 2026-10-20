@@ -75,6 +75,29 @@ case "$N" in
   11) check "tests" tests_with_min 185
       check "pack" npm run pack
       check "electron smoke" smoke ;;
+  6a) check "tests" tests_with_min 100 runner 8
+      check "electron smoke" smoke ;;
+  6b) check "tests" tests_with_min 100
+      check "screenshots: screens" shoot screens
+      check "screenshots: chat" shoot chat ;;
+  7a) check "tests" tests_with_min 100 scheduler 6
+      check "electron smoke" smoke ;;
+  7b) check "tests" tests_with_min 100
+      check "screenshots: screens" shoot screens
+      check "screenshots: data" shoot data ;;
+  8a) check "tests" tests_with_min 100
+      check "electron smoke" smoke ;;
+  8b) check "tests" tests_with_min 100
+      check "screenshots: screens" shoot screens ;;
+  9a) check "tests" tests_with_min 100
+      check "electron smoke" smoke ;;
+  9b) check "tests" tests_with_min 100
+      check "screenshots: screens" shoot screens
+      check "screenshots: chat" shoot chat ;;
+  10a) check "tests" tests_with_min 100 helpers 6 ;;
+  10b) check "tests" tests_with_min 100
+       check "screenshots: screens" shoot screens
+       check "screenshots: chat" shoot chat ;;
   *) echo "unknown milestone $M"; exit 2 ;;
 esac
 
