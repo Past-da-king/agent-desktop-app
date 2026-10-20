@@ -89,6 +89,8 @@ function engineEnv(extra: Record<string, string> = {}): Record<string, string> {
   // Approval cards can keep a tool call open for a long time.
   env['MCP_TOOL_TIMEOUT'] = String(6 * 60 * 60 * 1000)
   env['MCP_TIMEOUT'] = '60000'
+  // claude.ai account connectors (Gmail, Drive, Docs...) would act without the app's approvals.
+  env['ENABLE_CLAUDEAI_MCP_SERVERS'] = 'false'
   return { ...env, ...extra }
 }
 
@@ -155,8 +157,13 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         abortController,
         // Nothing from the person's own Claude Code setup (CLAUDE.md, hooks, plugins) leaks into the agent.
         settingSources: [],
+        // Only the app's own MCP server: none of the person's other MCP servers or claude.ai connectors.
+        strictMcpConfig: true,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
+        // Only the app's tools plus web search and fetch exist for the agent: none of Claude Code's own
+        // tools (shell, files, workflows, subagents) can act around the app's approvals.
+        tools: ['WebSearch', 'WebFetch'],
         allowedTools: ['mcp__agent', 'WebSearch', 'WebFetch'],
         disallowedTools: ['Bash', 'Edit', 'Write', 'NotebookEdit', 'KillShell', 'Task', 'Agent', 'Read', 'Glob', 'Grep'],
         mcpServers: {
