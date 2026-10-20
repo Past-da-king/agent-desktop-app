@@ -1,0 +1,2240 @@
+[
+  {
+    "route": "?demo=1#/home",
+    "index": 0,
+    "name": "Search or ask",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 1,
+    "name": "Collapse sidebar",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 2,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 3,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 4,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 5,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 6,
+    "name": "Nova, your agent",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 7,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 8,
+    "name": "Home",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 9,
+    "name": "Chat33",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 10,
+    "name": "Tasks",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 11,
+    "name": "Memory",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 12,
+    "name": "Routines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 13,
+    "name": "Connections",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 14,
+    "name": "Durban trip: flightsnow",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 15,
+    "name": "Acme invoices1 h",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 16,
+    "name": "Gift ideas for NomsaYesterday",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 17,
+    "name": "Weekly reviewSun",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 18,
+    "name": "Driver's licence renewalFri",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 19,
+    "name": "Settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 20,
+    "name": "Account settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 21,
+    "name": "Search",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 22,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 23,
+    "name": "Open the conversation",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 24,
+    "name": "All",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 25,
+    "name": "Mark done: Send Lerato the invoice",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 26,
+    "name": "Send Lerato the invoiceToday, 19:43",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 27,
+    "name": "Delete Send Lerato the invoice",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 28,
+    "name": "Mark done: Renew driver's licence",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 29,
+    "name": "Renew driver's licenceMon 26 Oct, 20:00",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 30,
+    "name": "Delete Renew driver's licence",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 31,
+    "name": "Mark done: Buy a gift for Nomsa",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 32,
+    "name": "Buy a gift for NomsaTue 27 Oct, 09:00",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 33,
+    "name": "Delete Buy a gift for Nomsa",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 34,
+    "name": "Mark done: Shortlist 3 guesthouses in Durban",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 35,
+    "name": "Shortlist 3 guesthouses in DurbanWed 28 Oct, 09:00",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 36,
+    "name": "Delete Shortlist 3 guesthouses in Durban",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 37,
+    "name": "Add",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 38,
+    "name": "331/3Plan the Durban trip",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 39,
+    "name": "201/5Apply for a Master's in Computer Science for 2027",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 40,
+    "name": "502/4Tidy up the Acme invoices",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 41,
+    "name": "Ocean Breeze",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 42,
+    "name": "The Palms",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 43,
+    "name": "Open in chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 44,
+    "name": "Yes, a window",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 45,
+    "name": "No preference",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 46,
+    "name": "Open in chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 47,
+    "name": "Approve",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/home",
+    "index": 48,
+    "name": "Review details",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 0,
+    "name": "Search or ask",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 1,
+    "name": "Collapse sidebar",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 2,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 3,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 4,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 5,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 6,
+    "name": "Nova, your agent",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 7,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 8,
+    "name": "Home",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 9,
+    "name": "Chat33",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 10,
+    "name": "Tasks",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 11,
+    "name": "Memory",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 12,
+    "name": "Routines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 13,
+    "name": "Connections",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 14,
+    "name": "Durban trip: flightsnow",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 15,
+    "name": "Acme invoices1 h",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 16,
+    "name": "Gift ideas for NomsaYesterday",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 17,
+    "name": "Weekly reviewSun",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 18,
+    "name": "Driver's licence renewalFri",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 19,
+    "name": "Settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 20,
+    "name": "Account settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 21,
+    "name": "Talk",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 22,
+    "name": "Read the report",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 23,
+    "name": "Yes, a window",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 24,
+    "name": "No preference",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 25,
+    "name": "Answer",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 26,
+    "name": "Approve and go ahead",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 27,
+    "name": "Decline",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 28,
+    "name": "Guesthouse checkWorkingChecking The Palms",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 29,
+    "name": "Stop Guesthouse check",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 30,
+    "name": "Airline comparisonDoneCompared 3 airlines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 31,
+    "name": "Attach a file",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 32,
+    "name": "Grab a screenshot",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 33,
+    "name": "Dictate",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 34,
+    "name": "Send",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 35,
+    "name": "Take over",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 36,
+    "name": "Collapse the browser panel",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 37,
+    "name": "Back",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 38,
+    "name": "Reload",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 39,
+    "name": "SkyHop flights",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 40,
+    "name": "Close SkyHop flights",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 41,
+    "name": "Open in my browser",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 42,
+    "name": "Sam",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 43,
+    "name": "Seat preference",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/chat",
+    "index": 44,
+    "name": "Lerato",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 0,
+    "name": "Search or ask",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 1,
+    "name": "Collapse sidebar",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 2,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 3,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 4,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 5,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 6,
+    "name": "Nova, your agent",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 7,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 8,
+    "name": "Home",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 9,
+    "name": "Chat33",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 10,
+    "name": "Tasks",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 11,
+    "name": "Memory",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 12,
+    "name": "Routines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 13,
+    "name": "Connections",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 14,
+    "name": "Durban trip: flightsnow",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 15,
+    "name": "Acme invoices1 h",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 16,
+    "name": "Gift ideas for NomsaYesterday",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 17,
+    "name": "Weekly reviewSun",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 18,
+    "name": "Driver's licence renewalFri",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 19,
+    "name": "Settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 20,
+    "name": "Account settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 21,
+    "name": "Add to-do",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 22,
+    "name": "My to-dos",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 23,
+    "name": "Agent's work",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 24,
+    "name": "Mark done: Send Lerato the invoice",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 25,
+    "name": "Send Lerato the invoiceToday, 19:43",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 26,
+    "name": "Mark done: Renew driver's licence",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 27,
+    "name": "Renew driver's licenceMon 26 Oct, 20:00",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 28,
+    "name": "Mark done: Buy a gift for Nomsa",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 29,
+    "name": "Buy a gift for NomsaTue 27 Oct, 09:00",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 30,
+    "name": "Mark done: Shortlist 3 guesthouses in Durban",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 31,
+    "name": "Shortlist 3 guesthouses in DurbanWed 28 Oct, 09:00",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 32,
+    "name": "Mark done",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 33,
+    "name": "Edit",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 34,
+    "name": "Ask Nova to do it",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/tasks",
+    "index": 35,
+    "name": "Delete",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 0,
+    "name": "Search or ask",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 1,
+    "name": "Collapse sidebar",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 2,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 3,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 4,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 5,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 6,
+    "name": "Nova, your agent",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 7,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 8,
+    "name": "Home",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 9,
+    "name": "Chat33",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 10,
+    "name": "Tasks",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 11,
+    "name": "Memory",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 12,
+    "name": "Routines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 13,
+    "name": "Connections",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 14,
+    "name": "Durban trip: flightsnow",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 15,
+    "name": "Acme invoices1 h",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 16,
+    "name": "Gift ideas for NomsaYesterday",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 17,
+    "name": "Weekly reviewSun",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 18,
+    "name": "Driver's licence renewalFri",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 19,
+    "name": "Settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 20,
+    "name": "Account settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 21,
+    "name": "New page",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 22,
+    "name": "All",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 23,
+    "name": "Person",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 24,
+    "name": "Fact",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 25,
+    "name": "Preference",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 26,
+    "name": "Decision",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 27,
+    "name": "How-to",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 28,
+    "name": "Event",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 29,
+    "name": "Skill",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 30,
+    "name": "SamSam Dlamini runs product at Acme and lives in Johannesbur",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 31,
+    "name": "Seat preferenceWindow seats, no red-eye flights. Applies to ",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 32,
+    "name": "LeratoLerato is Sam's sister. She runs the books at Acme; in",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 33,
+    "name": "AcmeA fintech company where Sam works. Office in Rosebank. I",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 34,
+    "name": "NomsaSam's friend. Turns 30 on Saturday 31 October. Likes ce",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 35,
+    "name": "Invoice dayInvoices go out on the 25th, always as PDF, copie",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 36,
+    "name": "Delete page",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 37,
+    "name": "Acme",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 38,
+    "name": "Lerato",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 39,
+    "name": "Acme",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 40,
+    "name": "Lerato",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 41,
+    "name": "Edit page",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/memory",
+    "index": 42,
+    "name": "Unpin",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 0,
+    "name": "Search or ask",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 1,
+    "name": "Collapse sidebar",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 2,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 3,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 4,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 5,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 6,
+    "name": "Nova, your agent",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 7,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 8,
+    "name": "Home",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 9,
+    "name": "Chat33",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 10,
+    "name": "Tasks",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 11,
+    "name": "Memory",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 12,
+    "name": "Routines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 13,
+    "name": "Connections",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 14,
+    "name": "Durban trip: flightsnow",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 15,
+    "name": "Acme invoices1 h",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 16,
+    "name": "Gift ideas for NomsaYesterday",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 17,
+    "name": "Weekly reviewSun",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 18,
+    "name": "Driver's licence renewalFri",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 19,
+    "name": "Settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 20,
+    "name": "Account settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 21,
+    "name": "New routine",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 22,
+    "name": "Run it now",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 23,
+    "name": "Run Inbox sweep now",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 24,
+    "name": "Edit Inbox sweep",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 25,
+    "name": "Delete Inbox sweep",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 26,
+    "name": "Run Inbox sweep",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 27,
+    "name": "Run Morning brief now",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 28,
+    "name": "Edit Morning brief",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 29,
+    "name": "Delete Morning brief",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 30,
+    "name": "Run Morning brief",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 31,
+    "name": "Run Weekly review now",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 32,
+    "name": "Edit Weekly review",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 33,
+    "name": "Delete Weekly review",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 34,
+    "name": "Run Weekly review",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 35,
+    "name": "Morning brief",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 36,
+    "name": "Inbox sweep",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 37,
+    "name": "Weekly review",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 38,
+    "name": "Bills reminder",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 39,
+    "name": "Price watch",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/routines",
+    "index": 40,
+    "name": "Notification settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 0,
+    "name": "Search or ask",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 1,
+    "name": "Collapse sidebar",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 2,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 3,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 4,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 5,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 6,
+    "name": "Nova, your agent",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 7,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 8,
+    "name": "Home",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 9,
+    "name": "Chat33",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 10,
+    "name": "Tasks",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 11,
+    "name": "Memory",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 12,
+    "name": "Routines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 13,
+    "name": "Connections",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 14,
+    "name": "Durban trip: flightsnow",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 15,
+    "name": "Acme invoices1 h",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 16,
+    "name": "Gift ideas for NomsaYesterday",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 17,
+    "name": "Weekly reviewSun",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 18,
+    "name": "Driver's licence renewalFri",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 19,
+    "name": "Settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 20,
+    "name": "Account settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 21,
+    "name": "Manage",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 22,
+    "name": "Desktop notifications",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 23,
+    "name": "Allow",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 24,
+    "name": "Open",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 25,
+    "name": "Open",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/connections",
+    "index": 26,
+    "name": "Add machine",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 0,
+    "name": "Search or ask",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 1,
+    "name": "Collapse sidebar",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 2,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 3,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 4,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 5,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 6,
+    "name": "Nova, your agent",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 7,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 8,
+    "name": "Home",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 9,
+    "name": "Chat33",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 10,
+    "name": "Tasks",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 11,
+    "name": "Memory",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 12,
+    "name": "Routines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 13,
+    "name": "Connections",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 14,
+    "name": "Durban trip: flightsnow",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 15,
+    "name": "Acme invoices1 h",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 16,
+    "name": "Gift ideas for NomsaYesterday",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 17,
+    "name": "Weekly reviewSun",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 18,
+    "name": "Driver's licence renewalFri",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 19,
+    "name": "Settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 20,
+    "name": "Account settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 21,
+    "name": "Sign out",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 22,
+    "name": "Sync now",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 23,
+    "name": "Change",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 24,
+    "name": "System",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 25,
+    "name": "Light",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 26,
+    "name": "Dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 27,
+    "name": "Iris",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 28,
+    "name": "Ocean",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 29,
+    "name": "Teal",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 30,
+    "name": "Forest",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 31,
+    "name": "Ember",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 32,
+    "name": "Rose",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 33,
+    "name": "Violet",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 34,
+    "name": "Magenta",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 35,
+    "name": "Scout",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 36,
+    "name": "Ghost",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 37,
+    "name": "Clover",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 38,
+    "name": "Bloom",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 39,
+    "name": "Puff",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 40,
+    "name": "Gem",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 41,
+    "name": "Pebble",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 42,
+    "name": "Heart",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 43,
+    "name": "Bun",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 44,
+    "name": "Start when I sign in",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 45,
+    "name": "Desktop notifications",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 46,
+    "name": "Keep running in the tray",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 47,
+    "name": "Record",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 48,
+    "name": "Add folder",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 49,
+    "name": "Ask first",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 50,
+    "name": "Never",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=1#/settings",
+    "index": 51,
+    "name": "Reset",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 0,
+    "name": "Search or ask",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 1,
+    "name": "Collapse sidebar",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 2,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 3,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 4,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 5,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 6,
+    "name": "Nova, your agent",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 7,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 8,
+    "name": "Home",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 9,
+    "name": "Chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 10,
+    "name": "Tasks",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 11,
+    "name": "Memory",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 12,
+    "name": "Routines",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 13,
+    "name": "Connections",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 14,
+    "name": "Settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 15,
+    "name": "Account settings",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 16,
+    "name": "Search",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 17,
+    "name": "New chat",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 18,
+    "name": "Open the conversation",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 19,
+    "name": "All",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 20,
+    "name": "Tell me what you would like done",
+    "result": "ok"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 21,
+    "name": "Add",
+    "result": "disabled"
+  },
+  {
+    "route": "?demo=empty#/home",
+    "index": 22,
+    "name": "Tell me a goal",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 0,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 1,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 2,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 3,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 4,
+    "name": "Sign in",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 5,
+    "name": "Create account",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 6,
+    "name": "Show password",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 7,
+    "name": "Sign in",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 8,
+    "name": "Use this computer only, no account",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/signin",
+    "index": 9,
+    "name": "Allow unencrypted HTTP",
+    "result": "click failed: elementHandle.click: Timeout 2000ms exceeded."
+  },
+  {
+    "route": "#/onboarding/sync",
+    "index": 0,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/sync",
+    "index": 1,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/sync",
+    "index": 2,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/sync",
+    "index": 3,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/sync",
+    "index": 4,
+    "name": "Back",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/sync",
+    "index": 5,
+    "name": "Continue",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 0,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 1,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 2,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 3,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 4,
+    "name": "Back",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 5,
+    "name": "Anthropic",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 6,
+    "name": "OpenAI",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 7,
+    "name": "Google Gemini",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 8,
+    "name": "DeepSeek",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 9,
+    "name": "OpenCode Go",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 10,
+    "name": "OpenCode Zen",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 11,
+    "name": "OpenRouter",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 12,
+    "name": "Other",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 13,
+    "name": "Show key",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 14,
+    "name": "Check key",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 15,
+    "name": "Open Anthropic",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 16,
+    "name": "Continue",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/ai",
+    "index": 17,
+    "name": "Skip, I will add it later",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 0,
+    "name": "Switch light and dark",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 1,
+    "name": "Minimise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 2,
+    "name": "Maximise",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 3,
+    "name": "Close",
+    "result": "skipped (window control)"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 4,
+    "name": "Back",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 5,
+    "name": "Iris",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 6,
+    "name": "Ocean",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 7,
+    "name": "Teal",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 8,
+    "name": "Forest",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 9,
+    "name": "Ember",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 10,
+    "name": "Rose",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 11,
+    "name": "Violet",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 12,
+    "name": "Magenta",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 13,
+    "name": "Scout",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 14,
+    "name": "Ghost",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 15,
+    "name": "Clover",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 16,
+    "name": "Bloom",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 17,
+    "name": "Puff",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 18,
+    "name": "Gem",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 19,
+    "name": "Pebble",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 20,
+    "name": "Heart",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 21,
+    "name": "Bun",
+    "result": "ok"
+  },
+  {
+    "route": "#/onboarding/style",
+    "index": 22,
+    "name": "Open Agent",
+    "result": "ok"
+  }
+]
