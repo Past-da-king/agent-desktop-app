@@ -97,6 +97,11 @@ const api: AgentApi = {
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
   },
 
+  helpers: {
+    stop: (id) => call<boolean>(CHANNELS.helpers.stop, id),
+    stopAll: () => call<number>(CHANNELS.helpers.stopAll),
+  },
+
   window: {
     minimize: () => {
       void call<void>(CHANNELS.window.minimize)

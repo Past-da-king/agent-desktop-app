@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
+import { helperView, type HelperView } from '../lib/helpers'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { refreshEntity, useEntity, useEntityLoaded } from '../state/useData'
@@ -11,7 +12,7 @@ import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { Button } from '../ui/Button'
-import { IconButton, Kbd } from '../ui/bits'
+import { IconButton, Kbd, Pill } from '../ui/bits'
 import { Chip } from '../ui/Chip'
 import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
@@ -341,26 +342,80 @@ function UserRow({ item }: { item: ChatItem }): JSX.Element {
   )
 }
 
-function HelperRow({ item }: { item: ChatItem }): JSX.Element {
-  const meta = parseMeta(item.meta)
-  const status = metaText(meta, 'status') || 'done'
+function HelperRow({ helper }: { helper: HelperView }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const live = helper.state === 'working'
+  const tone = live ? (helper.queued ? 'mute' : 'pri') : helper.state === 'done' ? 'ok' : 'warn'
+  const label = live ? (helper.queued ? 'Queued' : 'Working') : helper.state === 'done' ? 'Done' : helper.state === 'failed' ? 'Failed' : 'Stopped'
+  const icon: IconName = live ? 'globe' : helper.state === 'done' ? 'check' : helper.state === 'failed' ? 'x' : 'stop'
+  const bodyId = `helper-steps-${helper.id.replace(/[^a-zA-Z0-9_-]/g, '')}`
+
+  const stop = (): void => {
+    if (stopping) return
+    setStopping(true)
+    void agent.helpers
+      .stop(helper.id)
+      .then((ok) => {
+        if (!ok) setStopping(false)
+      })
+      .catch(() => setStopping(false))
+  }
+
   return (
-    <div className="hrow">
-      <span className={`hs${status === 'working' ? ' work' : ''}`}>
-        <Icon name={status === 'working' ? 'globe' : 'check'} size={20} />
-      </span>
-      <span className="hn">
-        <b>{metaText(meta, 'name') || 'Helper'}</b>
-        <span className={`pill ${status === 'working' ? 'pri' : 'ok'}`}>
-          {status === 'working' ? 'Working' : 'Done'}
-        </span>
-        <div>{metaText(meta, 'summary') || item.text}</div>
-      </span>
+    <div className="hcard">
+      <div className={`hrow${open ? ' open' : ''}`}>
+        <button
+          type="button"
+          className="hmain"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span className={`hs${live ? ' work' : ''}`}>
+            <Icon name={icon} size={20} />
+          </span>
+          <span className="hn">
+            <b>{helper.label}</b>
+            <Pill tone={tone}>{label}</Pill>
+            <div>{helper.summary || (helper.queued ? 'Waiting its turn' : live ? 'Working' : 'Finished')}</div>
+          </span>
+          <span className="hchev">
+            <Icon name="chev" size={20} />
+          </span>
+        </button>
+        {live ? (
+          <Button
+            variant="text"
+            size="sm"
+            className="hstop"
+            disabled={stopping}
+            aria-label={`Stop ${helper.label}`}
+            onClick={stop}
+          >
+            Stop
+          </Button>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="hbody" id={bodyId}>
+          <div className="hbrief">{helper.brief}</div>
+          {helper.activity.length === 0 ? (
+            <div className="hbrief">No steps yet.</div>
+          ) : (
+            <div className="hacts">
+              {helper.activity.map((activity) => (
+                <ActivityRow key={activity.id} item={activity} />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
 
-function renderItem(item: ChatItem, onOpenReport: (item: ChatItem) => void): JSX.Element {
+function renderItem(item: ChatItem, items: ChatItem[], onOpenReport: (item: ChatItem) => void): JSX.Element {
   switch (item.kind) {
     case 'user':
       return <UserRow item={item} />
@@ -377,7 +432,7 @@ function renderItem(item: ChatItem, onOpenReport: (item: ChatItem) => void): JSX
     case 'approval':
       return <ApprovalRow item={item} />
     case 'helper':
-      return <HelperRow item={item} />
+      return <HelperRow helper={helperView(item, items)} />
     case 'report':
       return <ReportRow item={item} onOpen={onOpenReport} />
     case 'notice':
@@ -620,7 +675,7 @@ export function Chat(): JSX.Element {
           <div className="thread-in">
             {messages.map((item) => (
               <div key={item.id} style={{ display: 'contents' }}>
-                {renderItem(item, (row) => setReader(row))}
+                {renderItem(item, items, (row) => setReader(row))}
               </div>
             ))}
             {thinking ? (

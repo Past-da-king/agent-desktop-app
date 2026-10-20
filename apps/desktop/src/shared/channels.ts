@@ -45,6 +45,10 @@ export const CHANNELS = {
     giveBack: 'agent:browser.giveBack',
     openInSystem: 'agent:browser.openInSystem',
   },
+  helpers: {
+    stop: 'agent:helpers.stop',
+    stopAll: 'agent:helpers.stopAll',
+  },
   window: {
     minimize: 'agent:window.minimize',
     toggleMaximize: 'agent:window.toggleMaximize',

@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { agent, chat } from '../bridge'
 import { startNewChat } from '../lib/chat-actions'
 import { dueLabel, greeting, nextRun, scheduleLabel, short, timeAgo, todayEyebrow } from '../lib/format'
+import { workingHelpers } from '../lib/helpers'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { dueSoon, openUserTasks } from '../lib/tasks'
 import { useEntity, useEntityLoaded } from '../state/useData'
@@ -188,6 +189,7 @@ export function Home(): JSX.Element {
   const firstName = (settings?.userName.trim() || 'there').split(' ')[0] ?? 'there'
 
   const needs = useWaiting()
+  const helpers = useMemo(() => workingHelpers(chatItems), [chatItems])
   const openGoal = goals.find((goal) => goal.status === 'open') ?? null
   const goal = goalProgress(openGoal, tasks)
   const run = useRunInfo(chatItems)
@@ -223,11 +225,13 @@ export function Home(): JSX.Element {
     ? 'Working right now'
     : needs.length > 0
       ? `Waiting for you on ${needs.length === 1 ? 'one thing' : `${needs.length} things`}`
-      : openGoal
-        ? `Working on ${openGoal.title}`
-        : lastWork
-          ? `Last worked ${timeAgo(lastWork.createdAt)}`
-          : 'Nothing on your plate yet'
+      : helpers.length > 0
+        ? `${helpers.length === 1 ? 'A helper is' : `${helpers.length} helpers are`} working on it`
+        : openGoal
+          ? `Working on ${openGoal.title}`
+          : lastWork
+            ? `Last worked ${timeAgo(lastWork.createdAt)}`
+            : 'Nothing on your plate yet'
 
   if (!ready) {
     return (
@@ -295,6 +299,22 @@ export function Home(): JSX.Element {
               </div>
               <Icon name="arrow" size={26} />
             </div>
+            {helpers.length > 0 ? (
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>
+                  HELPERS
+                </div>
+                <div className="now-helpers">
+                  {helpers.map((helper) => (
+                    <div className="now-helper" key={helper.id}>
+                      <Icon name="globe" size={16} />
+                      <b>{helper.label}</b>
+                      <span>{helper.summary || (helper.queued ? 'Waiting its turn' : 'Working')}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {run.running ? (
               <div>
                 <div className="eyebrow" style={{ marginBottom: 8 }}>

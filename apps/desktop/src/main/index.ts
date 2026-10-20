@@ -502,6 +502,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     account,
     chat: runner,
     routines: scheduler,
+    helpers,
     ipcMain,
     windows: windowControls(),
     browser: agentBrowser,
