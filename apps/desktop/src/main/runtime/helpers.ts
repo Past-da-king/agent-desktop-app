@@ -28,6 +28,7 @@ import {
 } from '@agent/core'
 
 import type { DataStore } from './data'
+import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
 import {
   describeCall,
@@ -90,6 +91,8 @@ export interface HelperManagerDeps {
   maxSteps?: number
   emit?: (event: ChatEvent) => void
   notify?: (title: string, body: string) => void
+  /** On the person's own plan, every helper is its own Claude Agent SDK / Codex SDK session. */
+  cli?: CliHost | null
 }
 
 interface Ready {
@@ -107,6 +110,8 @@ interface HelperRun {
   controller: AbortController | null
   /** The conversation to carry on with, for a pushed helper. Null for a fresh brief. */
   initialHistory: Msg[] | null
+  /** On a plan: the message a pushed helper carries on with (its SDK session holds the history). */
+  pushMessage?: string
 }
 
 interface Batch {
@@ -128,6 +133,7 @@ export class HelperManager implements HelperHost {
   private readonly settings: SettingsView
   private readonly secrets: SecretsView
   private readonly providerFactory: ProviderFactory
+  private readonly cli: CliHost | null
   private readonly workerTools: Tool[]
   private readonly deliver: (text: string) => Promise<void> | void
   private readonly platform: string
@@ -154,6 +160,7 @@ export class HelperManager implements HelperHost {
     this.settings = deps.settings
     this.secrets = deps.secrets
     this.providerFactory = deps.providerFactory
+    this.cli = deps.cli ?? null
     this.workerTools = deps.workerTools
     this.deliver = deps.deliver
     this.platform = deps.platform ?? process.platform
@@ -168,7 +175,8 @@ export class HelperManager implements HelperHost {
   // ---- the main agent's side ---------------------------------------------------------------
 
   async delegate(tasks: HelperTask[], together = false): Promise<string> {
-    const ready = this.ready()
+    // On the person's plan every helper is its own SDK session: no API key or provider is needed.
+    const ready = this.onPlan() ? { model: this.settings.get().cliModel.trim() } : this.ready()
     if (typeof ready === 'string') return ready
 
     const clean = tasks.filter((task) => task.brief.trim() !== '').slice(0, MAX_TASKS)
@@ -211,6 +219,12 @@ export class HelperManager implements HelperHost {
   async steer(id: string, message: string): Promise<string> {
     const run = this.runs.get(id)
     if (run === undefined) return this.push(id, message)
+    if (this.onPlan()) {
+      // An SDK session cannot read a note mid-turn: stop it where it is and send it back with the note.
+      await this.stop(id)
+      for (let i = 0; i < 50 && this.runs.has(id); i += 1) await new Promise((resolve) => setTimeout(resolve, 100))
+      return this.push(id, message)
+    }
     const notes = this.inbox.get(id) ?? []
     notes.push(message)
     this.inbox.set(id, notes)
@@ -229,6 +243,24 @@ export class HelperManager implements HelperHost {
     const meta = parseMeta(row.meta)
     const label = stringField(meta['label']) || 'Helper'
     const pushes = numberField(meta['pushes']) + 1
+    if (this.onPlan()) {
+      await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now() })
+      this.runs.set(id, {
+        id,
+        label,
+        brief: row.text,
+        model: '',
+        pushes,
+        startedAt: this.now(),
+        controller: null,
+        initialHistory: null,
+        pushMessage: message,
+      })
+      await this.addActivity(id, label, `Sent back: ${clip(message, 140)}`)
+      this.queue.push(id)
+      this.pump()
+      return `Helper #${id} is back on it. Its new result will arrive as a message.`
+    }
     const history = await this.loadHistory(id)
     if (history.length === 0) history.push(userMsg(row.text))
     history.push(userMsg(message))
@@ -421,6 +453,10 @@ export class HelperManager implements HelperHost {
   }
 
   private async runHelper(run: HelperRun): Promise<void> {
+    if (this.onPlan()) {
+      await this.runOnPlan(run)
+      return
+    }
     const ready = this.ready()
     if (typeof ready === 'string') {
       await this.finish(run, 'failed', ready)
@@ -830,6 +866,59 @@ export class HelperManager implements HelperHost {
       helper: { label: run.label, brief: run.brief },
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
+  }
+
+  private onPlan(): boolean {
+    return this.cli !== null && this.settings.get().mode === 'subscription'
+  }
+
+  /** One helper turn as its own SDK session on the person's plan; a pushed helper resumes its session. */
+  private async runOnPlan(run: HelperRun): Promise<void> {
+    const cli = this.cli
+    if (cli === null) return
+    const current = this.settings.get()
+    const controller = new AbortController()
+    run.controller = controller
+    if (run.pushMessage === undefined) cli.forget(`helper:${run.id}`)
+    await this.updateMeta(run.id, { state: 'working', summary: 'Thinking', queued: false })
+
+    let state: HelperState = 'failed'
+    let result = ''
+    try {
+      const outcome = await cli.turn({
+        cli: current.cli === '' ? 'claude' : current.cli,
+        thread: `helper:${run.id}`,
+        tools: this.workerTools,
+        system: await this.buildHelperPrompt(run),
+        prompt: run.pushMessage ?? run.brief,
+        ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
+        context: this.context(run, controller.signal),
+        signal: controller.signal,
+        onEvent: (event) => this.onEvent(run, event),
+        onCall: (call) => this.onEvent(run, { type: 'tool_started', call: { t: 'call', id: call.id, name: call.name, input: call.input } }),
+        onResult: (call, text, isError) =>
+          this.onEvent(run, {
+            type: 'tool_finished',
+            call: { t: 'call', id: call.id, name: call.name, input: call.input },
+            result: text,
+            isError,
+          }),
+      })
+      if (controller.signal.aborted) {
+        state = 'stopped'
+        result = 'Stopped before it finished.'
+      } else if (outcome.error !== undefined) {
+        state = 'failed'
+        result = outcome.error
+      } else {
+        state = 'done'
+        result = outcome.text
+      }
+    } catch (error) {
+      state = controller.signal.aborted ? 'stopped' : 'failed'
+      result = controller.signal.aborted ? 'Stopped before it finished.' : friendlyError(error)
+    }
+    await this.finish(run, state, result)
   }
 
   /** The provider and model for a helper, or a plain-words reason there is none. */

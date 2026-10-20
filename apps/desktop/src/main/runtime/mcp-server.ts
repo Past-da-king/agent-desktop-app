@@ -14,14 +14,17 @@ import type { JsonObject, Tool, ToolContext } from '@agent/core'
 
 export interface ToolServer {
   url: string
-  token: string
+  /** A new key for one run: requests carrying it see that run's tools and context. */
+  open(run: ToolRun): string
+  /** Forget a run's key; its requests are refused from then on. */
+  release(token: string): void
   close(): Promise<void>
 }
 
-export interface ToolServerOptions {
-  tools: () => Tool[]
-  /** The context of the run that is going on now, or null between runs (calls are then refused). */
-  context: () => ToolContext | null
+/** One run's view of the app: several runs (the main agent and its helpers) use the server at once. */
+export interface ToolRun {
+  tools: Tool[]
+  context: ToolContext
   /** Called around each tool call, so the chat shows it as it happens. */
   onCall?: (call: { id: string; name: string; input: JsonObject }) => void | Promise<void>
   onResult?: (call: { id: string; name: string; input: JsonObject }, result: string, isError: boolean) => void | Promise<void>
@@ -61,19 +64,27 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(text)
 }
 
-function authorised(req: IncomingMessage, token: string): boolean {
+function bearer(req: IncomingMessage): string {
   const header = req.headers.authorization ?? ''
-  const given = Buffer.from(header.startsWith('Bearer ') ? header.slice(7) : '')
-  const want = Buffer.from(token)
-  return given.length === want.length && timingSafeEqual(given, want)
+  return header.startsWith('Bearer ') ? header.slice(7) : ''
+}
+
+function same(a: string, b: string): boolean {
+  const left = Buffer.from(a)
+  const right = Buffer.from(b)
+  return left.length === right.length && timingSafeEqual(left, right)
 }
 
 let callSeq = 0
 
-export async function startToolServer(options: ToolServerOptions): Promise<ToolServer> {
-  const token = randomBytes(32).toString('base64url')
+export async function startToolServer(): Promise<ToolServer> {
+  const runs = new Map<string, ToolRun>()
+  const find = (given: string): ToolRun | undefined => {
+    for (const [token, run] of runs) if (same(given, token)) return run
+    return undefined
+  }
 
-  const handle = async (rpc: RpcRequest): Promise<unknown> => {
+  const handle = async (rpc: RpcRequest, run: ToolRun): Promise<unknown> => {
     switch (rpc.method) {
       case 'initialize':
         return {
@@ -85,7 +96,7 @@ export async function startToolServer(options: ToolServerOptions): Promise<ToolS
         return {}
       case 'tools/list':
         return {
-          tools: options.tools().map((tool) => ({
+          tools: run.tools.map((tool) => ({
             name: tool.spec.name,
             description: tool.spec.description,
             inputSchema: tool.spec.schema,
@@ -95,24 +106,20 @@ export async function startToolServer(options: ToolServerOptions): Promise<ToolS
         const name = String(rpc.params?.['name'] ?? '')
         const raw = rpc.params?.['arguments']
         const input: JsonObject = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as JsonObject) : {}
-        const tool = options.tools().find((item) => item.spec.name === name)
-        const context = options.context()
+        const tool = run.tools.find((item) => item.spec.name === name)
         const call = { id: `mcp-${(callSeq += 1)}`, name, input }
         if (tool === undefined) return { content: [{ type: 'text', text: `Unknown tool ${name}` }], isError: true }
-        if (context === null) {
-          return { content: [{ type: 'text', text: 'The agent is not running a turn right now.' }], isError: true }
-        }
-        await options.onCall?.(call)
+        await run.onCall?.(call)
         let text: string
         let isError = false
         try {
-          text = await tool.run(input, context)
+          text = await tool.run(input, run.context)
         } catch (error) {
           text = `Error: ${error instanceof Error ? error.message : String(error)}`
           isError = true
         }
         if (text.length > 24_000) text = `${text.slice(0, 24_000)}\n...(cut, ${text.length} chars total)`
-        await options.onResult?.(call, text, isError)
+        await run.onResult?.(call, text, isError)
         return { content: [{ type: 'text', text }], isError }
       }
       default:
@@ -122,7 +129,8 @@ export async function startToolServer(options: ToolServerOptions): Promise<ToolS
 
   const server: Server = createServer((req, res) => {
     void (async () => {
-      if (!authorised(req, token)) return send(res, 401, { error: 'unauthorised' })
+      const run = find(bearer(req))
+      if (run === undefined) return send(res, 401, { error: 'unauthorised' })
       if (req.method === 'GET') return send(res, 405, { error: 'no event stream' })
       if (req.method === 'DELETE') return send(res, 200, {})
       if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' })
@@ -137,7 +145,7 @@ export async function startToolServer(options: ToolServerOptions): Promise<ToolS
       for (const rpc of batch) {
         if (rpc.id === undefined || rpc.id === null) continue // a notification: nothing to answer
         try {
-          replies.push({ jsonrpc: '2.0', id: rpc.id, result: await handle(rpc) })
+          replies.push({ jsonrpc: '2.0', id: rpc.id, result: await handle(rpc, run) })
         } catch (error) {
           const code = (error as { code?: number }).code ?? -32603
           replies.push({ jsonrpc: '2.0', id: rpc.id, error: { code, message: error instanceof Error ? error.message : 'error' } })
@@ -161,7 +169,14 @@ export async function startToolServer(options: ToolServerOptions): Promise<ToolS
   const port = typeof address === 'object' && address !== null ? address.port : 0
   return {
     url: `http://127.0.0.1:${port}/mcp`,
-    token,
+    open: (run) => {
+      const token = randomBytes(32).toString('base64url')
+      runs.set(token, run)
+      return token
+    },
+    release: (token) => {
+      runs.delete(token)
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections()

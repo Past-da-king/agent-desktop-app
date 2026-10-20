@@ -503,8 +503,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
       allowHttp: current.allowHttp,
     })
   const budget = new StepBudget()
+  // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
+  cliHost = new CliHost(join(app.getPath('userData'), 'cli'), app.getAppPath())
   const helpers = new HelperManager({
     store,
+    cli: cliHost,
     settings,
     secrets,
     providerFactory: factory,
@@ -533,18 +536,6 @@ async function startServices(win: BrowserWindow): Promise<void> {
     mainBudget: budget,
     environment,
   })
-  // On a subscription the installed AI tool gets the full worker toolset (no main-agent step budget,
-  // no helpers: the CLI does that work itself), with the same file picks and approvals.
-  const cliTools = buildWorkerToolset({
-    store,
-    settings,
-    filePicks,
-    pickFiles: pickFilePaths,
-    browser: agentBrowser,
-    agentName: () => settings.get().agentName,
-    environment,
-  })
-  cliHost = new CliHost(() => cliTools, join(app.getPath('userData'), 'cli'), app.getAppPath())
   runner = new Runner({
     store,
     settings,

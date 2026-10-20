@@ -510,8 +510,8 @@ export class Runner {
       role,
       ...(routineName === undefined ? {} : { routineName }),
       helperModel: current.cli === 'codex' ? 'Codex' : 'Claude',
-      liveHelpers: [],
-      canDelegate: false,
+      liveHelpers: this.helpers?.live() ?? [],
+      canDelegate: this.helpers !== undefined,
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
@@ -527,6 +527,7 @@ export class Runner {
     const result = await this.cli.turn({
       cli: current.cli === '' ? 'claude' : current.cli,
       thread: 'main',
+      tools: this.tools,
       system: await this.cliSystem(text, 'main'),
       prompt: text,
       images,
@@ -557,6 +558,7 @@ export class Runner {
     const result = await this.cli.turn({
       cli: current.cli === '' ? 'claude' : current.cli,
       thread: 'routine',
+      tools: this.tools,
       system: await this.cliSystem(trigger.prompt, 'routine', trigger.name),
       prompt: trigger.prompt,
       ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
@@ -593,6 +595,7 @@ export class Runner {
       const result = await this.cli.turn({
         cli,
         thread: 'routine',
+        tools: [],
         system: 'Reply with exactly the word OK and nothing else.',
         prompt: 'Reply with exactly the word OK.',
         context: this.toolContext(controller.signal, 'routine'),

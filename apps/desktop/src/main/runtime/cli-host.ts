@@ -25,8 +25,13 @@ export interface CliCall {
 
 export interface CliTurnRequest {
   cli: CliId
-  /** Which conversation this is: 'main' continues across turns, a routine starts fresh each time. */
-  thread: 'main' | 'routine'
+  /**
+   * Which conversation this is: 'main' and 'helper:<id>' continue across turns (a pushed helper resumes
+   * its own session), 'routine' starts fresh each time.
+   */
+  thread: string
+  /** The tools this run may use (the main agent's set, or a helper's worker set). */
+  tools: Tool[]
   system: string
   prompt: string
   images?: string[]
@@ -38,7 +43,7 @@ export interface CliTurnRequest {
   onResult: (call: CliCall, result: string, isError: boolean) => Promise<void>
 }
 
-/** Tools that start more model runs of their own: on a plan the engine does that work itself. */
+/** Helpers never delegate further: only the main agent gets these. */
 const NOT_ON_CLI = /^(delegate|helper_|helpers_)/
 
 /** A native binary inside app.asar cannot be started; electron-builder unpacks it next to the archive. */
@@ -48,12 +53,10 @@ function unpacked(path: string): string {
 
 export class CliHost {
   private server: ToolServer | null = null
-  private current: { context: ToolContext; onCall: CliTurnRequest['onCall']; onResult: CliTurnRequest['onResult'] } | null = null
   private readonly sessionsFile: string
   private readonly require: NodeRequire
 
   constructor(
-    private readonly tools: () => Tool[],
     private readonly workDir: string,
     /** The app folder (app.getAppPath()), where the SDK packages are resolved from. */
     appPath: string,
@@ -144,7 +147,7 @@ export class CliHost {
     })
   }
 
-  forget(thread: 'main' | 'routine' = 'main'): void {
+  forget(thread = 'main'): void {
     const sessions = this.sessions()
     delete sessions[thread]
     this.saveSessions(sessions)
@@ -152,7 +155,14 @@ export class CliHost {
 
   async turn(request: CliTurnRequest): Promise<{ text: string; error?: string }> {
     const server = await this.ensureServer()
-    this.current = { context: request.context, onCall: request.onCall, onResult: request.onResult }
+    const token = server.open({
+      tools: request.tools.filter((tool) => request.thread === 'main' || !NOT_ON_CLI.test(tool.spec.name)),
+      context: request.context,
+      onCall: request.onCall,
+      onResult: request.onResult,
+    })
+    const continues = request.thread !== 'routine'
+    const dir = join(this.workDir, request.cli, request.thread.replace(/[^a-z0-9-]/gi, '_'))
     try {
       const key = `${request.cli}:${request.thread}`
       const run = (sessionId: string | null) =>
@@ -164,20 +174,20 @@ export class CliHost {
           images: request.images ?? [],
           sessionId,
           ...(request.model === undefined ? {} : { model: request.model }),
-          mcp: { url: server.url, token: server.token },
-          workDir: join(this.workDir, request.cli, request.thread),
+          mcp: { url: server.url, token },
+          workDir: dir,
           signal: request.signal,
           onEvent: request.onEvent,
         })
-      mkdirSync(join(this.workDir, request.cli, request.thread), { recursive: true })
-      let result = await run(request.thread === 'main' ? (this.sessions()[key] ?? null) : null)
+      mkdirSync(dir, { recursive: true })
+      let result = await run(continues ? (this.sessions()[key] ?? null) : null)
       if (result.error === 'SESSION_LOST') result = await run(null)
-      if (request.thread === 'main' && result.sessionId !== null) {
+      if (continues && result.sessionId !== null) {
         this.saveSessions({ ...this.sessions(), [key]: result.sessionId })
       }
       return result.error === undefined ? { text: result.text } : { text: result.text, error: result.error }
     } finally {
-      this.current = null
+      server.release(token)
     }
   }
 
@@ -188,12 +198,7 @@ export class CliHost {
 
   private async ensureServer(): Promise<ToolServer> {
     if (this.server !== null) return this.server
-    this.server = await startToolServer({
-      tools: () => this.tools().filter((tool) => !NOT_ON_CLI.test(tool.spec.name)),
-      context: () => this.current?.context ?? null,
-      onCall: (call) => this.current?.onCall(call),
-      onResult: (call, result, isError) => this.current?.onResult(call, result, isError),
-    })
+    this.server = await startToolServer()
     return this.server
   }
 
