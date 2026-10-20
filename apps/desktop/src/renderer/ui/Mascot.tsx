@@ -49,11 +49,14 @@ export function Mascot({
   size = 48,
   busy = false,
   fill,
+  needsYou = false,
 }: {
   id: MascotId
   size?: number
   busy?: boolean
   fill?: string
+  /** The phone's rule: the sidekick wears the person's accent, and turns amber only when it needs them. */
+  needsYou?: boolean
 }): JSX.Element {
   const shape = MASCOTS[id]
   const calm = mascotPath(id, false)
@@ -74,7 +77,7 @@ export function Mascot({
             repeatCount="indefinite"
           />
         ) : null}
-        <path d={calm} fill={fill ?? 'var(--mascot)'}>
+        <path d={calm} fill={needsYou ? 'var(--tert)' : (fill ?? 'var(--mascot)')} style={{ transition: 'fill .3s var(--effects)' }}>
           {morph ? (
             <animate
               attributeName="d"
@@ -88,7 +91,7 @@ export function Mascot({
           ) : null}
         </path>
       </g>
-      <g className="eyes" fill="var(--eye)">
+      <g className="eyes" fill={needsYou ? 'var(--on-tert)' : 'var(--eye)'}>
         <ellipse cx="37.5" cy="49" rx="4.3" ry="6.4" />
         <ellipse cx="62.5" cy="49" rx="4.3" ry="6.4" />
       </g>

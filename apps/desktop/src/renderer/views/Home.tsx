@@ -294,7 +294,7 @@ export function Home(): JSX.Element {
             aria-label="Open the conversation"
           >
             <div className="now-top">
-              <Mascot id={settings?.mascot ?? 'scout'} size={84} busy={needs.length === 0} />
+              <Mascot id={settings?.mascot ?? 'scout'} size={84} busy={needs.length === 0} needsYou={needs.length > 0} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="eyebrow">RIGHT NOW</div>
                 <div className="nm">{agentName}</div>

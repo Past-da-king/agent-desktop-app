@@ -78,7 +78,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
         onClick={() => navigate({ page: 'home' })}
         aria-label={`${agentName}, your agent`}
       >
-        <Mascot id={settings?.mascot ?? 'scout'} size={48} busy={needs === 0} />
+        <Mascot id={settings?.mascot ?? 'scout'} size={48} busy={needs === 0} needsYou={needs > 0} />
         <div className="who">
           <div className="nm">{agentName}</div>
           <div className={`st${needs > 0 ? ' warn' : ''}`}>{short(statusText, 44)}</div>

@@ -39,32 +39,18 @@ async function loadPlaywright() {
 }
 
 /** The scout mascot from design/mockup.html, drawn as a static path. */
-function mascotPath() {
-  const N = 240
-  const n = 9
-  const a = 0.07
-  const points = []
-  for (let i = 0; i < N; i += 1) {
-    const th = (i / N) * Math.PI * 2 - Math.PI / 2
-    const r = 1 - a + a * Math.cos(n * (th + Math.PI / 2))
-    points.push([50 + 46 * r * Math.cos(th), 50 + 46 * r * Math.sin(th)])
-  }
-  return `M${points.map(([x, y]) => `${x.toFixed(2)} ${y.toFixed(2)}`).join('L')}Z`
-}
+// The phone app's default launcher icon (res/drawable/ic_fg_scout_iris.xml on an icon_bg_iris background), so the
+// desktop app carries the same face: the scout sidekick in iris with light eyes, on the iris container colour.
+const SCOUT = 'M54.00,24.85 C56.19,24.85 58.38,25.64 60.11,27.21 C61.88,28.81 64.20,29.65 66.58,29.56 C71.26,29.38 75.31,32.78 75.94,37.42 C76.26,39.78 77.50,41.92 79.38,43.38 C83.08,46.25 84.00,51.45 81.50,55.42 C80.23,57.43 79.81,59.86 80.31,62.19 C81.30,66.77 78.66,71.35 74.20,72.78 C71.93,73.50 70.04,75.09 68.93,77.20 C66.74,81.34 61.77,83.15 57.44,81.38 C55.23,80.48 52.77,80.48 50.56,81.38 C46.23,83.15 41.26,81.34 39.07,77.20 C37.96,75.09 36.07,73.50 33.80,72.78 C29.34,71.35 26.70,66.77 27.69,62.19 C28.19,59.86 27.77,57.43 26.50,55.42 C24.00,51.45 24.92,46.25 28.62,43.38 C30.50,41.92 31.74,39.78 32.06,37.42 C32.69,32.78 36.74,29.38 41.42,29.56 C43.80,29.65 46.12,28.81 47.89,27.21 C49.62,25.64 51.81,24.85 54.00,24.85 Z'
+const EYES = 'M46,51 a3,4.6 0 1,0 6,0 a3,4.6 0 1,0 -6,0 Z M56,51 a3,4.6 0 1,0 6,0 a3,4.6 0 1,0 -6,0 Z'
 
 function iconSvg() {
+  // Android adaptive icons are drawn on a 108 x 108 canvas; the whole canvas fills the tile here.
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5A50E0"/>
-      <stop offset="1" stop-color="#3B31B8"/>
-    </linearGradient>
-  </defs>
-  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
-  <g transform="translate(192 176) scale(6.4)">
-    <path d="${mascotPath()}" fill="#F29A2E"/>
-    <ellipse cx="37.5" cy="49" rx="4.3" ry="6.4" fill="#3A1F00"/>
-    <ellipse cx="62.5" cy="49" rx="4.3" ry="6.4" fill="#3A1F00"/>
+  <rect width="1024" height="1024" rx="224" fill="#E4E0FF"/>
+  <g transform="scale(9.4815)">
+    <path d="${SCOUT}" fill="#4A3FD1"/>
+    <path d="${EYES}" fill="#FBFAFF"/>
   </g>
 </svg>`
 }
