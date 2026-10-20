@@ -386,7 +386,7 @@ export function Home(): JSX.Element {
           <section>
             <SectionHeader
               eyebrow="YOUR TO-DOS"
-              line={`${todos.length} open, soonest first`}
+              line={todos.length === 0 ? 'Nothing open right now' : `${todos.length} open, soonest first`}
               right={
                 <Button variant="text" size="sm" onClick={() => navigate({ page: 'tasks' })}>
                   All

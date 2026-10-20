@@ -287,7 +287,9 @@ export function Routines(): JSX.Element {
       <div className="ph">
         <div>
           <span className="eyebrow">ROUTINES</span>
-          <h1 className="h1">{enabled.length} running on a schedule</h1>
+          <h1 className="h1">
+            {enabled.length === 0 ? 'Nothing on a schedule yet' : `${enabled.length} running on a schedule`}
+          </h1>
           <p className="lead">Jobs your agent does without being asked.</p>
         </div>
         <div className="ph-actions">
@@ -337,7 +339,7 @@ export function Routines(): JSX.Element {
 
           <div style={{ marginTop: 34 }}>
             <SectionHeader eyebrow="ALL ROUTINES" line="Switch one off and it stays, ready for later" />
-            <div className="cols2">
+            <div className="rtn-grid">
               {sorted.map((trigger) => (
                 <div className="rtn" key={trigger.id}>
                   <span className="mi2">
@@ -345,15 +347,15 @@ export function Routines(): JSX.Element {
                   </span>
                   <div className="rt">
                     <b>{trigger.name}</b>
-                    <span>{scheduleLabel(trigger)}</span>
-                    <br />
-                    <span>{lastLabel(trigger)}</span>
+                    <span className="rt-when">{scheduleLabel(trigger)}</span>
+                    <span className="rt-last">{lastLabel(trigger)}</span>
                   </div>
                   <div className="rtn-actions">
                     <button
                       type="button"
                       className="ib"
                       aria-label={`Run ${trigger.name} now`}
+                      title="Run now"
                       disabled={runningId === trigger.id}
                       onClick={() => {
                         void runNow(trigger)
@@ -365,6 +367,7 @@ export function Routines(): JSX.Element {
                       type="button"
                       className="ib"
                       aria-label={`Edit ${trigger.name}`}
+                      title="Edit"
                       onClick={() => setDialog({ trigger, template: null })}
                     >
                       <Icon name="edit" size={18} />
@@ -373,6 +376,7 @@ export function Routines(): JSX.Element {
                       type="button"
                       className="ib"
                       aria-label={`Delete ${trigger.name}`}
+                      title="Delete"
                       onClick={() => remove(trigger)}
                     >
                       <Icon name="trash" size={18} />

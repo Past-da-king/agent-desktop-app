@@ -207,19 +207,23 @@ function signInError(email: string, password: string): string | null {
 const runState: RunState = { running: false, waiting: [] }
 
 const browserListeners = new Set<(state: BrowserState) => void>()
+// Only the seeded demo has a page open; empty and fresh modes show the browser's own empty state.
+const demoBrowser = mode === 'demo' || mode === 'big'
 const mockBrowser: BrowserState = {
-  url: 'https://skyhop.example/flights',
-  title: 'SkyHop flights',
-  tabs: [
-    {
-      id: 'mock-tab-1',
-      title: 'SkyHop flights',
-      url: 'https://skyhop.example/flights',
-      active: true,
-    },
-  ],
+  url: demoBrowser ? 'https://skyhop.example/flights' : '',
+  title: demoBrowser ? 'SkyHop flights' : '',
+  tabs: demoBrowser
+    ? [
+        {
+          id: 'mock-tab-1',
+          title: 'SkyHop flights',
+          url: 'https://skyhop.example/flights',
+          active: true,
+        },
+      ]
+    : [],
   visible: false,
-  agentActive: true,
+  agentActive: demoBrowser,
   needsUser: false,
   handoffReason: '',
 }

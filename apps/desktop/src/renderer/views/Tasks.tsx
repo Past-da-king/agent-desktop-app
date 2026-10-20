@@ -115,7 +115,7 @@ export function Tasks(): JSX.Element {
       <div className="ph">
         <div>
           <span className="eyebrow">TASKS</span>
-          <h1 className="h1">{openCount} on your list</h1>
+          <h1 className="h1">{openCount === 0 ? 'A clear list' : `${openCount} on your list`}</h1>
         </div>
         <div className="ph-actions">
           <Button onClick={() => setDialog({ task: null })}>

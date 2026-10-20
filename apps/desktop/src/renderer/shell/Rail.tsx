@@ -121,6 +121,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
 
       <div className="eyebrow mute grp">RECENT CHATS</div>
       <div className="chatlist">
+        {chats.length === 0 ? <p className="chat-none">Your chats will show up here.</p> : null}
         {chats.map((chat) => (
           <button
             key={chat.id}
@@ -155,7 +156,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
       >
         <Avatar name={userName} />
         <div className="who" style={{ minWidth: 0, textAlign: 'left' }}>
-          <div style={{ font: "500 14px/1.2 'Roboto',sans-serif", overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div style={{ font: '500 14px/1.2 var(--font)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {userName}
           </div>
           <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
