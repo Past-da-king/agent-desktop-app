@@ -162,6 +162,8 @@ export interface Tool {
 export interface ToolContext {
   /** "main" for the user-facing agent; a helper's label otherwise. */
   agentLabel: string
+  /** The id of the profile a helper works in (its accounts and browser sign-ins). Absent for the main agent. */
+  profile?: string
   /** Show a short line of activity in the chat ("Searched memory"). Returns an id to update. */
   activity(text: string, meta?: JsonObject): Promise<number>
   updateActivity(id: number, text: string, meta?: JsonObject): Promise<void>
