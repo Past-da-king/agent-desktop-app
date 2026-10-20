@@ -67,6 +67,8 @@ export interface ChatRunner {
   state(): RunState
   answer(itemId: string, answer: string): Promise<void>
   decide(itemId: string, decision: Decision): Promise<void>
+  /** A button tap on an agent card, heard by the agent quietly. */
+  tap(itemId: string, label: string, message: string): Promise<void>
   /** Optional: only the real runner can drive an installed AI tool. */
   checkCli?(): Promise<{ ok: boolean; message: string }>
   cliLogin?(): Promise<{ ok: boolean; message: string }>
@@ -250,6 +252,13 @@ export function registerIpc(deps: IpcDeps): () => void {
       throw new Error('decision must be approve or decline')
     }
     await chat.decide(id, rawDecision)
+  })
+
+  handle(CHANNELS.chat.tap, async (_event, rawId, rawLabel, rawMessage) => {
+    const id = requireString(rawId, 'message id', MAX_STRING)
+    const label = requireString(rawLabel, 'button label', MAX_STRING)
+    const message = requireString(rawMessage, 'tap', MAX_ANSWER)
+    await chat.tap(id, label, message)
   })
 
   // ---- routines ----

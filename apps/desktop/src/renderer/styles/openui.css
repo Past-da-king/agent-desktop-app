@@ -1,0 +1,202 @@
+/* Generated UI in the chat (OpenUI), drawn like the phone app's cards: one tonal step per layer (card, then tiles
+   inside it), cookie icon chips, one hero figure, two-column fact tiles, grouped lists, and pill buttons that squash.
+   Tokens only, so light and dark both follow tokens.css. */
+
+.a-msg.rich{max-width:760px;width:100%;display:flex;flex-direction:column;gap:12px}
+.a-msg.rich .a-prose{max-width:680px}
+.oui{min-width:0;width:100%;line-height:1.45;font-size:15px}
+.oui .num{font-variant-numeric:tabular-nums}
+.oui .out{color:var(--err)}
+.oui .in{color:var(--ok)}
+
+/* While the program streams in and nothing can be drawn yet. */
+.oui-pending{height:120px;border-radius:var(--r-lg);background:linear-gradient(100deg,var(--s-high) 30%,var(--s-highest) 50%,var(--s-high) 70%);background-size:300% 100%;animation:oui-shimmer 1.4s linear infinite}
+@keyframes oui-shimmer{from{background-position:100% 0}to{background-position:0 0}}
+.oui-raw{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:400 13px/1.6 ui-monospace,'Cascadia Mono',Consolas,'SF Mono',monospace;background:var(--s-mid);color:var(--on-bg);border-radius:var(--r-md);padding:12px 16px}
+
+/* ---- Card and header ---- */
+.oui-stack{display:flex;flex-direction:column;gap:12px}
+.oui-card{background:var(--s-high);color:var(--on-bg);border-radius:var(--r-lg);overflow:hidden;min-width:0}
+.oui-card-in{padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.oui-lead{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;background:var(--s-highest)}
+.oui-img{display:block;width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:var(--r-md);background:var(--s-highest)}
+.oui-pic-none{display:flex;align-items:center;justify-content:center;color:var(--on-sv);background:var(--s-highest)}
+
+.oui-head{display:flex;align-items:center;gap:14px;min-width:0}
+.oui-head-t{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
+.oui-title{font:600 22px/1.25 var(--font);letter-spacing:-.01em;overflow-wrap:anywhere}
+.oui-sub{font-size:14px;line-height:1.4;color:var(--on-sv)}
+.oui-hero{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:8px;line-height:1.1}
+.oui-hero-n{font:700 34px/1.1 var(--font);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.oui-hero-u{font-size:16px;color:var(--on-sv)}
+
+/* The cookie chip: the Material 3 Expressive 9-sided cookie behind a line icon. */
+.oui-chip{position:relative;flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--on-pc)}
+.oui-chip-bg{position:absolute;inset:0;fill:var(--pc)}
+.oui-chip-in{position:relative;display:inline-flex;align-items:center;justify-content:center}
+.oui-chip.round{border-radius:999px;background:var(--pc)}
+.oui-chip.t-warning{color:var(--on-tc)}.oui-chip.t-warning .oui-chip-bg{fill:var(--tc)}
+.oui-chip.t-error{color:var(--on-ec)}.oui-chip.t-error .oui-chip-bg{fill:var(--ec)}
+.oui-chip.t-success{color:var(--ok)}.oui-chip.t-success .oui-chip-bg{fill:var(--okc)}
+.oui-chip.t-neutral{color:var(--on-sv)}.oui-chip.t-neutral .oui-chip-bg{fill:var(--s-highest)}
+.oui-chip.t-plain{color:var(--on-sv)}.oui-chip.t-plain.round{background:var(--s-high)}
+.oui-letter,.oui-li-n{font:700 14px/1 var(--font)}
+
+/* ---- Text, sections, callouts ---- */
+.oui-text{font-size:15px;line-height:1.55;overflow-wrap:anywhere}
+.oui-text p+p{margin-top:8px}
+.oui-text.s-small{font-size:14px;color:var(--on-sv)}
+.oui-text.s-large{font-size:17px}
+.oui-text.s-small-heavy{font-size:14px;font-weight:600}
+.oui-text.s-large-heavy{font-size:18px;font-weight:600}
+.oui-text.v-card,.oui-text.v-sunk{background:var(--s-highest);border-radius:var(--r-md);padding:12px 14px}
+.oui-text ul,.oui-text ol{padding-left:22px;display:flex;flex-direction:column;gap:4px;margin:6px 0}
+.oui-text ul{list-style:disc}
+.oui-ih{display:flex;flex-direction:column;gap:2px}
+.oui-ih-t{font:600 17px/1.3 var(--font)}
+.oui-ih-d{font-size:14px;color:var(--on-sv)}
+.oui-sep{border:0;height:1px;background:var(--outline-v);margin:0}
+.oui-callout{display:flex;gap:12px;align-items:flex-start;background:var(--s-highest);border-radius:var(--r-md);padding:14px}
+.oui-callout-t{min-width:0;display:flex;flex-direction:column;gap:2px;padding-top:2px}
+.oui-callout-h{font:600 15px/1.35 var(--font)}
+.oui-callout-d{font-size:14px;line-height:1.5;color:var(--on-sv)}
+
+/* ---- Facts ---- */
+.oui-facts{display:flex;flex-direction:column;gap:8px;min-width:0}
+.oui-caption{font:500 13px/1.3 var(--font);color:var(--on-sv);letter-spacing:.01em}
+.oui-tiles{display:flex;flex-direction:column;gap:8px}
+.oui-tile-row{display:flex;gap:8px}
+.oui-tile{flex:1 1 0;min-width:0;background:var(--s-highest);border-radius:var(--r-md);padding:14px;display:flex;flex-direction:column;gap:6px}
+.oui-tile-l{display:flex;align-items:center;gap:6px;font-size:13px;line-height:1.3;color:var(--on-sv);min-width:0}
+.oui-tile-l .oui-ico{color:var(--primary);flex:none}
+.oui-tile-l span{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.oui-tile-v{font:600 17px/1.25 var(--font);overflow-wrap:anywhere}
+.oui-tile.big .oui-tile-v{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
+.oui-group{background:var(--s-highest);border-radius:var(--r-md);overflow:hidden}
+.oui-row{position:relative;display:flex;align-items:center;gap:12px;padding:12px 14px;min-width:0}
+.oui-row+.oui-row::before{content:'';position:absolute;top:0;left:62px;right:0;height:1px;background:color-mix(in srgb,var(--outline-v) 70%,transparent)}
+.oui-row.long{align-items:flex-start}
+.oui-row-l{flex:1;min-width:0;font-size:15px}
+.oui-row-v{flex:0 1 auto;max-width:55%;text-align:right;font:600 15px/1.35 var(--font)}
+.oui-row-stack{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.oui-row-cap{font-size:13px;color:var(--on-sv)}
+.oui-row-body{font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+.oui-foot{display:flex;justify-content:space-between;gap:12px;padding:4px;font:600 15px/1.3 var(--font)}
+
+/* ---- Swipe rows ---- */
+.oui-swipe{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:6px;scrollbar-width:thin;scrollbar-color:var(--outline-v) transparent;overscroll-behavior-x:contain}
+.oui-swipe-i{flex:0 0 min(86%,380px);scroll-snap-align:start;min-width:0;display:flex}
+.oui-swipe-i>*{flex:1}
+.oui-swipe.products .oui-swipe-i{flex-basis:clamp(168px,60%,250px)}
+
+/* ---- Product ---- */
+.oui-product{background:var(--s-high);color:var(--on-bg);border-radius:24px;overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.oui-product-pic{position:relative}
+.oui-product-img{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:1;object-fit:cover;background:var(--s-highest);color:var(--on-sv)}
+.oui-product-tag{position:absolute;top:10px;left:10px;max-width:calc(100% - 20px);background:var(--pc);color:var(--on-pc);border-radius:999px;padding:5px 10px;font:600 12px/1.2 var(--font);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oui-product-in{padding:12px 14px 14px;display:flex;flex-direction:column;gap:6px;flex:1}
+.oui-product-seller{font-size:13px;color:var(--on-sv);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oui-product-name{font:600 15px/1.35 var(--font);min-height:2.7em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.oui-stars{display:flex;align-items:center;gap:6px;min-height:20px}
+.oui-stars-row{display:inline-flex}
+.oui-star{position:relative;display:inline-flex;color:var(--outline)}
+.oui-star.k2{color:var(--tert)}
+.oui-star.k1{color:var(--outline)}
+.oui-star-half{position:absolute;inset:0;width:50%;overflow:hidden;color:var(--tert)}
+.oui-stars-n{font:600 14px/1 var(--font)}
+.oui-stars-c{font-size:13px;color:var(--on-sv)}
+.oui-price{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:auto}
+.oui-price-n{font:700 22px/1.2 var(--font);letter-spacing:-.01em}
+.oui-price-was{font-size:14px;color:var(--on-sv)}
+.oui-product .oui-btns{margin-top:4px}
+.oui-product .oui-btn{min-height:44px;padding:10px 14px;font-size:14px}
+
+/* ---- Buttons: big pills that spring to a softer rectangle under the pointer ---- */
+.oui-btns{display:flex;gap:10px}
+.oui-btns.col{flex-direction:column}
+.oui-btns.row>.oui-btn{flex:1 1 0}
+.oui-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:52px;padding:14px 20px;border:0;border-radius:28px;font:600 15px/1.2 var(--font);cursor:pointer;min-width:0;
+  background:var(--primary);color:var(--on-primary);
+  transition:border-radius .45s var(--spatial),transform .45s var(--spatial),background-color .2s var(--effects),box-shadow .2s var(--effects)}
+.oui-btn>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oui-btn .oui-ico{flex:none}
+.oui-btn:hover{box-shadow:inset 0 0 0 100px color-mix(in srgb,currentColor 8%,transparent)}
+.oui-btn:active{border-radius:14px;transform:scale(.98)}
+.oui-btn:focus-visible{outline:3px solid var(--primary);outline-offset:2px}
+.oui-btn.v-secondary{background:var(--sc);color:var(--on-sc)}
+.oui-btn.v-tertiary{background:transparent;color:var(--primary)}
+.oui-btn.danger{background:var(--ec);color:var(--on-ec)}
+.oui-btn.sent,.oui-btn.sent:hover{background:var(--s-highest);color:var(--on-sv);cursor:default;box-shadow:none}
+.oui-btn:disabled:not(.sent){opacity:.6;cursor:default}
+@media (prefers-reduced-motion:reduce){.oui-btn{transition:background-color .2s var(--effects)}.oui-btn:active{transform:none}}
+
+/* ---- Follow-ups, lists, tags, sources ---- */
+.oui-follow{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.oui-follow-b{display:inline-flex;align-items:center;gap:8px;max-width:100%;border:0;border-radius:999px;background:var(--s-highest);color:var(--primary);padding:10px 12px 10px 16px;font:600 14px/1.3 var(--font);cursor:pointer;text-align:left;transition:border-radius .45s var(--spatial),background-color .2s var(--effects)}
+.oui-follow-b:hover{background:color-mix(in srgb,var(--primary) 10%,var(--s-highest))}
+.oui-follow-b:active{border-radius:12px}
+.oui-follow-b:focus-visible{outline:3px solid var(--primary);outline-offset:2px}
+.oui-list{display:flex;flex-direction:column;gap:2px}
+.oui-li{display:flex;align-items:flex-start;gap:14px;padding:6px;margin:0 -6px;border-radius:16px;background:transparent;border:0;color:inherit;text-align:left;font:inherit;width:calc(100% + 12px)}
+.oui-li.tap{cursor:pointer;transition:background-color .2s var(--effects)}
+.oui-li.tap:hover{background:color-mix(in srgb,var(--on-bg) 6%,transparent)}
+.oui-li.tap:focus-visible{outline:3px solid var(--primary);outline-offset:0}
+.oui-li.tap>.oui-ico{align-self:center;color:var(--on-sv);flex:none}
+.oui-li-lead{display:flex;flex-direction:column;align-items:center;align-self:stretch;flex:none}
+.oui-li-lead:empty{display:none}
+.oui-li-img{width:56px;height:56px;border-radius:16px;object-fit:cover;display:flex;align-items:center;justify-content:center}
+.oui-li-line{flex:1;width:2px;margin-top:4px;background:color-mix(in srgb,var(--outline-v) 80%,transparent);border-radius:2px}
+.oui-li-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;padding-top:7px}
+.oui-li.joined .oui-li-t{padding-bottom:12px}
+.oui-li-title{font:600 15px/1.35 var(--font)}
+.oui-li-sub{font-size:14px;line-height:1.45;color:var(--on-sv)}
+.oui-li-act{font:600 14px/1.3 var(--font);color:var(--primary);padding-top:9px;flex:none}
+.oui-tags{display:flex;flex-wrap:wrap;gap:6px}
+.oui-tag{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:6px 12px;font:500 13px/1.2 var(--font);background:var(--s-highest);color:var(--on-sv)}
+.oui-tag.v-success{background:var(--okc);color:var(--ok)}
+.oui-tag.v-warning{background:var(--tc);color:var(--on-tc)}
+.oui-tag.v-danger{background:var(--ec);color:var(--on-ec)}
+.oui-tag.v-info{background:var(--pc);color:var(--on-pc)}
+.oui-sources{display:flex;flex-wrap:wrap;gap:6px}
+.oui-source{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:999px;padding:5px 12px 5px 6px;background:var(--s-highest);color:var(--on-sv);font:500 13px/1.2 var(--font);cursor:pointer}
+.oui-source:hover:not(:disabled){color:var(--on-bg)}
+.oui-source:disabled{cursor:default}
+.oui-source-n{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;border-radius:999px;background:var(--pc);color:var(--on-pc);font:700 12px/1 var(--font)}
+
+/* ---- Tables and charts ---- */
+.oui-table-wrap{background:var(--s-highest);border-radius:var(--r-md);overflow-x:auto}
+.oui-table{width:100%;border-collapse:collapse;font-size:14px}
+.oui-table th{font:600 13px/1.3 var(--font);color:var(--on-sv);text-align:left;padding:12px 14px;border-bottom:1px solid var(--outline-v);white-space:nowrap}
+.oui-table td{padding:11px 14px;border-top:1px solid color-mix(in srgb,var(--outline-v) 50%,transparent)}
+.oui-table tr:first-child td{border-top:0}
+.oui-table .num{text-align:right}
+.oui-chart{display:flex;flex-direction:column;gap:8px}
+.oui-chart svg{width:100%;height:180px;display:block}
+.oui-grid{stroke:var(--outline-v);stroke-width:1;vector-effect:non-scaling-stroke}
+.oui-chart-x{display:flex}
+.oui-chart-x span{flex:1;text-align:center;font-size:12px;color:var(--on-sv);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oui-legend,.oui-pie-l{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:var(--on-sv)}
+.oui-legend span,.oui-pie-l span{display:inline-flex;align-items:center;gap:6px}
+.oui-legend i,.oui-pie-l i{width:10px;height:10px;border-radius:999px;display:inline-block}
+.oui-pie{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.oui-pie-l{flex-direction:column;color:var(--on-bg);font-size:14px}
+.oui-pie-l b{font-weight:600;color:var(--on-sv)}
+
+/* ---- The ask card: amber because it needs the person, one card with the free answer under it ---- */
+.appr.ask{padding:0 0 18px;gap:6px}
+.oui-ask .oui-card{background:transparent;color:var(--on-tc)}
+.oui-ask .oui-card-in{padding:20px 20px 8px}
+.oui-ask .oui-sub{color:color-mix(in srgb,var(--on-tc) 82%,transparent)}
+.oui-ask .oui-btn.v-secondary{background:var(--bg);color:var(--on-bg)}
+.oui-ask.busy .oui-btn{opacity:.6;pointer-events:none}
+.appr.ask .free,.appr.ask .hint{padding:0 20px}
+
+@media (max-width:640px){
+  .oui-card-in{padding:16px;gap:14px}
+  .oui-hero-n{font-size:30px}
+  .oui-title{font-size:20px}
+  .oui-tile.big .oui-tile-v{font-size:26px}
+  .appr.ask{padding:0 0 16px}
+  .oui-ask .oui-card-in{padding:16px 16px 6px}
+  .appr.ask .free,.appr.ask .hint{padding:0 16px}
+}

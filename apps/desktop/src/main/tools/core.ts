@@ -16,6 +16,7 @@ import {
 
 import type { DataStore } from '../runtime/data'
 import { formatDateTime } from '../runtime/time'
+import { hasRefusal, NO, TURNED_DOWN, withNo } from '../../shared/ask-options'
 
 export const FETCH_TIMEOUT_MS = 20_000
 export const FETCH_MAX_CHARS = 12_000
@@ -70,14 +71,15 @@ function askUserTool(): Tool {
       ),
     },
     run: async (input, ctx) => {
-      const options = strings(input['options'])
-      const answer = await ctx.ask(
-        text(input['question']),
-        options.length === 0 ? ['Yes', 'No'] : options,
-      )
-      return answer === null
-        ? 'Nobody could answer right now (this is a background run). Make the safe choice or leave it for the user.'
-        : `The user answered: ${answer}`
+      const given = strings(input['options'])
+      const options = given.length === 0 ? ['Yes', 'No'] : given
+      // There is always a way to say no, last (the owner's rule on the phone, agent/AskOptions.kt).
+      const answer = await ctx.ask(text(input['question']), withNo(options))
+      if (answer === null) {
+        return 'Nobody could answer right now (this is a background run). Make the safe choice or leave it for the user.'
+      }
+      if (answer === NO && !hasRefusal(options)) return TURNED_DOWN
+      return `The user answered: ${answer}`
     },
   }
 }

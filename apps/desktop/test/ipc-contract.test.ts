@@ -177,7 +177,7 @@ const METHODS: Record<string, string[]> = {
   settings: ['get', 'save', 'providers', 'setApiKey', 'checkKey', 'checkCli', 'cliLogin', 'reset'],
   account: ['signIn', 'signOut', 'firstSync', 'syncNow', 'status'],
   data: ['list', 'upsert', 'remove'],
-  chat: ['send', 'stop', 'state', 'answer', 'decide'],
+  chat: ['send', 'stop', 'state', 'answer', 'decide', 'tap'],
   routines: ['runNow'],
   browser: [
     'setBounds',

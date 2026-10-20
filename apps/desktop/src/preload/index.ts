@@ -81,6 +81,7 @@ const api: AgentApi = {
     state: () => call<RunState>(CHANNELS.chat.state),
     answer: (itemId, answer) => call<void>(CHANNELS.chat.answer, itemId, answer),
     decide: (itemId, decision: Decision) => call<void>(CHANNELS.chat.decide, itemId, decision),
+    tap: (itemId, label, message) => call<void>(CHANNELS.chat.tap, itemId, label, message),
     onEvent: (callback) => on<ChatEvent>(EVENTS.chat, callback),
   },
 
