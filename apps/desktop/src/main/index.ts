@@ -493,6 +493,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     window: win,
     onState: (state) => broadcast(EVENTS.browser, state),
     openExternal: (url) => shell.openExternal(url),
+    sitesFile: join(app.getPath('userData'), 'browser-sites.json'),
   })
 
   const factory = (current: ReturnType<SettingsStore['get']>, key: string): ReturnType<typeof providerFor> =>

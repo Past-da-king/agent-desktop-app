@@ -11,6 +11,7 @@ import { DEFAULT_SETTINGS, type Tool } from '@agent/core'
 import { unavailableBrowser, type BrowserDriver } from '../browser/types'
 import { codeTools } from '../tools/code'
 import { browserTools } from '../tools/browser'
+import { browserProTools } from '../tools/browser-pro'
 import { coreTools, type CoreToolDeps } from '../tools/core'
 import { fileTools } from '../tools/files'
 import { memoryTools } from '../tools/memory'
@@ -99,6 +100,7 @@ export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
       browser: deps.browser ?? unavailableBrowser,
       ...(name === undefined ? {} : { agentName: name }),
     }), // browser_open through browser_show_user
+    ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
 
   ]
 }
