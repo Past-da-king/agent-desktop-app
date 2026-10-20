@@ -320,9 +320,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.emit()
   }
 
-  /** A new empty tab for the person, in front. */
+  /** A new tab for the person, in front, on Google. */
   personNewTab(): void {
-    this.createTab()
+    this.createTab(NEW_TAB_PAGE)
     this.emit()
   }
 
@@ -1716,11 +1716,14 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | nu
 
 export type { BrowserBounds, BrowserState }
 
-/** What the person typed in the address bar, as an address to open. Plain words become a web search. */
+/** Where a new tab the person opens starts. */
+export const NEW_TAB_PAGE = 'https://www.google.com/'
+
+/** What the person typed in the address bar, as an address to open. Plain words become a Google search. */
 export function addressOf(raw: string): string | null {
   const text = raw.trim()
   if (text === '') return null
   if (/^https?:\/\//i.test(text)) return text
   if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(text) || /^localhost(:\d+)?(\/\S*)?$/i.test(text)) return `https://${text}`
-  return `https://duckduckgo.com/?q=${encodeURIComponent(text)}`
+  return `https://www.google.com/search?q=${encodeURIComponent(text)}`
 }
