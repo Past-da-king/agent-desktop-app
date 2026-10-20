@@ -15,6 +15,7 @@ import { IconChip, UiGlyph } from './icons'
 import {
   actionsOf,
   buttonsLayout,
+  cardTitle,
   factRows,
   factsLayout,
   fmt,
@@ -232,10 +233,7 @@ function CardComp({ n, cx }: { n: UiNode; cx: Cx }): JSX.Element {
   const kids = nodes(n, 'children')
   const header = kids.find((k) => k.type === 'CardHeader') ?? null
   // The card's name is its header; inside a card with sections, each section heading names the item below it.
-  const title = (header !== null ? str(header, 'title') : null) ?? (() => {
-    const ih = kids.find((k) => k.type === 'InlineHeader')
-    return ih === undefined ? null : str(ih, 'heading')
-  })()
+  const title = cardTitle(n)
   const first = kids[0]
   const lead = first !== undefined && (first.type === 'ImageBlock' || first.type === 'Image') ? first : null
   const firstFacts = kids.find((k) => k.type === 'EntityList') ?? null
