@@ -594,7 +594,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
     broadcast(EVENTS.hotkey, status)
   })
 
+  let lastSettings = settings.get()
   disposeSettings = settings.onChange((next) => {
+    // Which settings changed (names only, never values), so a setting that will not stick can be traced.
+    const changed = (Object.keys(next) as Array<keyof typeof next>).filter((key) => JSON.stringify(next[key]) !== JSON.stringify(lastSettings[key]))
+    lastSettings = next
+    if (changed.length > 0) logger.info('Settings changed', { keys: changed.join(',') })
     applyLoginItem(next)
     applyHotkey(next)
     tray?.refresh()
