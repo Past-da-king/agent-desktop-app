@@ -35,7 +35,7 @@
 ## Checks
 
 - `npm run typecheck`: clean.
-- `npx vitest run`: 180 tests passed, including 12 new renderer tests for thread order, dividers, titles,
+- `npx vitest run`: 180 tests passed, including 9 new renderer tests for thread order, dividers, titles,
   attachments, waiting ids and the demo card kinds.
 - `bash scripts/gate.sh M6b`: `GATE M6b PASSED` (build, repo rules, deliverables, 180 tests, 52 screen
   screenshots, 6 chat screenshots).
