@@ -10,6 +10,7 @@ import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { AccountService } from '../src/main/account'
 import { Store } from '../src/main/db'
 import { registerIpc, type BrowserControl, type IpcMainLike } from '../src/main/ipc'
+import type { HelperHost } from '../src/main/runtime/helpers'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset } from '../src/main/runtime/toolset'
 import { Secrets, type SafeStorageLike } from '../src/main/secrets'
@@ -32,6 +33,7 @@ let windowCalls: string[]
 let routineRuns: string[]
 let browserCalls: string[]
 let browserBounds: BrowserBounds | null
+let helperCalls: string[]
 
 const browserState: BrowserState = {
   url: 'https://example.com/',
@@ -61,6 +63,23 @@ beforeEach(() => {
   routineRuns = []
   browserCalls = []
   browserBounds = null
+  helperCalls = []
+
+  const helpers: HelperHost = {
+    delegate: async () => '',
+    steer: async () => '',
+    push: async () => '',
+    status: async () => '',
+    stop: async (id) => {
+      helperCalls.push(id)
+      return true
+    },
+    stopAll: async () => {
+      helperCalls.push('all')
+      return 2
+    },
+    live: () => [],
+  }
 
   const ipcMain: IpcMainLike = {
     handle(channel, listener) {
@@ -120,6 +139,7 @@ beforeEach(() => {
       },
     },
     browser,
+    helpers,
     ipcMain,
     windows: {
       minimize: () => windowCalls.push('minimize'),
@@ -170,6 +190,7 @@ const METHODS: Record<string, string[]> = {
     'giveBack',
     'openInSystem',
   ],
+  helpers: ['stop', 'stopAll'],
   window: ['minimize', 'toggleMaximize', 'close', 'isMaximized'],
   files: ['pick', 'pickFolder', 'thumbnail'],
   system: ['info'],
@@ -296,6 +317,13 @@ describe('registerIpc', () => {
     await invoke(CHANNELS.routines.runNow, 'routine-1')
     expect(routineRuns).toEqual(['routine-1'])
     await expect(invoke(CHANNELS.routines.runNow, 42)).rejects.toThrow('routine id must be text')
+  })
+
+  it('stops helpers through the manager and rejects a bad id', async () => {
+    expect(await invoke(CHANNELS.helpers.stop, 'helper-1')).toBe(true)
+    expect(await invoke(CHANNELS.helpers.stopAll)).toBe(2)
+    expect(helperCalls).toEqual(['helper-1', 'all'])
+    await expect(invoke(CHANNELS.helpers.stop, 42)).rejects.toThrow('helper id must be text')
   })
 
   it('rejects a bad chat message', async () => {

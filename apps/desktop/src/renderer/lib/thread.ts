@@ -1,13 +1,20 @@
 import type { Attachment, ChatItem } from '@agent/core'
 
 import { short } from './format'
+import { helperVisible, isHelper, isHelperActivity } from './helpers'
 import { metaText, parseMeta } from './meta'
 
-/** The conversation, oldest first. Branch markers and Home-only cards are not part of the thread. */
+/**
+ * The conversation, oldest first. Branch markers, Home-only cards and a helper's own steps are not
+ * part of the main thread: its steps live inside its card. A finished helper folds away once the
+ * main reply carrying its result has landed.
+ */
 export function threadItems(items: ChatItem[]): ChatItem[] {
   return items
     .filter((item) => item.kind !== 'branch')
     .filter((item) => !(item.kind === 'question' && parseMeta(item.meta)['context'] === 'home'))
+    .filter((item) => !isHelperActivity(item))
+    .filter((item) => !isHelper(item) || helperVisible(item, items))
     .sort((a, b) => a.createdAt - b.createdAt)
 }
 

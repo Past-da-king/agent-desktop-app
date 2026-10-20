@@ -24,6 +24,7 @@ import { arch as osArch, hostname as osHostname, platform as osPlatform } from '
 
 import type { AccountService, SignInArgs } from './account'
 import type { Store } from './db'
+import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
 import type { SettingsStore } from './settings'
 import { CHANNELS, EVENTS } from '../shared/channels'
@@ -89,6 +90,7 @@ export interface IpcDeps {
   account: AccountService
   chat: ChatRunner
   routines?: RoutineService
+  helpers?: HelperHost
   ipcMain: IpcMainLike
   windows: WindowControls
   browser?: BrowserControl
@@ -238,6 +240,19 @@ export function registerIpc(deps: IpcDeps): () => void {
     const id = requireString(rawId, 'routine id', MAX_STRING)
     if (deps.routines === undefined) throw new Error('Routines are not ready yet')
     await deps.routines.runNow(id)
+  })
+
+  // ---- helpers ----
+
+  handle(CHANNELS.helpers.stop, async (_event, rawId) => {
+    const id = requireString(rawId, 'helper id', MAX_STRING)
+    if (deps.helpers === undefined) return false
+    return deps.helpers.stop(id)
+  })
+
+  handle(CHANNELS.helpers.stopAll, async () => {
+    if (deps.helpers === undefined) return 0
+    return deps.helpers.stopAll()
   })
 
   // ---- the agent's browser ----

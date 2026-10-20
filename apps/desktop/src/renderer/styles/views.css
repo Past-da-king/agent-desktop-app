@@ -7,6 +7,11 @@
 .now .nm{font:500 30px/1.15 'Roboto Flex','Roboto',sans-serif}
 .now .sub{font-size:15px;color:color-mix(in srgb,var(--on-pc) 85%,transparent)}
 .now .eyebrow{color:color-mix(in srgb,var(--on-pc) 85%,transparent)}
+.now-helpers{display:flex;flex-direction:column;gap:8px}
+.now-helper{display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.4;color:color-mix(in srgb,var(--on-pc) 85%,transparent);min-width:0}
+.now-helper svg{flex:none}
+.now-helper b{font:500 13px/1.4 'Roboto',sans-serif;color:var(--on-pc);white-space:nowrap}
+.now-helper span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .now-row{display:flex;align-items:baseline;justify-content:space-between;gap:14px;font:500 17px/1.3 'Roboto',sans-serif}
 .stepchips{display:flex;gap:8px;flex-wrap:wrap}
 .sc-chip{display:inline-flex;align-items:center;gap:6px;height:30px;max-width:100%;min-width:0;padding:0 12px;border-radius:999px;font:500 12px/1 'Roboto',sans-serif;background:color-mix(in srgb,var(--on-pc) 14%,transparent);color:var(--on-pc)}
@@ -105,13 +110,22 @@
 .free input:focus{border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 25%,transparent)}
 .free input::placeholder{color:var(--on-sv)}
 .free .btn{height:44px;flex:none}
+.hcard{min-width:0}
 .hrow{display:flex;align-items:center;gap:14px;background:var(--s-low);border-radius:var(--r-lg);padding:12px 18px 12px 14px;text-align:left;width:100%;transition:background .2s}
 .hrow:hover{background:var(--s-mid)}
-.hrow .hs{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--okc);color:var(--ok)}
+.hrow.open{border-radius:var(--r-lg) var(--r-lg) 0 0}
+.hrow .hmain{display:flex;align-items:center;gap:14px;flex:1;min-width:0;text-align:left;background:none;color:inherit}
+.hrow .hs{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--okc);color:var(--ok);flex:none}
 .hrow .hs.work{background:var(--pc);color:var(--on-pc)}
 .hrow .hn{flex:1;min-width:0}
 .hrow .hn b{font:500 15px/1.2 'Roboto',sans-serif;margin-right:8px}
-.hrow .hn div{font-size:13px;color:var(--on-sv);margin-top:2px}
+.hrow .hn div{font-size:13px;color:var(--on-sv);margin-top:2px;overflow-wrap:anywhere}
+.hrow .hchev{flex:none;color:var(--on-sv);display:grid;place-items:center;transition:transform .2s var(--effects)}
+.hrow.open .hchev{transform:rotate(90deg)}
+.hrow .hstop{flex:none;color:var(--primary)}
+.hbody{background:var(--s-low);border-radius:0 0 var(--r-lg) var(--r-lg);padding:12px 18px 16px 68px;display:flex;flex-direction:column;gap:12px}
+.hbrief{font-size:13px;line-height:1.5;color:var(--on-sv);overflow-wrap:anywhere}
+.hacts{display:flex;flex-direction:column;gap:10px}
 .appr{background:var(--tc);color:var(--on-tc);border-radius:var(--r-lg);padding:22px 24px;display:flex;flex-direction:column;gap:14px;max-width:760px}
 .appr .eyebrow{color:var(--on-tc);display:flex;align-items:center;gap:8px}
 .appr .tt{font:500 22px/1.25 'Roboto Flex','Roboto',sans-serif;overflow-wrap:anywhere}

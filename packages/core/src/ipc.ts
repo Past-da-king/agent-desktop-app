@@ -263,6 +263,16 @@ export interface BrowserState {
   handoffReason: string
 }
 
+export type HelperState = 'working' | 'done' | 'failed' | 'stopped'
+
+/** The helper controls the chat and Home need. A helper's live details ride on its `chat_item` row. */
+export interface HelpersApi {
+  /** Stops one working helper. False when it was not running. */
+  stop(id: string): Promise<boolean>
+  /** Stops every working helper and returns how many were asked to stop. */
+  stopAll(): Promise<number>
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The api
 // ---------------------------------------------------------------------------------------------------------------
@@ -337,6 +347,7 @@ export interface AgentApi {
     openInSystem(): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
   }
+  helpers: HelpersApi
 
   window: {
     minimize(): void
