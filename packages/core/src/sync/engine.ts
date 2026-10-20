@@ -78,8 +78,13 @@ export class SyncEngine {
     this.setStatus({ signedIn })
   }
 
-  /** One full pass, without a long poll. Safe to call at any time; false when it could not reach the service. */
+  /**
+   * One full pass, without a long poll. Safe to call at any time; false when it could not reach the service.
+   * A loop that is holding a long poll is interrupted first, so a manual sync or onboarding pass never
+   * waits for the 25 s window to expire.
+   */
   syncOnce(): Promise<boolean> {
+    this.pullController?.abort()
     return this.withLock(() => this.pass(0))
   }
 
@@ -134,7 +139,7 @@ export class SyncEngine {
 
     while (this.stopController === controller && !controller.signal.aborted) {
       this.nudgeAbort = false
-      const ok = await this.withLock(() => this.pass(wait))
+      const ok = await this.withLock(() => this.pass(wait, controller.signal))
       if (this.stopController !== controller || controller.signal.aborted) break
       if (ok) {
         backoff = initial
@@ -150,7 +155,8 @@ export class SyncEngine {
     }
   }
 
-  private async pass(waitSeconds: number): Promise<boolean> {
+  private async pass(waitSeconds: number, stop?: AbortSignal): Promise<boolean> {
+    if (aborted(stop)) return false
     const client = this.client()
     if (client === null) {
       this.setStatus({ signedIn: false, syncing: false })
@@ -167,6 +173,7 @@ export class SyncEngine {
         if (newest !== null) await this.store.setPushMark(newest)
       }
 
+      if (aborted(stop)) return false
       const controller = new AbortController()
       this.pullController = controller
       let pulled
@@ -279,6 +286,10 @@ function latestStamp(changes: Change[]): string | null {
   if (stamp !== null) return stamp
   const last = changes[changes.length - 1]
   return last?.stamp ?? null
+}
+
+function aborted(signal?: AbortSignal): boolean {
+  return signal?.aborted === true
 }
 
 function isAbort(error: unknown): boolean {

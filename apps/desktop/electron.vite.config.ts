@@ -5,7 +5,10 @@ import { defineConfig } from 'electron-vite'
 
 export default defineConfig({
   main: {
+    // The workspace package ships TypeScript source, so bundle it into the main process rather
+    // than leaving a require('@agent/core') that Node cannot load at runtime.
     build: {
+      externalizeDeps: { exclude: ['@agent/core'] },
       outDir: 'out/main',
       rollupOptions: {
         input: resolve(__dirname, 'src/main/index.ts'),
