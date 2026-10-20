@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 
 import type {
   AgentApi,
+  AppInfo,
   Attachment,
   ChatEvent,
   Decision,
@@ -106,6 +107,12 @@ const api: AgentApi = {
   shell: {
     openExternal: (url) => call<void>(CHANNELS.shell.openExternal, url),
     reveal: (path) => call<void>(CHANNELS.shell.reveal, path),
+  },
+
+  app: {
+    info: () => call<AppInfo>(CHANNELS.app.info),
+    openLogsFolder: () => call<void>(CHANNELS.app.openLogsFolder),
+    openLicences: () => call<void>(CHANNELS.app.openLicences),
   },
 }
 

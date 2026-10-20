@@ -10,6 +10,7 @@ export default defineConfig({
     build: {
       externalizeDeps: { exclude: ['@agent/core'] },
       outDir: 'out/main',
+      sourcemap: false,
       rollupOptions: {
         input: resolve(__dirname, 'src/main/index.ts'),
         output: { format: 'cjs', entryFileNames: 'index.js' },
@@ -19,6 +20,7 @@ export default defineConfig({
   preload: {
     build: {
       outDir: 'out/preload',
+      sourcemap: false,
       rollupOptions: {
         input: resolve(__dirname, 'src/preload/index.ts'),
         output: { format: 'cjs', entryFileNames: 'index.js' },
@@ -32,6 +34,7 @@ export default defineConfig({
     build: {
       outDir: resolve(__dirname, 'out/renderer'),
       emptyOutDir: true,
+      sourcemap: false,
       rollupOptions: {
         input: resolve(__dirname, 'src/renderer/index.html'),
       },
