@@ -200,7 +200,7 @@ export function ProfileDialog({
       .filter((a) => !active.some((c) => c.id === a.id))
       .map((a) => ({ id: a.id, tile: a.app, title: a.label, line: 'Not connected right now', logo: logoUrl(a.app) })),
   ]
-  const learnedItems: CheckItem[] = learnedApps.map((app) => ({ id: app.id, tile: app.name, title: app.name, line: app.host }))
+  const learnedItems: CheckItem[] = learnedApps.map((app) => ({ id: app.id, tile: app.name, title: app.name, line: app.host, ...(app.icon === undefined ? {} : { logo: app.icon }) }))
 
   const flip = (list: string[], id: string): string[] => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id])
 

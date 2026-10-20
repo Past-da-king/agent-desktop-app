@@ -100,14 +100,14 @@ function fixTool(browser: BrowserProDriver): Tool {
     spec: {
       name: 'browser_fix',
       description:
-        "Fix the current site on the fly; fixes are kept and applied on every later visit. css: insert CSS (hide a cookie wall or overlay that eats clicks, force a layout). js: run a script on every page of the site once it loads. clear_data: wipe the site's cookies, storage, caches and service workers and reload (a stuck sign-in, a broken saved state). headers: extra request headers, one 'Name: value' per line (an empty value removes one). user_agent: a different user agent for this site. retry: load the page again as the other kind of device (desktop or phone) and remember the one that works. forget: drop everything learned about the site. list: what is known about every site.",
+        "Fix the current site on the fly; fixes are kept and applied on every later visit. css: insert CSS (hide a cookie wall or overlay that eats clicks, force a layout). js: run a script on the page (once, unless persist is true; to look around or test use browser_eval, and never keep a script that adds anything visible). clear_data: wipe the site's cookies, storage, caches and service workers and reload (a stuck sign-in, a broken saved state). headers: extra request headers, one 'Name: value' per line (an empty value removes one). user_agent: a different user agent for this site. retry: load the page again as the other kind of device (desktop or phone) and remember the one that works. forget: drop everything learned about the site. list: what is known about every site.",
       schema: schema(['action'], {
         action: enumOf('What to do', ...FIXES),
         css: str('CSS for action css'),
         js: str('JavaScript for action js'),
         headers: str("For action headers: one 'Name: value' per line"),
         userAgent: str('For action user_agent'),
-        persist: bool('Keep the css or js for later visits (default true)'),
+        persist: bool('Keep it for later visits. CSS is kept unless false; a script only when true. Keep only a real, tested fix that shows nothing extra on the page.'),
       }),
     },
     run: async (input) => {
@@ -125,7 +125,9 @@ function fixTool(browser: BrowserProDriver): Tool {
           ...(js === '' ? {} : { js }),
           ...(headers === null ? {} : { headers }),
           ...(typeof input['userAgent'] === 'string' ? { userAgent: input['userAgent'] } : {}),
-          ...(input['persist'] === false ? { persist: false } : {}),
+          // CSS is kept by default (it fixes how a site looks). A script is kept only when the agent says so:
+          // a probe it wrote to look around must never run on every later visit.
+          ...(action === 'js' ? { persist: input['persist'] === true } : input['persist'] === false ? { persist: false } : {}),
         }),
       )
     },

@@ -148,3 +148,15 @@
 .appr pre{padding:10px 14px;font:400 12.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;max-height:168px;overflow:auto}
 .appr .acts .btn,.appr .acts .ans{min-height:40px}
 .appr .hint{font-size:12px}
+
+/* Learned apps open like a connected app: the details sit inside the row's body. */
+.learned-body{padding:4px 14px 12px 66px;display:flex;flex-direction:column;gap:10px}
+.learned-body .learned-about{margin:0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;max-width:72ch}
+.learned-body .learned-tools{margin:0}
+.learned-body .learned-trust{margin:0}
+.learned-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.learned-body .learned-prof{padding:0}
+@media (max-width:600px){.learned-body{padding:4px 10px 12px 12px}}
+/* Composio apps or learned apps, one switch. */
+.apps-switch{margin:4px 0 14px}
+.learned-section{margin-bottom:28px}

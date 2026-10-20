@@ -869,6 +869,16 @@ export const mockAgent: AgentApi = {
     async catalog() {
       return copy(MOCK_CATALOG)
     },
+    async search(query: string) {
+      await delay(300)
+      const q = query.trim().toLowerCase()
+      const extra = [
+        { slug: 'youtube', name: 'YouTube', line: 'Videos, channels and playlists' },
+        { slug: 'takealot', name: 'Takealot', line: 'Shopping' },
+        { slug: 'xero', name: 'Xero', line: 'Accounting' },
+      ]
+      return [...MOCK_CATALOG, ...extra].filter((app) => `${app.slug} ${app.name}`.toLowerCase().includes(q))
+    },
     async connect(app: string) {
       if (appsKeyKind === '') return { ok: false, message: 'Add your Composio key first.' }
       const id = newId('ca')

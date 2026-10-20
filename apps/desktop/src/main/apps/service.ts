@@ -235,6 +235,25 @@ export class AppsService {
     return list
   }
 
+  /**
+   * Apps matching what the person typed, from all of Composio: its own search with a Connect key, the full
+   * toolkit list otherwise. Never only the popular list.
+   */
+  async searchApps(query: string): Promise<AppChoice[]> {
+    const q = query.trim().toLowerCase()
+    if (q === '') return []
+    const backend = this.backend()
+    if (backend?.searchApps !== undefined) {
+      try {
+        return await backend.searchApps(q)
+      } catch {
+        return []
+      }
+    }
+    const all = await this.catalog()
+    return all.filter((app) => `${app.slug} ${app.name} ${app.line}`.toLowerCase().includes(q)).slice(0, 60)
+  }
+
   private logoOf(app: string): string {
     return this.toolkitCache?.list.find((choice) => choice.slug === app)?.logo ?? logoFor(app)
   }
@@ -266,7 +285,9 @@ export class AppsService {
   }
 
   learnedApps(): LearnedAppInfo[] {
-    return this.deps.learned.apps().map((app) => ({
+    const apps = this.deps.learned.apps()
+    for (const app of apps) if (app.icon === undefined) void this.fetchIcon(app.id, app.startUrl)
+    return apps.map((app) => ({
       id: app.id,
       name: app.name,
       startUrl: app.startUrl,
@@ -275,7 +296,31 @@ export class AppsService {
       trusted: app.trusted,
       updatedAt: app.updatedAt,
       tools: app.tools.map((t) => ({ name: t.name, description: t.description, readOnly: t.readOnly })),
+      ...(app.icon === undefined ? {} : { icon: app.icon }),
     }))
+  }
+
+  private readonly iconTries = new Set<string>()
+
+  /** The site's favicon, fetched once (its own /favicon.ico, else the icon search engines show) and saved. */
+  private async fetchIcon(id: string, startUrl: string): Promise<void> {
+    const host = hostOf(startUrl)
+    if (host === '' || this.iconTries.has(id)) return
+    this.iconTries.add(id)
+    const fetcher = this.deps.fetchImpl ?? fetch
+    for (const url of [`https://${host}/favicon.ico`, `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`]) {
+      try {
+        const res = await fetcher(url, { signal: AbortSignal.timeout(8000) })
+        const type = (res.headers.get('content-type') ?? '').split(';')[0]?.trim() ?? ''
+        if (!res.ok || !type.startsWith('image/')) continue
+        const bytes = Buffer.from(await res.arrayBuffer())
+        if (bytes.length < 64 || bytes.length > 200_000) continue
+        this.deps.learned.setIcon(id, `data:${type};base64,${bytes.toString('base64')}`)
+        return
+      } catch {
+        // Try the next place; with no icon the list shows a lettered tile.
+      }
+    }
   }
 
   removeLearned(id: string): void {

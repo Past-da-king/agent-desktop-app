@@ -9,6 +9,7 @@ import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Icon, type IconName } from '../ui/Icon'
+import { Segmented } from '../ui/Segmented'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
 import { ConnectedAppsSection, LearnedAppsSection } from './ConnectedApps'
@@ -71,6 +72,7 @@ function FoundGroup({ title, items }: { title: string; items: Found[] }): JSX.El
 }
 
 export function Connections(): JSX.Element {
+  const [appsTab, setAppsTab] = useState<'composio' | 'learned'>('composio')
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   const navigate = useUi((state) => state.navigate)
@@ -150,11 +152,21 @@ export function Connections(): JSX.Element {
         </div>
       </div>
 
-      <ConnectedAppsSection />
+      <div className="apps-switch">
+        <Segmented
+          ariaLabel="Which apps"
+          value={appsTab}
+          onChange={setAppsTab}
+          options={[
+            { value: 'composio', label: 'Connected apps' },
+            { value: 'learned', label: 'Learned apps' },
+          ]}
+        />
+      </div>
+      {appsTab === 'composio' ? <ConnectedAppsSection /> : <LearnedAppsSection />}
 
       <div className="two conn-rest">
         <div className="stack">
-          <LearnedAppsSection />
 
           <section>
             <SectionHeader eyebrow="BUILT IN" line="On this computer, plus the machines you add" />

@@ -109,6 +109,8 @@ export interface LearnedApp {
   /** Its tools that change things run without asking each time. Only the person can turn this on. */
   trusted: boolean
   updatedAt: number
+  /** The site's own icon, fetched once and kept (a data: URL), so the list shows it with no network call. */
+  icon?: string
 }
 
 export const MAX_APPS = 30
@@ -161,6 +163,7 @@ function toApp(raw: unknown): LearnedApp | null {
     tools,
     trusted: o['trusted'] === true,
     updatedAt: typeof o['updatedAt'] === 'number' ? o['updatedAt'] : 0,
+    ...(typeof o['icon'] === 'string' && o['icon'].startsWith('data:image/') ? { icon: o['icon'] } : {}),
   }
 }
 
@@ -193,8 +196,13 @@ export class LearnedStore {
   /** Saving over an app of the same id replaces its tools but keeps what the person decided about trust. */
   save(app: LearnedApp): void {
     const old = this.list.find((a) => a.id === app.id)
-    const next = { ...app, trusted: old?.trusted ?? false, updatedAt: this.now() }
+    const next = { ...app, trusted: old?.trusted ?? false, updatedAt: this.now(), ...(old?.icon === undefined ? {} : { icon: old.icon }) }
     this.list = [...this.list.filter((a) => a.id !== app.id), next]
+    this.persist()
+  }
+
+  setIcon(id: string, icon: string): void {
+    this.list = this.list.map((a) => (a.id === id ? { ...a, icon } : a))
     this.persist()
   }
 

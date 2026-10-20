@@ -44,7 +44,7 @@ function toneFor(name: string): string {
 export function AppLogo({ name, logo, size = 'md' }: { name: string; logo?: string; size?: 'sm' | 'md' }): JSX.Element {
   const [broken, setBroken] = useState(false)
   const url = logo ?? ''
-  const usable = url.startsWith('https://') && !broken
+  const usable = (url.startsWith('https://') || url.startsWith('data:image/')) && !broken
   return (
     <span className={`app-logo${size === 'sm' ? ' sm' : ''} ${usable ? 'img' : toneFor(name)}`} aria-hidden="true">
       {usable ? <img src={url} alt="" loading="lazy" onError={() => setBroken(true)} /> : initialOf(name)}
@@ -234,7 +234,50 @@ function ConnectDialog({ onClose }: { onClose: () => void }): JSX.Element {
     }
   }, [])
 
-  const { shown, total } = useMemo(() => searchCatalog(catalog ?? [], query, 60), [catalog, query])
+  // The list Composio gave up front can be partial (a Connect key cannot list everything), so what the person
+  // types is also searched across all of Composio, and those matches join the list.
+  const [found, setFound] = useState<{ query: string; apps: AppChoice[] } | null>(null)
+  const [searching, setSearching] = useState(false)
+  useEffect(() => {
+    const q = query.trim()
+    if (q.length < 2) {
+      setFound(null)
+      setSearching(false)
+      return
+    }
+    let live = true
+    setSearching(true)
+    const timer = window.setTimeout(() => {
+      agent.apps
+        .search(q)
+        .then((apps) => {
+          if (live) setFound({ query: q, apps })
+        })
+        .catch(() => {
+          if (live) setFound({ query: q, apps: [] })
+        })
+        .finally(() => {
+          if (live) setSearching(false)
+        })
+    }, 350)
+    return () => {
+      live = false
+      window.clearTimeout(timer)
+    }
+  }, [query])
+  const merged = useMemo(() => {
+    const base = catalog ?? []
+    if (found === null) return base
+    const have = new Set(base.map((app) => app.slug))
+    return [...base, ...found.apps.filter((app) => !have.has(app.slug))]
+  }, [catalog, found])
+  const { shown: matched, total } = useMemo(() => searchCatalog(merged, query, 60), [merged, query])
+  // Composio's own matches count even when the words differ from the app's name (a search for "video" finds YouTube).
+  const shown = useMemo(() => {
+    if (found === null) return matched
+    const have = new Set(matched.map((app) => app.slug))
+    return [...matched, ...found.apps.filter((app) => !have.has(app.slug))].slice(0, 60)
+  }, [matched, found])
   const typed = query.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '')
 
   const connect = async (slug: string): Promise<void> => {
@@ -265,9 +308,13 @@ function ConnectDialog({ onClose }: { onClose: () => void }): JSX.Element {
       <p className="small muted connect-count" aria-live="polite">
         {catalog === null
           ? 'Loading the apps...'
-          : total > shown.length
-            ? `Showing ${shown.length} of ${total} apps. Search to find the rest.`
-            : `${total} ${total === 1 ? 'app' : 'apps'}`}
+          : searching
+            ? 'Searching all of Composio...'
+            : query.trim().length >= 2
+              ? `${shown.length} ${shown.length === 1 ? 'match' : 'matches'} across all of Composio`
+              : total > shown.length
+                ? `Showing ${shown.length} of ${total} popular apps. Search to find any of Composio's apps.`
+                : `${total} ${total === 1 ? 'app' : 'apps'}. Search to find any of Composio's apps.`}
       </p>
       <div className="app-pick" role="list">
         {shown.map((item) => (
@@ -287,7 +334,7 @@ function ConnectDialog({ onClose }: { onClose: () => void }): JSX.Element {
             <span className="app-pick-go">{busy === item.slug ? 'Opening...' : 'Connect'}</span>
           </button>
         ))}
-        {catalog !== null && shown.length === 0 && typed !== '' ? (
+        {catalog !== null && !searching && shown.length === 0 && typed !== '' ? (
           <button type="button" role="listitem" className="app-pick-row" disabled={busy !== ''} onClick={() => void connect(typed)}>
             <AppLogo name={query} />
             <span className="rt">
@@ -698,13 +745,13 @@ export function ConnectedAppsSection(): JSX.Element {
 }
 
 /** Sites the agent taught itself, each with the profiles that may run it. */
-export function LearnedAppsSection(): JSX.Element {
+export function LearnedAppsSection({ bare = false }: { bare?: boolean }): JSX.Element {
   const { learned } = useApps()
   const profiles = useProfiles() ?? []
   const [removing, setRemoving] = useState<LearnedAppInfo | null>(null)
   return (
-    <section>
-      <SectionHeader eyebrow="LEARNED APPS" line="Sites your agent taught itself to use" />
+    <section className="learned-section">
+      {bare ? null : <SectionHeader eyebrow="LEARNED APPS" line="Sites your agent taught itself to use" />}
       {learned === null ? (
         <div className="list" style={{ padding: 18 }}>
           <p className="small muted">Loading...</p>
@@ -725,7 +772,7 @@ export function LearnedAppsSection(): JSX.Element {
           </div>
         </div>
       ) : (
-        <div className="list" style={{ padding: 6 }}>
+        <div className="agrp-list">
           {learned.map((app) => (
             <LearnedRow key={app.id} app={app} profiles={profiles} onRemove={() => setRemoving(app)} />
           ))}
@@ -763,54 +810,64 @@ function toolCounts(app: LearnedAppInfo): string {
 function LearnedRow({ app, profiles, onRemove }: { app: LearnedAppInfo; profiles: AgentProfileInfo[]; onRemove: () => void }): JSX.Element {
   const [open, setOpen] = useState(false)
   const changes = app.tools.some((tool) => !tool.readOnly)
-  const listId = `learned-tools-${app.id}`
+  const panel = `learned-${app.id}`
+  const inProfiles = profiles.filter((p) => p.learned.includes(app.id))
 
+  // One compact row, like a connected app: the site's icon, its name, where and how many tools. The rest opens.
   return (
-    <div className="app-acct">
-      <div className="rowc">
-        <AppLogo name={app.name} />
-        <div className="rt">
+    <div className={`agrp${open ? ' open' : ''}`}>
+      <button type="button" className="agrp-row" aria-expanded={open} aria-controls={panel} onClick={() => setOpen((v) => !v)}>
+        <AppLogo name={app.name} {...(app.icon === undefined ? {} : { logo: app.icon })} />
+        <span className="rt">
           <b>{app.name}</b>
-          <span className="rt-line">{app.host}</span>
-          <span className="rt-line">{toolCounts(app)}</span>
-        </div>
-        <span className="app-key-actions">
-          <Button variant="text" size="sm" aria-expanded={open} aria-controls={listId} onClick={() => setOpen((v) => !v)}>
-            {open ? 'Hide tools' : 'Tools'}
-          </Button>
-          <Button variant="text" size="sm" onClick={onRemove}>
-            Remove
-          </Button>
-        </span>
-      </div>
-      {app.about !== '' ? <p className="learned-about">{app.about}</p> : null}
-      <div className="learned-prof">{learnedChips(app, profiles)}</div>
-      {open ? (
-        <ul className="learned-tools" id={listId}>
-          {app.tools.map((tool) => (
-            <li key={tool.name}>
-              <span className="lt-name">{tool.name.replace(/_/g, ' ')}</span>
-              <span className="lt-desc">{tool.description}</span>
-              <span className={tool.readOnly ? 'pill ok' : 'pill warn'}>{tool.readOnly ? 'Reads' : 'Changes'}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {changes ? (
-        <div className="learned-trust">
           <span>
-            <b>Let changes run without asking</b>
-            <span>Off: you approve each change in Chat first</span>
+            {app.host} · {toolCounts(app)}
           </span>
-          <Switch
-            on={app.trusted}
-            label={`Let ${app.name} changes run without asking`}
-            onToggle={(next) => {
-              agent.apps.setTrusted(app.id, next).catch((cause: unknown) => {
-                toast(errorText(cause, 'That could not be saved.'))
-              })
-            }}
-          />
+        </span>
+        <span className="agrp-dots" aria-label={inProfiles.length === 0 ? 'In no profile' : `In ${inProfiles.map((p) => p.name).join(', ')}`}>
+          {inProfiles.map((p) => (
+            <span key={p.id} className="pf agrp-dot" style={tone(p.color)} title={p.name} />
+          ))}
+        </span>
+        <span className="agrp-chev">
+          <Icon name="chevd" size={18} />
+        </span>
+      </button>
+      {open ? (
+        <div className="agrp-body learned-body" id={panel}>
+          {app.about !== '' ? <p className="learned-about">{app.about}</p> : null}
+          <ul className="learned-tools">
+            {app.tools.map((tool) => (
+              <li key={tool.name}>
+                <span className="lt-name">{tool.name.replace(/_/g, ' ')}</span>
+                <span className="lt-desc">{tool.description}</span>
+                <span className={tool.readOnly ? 'pill ok' : 'pill warn'}>{tool.readOnly ? 'Reads' : 'Changes'}</span>
+              </li>
+            ))}
+          </ul>
+          {changes ? (
+            <div className="learned-trust">
+              <span>
+                <b>Let changes run without asking</b>
+                <span>Off: you approve each change in Chat first</span>
+              </span>
+              <Switch
+                on={app.trusted}
+                label={`Let ${app.name} changes run without asking`}
+                onToggle={(next) => {
+                  agent.apps.setTrusted(app.id, next).catch((cause: unknown) => {
+                    toast(errorText(cause, 'That could not be saved.'))
+                  })
+                }}
+              />
+            </div>
+          ) : null}
+          <div className="learned-foot">
+            <div className="learned-prof">{learnedChips(app, profiles)}</div>
+            <Button variant="text" size="sm" onClick={onRemove}>
+              Remove
+            </Button>
+          </div>
         </div>
       ) : null}
     </div>

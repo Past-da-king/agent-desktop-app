@@ -62,6 +62,7 @@ export const CHANNELS = {
     status: 'agent:apps.status',
     setKey: 'agent:apps.setKey',
     catalog: 'agent:apps.catalog',
+    search: 'agent:apps.search',
     connect: 'agent:apps.connect',
     disconnect: 'agent:apps.disconnect',
     setRules: 'agent:apps.setRules',

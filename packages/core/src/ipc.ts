@@ -427,6 +427,8 @@ export interface LearnedAppInfo {
   trusted: boolean
   updatedAt: number
   tools: LearnedToolInfo[]
+  /** The site's own icon (a data: URL), saved once it was fetched. */
+  icon?: string
 }
 
 export interface AppsApi {
@@ -435,6 +437,8 @@ export interface AppsApi {
   setKey(key: string): Promise<{ ok: boolean; message: string }>
   /** Every app Composio offers (with logos), popular ones first; the popular list alone when there is no key. */
   catalog(): Promise<AppChoice[]>
+  /** Search every Composio app for what the person typed (the catalogue a Connect key cannot list in full). */
+  search(query: string): Promise<AppChoice[]>
   /** Opens the app's sign-in in the person's own browser and waits in the background until it is connected. */
   connect(app: string): Promise<{ ok: boolean; message: string }>
   disconnect(accountId: string): Promise<void>

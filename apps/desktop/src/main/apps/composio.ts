@@ -64,6 +64,8 @@ export interface ComposioBackend {
   execute(slug: string, args: JsonObject, account: string | null): Promise<{ ok: boolean; text: string }>
   /** Every toolkit Composio offers, with logos. Null when this kind of key cannot list them. */
   toolkits?(): Promise<AppChoice[] | null>
+  /** Apps matching what the person typed, asked of Composio itself: how a Connect key reaches the whole catalogue. */
+  searchApps?(query: string): Promise<AppChoice[]>
 }
 
 export class ComposioError extends Error {
@@ -443,6 +445,29 @@ export class ConnectBackend implements ComposioBackend {
       this.ready = false
       return once()
     }
+  }
+
+  /** Composio's own search across every app (a Connect key cannot list the catalogue, but it can search it). */
+  async searchApps(query: string): Promise<AppChoice[]> {
+    const q = query.trim().slice(0, 80)
+    if (q === '') return []
+    const d = await this.data('COMPOSIO_SEARCH_TOOLS', { queries: [{ use_case: `use the ${q} app` }] })
+    const seen = new Set<string>()
+    return asArray(d['toolkit_connection_statuses'])
+      .map((raw) => asObject(raw))
+      .flatMap((o) => {
+        const slug = asText(o['toolkit']).toLowerCase()
+        if (!/^[a-z0-9_]{2,60}$/.test(slug) || seen.has(slug)) return []
+        seen.add(slug)
+        const popular = POPULAR_APPS.find((app) => app.slug === slug)
+        return [{
+          slug,
+          name: popular?.name ?? appName(slug),
+          line: popular?.line ?? asText(o['description']).replace(/\s+/g, ' ').trim().slice(0, 140),
+          logo: logoFor(slug),
+          categories: [],
+        }]
+      })
   }
 
   private async data(name: string, args: JsonObject): Promise<Record<string, unknown>> {
