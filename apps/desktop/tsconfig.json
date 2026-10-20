@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@agent/core": ["../../packages/core/src/index.ts"]
+    }
+  },
+  "include": ["src", "electron.vite.config.ts", "vite.web.config.ts"]
+}

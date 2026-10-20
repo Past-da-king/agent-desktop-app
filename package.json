@@ -1,0 +1,28 @@
+{
+  "name": "agent-desktop-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w @agent/core && npm run build -w @agent/desktop",
+    "test": "vitest run",
+    "dev": "npm run dev -w @agent/desktop",
+    "dev:web": "npm run dev:web -w @agent/desktop",
+    "shoot": "node scripts/shoot.mjs",
+    "gate": "bash scripts/gate.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "playwright-core": "^1.64.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
+  }
+}
