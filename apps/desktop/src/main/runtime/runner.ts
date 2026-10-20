@@ -511,6 +511,7 @@ export class Runner {
       ...(routineName === undefined ? {} : { routineName }),
       helperModel: current.cli === 'codex' ? 'Codex' : 'Claude',
       liveHelpers: [],
+      canDelegate: false,
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })

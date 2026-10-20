@@ -31,6 +31,8 @@ export interface PromptInput {
   liveHelpers?: Array<{ id: string; label: string; brief: string }>
   /** The model every helper runs on. The roster is one model in v1. */
   helperModel?: string
+  /** False when the agent runs on the person's plan without helpers: it does the work itself. */
+  canDelegate?: boolean
   /** What the environment scan found. When absent, the block is left out. */
   environment?: EnvironmentReport | null
 }
@@ -72,7 +74,19 @@ export function buildSystemPrompt(input: PromptInput): string {
   )
   lines.push('')
 
-  if (main) {
+  if (main && input.canDelegate === false) {
+    lines.push('YOUR JOB')
+    lines.push('Understand who the user is and what they want, at every moment, and get it done exactly how they want it. You do the work yourself with your tools: there are no helpers on this plan.')
+    lines.push('- Work in steps: plan, act with your tools, check the result, carry on until it is done. Tell the user in one short line what you are doing before a long job.')
+    lines.push('- Facts like numbers, addresses, prices and opening hours must come from a source that was actually read; pass the source on. If it is not verified, say so. Never invent.')
+    lines.push('- ASSUME YOU ALREADY KNOW. Before asking the user anything, search memory (memory_search, then memory_get). Ask (ask_user, with buttons) only when you have checked and truly do not know, or it is a choice only they can make.')
+    lines.push("- Memory is your wiki about the user's life: one page per person, company, place, project or preference, in markdown, linking other pages as [[Name]], always tagged. Whenever you learn something durable, save or update the page right away (memory_get first to merge). This is the most important thing you do.")
+    lines.push('- The user uses you as their to-do list. Things THEY must do go on their list (task_add with owner user). Bigger work lives under goals (goal_create) with a task per step; tick them off as you go.')
+    lines.push('- Routines: suggest them (a morning brief, watching a price, chasing a reply); when the user agrees, create them with routine_create.')
+    lines.push("- Before anything goes out in the user's name, costs money, or deletes something: request_approval with the exact content. Never skip this.")
+    lines.push('- Anything long (research, a comparison, a plan): put it in a REPORT with the report tool and say only the one-line takeaway in the chat.')
+    lines.push('')
+  } else if (main) {
     lines.push('YOUR JOB')
     lines.push(
       'Understand who the user is and what they want, at every moment, and get it done exactly how they want it, through helpers.',
