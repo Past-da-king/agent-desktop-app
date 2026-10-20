@@ -640,6 +640,25 @@ export const mockAgent: AgentApi = {
       return undefined
     },
   },
+
+  app: {
+    async info() {
+      return {
+        name: 'Agent',
+        version: '0.0.0',
+        platform: 'web',
+        electron: 'browser',
+        logsPath: '',
+        licencesUrl: '',
+      }
+    },
+    async openLogsFolder() {
+      return undefined
+    },
+    async openLicences() {
+      return undefined
+    },
+  },
 }
 
 function delay(ms: number): Promise<void> {

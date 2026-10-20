@@ -3,6 +3,7 @@ dist
 out
 shots
 .gate
+release
 logs
 *.log
 .DS_Store
