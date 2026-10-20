@@ -29,6 +29,10 @@ export default defineConfig({
     root: resolve(__dirname, 'src/renderer'),
     base: './',
     plugins: [react()],
+    resolve: {
+      // The renderer gets the browser-safe contract, never the Node-side runtime behind index.ts.
+      alias: { '@agent/core': resolve(__dirname, '../../packages/core/src/browser.ts') },
+    },
     build: {
       outDir: resolve(__dirname, 'out/renderer'),
       emptyOutDir: true,
