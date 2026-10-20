@@ -15,7 +15,8 @@ import {
 import { useEffect, useState, type CSSProperties } from 'react'
 
 import { agent } from '../bridge'
-import { COLOR_LABELS, accountLabel, initialOf, nextColor, toneStyle, visibleProfiles } from '../lib/profiles'
+import { COLOR_LABELS, accountLabel, initialOf, logoUrl, nextColor, toneStyle, visibleProfiles } from '../lib/profiles'
+import { AppLogo } from './ConnectedApps'
 import { toast } from '../state/useToast'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
@@ -133,6 +134,8 @@ interface CheckItem {
   tile: string
   title: string
   line: string
+  /** The app's logo; a lettered tile stands in when there is none or it does not load. */
+  logo?: string
 }
 
 function Checklist({ items, picked, onToggle }: { items: CheckItem[]; picked: string[]; onToggle: (id: string) => void }): JSX.Element {
@@ -142,9 +145,7 @@ function Checklist({ items, picked, onToggle }: { items: CheckItem[]; picked: st
         const on = picked.includes(item.id)
         return (
           <label key={item.id} className="pf-acct">
-            <span className="pf-mini" aria-hidden="true">
-              {initialOf(item.tile)}
-            </span>
+            <AppLogo name={item.tile} size="sm" {...(item.logo === undefined || item.logo === '' ? {} : { logo: item.logo })} />
             <span className="rt">
               <b>{item.title}</b>
               <span>{item.line}</span>
@@ -194,10 +195,10 @@ export function ProfileDialog({
     ...active
       .slice()
       .sort((a, b) => a.appName.localeCompare(b.appName) || accountLabel(a).localeCompare(accountLabel(b)))
-      .map((a) => ({ id: a.id, tile: a.appName, title: accountLabel(a), line: a.appName })),
+      .map((a) => ({ id: a.id, tile: a.appName, title: accountLabel(a), line: a.appName, logo: a.logo || logoUrl(a.app) })),
     ...(profile?.accounts ?? [])
       .filter((a) => !active.some((c) => c.id === a.id))
-      .map((a) => ({ id: a.id, tile: a.app, title: a.label, line: 'Not connected right now' })),
+      .map((a) => ({ id: a.id, tile: a.app, title: a.label, line: 'Not connected right now', logo: logoUrl(a.app) })),
   ]
   const learnedItems: CheckItem[] = learnedApps.map((app) => ({ id: app.id, tile: app.name, title: app.name, line: app.host }))
 
