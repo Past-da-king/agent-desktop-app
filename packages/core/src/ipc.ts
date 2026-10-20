@@ -232,6 +232,38 @@ export interface SystemInfo {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// The agent's browser
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Where the renderer wants the live browser view, in window (CSS) pixels. */
+export interface BrowserBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+  visible: boolean
+}
+
+export interface BrowserTab {
+  id: string
+  title: string
+  url: string
+  active: boolean
+}
+
+/** What the panel shows. `agentActive` is false while the person has control. */
+export interface BrowserState {
+  url: string
+  title: string
+  tabs: BrowserTab[]
+  visible: boolean
+  agentActive: boolean
+  /** True while the agent is waiting for the person to finish something on a page. */
+  needsUser: boolean
+  handoffReason: string
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The api
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -287,6 +319,23 @@ export interface AgentApi {
 
   routines: {
     runNow(id: string): Promise<void>
+  }
+
+  browser: {
+    /** The rectangle of the chat panel, or visible: false when the panel is closed. */
+    setBounds(bounds: BrowserBounds): Promise<void>
+    state(): Promise<BrowserState>
+    back(): Promise<void>
+    reload(): Promise<void>
+    selectTab(id: string): Promise<void>
+    closeTab(id: string): Promise<void>
+    /** The person takes the page over: their mouse and keyboard work again. */
+    takeOver(): Promise<void>
+    /** The person hands the page back to the agent. */
+    giveBack(): Promise<void>
+    /** Opens the current page in the person's own browser. */
+    openInSystem(): Promise<void>
+    onState(cb: (state: BrowserState) => void): Unsubscribe
   }
 
   window: {

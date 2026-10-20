@@ -1,6 +1,8 @@
 import { DEFAULT_SETTINGS, PROVIDERS } from '@agent/core'
 import type {
   AgentApi,
+  BrowserBounds,
+  BrowserState,
   ChatEvent,
   ChatItem,
   Decision,
@@ -202,6 +204,32 @@ function signInError(email: string, password: string): string | null {
 }
 
 const runState: RunState = { running: false, waiting: [] }
+
+const browserListeners = new Set<(state: BrowserState) => void>()
+const mockBrowser: BrowserState = {
+  url: 'https://skyhop.example/flights',
+  title: 'SkyHop flights',
+  tabs: [
+    {
+      id: 'mock-tab-1',
+      title: 'SkyHop flights',
+      url: 'https://skyhop.example/flights',
+      active: true,
+    },
+  ],
+  visible: false,
+  agentActive: true,
+  needsUser: false,
+  handoffReason: '',
+}
+
+function notifyBrowser(): void {
+  const snapshot: BrowserState = {
+    ...mockBrowser,
+    tabs: mockBrowser.tabs.map((tab) => ({ ...tab })),
+  }
+  for (const listener of browserListeners) listener(snapshot)
+}
 
 export const mockAgent: AgentApi = {
   platform: 'web',
@@ -441,6 +469,59 @@ export const mockAgent: AgentApi = {
         lastResult: 'Run finished, 3 things found',
       }
       emitData('trigger')
+    },
+  },
+
+  browser: {
+    async setBounds(bounds: BrowserBounds) {
+      mockBrowser.visible = bounds.visible
+      notifyBrowser()
+    },
+    async state() {
+      return { ...mockBrowser, tabs: mockBrowser.tabs.map((tab) => ({ ...tab })) }
+    },
+    async back() {
+      return undefined
+    },
+    async reload() {
+      return undefined
+    },
+    async selectTab(id: string) {
+      const chosen = mockBrowser.tabs.find((tab) => tab.id === id)
+      if (chosen === undefined) return
+      mockBrowser.tabs = mockBrowser.tabs.map((tab) => ({ ...tab, active: tab.id === id }))
+      mockBrowser.url = chosen.url
+      mockBrowser.title = chosen.title
+      notifyBrowser()
+    },
+    async closeTab(id: string) {
+      mockBrowser.tabs = mockBrowser.tabs.filter((tab) => tab.id !== id)
+      const active = mockBrowser.tabs.find((tab) => tab.active) ?? mockBrowser.tabs[0]
+      mockBrowser.tabs = mockBrowser.tabs.map((tab) => ({ ...tab, active: tab.id === active?.id }))
+      mockBrowser.url = active?.url ?? ''
+      mockBrowser.title = active?.title ?? ''
+      notifyBrowser()
+    },
+    async takeOver() {
+      mockBrowser.agentActive = false
+      mockBrowser.handoffReason = ''
+      mockBrowser.needsUser = false
+      notifyBrowser()
+    },
+    async giveBack() {
+      mockBrowser.agentActive = true
+      mockBrowser.handoffReason = ''
+      mockBrowser.needsUser = false
+      notifyBrowser()
+    },
+    async openInSystem() {
+      return undefined
+    },
+    onState(callback: (state: BrowserState) => void): Unsubscribe {
+      browserListeners.add(callback)
+      return () => {
+        browserListeners.delete(callback)
+      }
     },
   },
 
