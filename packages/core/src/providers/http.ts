@@ -8,7 +8,12 @@ export interface PostJsonOptions {
   attempts?: number
   signal?: AbortSignal
   fetchImpl?: typeof fetch
+  /** How long one attempt may wait for the provider. A provider that never answers must not hang the agent. */
+  timeoutMs?: number
 }
+
+/** One request may take this long (a long answer from a slow model fits); then it is retried. */
+export const REQUEST_TIMEOUT_MS = 120_000
 
 export async function postJson(
   url: string,
@@ -21,14 +26,21 @@ export async function postJson(
   const signal = options.signal
   let last: ProviderException | null = null
 
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS
+  let timeouts = 0
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (signal?.aborted) throw abortError()
+    // The person's Stop and this attempt's own clock both end the request.
+    const clock = new AbortController()
+    const timer = setTimeout(() => clock.abort(), timeoutMs)
+    const onStop = (): void => clock.abort()
+    signal?.addEventListener('abort', onStop, { once: true })
     try {
       const res = await fetchImpl(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT, ...headers },
         body: JSON.stringify(body),
-        signal,
+        signal: clock.signal,
       })
       const text = await res.text()
       if (res.ok) {
@@ -46,9 +58,19 @@ export async function postJson(
       last = error
     } catch (e) {
       if (e instanceof ProviderException && !e.retryable) throw e
-      if (e instanceof Error && e.name === 'AbortError') throw e
-      if (e instanceof ProviderException) last = e
+      if (signal?.aborted) throw abortError()
+      if (clock.signal.aborted) {
+        const timedOut = new ProviderException(`The AI service did not answer within ${Math.round(timeoutMs / 1000)} seconds.`, 0, true)
+        // A provider that hangs once usually hangs again: one more try, then say so instead of waiting on.
+        if (timeouts > 0) throw timedOut
+        timeouts += 1
+        last = timedOut
+      } else if (e instanceof Error && e.name === 'AbortError') throw e
+      else if (e instanceof ProviderException) last = e
       else last = new ProviderException(`Network: ${e instanceof Error ? e.message : String(e)}`, 0, true)
+    } finally {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onStop)
     }
     if (attempt < attempts - 1) await sleep(1500 * (attempt + 1), signal)
   }
