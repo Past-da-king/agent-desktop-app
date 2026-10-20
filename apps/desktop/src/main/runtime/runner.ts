@@ -18,6 +18,7 @@ import {
   type Attachment,
   type ChatEvent,
   type Decision,
+  type EnvironmentReport,
   type JsonObject,
   type LlmProvider,
   type Msg,
@@ -76,6 +77,8 @@ export interface RunnerDeps {
   helpers?: HelperHost
   /** The main agent's action-step budget, shared by the tools built in toolset.ts. */
   budget?: StepBudget
+  /** What is on this computer, from the cached scan. */
+  environment?: () => EnvironmentReport | null
 }
 
 interface ActivityRow {
@@ -100,6 +103,7 @@ export class Runner {
   private readonly timeZone: string | undefined
   private readonly helpers: HelperHost | undefined
   private readonly budget: StepBudget | undefined
+  private readonly environment: () => EnvironmentReport | null
 
   private running = false
   private controller: AbortController | null = null
@@ -129,6 +133,7 @@ export class Runner {
     this.timeZone = deps.timeZone
     this.helpers = deps.helpers
     this.budget = deps.budget
+    this.environment = deps.environment ?? (() => null)
   }
 
   // ---- the person's side ------------------------------------------------------------------
@@ -310,6 +315,7 @@ export class Runner {
         latestUserText: trigger.prompt,
         role: 'routine',
         routineName: trigger.name,
+        environment: this.environment(),
         ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
       })
 
@@ -452,6 +458,7 @@ export class Runner {
       role: 'main',
       helperModel: model,
       liveHelpers: this.helpers?.live() ?? [],
+      environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
     const context = this.toolContext(signal)

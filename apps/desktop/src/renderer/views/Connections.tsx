@@ -1,4 +1,4 @@
-import type { SystemInfo } from '@agent/core'
+import type { EnvironmentReport, Found, SystemInfo } from '@agent/core'
 import { useEffect, useState, type ReactNode } from 'react'
 
 import { agent } from '../bridge'
@@ -36,11 +36,46 @@ function Row({
   )
 }
 
+function FoundRow({ item }: { item: Found }): JSX.Element {
+  const line = item.found ? (item.version === undefined ? 'Found' : `Version ${item.version}`) : 'Not found on this computer'
+  return (
+    <div className="rowc">
+      <div className="ri">
+        <Icon name={item.found ? 'check' : 'x'} size={20} />
+      </div>
+      <div className="rt">
+        <b>{item.label}</b>
+        <span>{line}</span>
+      </div>
+      <span className={item.found ? 'pill ok' : 'pill mute'}>{item.found ? 'Found' : 'Not found'}</span>
+    </div>
+  )
+}
+
+function FoundGroup({ title, items }: { title: string; items: Found[] }): JSX.Element {
+  return (
+    <div>
+      <p className="eyebrow mute" style={{ margin: '10px 4px 2px' }}>
+        {title}
+      </p>
+      {items.length === 0 ? (
+        <p className="small muted" style={{ margin: '4px' }}>
+          Nothing looked for yet.
+        </p>
+      ) : (
+        items.map((item) => <FoundRow key={item.id} item={item} />)
+      )}
+    </div>
+  )
+}
+
 export function Connections(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   const navigate = useUi((state) => state.navigate)
   const [system, setSystem] = useState<SystemInfo | null>(null)
+  const [environment, setEnvironment] = useState<EnvironmentReport | null>(null)
+  const [scanning, setScanning] = useState(true)
   const allowed = settings?.grantedFolders ?? []
   const keys = formatAccelerator(settings?.quickAskHotkey || 'CommandOrControl+Shift+Space', agent.platform)
   const device = settings?.deviceName || 'This computer'
@@ -61,6 +96,33 @@ export function Connections(): JSX.Element {
       live = false
     }
   }, [])
+
+  useEffect(() => {
+    let live = true
+    agent.environment
+      .scan()
+      .then((report) => {
+        if (live) setEnvironment(report)
+      })
+      .catch(() => {
+        // The list simply stays as it was; the rest of the page works without it.
+      })
+      .finally(() => {
+        if (live) setScanning(false)
+      })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  const scanAgain = async (): Promise<void> => {
+    setScanning(true)
+    try {
+      setEnvironment(await agent.environment.scan(true))
+    } finally {
+      setScanning(false)
+    }
+  }
 
   const askForFolder = async (): Promise<void> => {
     try {
@@ -120,6 +182,36 @@ export function Connections(): JSX.Element {
                 line={settings?.shell === 'never' ? 'Never run on this computer' : 'Ask before every command'}
                 right={<span className="pill mute">{settings?.shell === 'never' ? 'Off' : 'Ask first'}</span>}
               />
+            </div>
+          </section>
+
+          <section>
+            <SectionHeader
+              eyebrow="FOUND HERE"
+              line="What is already on this computer"
+              right={
+                <Button variant="tonal" size="sm" disabled={scanning} onClick={() => void scanAgain()}>
+                  {scanning ? 'Scanning...' : 'Scan again'}
+                </Button>
+              }
+            />
+            <div className="card" style={{ padding: 10 }}>
+              {environment === null ? (
+                <p className="small muted" style={{ margin: '4px' }}>
+                  Looking at this computer...
+                </p>
+              ) : (
+                <>
+                  <FoundGroup title="SHELLS" items={environment.shells} />
+                  <FoundGroup title="RUNTIMES" items={environment.runtimes} />
+                  <FoundGroup title="AI TOOLS" items={environment.aiTools} />
+                  {environment.notes.map((note) => (
+                    <p key={note} className="small muted" style={{ margin: '10px 4px 0', lineHeight: 1.5 }}>
+                      {note}
+                    </p>
+                  ))}
+                </>
+              )}
             </div>
           </section>
 
