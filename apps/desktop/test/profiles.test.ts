@@ -363,3 +363,26 @@ describe('Composio listing', () => {
     expect(bodies[0]).toMatchObject({ user_id: 'phone-user', connected_account_id: 'a1' })
   })
 })
+
+describe('apps_* tools for a helper', () => {
+  it('refuse every Composio tool in General and apps outside the profile, and stay open for the main agent', async () => {
+    const { appTools } = await import('../src/main/tools/apps')
+    const apps = new AppsService({
+      secrets: { get: (name) => (name === 'composioKey' ? 'ak_test' : null), set: () => undefined, delete: () => undefined },
+      file: new ConnectedAppsFile(join(dir, 'connected-apps.json')),
+      learned: new LearnedStore(join(dir, 'learned.json')),
+      profiles: store(),
+      openExternal: async () => undefined,
+      fetchImpl: (async () => new Response(JSON.stringify({ items: [] }), { status: 200 })) as typeof fetch,
+    })
+    const work = apps.profiles.create('Work', [workGmail])
+    if (!work.ok) throw new Error('not made')
+    const tools = appTools(apps)
+    const find = toolNamed(tools, 'apps_find_tools')
+    const connect = toolNamed(tools, 'apps_connect')
+    expect(await find.run({ query: 'send', toolkit: 'gmail' }, testContext({ profile: GENERAL_ID }))).toContain('none of the person')
+    expect(await find.run({ query: 'post', toolkit: 'slack' }, testContext({ profile: work.value.id }))).toContain('has no Slack account')
+    expect(await connect.run({ toolkit: 'slack', reason: 'x' }, testContext({ profile: GENERAL_ID }))).toContain('cannot connect or use Slack')
+    expect(await find.run({ query: 'send', toolkit: 'slack' }, testContext())).not.toContain('profile')
+  })
+})
