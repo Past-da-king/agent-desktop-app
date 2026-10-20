@@ -23,6 +23,7 @@ tests_with_min() { # minTotal [substr minSub]
 }
 
 smoke() {
+  if [ -n "${GATE_SKIP_SMOKE:-}" ]; then echo "SKIPPED: electron smoke is checked later on a machine with a display"; return 0; fi
   [ -f apps/desktop/out/main/index.js ] || { echo "no main build at apps/desktop/out/main/index.js"; return 1; }
   local out code
   out=$(cd apps/desktop && timeout 120 xvfb-run -a npx electron . --smoke --no-sandbox 2>&1); code=$?
