@@ -16,6 +16,7 @@ import { Palette } from './shell/Palette'
 import { QuickAsk } from './shell/QuickAsk'
 import { Shell } from './shell/Shell'
 import { TitleBar } from './shell/TitleBar'
+import { Toasts } from './ui/Toasts'
 
 function Page(): JSX.Element {
   const route = useRoute()
@@ -122,6 +123,7 @@ export function App(): JSX.Element {
         <Palette />
         <QuickAsk />
       </div>
+      <Toasts />
     </div>
   )
 }

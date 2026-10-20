@@ -111,6 +111,12 @@ kbd{font:500 12px/1 'Roboto',sans-serif;padding:4px 7px;border-radius:8px;backgr
 .empty .btn{margin-top:6px}
 .banner{background:var(--s-mid);border-radius:var(--r-md);padding:12px 16px;font-size:13px;color:var(--on-sv)}
 .banner.warn{background:var(--tc);color:var(--on-tc)}
+
+/* ---------- toasts (undo and small confirmations) ---------- */
+.toasts{position:absolute;left:50%;bottom:24px;transform:translateX(-50%);z-index:40;display:flex;flex-direction:column;gap:10px;width:min(560px,calc(100% - 32px));pointer-events:none}
+.toast{pointer-events:auto;display:flex;align-items:center;gap:10px;background:var(--s-low);color:var(--on-bg);border-radius:var(--r-lg);box-shadow:0 18px 50px rgba(40,30,110,.28);padding:10px 10px 10px 18px;font-size:14px;animation:pop .35s var(--spatial)}
+.toast>span{flex:1;min-width:0;overflow-wrap:anywhere}
+.toast .ib{flex:none;width:38px;height:38px}
 .sk{display:flex;flex-direction:column;gap:10px;padding:8px 0}
 .sk-row{height:16px;border-radius:8px;background:linear-gradient(90deg,var(--s-mid),var(--s-high),var(--s-mid));background-size:200% 100%;animation:shimmer 1.6s linear infinite}
 .sk-row.big{height:44px;border-radius:var(--r-md)}

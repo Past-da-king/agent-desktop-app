@@ -9,7 +9,8 @@
 .now .eyebrow{color:color-mix(in srgb,var(--on-pc) 85%,transparent)}
 .now-row{display:flex;align-items:baseline;justify-content:space-between;gap:14px;font:500 17px/1.3 'Roboto',sans-serif}
 .stepchips{display:flex;gap:8px;flex-wrap:wrap}
-.sc-chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:999px;font:500 12px/1 'Roboto',sans-serif;background:color-mix(in srgb,var(--on-pc) 14%,transparent);color:var(--on-pc);overflow-wrap:anywhere}
+.sc-chip{display:inline-flex;align-items:center;gap:6px;height:30px;max-width:100%;min-width:0;padding:0 12px;border-radius:999px;font:500 12px/1 'Roboto',sans-serif;background:color-mix(in srgb,var(--on-pc) 14%,transparent);color:var(--on-pc)}
+.sc-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wave{width:100%;height:14px;display:block}
 .need{background:var(--tc);color:var(--on-tc);border-radius:var(--r-lg);padding:22px 24px;display:flex;flex-direction:column;gap:14px}
 .need .eyebrow{color:var(--on-tc);display:flex;align-items:center;gap:8px}
@@ -29,6 +30,12 @@
 .todo .dd.soon{color:var(--tert)}
 .todo.done .tt{text-decoration:line-through;color:var(--on-sv)}
 .todo .todo-body{min-width:0}
+.todo .del{width:36px;height:36px;flex:none;opacity:.7}
+.todo .del:hover{opacity:1}
+.todo-add{display:flex;align-items:center;gap:10px;margin-top:10px;padding:6px 8px 6px 14px;border-radius:var(--r-md);background:var(--s-low);color:var(--on-sv)}
+.todo-add:focus-within{box-shadow:0 0 0 2px var(--primary)}
+.todo-add input{flex:1;min-width:0;height:40px;border:0;background:transparent;color:var(--on-bg);font-size:14px;outline:none}
+.todo-add input::placeholder{color:var(--on-sv)}
 .cb{width:24px;height:24px;border-radius:8px;border:2px solid var(--on-sv);display:grid;place-items:center;color:var(--on-primary);flex:none;transition:background .2s,border-color .2s,border-radius .45s var(--spatial)}
 .todo.done .cb{background:var(--primary);border-color:var(--primary);border-radius:12px}
 .goals{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
@@ -153,10 +160,17 @@
 .graph{background:var(--s-mid);border-radius:var(--r-lg);height:210px;position:relative;overflow:hidden}
 .graph svg{width:100%;height:100%;display:block}
 .gnode{font:500 12px/1 'Roboto',sans-serif}
+.mem-body{font-size:16px;line-height:1.65;overflow-wrap:anywhere}
+.mem-body p+p{margin-top:10px}
+.mem-body ol{padding-left:24px;margin:10px 0;display:flex;flex-direction:column;gap:6px}
+.mem-body ol li::marker{color:var(--primary);font-weight:700}
+.mem-body code{font:500 13px/1.4 'Roboto Mono',ui-monospace,monospace;background:var(--s-mid);padding:2px 6px;border-radius:6px}
 .rtn{display:flex;align-items:center;gap:16px;padding:18px 22px;background:var(--s-low);border-radius:var(--r-lg)}
 .rtn .rt{flex:1;min-width:0}
 .rtn .rt b{display:block;font:500 16px/1.3 'Roboto',sans-serif;overflow-wrap:anywhere}
 .rtn .rt span{font-size:13px;color:var(--on-sv)}
+.rtn-actions{display:flex;align-items:center;gap:2px;flex:none}
+.rtn-actions .ib{width:38px;height:38px}
 .sw2{width:52px;height:32px;border-radius:999px;background:var(--s-highest);border:2px solid var(--outline);position:relative;transition:background .25s var(--effects),border-color .25s;flex:none}
 .sw2::after{content:"";position:absolute;left:5px;top:50%;width:16px;height:16px;margin-top:-8px;border-radius:50%;background:var(--outline);transition:left .45s var(--spatial),width .45s var(--spatial),height .45s var(--spatial),margin-top .45s var(--spatial),background .2s}
 .sw2.on{background:var(--primary);border-color:var(--primary)}

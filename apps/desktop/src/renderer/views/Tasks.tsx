@@ -3,133 +3,19 @@ import { useEffect, useState } from 'react'
 
 import { agent, chat } from '../bridge'
 import { dueLabel } from '../lib/format'
+import { dueSoon, userTasks } from '../lib/tasks'
 import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
+import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
-import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
-import { Field } from '../ui/Field'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 import { Ring } from '../ui/Ring'
 import { Segmented } from '../ui/Segmented'
 import { Skeleton } from '../ui/Skeleton'
-
-function sortTasks(tasks: TaskRow[]): TaskRow[] {
-  return [...tasks].sort((a, b) => {
-    const aDone = a.status === 'done' ? 1 : 0
-    const bDone = b.status === 'done' ? 1 : 0
-    if (aDone !== bDone) return aDone - bDone
-    if (a.dueAt === null && b.dueAt === null) return a.createdAt - b.createdAt
-    if (a.dueAt === null) return 1
-    if (b.dueAt === null) return -1
-    return a.dueAt - b.dueAt
-  })
-}
-
-function AddTaskDialog({ onClose }: { onClose: () => void }): JSX.Element {
-  const selectTask = useUi((state) => state.selectTask)
-  const setTab = useUi((state) => state.setTaskTab)
-  const [title, setTitle] = useState('')
-  const [notes, setNotes] = useState('')
-  const [due, setDue] = useState('')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  const save = async (): Promise<void> => {
-    if (title.trim() === '') {
-      setError('Give the to-do a name first.')
-      return
-    }
-    setBusy(true)
-    const now = Date.now()
-    const dueAt = due === '' ? null : new Date(`${due}T09:00:00`).getTime()
-    const row: TaskRow = {
-      id: '',
-      createdAt: now,
-      goalId: null,
-      title: title.trim(),
-      notes: notes.trim(),
-      status: 'todo',
-      dueAt: dueAt !== null && Number.isFinite(dueAt) ? dueAt : null,
-      owner: 'user',
-      blocker: '',
-      updatedAt: now,
-    }
-    try {
-      const saved = await agent.data.upsert('task', row)
-      selectTask(saved.id)
-      setTab('todos')
-      onClose()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not save that to-do.')
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Dialog
-      label="Add a to-do"
-      onClose={onClose}
-      labelledBy="add-todo-title"
-    >
-      <div>
-        <span className="eyebrow">NEW TO-DO</span>
-        <h2 className="h2" id="add-todo-title" style={{ marginTop: 6 }}>
-          What needs doing?
-        </h2>
-      </div>
-      <Field
-        label="To-do"
-        value={title}
-        onChange={(value) => {
-          setTitle(value)
-          setError('')
-        }}
-        placeholder="Send Lerato the invoice"
-        error={error}
-        onEnter={() => {
-          void save()
-        }}
-      />
-      <div className="field">
-        <label htmlFor="todo-notes">Notes</label>
-        <textarea
-          id="todo-notes"
-          className="textarea"
-          value={notes}
-          onChange={(event) => setNotes(event.target.value)}
-          placeholder="Anything useful to remember"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor="todo-due">Due date</label>
-        <input
-          id="todo-due"
-          className="input"
-          type="date"
-          value={due}
-          onChange={(event) => setDue(event.target.value)}
-          style={{ paddingRight: 18 }}
-        />
-      </div>
-      <div className="dialog-actions">
-        <Button variant="text" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          onClick={() => {
-            void save()
-          }}
-          disabled={busy}
-        >
-          {busy ? 'Saving...' : 'Add to-do'}
-        </Button>
-      </div>
-    </Dialog>
-  )
-}
+import { TaskDialog } from './TaskDialog'
 
 function GoalCard({ goal, tasks }: { goal: GoalRow; tasks: TaskRow[] }): JSX.Element {
   const steps = tasks.filter((task) => task.goalId === goal.id)
@@ -166,7 +52,7 @@ function GoalCard({ goal, tasks }: { goal: GoalRow; tasks: TaskRow[] }): JSX.Ele
 
 export function Tasks(): JSX.Element {
   const settings = useSettings((state) => state.settings)
-  const tasks = useEntity('task')
+  const taskRows = useEntity('task')
   const goals = useEntity('goal')
   const tasksLoaded = useEntityLoaded('task')
   const goalsLoaded = useEntityLoaded('goal')
@@ -176,23 +62,47 @@ export function Tasks(): JSX.Element {
   const selectedId = useUi((state) => state.taskSel)
   const selectTask = useUi((state) => state.selectTask)
   const navigate = useUi((state) => state.navigate)
-  const [adding, setAdding] = useState(false)
+  const [dialog, setDialog] = useState<{ task: TaskRow | null } | null>(null)
 
-  const userTasks = sortTasks(tasks.filter((task) => task.owner === 'user'))
-  const selected = userTasks.find((task) => task.id === selectedId) ?? userTasks[0]
+  const tasks = userTasks(taskRows)
+  const selected = tasks.find((task) => task.id === selectedId) ?? tasks[0]
+  const openCount = tasks.filter((task) => task.status !== 'done').length
   const agentName = settings?.agentName.trim() || 'your agent'
 
   useEffect(() => {
     if (!loaded) return
-    if (userTasks.length === 0) return
-    if (selectedId === null || !userTasks.some((task) => task.id === selectedId)) {
-      const first = userTasks[0]
+    if (tasks.length === 0) {
+      if (selectedId !== null) selectTask(null)
+      return
+    }
+    if (selectedId === null || !tasks.some((task) => task.id === selectedId)) {
+      const first = tasks[0]
       if (first) selectTask(first.id)
     }
-  }, [loaded, selectedId, selectTask, userTasks])
+  }, [loaded, selectedId, selectTask, tasks])
 
   const toggle = (task: TaskRow): void => {
-    void agent.data.upsert('task', { ...task, status: task.status === 'done' ? 'todo' : 'done' })
+    void agent.data.upsert('task', { ...task, status: task.status === 'done' ? 'todo' : 'done' }).catch((cause: unknown) => {
+      toast(cause instanceof Error ? cause.message : 'Could not change that to-do.')
+    })
+  }
+
+  const remove = (task: TaskRow): void => {
+    setDialog(null)
+    selectTask(null)
+    void agent.data
+      .remove('task', task.id)
+      .then(() => {
+        toast('To-do deleted.', {
+          actionLabel: 'Undo',
+          onAction: () => {
+            void agent.data.upsert('task', task)
+          },
+        })
+      })
+      .catch((cause: unknown) => {
+        toast(cause instanceof Error ? cause.message : 'Could not delete that to-do.')
+      })
   }
 
   const askAgent = (task: TaskRow): void => {
@@ -205,10 +115,10 @@ export function Tasks(): JSX.Element {
       <div className="ph">
         <div>
           <span className="eyebrow">TASKS</span>
-          <h1 className="h1">{userTasks.filter((task) => task.status !== 'done').length} on your list</h1>
+          <h1 className="h1">{openCount} on your list</h1>
         </div>
         <div className="ph-actions">
-          <Button onClick={() => setAdding(true)}>
+          <Button onClick={() => setDialog({ task: null })}>
             <Icon name="plus" size={18} />
             Add to-do
           </Button>
@@ -220,7 +130,7 @@ export function Tasks(): JSX.Element {
         value={tab}
         onChange={setTab}
         options={[
-          { value: 'todos', label: 'Your to-dos' },
+          { value: 'todos', label: 'My to-dos' },
           { value: 'agent', label: "Agent's work" },
         ]}
         style={{ maxWidth: 440, marginBottom: 24 }}
@@ -229,13 +139,13 @@ export function Tasks(): JSX.Element {
       {!loaded ? (
         <Skeleton rows={5} />
       ) : tab === 'todos' ? (
-        userTasks.length === 0 ? (
+        tasks.length === 0 ? (
           <EmptyState
             mascot={settings?.mascot ?? 'scout'}
             title="Your list is clear"
             line="Add something small now, or just tell the agent and it will keep the list for you."
             action={
-              <Button variant="tonal" size="sm" onClick={() => setAdding(true)}>
+              <Button variant="tonal" size="sm" onClick={() => setDialog({ task: null })}>
                 Add your first to-do
               </Button>
             }
@@ -244,7 +154,7 @@ export function Tasks(): JSX.Element {
           <div className="md">
             <div>
               <div className="list">
-                {userTasks.map((task) => (
+                {tasks.map((task) => (
                   <div key={task.id} className={`todo${task.status === 'done' ? ' done' : ''}${selected?.id === task.id ? ' on' : ''}`}>
                     <button
                       type="button"
@@ -263,7 +173,7 @@ export function Tasks(): JSX.Element {
                       onClick={() => selectTask(task.id)}
                     >
                       <div className="tt">{task.title}</div>
-                      <div className="dd">{dueLabel(task)}</div>
+                      <div className={`dd${dueSoon(task) ? ' soon' : ''}`}>{dueLabel(task)}</div>
                     </button>
                   </div>
                 ))}
@@ -280,10 +190,28 @@ export function Tasks(): JSX.Element {
                 </div>
                 <div className="kv">
                   <span className="eyebrow mute">DUE</span>
-                  <span className="h3" style={selected.dueAt !== null && selected.dueAt - Date.now() < 86_400_000 && selected.status !== 'done' ? { color: 'var(--tert)' } : undefined}>
+                  <span className="h3" style={dueSoon(selected) ? { color: 'var(--tert)' } : undefined}>
                     {dueLabel(selected)}
                   </span>
                 </div>
+                <div className="kv">
+                  <span className="eyebrow mute">STATUS</span>
+                  <span style={{ fontSize: 15 }}>
+                    {selected.status === 'doing'
+                      ? 'Doing'
+                      : selected.status === 'blocked'
+                        ? 'Blocked'
+                        : selected.status === 'done'
+                          ? 'Done'
+                          : 'To do'}
+                  </span>
+                </div>
+                {selected.blocker ? (
+                  <div className="kv">
+                    <span className="eyebrow mute">BLOCKED BY</span>
+                    <p style={{ fontSize: 15, lineHeight: 1.6 }}>{selected.blocker}</p>
+                  </div>
+                ) : null}
                 <div className="kv">
                   <span className="eyebrow mute">NOTES</span>
                   <p style={{ fontSize: 15, lineHeight: 1.6 }}>{selected.notes || 'No notes yet.'}</p>
@@ -298,8 +226,19 @@ export function Tasks(): JSX.Element {
                   <Button onClick={() => toggle(selected)}>
                     {selected.status === 'done' ? 'Mark as not done' : 'Mark done'}
                   </Button>
+                  <Button variant="tonal" onClick={() => setDialog({ task: selected })}>
+                    <Icon name="edit" size={18} />
+                    Edit
+                  </Button>
                   <Button variant="tonal" onClick={() => askAgent(selected)}>
                     Ask {agentName} to do it
+                  </Button>
+                  <Button
+                    variant="line"
+                    style={{ color: 'var(--err)', borderColor: 'var(--err)' }}
+                    onClick={() => remove(selected)}
+                  >
+                    Delete
                   </Button>
                 </div>
               </div>
@@ -328,12 +267,24 @@ export function Tasks(): JSX.Element {
           {goals
             .filter((goal) => goal.status === 'open')
             .map((goal) => (
-              <GoalCard key={goal.id} goal={goal} tasks={tasks} />
+              <GoalCard key={goal.id} goal={goal} tasks={taskRows} />
             ))}
         </div>
       )}
 
-      {adding ? <AddTaskDialog onClose={() => setAdding(false)} /> : null}
+      {dialog ? (
+        <TaskDialog
+          task={dialog.task}
+          owner="user"
+          goals={goals}
+          onClose={() => setDialog(null)}
+          onSaved={(saved) => {
+            selectTask(saved.id)
+            setTab('todos')
+          }}
+          onDelete={remove}
+        />
+      ) : null}
     </div>
   )
 }

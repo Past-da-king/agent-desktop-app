@@ -1,12 +1,15 @@
-import type { ChatItem, TaskRow, TriggerRow } from '@agent/core'
-import { useMemo } from 'react'
+import type { ChatItem, GoalRow, TaskRow, TriggerRow } from '@agent/core'
+import { useMemo, useState } from 'react'
 
 import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
-import { dueLabel, greeting, nextRun, scheduleLabel, short, todayEyebrow } from '../lib/format'
+import { dueLabel, greeting, nextRun, scheduleLabel, short, timeAgo, todayEyebrow } from '../lib/format'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
+import { dueSoon, openUserTasks } from '../lib/tasks'
 import { useEntity, useEntityLoaded } from '../state/useData'
+import { useRunInfo, lastAgentWork } from '../state/useRun'
 import { useSettings } from '../state/useSettings'
+import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
@@ -16,6 +19,7 @@ import { Ring } from '../ui/Ring'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Skeleton } from '../ui/Skeleton'
 import { Wave } from '../ui/Wave'
+import { TaskDialog } from './TaskDialog'
 
 interface Upcoming {
   id: string
@@ -35,11 +39,15 @@ function upcoming(tasks: TaskRow[], triggers: TriggerRow[]): Upcoming[] {
   return [...fromTasks, ...fromTriggers].sort((a, b) => a.when - b.when).slice(0, 5)
 }
 
-function whenLabel(upcoming: Upcoming): string {
-  if (upcoming.routine) {
-    return scheduleLabel({ kind: 'at', spec: new Date(upcoming.when).toISOString() })
-  }
-  return dueLabel({ dueAt: upcoming.when })
+function whenLabel(item: Upcoming): string {
+  if (item.routine) return scheduleLabel({ kind: 'at', spec: new Date(item.when).toISOString() })
+  return dueLabel({ dueAt: item.when })
+}
+
+function goalProgress(goal: GoalRow | null, tasks: TaskRow[]): { steps: TaskRow[]; done: number; pct: number } {
+  const steps = goal === null ? [] : tasks.filter((task) => task.goalId === goal.id)
+  const done = steps.filter((task) => task.status === 'done').length
+  return { steps, done, pct: steps.length === 0 ? 0 : (done / steps.length) * 100 }
 }
 
 function QuestionCard({ item, agentName }: { item: ChatItem; agentName: string }): JSX.Element {
@@ -104,15 +112,68 @@ function ApprovalCard({ item }: { item: ChatItem }): JSX.Element {
   )
 }
 
+function AddTodoInline(): JSX.Element {
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const add = async (): Promise<void> => {
+    const title = value.trim()
+    if (title === '' || busy) return
+    setBusy(true)
+    const now = Date.now()
+    try {
+      await agent.data.upsert('task', {
+        id: '',
+        createdAt: now,
+        goalId: null,
+        title,
+        notes: '',
+        status: 'todo',
+        dueAt: null,
+        owner: 'user',
+        blocker: '',
+        updatedAt: now,
+      })
+      setValue('')
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Could not add that to-do.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form
+      className="todo-add"
+      onSubmit={(event) => {
+        event.preventDefault()
+        void add()
+      }}
+    >
+      <Icon name="plus" size={18} />
+      <input
+        aria-label="Add a to-do"
+        placeholder="Add a to-do"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        autoComplete="off"
+      />
+      <Button type="submit" variant="tonal" size="sm" disabled={value.trim() === '' || busy}>
+        Add
+      </Button>
+    </form>
+  )
+}
+
 export function Home(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const navigate = useUi((state) => state.navigate)
   const openPalette = useUi((state) => state.openPalette)
   const focusComposer = useUi((state) => state.focusComposer)
-  const selectTask = useUi((state) => state.selectTask)
   const setTaskTab = useUi((state) => state.setTaskTab)
+  const [editingTask, setEditingTask] = useState<TaskRow | null>(null)
 
-  const chat = useEntity('chat_item')
+  const chatItems = useEntity('chat_item')
   const tasks = useEntity('task')
   const goals = useEntity('goal')
   const triggers = useEntity('trigger')
@@ -125,30 +186,49 @@ export function Home(): JSX.Element {
   const agentName = settings?.agentName.trim() || 'Your agent'
   const firstName = (settings?.userName.trim() || 'there').split(' ')[0] ?? 'there'
 
-  const needs = openCards(chat)
+  const needs = openCards(chatItems)
   const question = needs.find((item) => item.kind === 'question')
   const approvals = needs.filter((item) => item.kind === 'approval')
-  const openGoal = goals.find((goal) => goal.status === 'open')
-  const goalTasks = openGoal ? tasks.filter((task) => task.goalId === openGoal.id) : []
-  const doneSteps = goalTasks.filter((task) => task.status === 'done').length
-  const userTasks = useMemo(
-    () =>
-      tasks
-        .filter((task) => task.owner === 'user')
-        .sort((a, b) => {
-          if (a.dueAt === null && b.dueAt === null) return a.createdAt - b.createdAt
-          if (a.dueAt === null) return 1
-          if (b.dueAt === null) return -1
-          return a.dueAt - b.dueAt
-        }),
-    [tasks],
-  )
-  const openTodos = userTasks.filter((task) => task.status !== 'done').length
+  const openGoal = goals.find((goal) => goal.status === 'open') ?? null
+  const goal = goalProgress(openGoal, tasks)
+  const run = useRunInfo(chatItems)
+  const lastWork = lastAgentWork(chatItems)
+
+  const todos = useMemo(() => openUserTasks(tasks), [tasks])
   const nextItems = upcoming(tasks, triggers)
 
   const toggleTask = (task: TaskRow): void => {
-    void agent.data.upsert('task', { ...task, status: task.status === 'done' ? 'todo' : 'done' })
+    void agent.data.upsert('task', { ...task, status: task.status === 'done' ? 'todo' : 'done' }).catch((cause: unknown) => {
+      toast(cause instanceof Error ? cause.message : 'Could not change that to-do.')
+    })
   }
+
+  const deleteTask = (task: TaskRow): void => {
+    setEditingTask(null)
+    void agent.data
+      .remove('task', task.id)
+      .then(() => {
+        toast('To-do deleted.', {
+          actionLabel: 'Undo',
+          onAction: () => {
+            void agent.data.upsert('task', task)
+          },
+        })
+      })
+      .catch((cause: unknown) => {
+        toast(cause instanceof Error ? cause.message : 'Could not delete that to-do.')
+      })
+  }
+
+  const heroSubtitle = run.running
+    ? 'Working right now'
+    : needs.length > 0
+      ? `Waiting for you on ${needs.length === 1 ? 'one thing' : `${needs.length} things`}`
+      : openGoal
+        ? `Working on ${openGoal.title}`
+        : lastWork
+          ? `Last worked ${timeAgo(lastWork.createdAt)}`
+          : 'Nothing on your plate yet'
 
   if (!ready) {
     return (
@@ -213,17 +293,37 @@ export function Home(): JSX.Element {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="eyebrow">RIGHT NOW</div>
                 <div className="nm">{agentName}</div>
-                <div className="sub">
-                  {needs.length > 0
-                    ? `Waiting for you on ${needs.length === 1 ? 'one thing' : `${needs.length} things`}`
-                    : openGoal
-                      ? `Working on ${openGoal.title}`
-                      : 'Nothing on your plate yet'}
-                </div>
+                <div className="sub">{heroSubtitle}</div>
               </div>
               <Icon name="arrow" size={26} />
             </div>
-            {openGoal ? (
+            {run.running ? (
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>
+                  WORKING ON
+                </div>
+                <div className="now-row">
+                  <span>{run.activity || 'Thinking it through'}</span>
+                  {openGoal ? (
+                    <span className="num">
+                      {goal.done}/{goal.steps.length}
+                    </span>
+                  ) : null}
+                </div>
+                <div style={{ margin: '12px 0 14px' }}>
+                  <Wave pct={openGoal ? goal.pct : 35} />
+                </div>
+                <div className="stepchips">
+                  {(openGoal ? goal.steps : tasks.filter((task) => task.owner === 'agent')).slice(0, 5).map((step) => (
+                    <span className="sc-chip" key={step.id}>
+                      {step.status === 'done' ? <Icon name="check" size={14} /> : null}
+                      {step.status === 'blocked' ? <Icon name="clock" size={14} /> : null}
+                      <span>{short(step.title, 48)}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : openGoal ? (
               <div>
                 <div className="eyebrow" style={{ marginBottom: 8 }}>
                   WORKING ON
@@ -231,20 +331,33 @@ export function Home(): JSX.Element {
                 <div className="now-row">
                   <span>{openGoal.title}</span>
                   <span className="num">
-                    {doneSteps}/{goalTasks.length}
+                    {goal.done}/{goal.steps.length}
                   </span>
                 </div>
                 <div style={{ margin: '12px 0 14px' }}>
-                  <Wave pct={goalTasks.length === 0 ? 0 : (doneSteps / goalTasks.length) * 100} />
+                  <Wave pct={goal.pct} />
                 </div>
                 <div className="stepchips">
-                  {goalTasks.slice(0, 5).map((step) => (
+                  {goal.steps.slice(0, 5).map((step) => (
                     <span className="sc-chip" key={step.id}>
                       {step.status === 'done' ? <Icon name="check" size={14} /> : null}
                       {step.status === 'blocked' ? <Icon name="clock" size={14} /> : null}
-                      {short(step.title, 48)}
+                      <span>{short(step.title, 48)}</span>
                     </span>
                   ))}
+                </div>
+              </div>
+            ) : lastWork ? (
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 8 }}>
+                  THE LAST THING I DID
+                </div>
+                <div className="now-row">
+                  <span>{short(lastWork.text, 110)}</span>
+                  <span className="num">{timeAgo(lastWork.createdAt)}</span>
+                </div>
+                <div style={{ margin: '12px 0 14px' }}>
+                  <Wave pct={100} />
                 </div>
               </div>
             ) : (
@@ -255,18 +368,18 @@ export function Home(): JSX.Element {
           <section>
             <SectionHeader
               eyebrow="YOUR TO-DOS"
-              line={`${openTodos} open, soonest first`}
+              line={`${todos.length} open, soonest first`}
               right={
                 <Button variant="text" size="sm" onClick={() => navigate({ page: 'tasks' })}>
                   All
                 </Button>
               }
             />
-            {userTasks.length === 0 ? (
+            {todos.length === 0 ? (
               <EmptyState
                 mascot={settings?.mascot ?? 'scout'}
                 title="Nothing on your list"
-                line="Tell me what you would like done and I will keep it here for you."
+                line="Tell me what you would like done, or add something small here now."
                 action={
                   <Button
                     variant="tonal"
@@ -282,32 +395,45 @@ export function Home(): JSX.Element {
               />
             ) : (
               <div className="list">
-                {userTasks.map((task) => (
-                  <button
-                    key={task.id}
-                    type="button"
-                    className={`todo${task.status === 'done' ? ' done' : ''}`}
-                    onClick={() => toggleTask(task)}
-                    aria-label={`${task.status === 'done' ? 'Mark not done' : 'Mark done'}: ${task.title}`}
-                  >
-                    <span className="cb" aria-hidden="true">
+                {todos.map((task) => (
+                  <div key={task.id} className="todo">
+                    <button
+                      type="button"
+                      className="cb"
+                      role="checkbox"
+                      aria-checked={false}
+                      aria-label={`Mark done: ${task.title}`}
+                      onClick={() => toggleTask(task)}
+                    >
                       {task.status === 'done' ? <Icon name="check" size={16} /> : null}
-                    </span>
-                    <span className="todo-body">
+                    </button>
+                    <button
+                      type="button"
+                      className="todo-body"
+                      style={{ flex: 1, minWidth: 0, textAlign: 'left' }}
+                      onClick={() => setEditingTask(task)}
+                    >
                       <div className="tt">{task.title}</div>
-                      <div className={`dd${task.dueAt !== null && task.dueAt - Date.now() < 86_400_000 ? ' soon' : ''}`}>
-                        {dueLabel(task)}
-                      </div>
-                    </span>
-                  </button>
+                      <div className={`dd${dueSoon(task) ? ' soon' : ''}`}>{dueLabel(task)}</div>
+                    </button>
+                    <button
+                      type="button"
+                      className="ib del"
+                      aria-label={`Delete ${task.title}`}
+                      onClick={() => deleteTask(task)}
+                    >
+                      <Icon name="trash" size={18} />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
+            <AddTodoInline />
           </section>
 
           <section>
             <SectionHeader eyebrow="GOALS" line="What your agent is working through" />
-            {goals.filter((goal) => goal.status === 'open').length === 0 ? (
+            {goals.filter((goalRow) => goalRow.status === 'open').length === 0 ? (
               <EmptyState
                 mascot={settings?.mascot ?? 'scout'}
                 title="No goals yet"
@@ -328,13 +454,12 @@ export function Home(): JSX.Element {
             ) : (
               <div className="goals">
                 {goals
-                  .filter((goal) => goal.status === 'open')
-                  .map((goal) => {
-                    const steps = tasks.filter((task) => task.goalId === goal.id)
-                    const done = steps.filter((task) => task.status === 'done').length
+                  .filter((goalRow) => goalRow.status === 'open')
+                  .map((goalRow) => {
+                    const progress = goalProgress(goalRow, tasks)
                     return (
                       <button
-                        key={goal.id}
+                        key={goalRow.id}
                         type="button"
                         className="goal"
                         onClick={() => {
@@ -343,12 +468,12 @@ export function Home(): JSX.Element {
                         }}
                       >
                         <div className="top">
-                          <Ring pct={steps.length === 0 ? 0 : (done / steps.length) * 100} />
+                          <Ring pct={progress.pct} />
                           <span className="fr num">
-                            {done}/{steps.length}
+                            {progress.done}/{progress.steps.length}
                           </span>
                         </div>
-                        <div className="gt">{goal.title}</div>
+                        <div className="gt">{goalRow.title}</div>
                       </button>
                     )
                   })}
@@ -438,6 +563,17 @@ export function Home(): JSX.Element {
           </section>
         </div>
       </div>
+
+      {editingTask ? (
+        <TaskDialog
+          task={editingTask}
+          owner="user"
+          goals={goals}
+          onClose={() => setEditingTask(null)}
+          onSaved={() => undefined}
+          onDelete={deleteTask}
+        />
+      ) : null}
     </div>
   )
 }

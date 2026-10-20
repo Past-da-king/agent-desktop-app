@@ -1,17 +1,28 @@
 import type { MemoryKind, MemoryRow } from '@agent/core'
-import { Fragment, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
 import { kindLabel, short, timeAgo } from '../lib/format'
+import {
+  findPage,
+  linkedNames,
+  linkTargets,
+  newPage,
+  plainBody,
+  searchMemories,
+  type MemoryKindFilter,
+} from '../lib/memory'
 import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
-import { useUi, type MemoryFilter } from '../state/useUi'
+import { toast } from '../state/useToast'
+import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Field } from '../ui/Field'
 import { Icon, type IconName } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
+import { Markdown } from '../ui/Markdown'
 import { Skeleton } from '../ui/Skeleton'
 
 const KIND_ORDER: MemoryKind[] = ['person', 'fact', 'preference', 'decision', 'how-to', 'event', 'skill']
@@ -26,27 +37,6 @@ const KIND_ICONS: Record<MemoryKind, IconName> = {
   skill: 'bolt',
 }
 
-const LINK = /\[\[([^\]]+)\]\]/g
-
-function linkedNames(body: string): string[] {
-  const names: string[] = []
-  for (const match of body.matchAll(LINK)) {
-    const name = match[1]?.trim()
-    if (name && !names.includes(name)) names.push(name)
-  }
-  return names
-}
-
-function linkTargets(memory: MemoryRow, all: MemoryRow[]): MemoryRow[] {
-  return linkedNames(memory.body)
-    .map((name) => all.find((item) => item.title.toLowerCase() === name.toLowerCase()))
-    .filter((item): item is MemoryRow => item !== undefined)
-}
-
-function plainBody(body: string): string {
-  return body.replace(/\[\[([^\]]+)\]\]/g, '$1')
-}
-
 function MemoryDialog({
   memory,
   onClose,
@@ -58,6 +48,7 @@ function MemoryDialog({
   const [title, setTitle] = useState(memory?.title ?? '')
   const [body, setBody] = useState(memory?.body ?? '')
   const [kind, setKind] = useState<MemoryKind>(memory?.kind ?? 'fact')
+  const [topics, setTopics] = useState(memory?.topics ?? '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -74,7 +65,7 @@ function MemoryDialog({
       title: title.trim(),
       body: body.trim(),
       kind,
-      topics: memory?.topics ?? '',
+      topics: topics.trim(),
       pinned: memory?.pinned ?? false,
       source: memory?.source ?? 'user',
       updatedAt: now,
@@ -118,21 +109,29 @@ function MemoryDialog({
           style={{ minHeight: 160 }}
         />
       </div>
-      <div className="field">
-        <label htmlFor="memory-kind">Kind</label>
-        <select
-          id="memory-kind"
-          className="input"
-          value={kind}
-          onChange={(event) => setKind(event.target.value as MemoryKind)}
-          style={{ paddingRight: 18 }}
-        >
-          {KIND_ORDER.map((item) => (
-            <option key={item} value={item}>
-              {kindLabel(item)}
-            </option>
-          ))}
-        </select>
+      <div className="task-grid">
+        <div className="field">
+          <label htmlFor="memory-kind">Kind</label>
+          <select
+            id="memory-kind"
+            className="input"
+            value={kind}
+            onChange={(event) => setKind(event.target.value as MemoryKind)}
+            style={{ paddingRight: 18 }}
+          >
+            {KIND_ORDER.map((item) => (
+              <option key={item} value={item}>
+                {kindLabel(item)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <Field
+          label="Topics"
+          value={topics}
+          onChange={setTopics}
+          placeholder="work, travel"
+        />
       </div>
       <div className="dialog-actions">
         <Button variant="text" onClick={onClose}>
@@ -151,40 +150,44 @@ function MemoryDialog({
   )
 }
 
-function DeleteDialog({ memory, onClose }: { memory: MemoryRow; onClose: () => void }): JSX.Element {
+function CreatePageDialog({ name, onClose }: { name: string; onClose: () => void }): JSX.Element {
   const selectMemory = useUi((state) => state.selectMemory)
   const [busy, setBusy] = useState(false)
+
+  const create = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const saved = await agent.data.upsert('memory', newPage(name))
+      selectMemory(saved.id)
+      onClose()
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Could not create that page.')
+      setBusy(false)
+    }
+  }
+
   return (
-    <Dialog label="Delete page" onClose={onClose} labelledBy="delete-memory-title">
+    <Dialog label="Create page" onClose={onClose} labelledBy="create-page-title">
       <div>
-        <span className="eyebrow">DELETE PAGE</span>
-        <h2 className="h2" id="delete-memory-title" style={{ marginTop: 6 }}>
-          Delete {memory.title}?
+        <span className="eyebrow">MISSING PAGE</span>
+        <h2 className="h2" id="create-page-title" style={{ marginTop: 6 }}>
+          Create {name}?
         </h2>
         <p className="lead" style={{ marginTop: 8 }}>
-          This removes the page from this computer and from sync. It cannot be undone.
+          This page does not exist yet. Make it now and the link will point to it from here on.
         </p>
       </div>
       <div className="dialog-actions">
         <Button variant="text" onClick={onClose}>
-          Keep it
+          Not now
         </Button>
         <Button
-          variant="line"
-          style={{ color: 'var(--err)', borderColor: 'var(--err)' }}
-          disabled={busy}
           onClick={() => {
-            setBusy(true)
-            void agent.data
-              .remove('memory', memory.id)
-              .then(() => {
-                selectMemory(null)
-                onClose()
-              })
-              .catch(() => setBusy(false))
+            void create()
           }}
+          disabled={busy}
         >
-          {busy ? 'Deleting...' : 'Delete page'}
+          {busy ? 'Creating...' : 'Create page'}
         </Button>
       </div>
     </Dialog>
@@ -263,47 +266,66 @@ export function Memory(): JSX.Element {
   const setFilter = useUi((state) => state.setMemoryKind)
   const selectedId = useUi((state) => state.memSel)
   const selectMemory = useUi((state) => state.selectMemory)
+  const [input, setInput] = useState(query)
   const [editing, setEditing] = useState<MemoryRow | 'new' | null>(null)
-  const [deleting, setDeleting] = useState<MemoryRow | null>(null)
+  const [creating, setCreating] = useState<string | null>(null)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(input), 150)
+    return () => clearTimeout(timer)
+  }, [input, setQuery])
 
   const agentName = settings?.agentName.trim() || 'your agent'
-  const kinds = KIND_ORDER.filter((kind) => memories.some((memory) => memory.kind === kind))
-  const q = query.trim().toLowerCase()
-  const filtered = memories
-    .filter((memory) => filter === 'all' || memory.kind === filter)
-    .filter((memory) => q === '' || `${memory.title} ${memory.body} ${memory.topics}`.toLowerCase().includes(q))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+  const filtered = searchMemories(memories, query, filter)
   const pinned = filtered.filter((memory) => memory.pinned)
   const rest = filtered.filter((memory) => !memory.pinned)
   const selected = filtered.find((memory) => memory.id === selectedId) ?? filtered[0] ?? null
   const links = selected ? linkTargets(selected, memories) : []
-  const nameToMemory = new Map(memories.map((memory) => [memory.title.toLowerCase(), memory]))
+  const topicList = selected ? selected.topics.split(',').map((topic) => topic.trim()).filter(Boolean) : []
 
-  const bodyNodes = (memory: MemoryRow): JSX.Element => {
-    const parts = memory.body.split(/(\[\[[^\]]+\]\])/g)
+  const openLink = (name: string): void => {
+    const page = findPage(memories, name)
+    if (page) selectMemory(page.id)
+    else setCreating(name)
+  }
+
+  const remove = (memory: MemoryRow): void => {
+    selectMemory(null)
+    void agent.data
+      .remove('memory', memory.id)
+      .then(() => {
+        toast('Page deleted.', {
+          actionLabel: 'Undo',
+          onAction: () => {
+            void agent.data.upsert('memory', memory)
+          },
+        })
+      })
+      .catch((cause: unknown) => {
+        toast(cause instanceof Error ? cause.message : 'Could not delete that page.')
+      })
+  }
+
+  const renderRow = (memory: MemoryRow): JSX.Element => {
+    const count = linkedNames(memory.body).length
     return (
-      <p style={{ fontSize: 16, lineHeight: 1.65 }}>
-        {parts.map((part, index) => {
-          const match = /^\[\[([^\]]+)\]\]$/.exec(part)
-          if (match) {
-            const name = match[1] ?? ''
-            const target = nameToMemory.get(name.toLowerCase())
-            if (target) {
-              return (
-                <button
-                  key={`${memory.id}-link-${index}`}
-                  type="button"
-                  className="linkish"
-                  onClick={() => selectMemory(target.id)}
-                >
-                  {name}
-                </button>
-              )
-            }
-          }
-          return <Fragment key={`${memory.id}-part-${index}`}>{part}</Fragment>
-        })}
-      </p>
+      <button
+        key={memory.id}
+        type="button"
+        className={`mrow${selected?.id === memory.id ? ' on' : ''}`}
+        onClick={() => selectMemory(memory.id)}
+      >
+        <span className={`mi2${memory.pinned ? ' pri' : ''}`}>
+          <Icon name={KIND_ICONS[memory.kind]} size={22} />
+        </span>
+        <span style={{ minWidth: 0, flex: 1 }}>
+          <div className="mt">{memory.title}</div>
+          <div className="ms">{plainBody(memory.body)}</div>
+          <div className="mm">
+            {kindLabel(memory.kind)} · {count} links · {timeAgo(memory.updatedAt)}
+          </div>
+        </span>
+      </button>
     )
   }
 
@@ -345,8 +367,8 @@ export function Memory(): JSX.Element {
               <input
                 id="memory-search"
                 placeholder="Search people, places, anything"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
                 autoComplete="off"
               />
             </label>
@@ -359,12 +381,12 @@ export function Memory(): JSX.Element {
               >
                 All
               </button>
-              {kinds.map((kind) => (
+              {KIND_ORDER.map((kind) => (
                 <button
                   key={kind}
                   type="button"
                   className={`chip${filter === kind ? ' on' : ''}`}
-                  onClick={() => setFilter(kind as MemoryFilter)}
+                  onClick={() => setFilter(kind as MemoryKindFilter)}
                 >
                   <Icon name={KIND_ICONS[kind]} size={16} />
                   {kindLabel(kind)}
@@ -387,28 +409,7 @@ export function Memory(): JSX.Element {
                       <span className="eyebrow">PINNED</span>
                       <span className="sec-line">Always on your agent's mind</span>
                     </div>
-                    {pinned.map((memory) => {
-                      const count = linkedNames(memory.body).length
-                      return (
-                        <button
-                          key={memory.id}
-                          type="button"
-                          className={`mrow${selected?.id === memory.id ? ' on' : ''}`}
-                          onClick={() => selectMemory(memory.id)}
-                        >
-                          <span className="mi2 pri">
-                            <Icon name={KIND_ICONS[memory.kind]} size={22} />
-                          </span>
-                          <span style={{ minWidth: 0, flex: 1 }}>
-                            <div className="mt">{memory.title}</div>
-                            <div className="ms">{plainBody(memory.body)}</div>
-                            <div className="mm">
-                              {kindLabel(memory.kind)} · {count} links · {timeAgo(memory.updatedAt)}
-                            </div>
-                          </span>
-                        </button>
-                      )
-                    })}
+                    {pinned.map(renderRow)}
                   </>
                 ) : null}
 
@@ -418,28 +419,7 @@ export function Memory(): JSX.Element {
                       <span className="eyebrow">EVERYTHING ELSE</span>
                       <span className="sec-line">Newest first</span>
                     </div>
-                    {rest.map((memory) => {
-                      const count = linkedNames(memory.body).length
-                      return (
-                        <button
-                          key={memory.id}
-                          type="button"
-                          className={`mrow${selected?.id === memory.id ? ' on' : ''}`}
-                          onClick={() => selectMemory(memory.id)}
-                        >
-                          <span className="mi2">
-                            <Icon name={KIND_ICONS[memory.kind]} size={22} />
-                          </span>
-                          <span style={{ minWidth: 0, flex: 1 }}>
-                            <div className="mt">{memory.title}</div>
-                            <div className="ms">{plainBody(memory.body)}</div>
-                            <div className="mm">
-                              {kindLabel(memory.kind)} · {count} links · {timeAgo(memory.updatedAt)}
-                            </div>
-                          </span>
-                        </button>
-                      )
-                    })}
+                    {rest.map(renderRow)}
                   </>
                 ) : null}
               </>
@@ -460,13 +440,25 @@ export function Memory(): JSX.Element {
                   type="button"
                   className="ib tonal"
                   aria-label="Delete page"
-                  onClick={() => setDeleting(selected)}
+                  onClick={() => remove(selected)}
                 >
                   <Icon name="trash" size={20} />
                 </button>
               </div>
 
-              {bodyNodes(selected)}
+              <div className="mem-body">
+                <Markdown text={selected.body} onWikiLink={openLink} />
+              </div>
+
+              {topicList.length > 0 ? (
+                <div className="mem-chips">
+                  {topicList.map((topic) => (
+                    <span className="chip" key={topic}>
+                      {topic}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
 
               <div>
                 <span className="eyebrow mute">HOW THEY CONNECT</span>
@@ -504,11 +496,16 @@ export function Memory(): JSX.Element {
               </div>
 
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <Button onClick={() => setEditing(selected)}>Edit page</Button>
+                <Button onClick={() => setEditing(selected)}>
+                  <Icon name="edit" size={18} />
+                  Edit page
+                </Button>
                 <Button
                   variant="tonal"
                   onClick={() => {
-                    void agent.data.upsert('memory', { ...selected, pinned: !selected.pinned })
+                    void agent.data.upsert('memory', { ...selected, pinned: !selected.pinned }).catch((cause: unknown) => {
+                      toast(cause instanceof Error ? cause.message : 'Could not change that page.')
+                    })
                   }}
                 >
                   {selected.pinned ? 'Unpin' : 'Pin it'}
@@ -522,7 +519,7 @@ export function Memory(): JSX.Element {
       {editing !== null ? (
         <MemoryDialog memory={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />
       ) : null}
-      {deleting ? <DeleteDialog memory={deleting} onClose={() => setDeleting(null)} /> : null}
+      {creating ? <CreatePageDialog name={creating} onClose={() => setCreating(null)} /> : null}
     </div>
   )
 }
