@@ -15,6 +15,7 @@ import {
   type Decision,
   type EntityMap,
   type EntityName,
+  type EnvironmentReport,
   type RowInput,
   type RunState,
   type Settings,
@@ -103,6 +104,8 @@ export interface IpcDeps {
   fetchImpl?: typeof fetch
   /** Filled by `index.ts` from Electron; tests fall back to this machine's own values. */
   systemInfo?: SystemInfo
+  /** The session-cached environment scan. */
+  environment?: { scan(options?: { refresh?: boolean }): Promise<EnvironmentReport> }
   appInfo?: () => AppInfo
   openLogsFolder?: () => void | Promise<void>
   openLicences?: () => void | Promise<void>
@@ -344,6 +347,11 @@ export function registerIpc(deps: IpcDeps): () => void {
 
   handle(CHANNELS.system.info, async () => deps.systemInfo ?? thisMachine())
 
+  handle(CHANNELS.environment.scan, async (_event, rawRefresh) => {
+    if (deps.environment === undefined) return emptyEnvironment()
+    return deps.environment.scan({ refresh: rawRefresh === true })
+  })
+
   // ---- window ----
 
   handle(CHANNELS.window.minimize, async () => {
@@ -461,6 +469,18 @@ function thisMachine(): SystemInfo {
     arch: osArch(),
     hostname: osHostname(),
     appVersion: '0.0.0',
+  }
+}
+
+/** Before the scan is wired (tests, early boot) the UI still gets a truthful, empty shape. */
+function emptyEnvironment(): EnvironmentReport {
+  return {
+    os: { platform: osPlatform(), release: '', arch: osArch(), hostname: osHostname() },
+    shells: [],
+    runtimes: [],
+    aiTools: [],
+    notes: [],
+    scannedAt: 0,
   }
 }
 

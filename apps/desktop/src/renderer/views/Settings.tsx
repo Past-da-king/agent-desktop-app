@@ -1,4 +1,4 @@
-import { PROVIDERS, type HotkeyStatus, type SystemInfo } from '@agent/core'
+import { PROVIDERS, type EnvironmentReport, type Found, type HotkeyStatus, type SystemInfo } from '@agent/core'
 import { useEffect, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
@@ -109,6 +109,20 @@ function HotkeyRecorder({
   )
 }
 
+function toolsLine(report: EnvironmentReport): string {
+  const shells = report.shells.filter((item) => item.found).map((item) => item.label)
+  const runtimes = report.runtimes.filter((item) => item.found).map((item) => foundName(item))
+  const aiTools = report.aiTools.filter((item) => item.found).map((item) => foundName(item))
+  const missing = report.aiTools.filter((item) => !item.found).map((item) => item.label)
+  const parts = [...shells, ...runtimes, ...aiTools]
+  const found = parts.length === 0 ? 'Nothing found yet' : parts.join(', ')
+  return missing.length === 0 ? found : `${found}. Not found: ${missing.join(', ')}.`
+}
+
+function foundName(item: Found): string {
+  return item.version === undefined ? item.label : `${item.label} ${item.version}`
+}
+
 export function Settings(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
@@ -119,6 +133,8 @@ export function Settings(): JSX.Element {
   const [pickingFolder, setPickingFolder] = useState(false)
   const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus | null>(null)
   const [system, setSystem] = useState<SystemInfo | null>(null)
+  const [environment, setEnvironment] = useState<EnvironmentReport | null>(null)
+  const [scanning, setScanning] = useState(true)
 
   useEffect(() => {
     let live = true
@@ -135,7 +151,34 @@ export function Settings(): JSX.Element {
     }
   }, [])
 
+  useEffect(() => {
+    let live = true
+    agent.environment
+      .scan()
+      .then((report) => {
+        if (live) setEnvironment(report)
+      })
+      .catch(() => {
+        // The summary is a detail; the rest of Settings works without it.
+      })
+      .finally(() => {
+        if (live) setScanning(false)
+      })
+    return () => {
+      live = false
+    }
+  }, [])
+
   useEffect(() => agent.window.onHotkeyStatus((status) => setHotkeyStatus(status)), [])
+
+  const scanAgain = async (): Promise<void> => {
+    setScanning(true)
+    try {
+      setEnvironment(await agent.environment.scan(true))
+    } finally {
+      setScanning(false)
+    }
+  }
 
   const provider = PROVIDERS.find((item) => item.id === settings?.provider)
   const model = settings?.model.trim() || provider?.defaultModel || 'No model chosen'
@@ -379,6 +422,18 @@ export function Settings(): JSX.Element {
                   <span>{system ? machineSummary(system) : 'This computer'}</span>
                 </div>
                 <Pill tone="ok">This one</Pill>
+              </div>
+              <div className="rowc">
+                <div className="ri">
+                  <Icon name="search" size={22} />
+                </div>
+                <div className="rt">
+                  <b>Tools on this computer</b>
+                  <span>{environment === null ? 'Looking at this computer...' : toolsLine(environment)}</span>
+                </div>
+                <Button variant="tonal" size="sm" disabled={scanning} onClick={() => void scanAgain()}>
+                  {scanning ? 'Scanning...' : 'Scan again'}
+                </Button>
               </div>
               <div className="rowc">
                 <div className="ri">

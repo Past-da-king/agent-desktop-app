@@ -21,13 +21,14 @@ import { mimeForFile, providerFor, type Attachment, type Settings } from '@agent
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
-import { APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
+import { APP_ID, APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
 import { AgentBrowser } from './browser/browser'
 import { Store } from './db'
 import { Logger } from './logger'
 import { Notifier } from './notify'
 import { HotkeyBinder, QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
 import { StepBudget } from './runtime/budget'
+import { hostEnvironment } from './runtime/environment-host'
 import { HelperManager } from './runtime/helpers'
 import { Runner } from './runtime/runner'
 import { Scheduler } from './runtime/scheduler'
@@ -42,6 +43,8 @@ const isSmoke = process.argv.includes('--smoke')
 const smokeTimeoutMs = 30_000
 
 app.setName(APP_NAME)
+// Set once, before any window or notification exists, so Windows shows toasts under the app's name.
+if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
 const logsDir = join(app.getPath('userData'), 'logs')
 const logger = new Logger(logsDir)
@@ -357,7 +360,11 @@ function showMainWindow(): void {
 
 function applyLoginItem(settings: Settings): void {
   try {
-    app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin })
+    // A packaged Windows app registers its own .exe; in development there is no installed program.
+    app.setLoginItemSettings({
+      openAtLogin: settings.launchAtLogin,
+      ...(app.isPackaged ? { path: app.getPath('exe') } : {}),
+    })
   } catch {
     // Linux desktops and some managed machines refuse this; the setting simply has no effect there.
   }
@@ -473,7 +480,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
     settings.save({ syncUrl: fromEnv })
   }
 
+  const environment = hostEnvironment()
   logger.info('Starting', { version: app.getVersion(), platform: platformId() })
+  // Look at the computer in the background. It only runs `--version`; nothing is installed or sent.
+  void environment.scan().catch(() => undefined)
   const updates = startUpdates()
   logger.info('Updates', { status: updates.status })
 
@@ -501,6 +511,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       settings,
       browser: agentBrowser,
       agentName: () => settings.get().agentName,
+      environment,
     }),
     deliver: async (note) => {
       if (runner !== null) await runner.deliver(note)
@@ -518,6 +529,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     agentName: () => settings.get().agentName,
     helpers,
     mainBudget: budget,
+    environment,
   })
   runner = new Runner({
     store,
@@ -526,6 +538,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     tools,
     helpers,
     budget,
+    environment: () => environment.current(),
     providerFactory: factory,
     notify: showNotification,
     notifyCard: (itemId, title, body) => notifier.needsYou(itemId, title, body),
@@ -581,6 +594,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       showItemInFolder: (path) => shell.showItemInFolder(path),
     },
     dialogs,
+    environment,
     systemInfo: {
       platform: process.platform,
       arch: process.arch,

@@ -5,20 +5,55 @@
  * The child process never inherits anything that looks like a key, token, secret or password.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { promises as fs } from 'node:fs'
+import { accessSync, constants, existsSync, promises as fs, statSync } from 'node:fs'
 
 import { int, schema, str, type Tool } from '@agent/core'
 
 import type { ToolContext } from '@agent/core'
+import type { EnvironmentFs, ResolvedCommand } from '../runtime/environment'
+import { spawnResolved, type SpawnResolvedOptions } from '../runtime/spawn'
 
 export const DEFAULT_TIMEOUT_SEC = 60
 export const MAX_TIMEOUT_SEC = 600
 export const MAX_OUTPUT_CHARS = 20_000
 
 const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD/i
+const ALWAYS_DROP_ENV = new Set(['ELECTRON_RUN_AS_NODE'])
+
+/** The real file probe, so a bare `sh` on PATH can be resolved outside the scan too. */
+const realProbe: EnvironmentFs = {
+  exists: existsSync,
+  isDirectory: (path) => {
+    try {
+      return statSync(path).isDirectory()
+    } catch {
+      return false
+    }
+  },
+  isExecutable: (path) => {
+    try {
+      accessSync(path, constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
+  },
+  size: (path) => {
+    try {
+      return statSync(path).size
+    } catch {
+      return -1
+    }
+  },
+}
 
 export interface ShellSettingsView {
   get(): { shell: 'ask' | 'never' }
+}
+
+/** The scan, as the shell tool needs it: what is actually on this computer. */
+export interface ShellEnvironment {
+  resolve(name: string): ResolvedCommand | null
 }
 
 export interface ShellToolDeps {
@@ -26,6 +61,10 @@ export interface ShellToolDeps {
   platform?: NodeJS.Platform
   env?: NodeJS.ProcessEnv
   spawnImpl?: typeof spawn
+  /** From the environment scan. Without it the tool uses the safest shell it can find. */
+  environment?: ShellEnvironment
+  /** Tests can say whether an absolute `$SHELL` exists. */
+  exists?: (path: string) => boolean
 }
 
 export function shellTools(deps: ShellToolDeps): Tool[] {
@@ -38,17 +77,28 @@ export function sanitiseEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   for (const [name, value] of Object.entries(env)) {
     if (value === undefined) continue
     if (SECRET_ENV.test(name)) continue
+    if (ALWAYS_DROP_ENV.has(name.toUpperCase())) continue
     clean[name] = value
   }
   return clean
+}
+
+/** The command that kills a whole process tree, or null on POSIX where the group is signalled. */
+export function treeKillCommand(
+  pid: number,
+  platform: NodeJS.Platform,
+): { file: string; args: string[] } | null {
+  if (platform !== 'win32') return null
+  return { file: 'taskkill', args: ['/PID', String(pid), '/T', '/F'] }
 }
 
 /** Kill the command and anything it started. POSIX uses the process group set up by `detached`. */
 export function killProcessTree(pid: number | undefined, platform = process.platform): void {
   if (pid === undefined) return
   try {
-    if (platform === 'win32') {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    const command = treeKillCommand(pid, platform)
+    if (command !== null) {
+      spawn(command.file, command.args, { windowsHide: true, stdio: 'ignore' })
     } else {
       process.kill(-pid, 'SIGKILL')
     }
@@ -61,6 +111,124 @@ export function killProcessTree(pid: number | undefined, platform = process.plat
   }
 }
 
+export type ShellId = 'pwsh' | 'powershell' | 'cmd' | 'bash' | 'zsh' | 'sh'
+
+export interface ShellChoice {
+  id: ShellId
+  label: string
+  file: string
+  args: string[]
+  windows: boolean
+}
+
+export type ShellPlan = ShellChoice | { error: string }
+
+export interface ShellChoiceOptions {
+  platform: NodeJS.Platform
+  env: NodeJS.ProcessEnv
+  command: string
+  resolve?: (name: string) => ResolvedCommand | null
+  exists?: (path: string) => boolean
+  /** The agent may ask for powershell, cmd or bash, but only when it is really there. */
+  requested?: string
+}
+
+/** PowerShell writes UTF-8 back to us, whatever the machine's old code page is. */
+export function utf8PowerShell(command: string): string {
+  return (
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ' +
+    '$OutputEncoding = [System.Text.Encoding]::UTF8; ' +
+    command
+  )
+}
+
+/** cmd's console switches to UTF-8 before the real command runs. */
+export function utf8Cmd(command: string): string {
+  return `chcp 65001 >nul & ${command}`
+}
+
+/**
+ * Pick the shell from the scan, never from an assumption. Windows prefers PowerShell 7, then
+ * Windows PowerShell, then cmd. Elsewhere the person's own `$SHELL`, then sh.
+ */
+export function chooseShell(options: ShellChoiceOptions): ShellPlan {
+  const find = (name: string): ResolvedCommand | null => options.resolve?.(name) ?? null
+  const requested = options.requested?.trim().toLowerCase() ?? ''
+  const command = options.command
+
+  if (options.platform === 'win32') {
+    if (requested === 'bash') {
+      const bash = find('bash')
+      if (bash === null) return { error: 'Bash is not on this computer.' }
+      return { id: 'bash', label: 'Bash', file: bash.path, args: ['-c', command], windows: false }
+    }
+    if (requested !== '' && requested !== 'cmd' && requested !== 'powershell' && requested !== 'pwsh' && requested !== 'powershell7') {
+      return { error: `There is no ${requested} shell to use.` }
+    }
+
+    if (requested !== 'cmd') {
+      const pwsh = find('pwsh')
+      if (pwsh !== null) {
+        return {
+          id: 'pwsh',
+          label: 'PowerShell 7',
+          file: pwsh.path,
+          args: ['-NoProfile', '-NonInteractive', '-Command', utf8PowerShell(command)],
+          windows: true,
+        }
+      }
+      const powershell = find('powershell')
+      if (powershell !== null) {
+        return {
+          id: 'powershell',
+          label: 'Windows PowerShell',
+          file: powershell.path,
+          args: [
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            utf8PowerShell(command),
+          ],
+          windows: true,
+        }
+      }
+      if (requested !== '') return { error: 'PowerShell is not on this computer.' }
+    }
+
+    const cmd = find('cmd')
+    return {
+      id: 'cmd',
+      label: 'Command Prompt',
+      file: cmd?.path ?? options.env['ComSpec']?.trim() ?? 'cmd.exe',
+      args: ['/d', '/s', '/c', utf8Cmd(command)],
+      windows: true,
+    }
+  }
+
+  if (requested !== '' && requested !== 'bash' && requested !== 'sh') {
+    return { error: `There is no ${requested} shell to use.` }
+  }
+  if (requested === 'bash') {
+    const bash = find('bash')
+    if (bash === null) return { error: 'Bash is not on this computer.' }
+    return { id: 'bash', label: 'Bash', file: bash.path, args: ['-c', command], windows: false }
+  }
+  if (requested === 'sh') {
+    return { id: 'sh', label: 'sh', file: find('sh')?.path ?? 'sh', args: ['-c', command], windows: false }
+  }
+  const userShell = options.env['SHELL']?.trim() ?? ''
+  const userFound =
+    userShell !== '' && (find(userShell) !== null || options.exists?.(userShell) === true)
+  if (userFound) {
+    const name = userShell.split('/').pop() ?? 'sh'
+    const id: ShellId = name === 'zsh' ? 'zsh' : name === 'bash' ? 'bash' : 'sh'
+    return { id, label: name, file: userShell, args: ['-c', command], windows: false }
+  }
+  return { id: 'sh', label: 'sh', file: 'sh', args: ['-c', command], windows: false }
+}
+
 function shellRunTool(deps: ShellToolDeps): Tool {
   return {
     spec: {
@@ -71,6 +239,11 @@ function shellRunTool(deps: ShellToolDeps): Tool {
         command: str('The exact command line to run'),
         cwd: str('Folder to run it in, defaults to the person\'s home folder'),
         timeoutSec: int('Seconds before it is stopped, default 60, at most 600'),
+        shell: {
+          type: 'string',
+          description: 'Which shell to use, when you need a particular one. Only one found on this computer.',
+          enum: ['powershell', 'cmd', 'bash'],
+        },
       }),
     },
     run: async (input, ctx) => {
@@ -92,13 +265,23 @@ function shellRunTool(deps: ShellToolDeps): Tool {
         if (info === null || !info.isDirectory()) return `${cwd} is not a folder.`
       }
 
+      const plan = chooseShell({
+        platform: deps.platform ?? process.platform,
+        env: deps.env ?? process.env,
+        command,
+        ...(deps.environment === undefined ? {} : { resolve: (name: string) => deps.environment?.resolve(name) ?? null }),
+        ...(deps.exists === undefined ? {} : { exists: deps.exists }),
+        ...(text(input['shell']).trim() === '' ? {} : { requested: text(input['shell']).trim() }),
+      })
+      if ('error' in plan) return plan.error
+
       const approved = await ctx.approve(
         `Run: ${command}`,
-        `${cwd === undefined ? '' : `In ${cwd}\n`}This runs a real command on this computer. It stops after ${timeoutSec} seconds.`,
+        `${cwd === undefined ? '' : `In ${cwd}\n`}Shell: ${plan.label}\nThis runs a real command on this computer. It stops after ${timeoutSec} seconds.`,
       )
       if (!approved) return 'The user did not approve that command, so I did not run it.'
 
-      return runCommand({ command, cwd, timeoutSec, ctx, deps })
+      return runCommand({ command, cwd, timeoutSec, ctx, deps, plan })
     },
   }
 }
@@ -109,25 +292,28 @@ interface RunRequest {
   timeoutSec: number
   ctx: ToolContext
   deps: ShellToolDeps
+  plan: ShellChoice
 }
 
 async function runCommand(request: RunRequest): Promise<string> {
   const platform = request.deps.platform ?? process.platform
   const env = sanitiseEnv({ ...(request.deps.env ?? process.env) })
-  const shell =
-    platform === 'win32'
-      ? { file: process.env['ComSpec'] ?? 'cmd.exe', args: ['/d', '/s', '/c', request.command] }
-      : { file: '/bin/sh', args: ['-c', request.command] }
 
   const sink = new OutputSink(MAX_OUTPUT_CHARS)
   let child: ChildProcess
   try {
-    child = (request.deps.spawnImpl ?? spawn)(shell.file, shell.args, {
+    const spawnOptions: SpawnResolvedOptions = {
       cwd: request.cwd,
       env,
+      platform,
+      resolve: { platform, env, fs: realProbe },
       detached: platform !== 'win32',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+    }
+    child = spawnResolved(request.plan.file, request.plan.args, {
+      ...spawnOptions,
+      ...(request.deps.spawnImpl === undefined ? {} : { spawnImpl: request.deps.spawnImpl }),
     })
   } catch (error) {
     return `Could not start that command: ${messageOf(error)}`

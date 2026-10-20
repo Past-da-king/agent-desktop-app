@@ -8,9 +8,11 @@
  */
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
+import { posix, win32 } from 'node:path'
 
 import { int, schema, str, type Settings, type Tool } from '@agent/core'
+
+import { canonicalWindowsPath, pathsFor, type PathApi } from '../runtime/paths'
 
 export const DEFAULT_READ_CHARS = 30_000
 export const MAX_READ_CHARS = 200_000
@@ -25,6 +27,58 @@ export interface FileSettingsView {
   get(): Settings
 }
 
+export interface StatsLike {
+  size: number
+  isDirectory(): boolean
+}
+
+export interface DirEntryLike {
+  name: string
+  isDirectory(): boolean
+  isSymbolicLink(): boolean
+}
+
+export interface FileHandleLike {
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ): Promise<{ bytesRead: number }>
+  close(): Promise<void>
+}
+
+/** The file operations the tools use, so a Windows-shaped fake can run on Linux. */
+export interface FileSystemLike {
+  realpath(path: string): Promise<string>
+  stat(path: string): Promise<StatsLike>
+  readdir(path: string): Promise<DirEntryLike[]>
+  writeFile(path: string, data: string): Promise<void>
+  mkdir(path: string): Promise<void>
+  rename(from: string, to: string): Promise<void>
+  cp(from: string, to: string): Promise<void>
+  rm(path: string): Promise<void>
+  open(path: string): Promise<FileHandleLike>
+}
+
+const nodeFileSystem: FileSystemLike = {
+  realpath: (path) => fs.realpath(path),
+  stat: (path) => fs.stat(path),
+  readdir: (path) => fs.readdir(path, { withFileTypes: true }),
+  writeFile: (path, data) => fs.writeFile(path, data, 'utf8'),
+  mkdir: async (path) => {
+    await fs.mkdir(path, { recursive: true })
+  },
+  rename: (from, to) => fs.rename(from, to),
+  cp: async (from, to) => {
+    await fs.cp(from, to, { recursive: true })
+  },
+  rm: async (path) => {
+    await fs.rm(path, { recursive: true, force: true })
+  },
+  open: async (path) => fs.open(path, 'r'),
+}
+
 export interface FileToolDeps {
   settings: FileSettingsView
   /** Files and folders the person picked this session; they are allowed without another ask. */
@@ -34,6 +88,10 @@ export interface FileToolDeps {
   /** Tests pin the home folder and the path rules; production uses the real ones. */
   home?: () => string
   platform?: NodeJS.Platform
+  /** Windows tests inject `path.win32`; production picks it from the platform. */
+  paths?: PathApi
+  /** Windows tests inject a fake file system; production uses node:fs. */
+  fs?: FileSystemLike
 }
 
 export function fileTools(deps: FileToolDeps): Tool[] {
@@ -64,26 +122,41 @@ export function insideFolder(
  * yet, the nearest existing ancestor is made real and the rest is appended unchanged, so a symlink
  * higher up cannot be used to slip out of a granted folder.
  */
-export async function realPathForWrite(path: string): Promise<string> {
-  const absolute = resolve(path)
+export async function realPathForWrite(
+  path: string,
+  api: PathApi = posix,
+  io: FileSystemLike = nodeFileSystem,
+): Promise<string> {
+  const absolute = api.resolve(path)
   try {
-    return await fs.realpath(absolute)
+    return await io.realpath(absolute)
   } catch {
-    const parent = dirname(absolute)
+    const parent = api.dirname(absolute)
     if (parent === absolute) return absolute
-    return join(await realPathForWrite(parent), basename(absolute))
+    return api.join(await realPathForWrite(parent, api, io), api.basename(absolute))
   }
 }
 
-export function expandHome(path: string, home = homedir()): string {
+export function expandHome(path: string, home = homedir(), api: PathApi = posix): string {
   if (path === '~') return home
-  if (path.startsWith('~/') || path.startsWith('~\\')) return join(home, path.slice(2))
+  if (path.startsWith('~/') || path.startsWith('~\\')) return api.join(home, path.slice(2))
   return path
 }
 
-function absoluteFrom(raw: string, home: string): string {
-  const expanded = expandHome(raw.trim(), home)
-  return isAbsolute(expanded) ? expanded : resolve(home, expanded)
+function absoluteFrom(raw: string, home: string, api: PathApi): string {
+  const expanded = expandHome(raw.trim(), home, api)
+  return api.isAbsolute(expanded) ? expanded : api.resolve(home, expanded)
+}
+
+/** Windows needs its own rules before any file is touched; other systems only forbid a NUL byte. */
+function preparePath(raw: string, platform: NodeJS.Platform, api: PathApi, home: string): Allowed | Denied {
+  if (platform === 'win32') {
+    const checked = canonicalWindowsPath(raw)
+    if (!checked.ok) return { error: checked.error }
+    return { path: absoluteFrom(checked.path, home, api) }
+  }
+  if (raw.includes('\u0000')) return { error: 'That path contains an invalid character.' }
+  return { path: absoluteFrom(raw, home, api) }
 }
 
 interface Allowed {
@@ -94,13 +167,23 @@ interface Denied {
   error: string
 }
 
+function ioOf(deps: FileToolDeps): FileSystemLike {
+  return deps.fs ?? nodeFileSystem
+}
+
+function apiOf(deps: FileToolDeps): PathApi {
+  return deps.paths ?? pathsFor(deps.platform ?? process.platform)
+}
+
 async function grantedFolders(deps: FileToolDeps): Promise<string[]> {
   const home = deps.home?.() ?? homedir()
+  const api = apiOf(deps)
+  const io = ioOf(deps)
   const folders: string[] = []
   for (const folder of deps.settings.get().grantedFolders) {
-    const absolute = absoluteFrom(folder, home)
+    const absolute = absoluteFrom(folder, home, api)
     try {
-      folders.push(await fs.realpath(absolute))
+      folders.push(await io.realpath(absolute))
     } catch {
       // A granted folder that has been moved or deleted grants nothing.
     }
@@ -130,11 +213,15 @@ async function accessPath(
   if (clean === '') return { error: 'Pass a full path to the file or folder.' }
   const home = deps.home?.() ?? homedir()
   const platform = deps.platform ?? process.platform
-  const absolute = absoluteFrom(clean, home)
+  const api = apiOf(deps)
+  const io = ioOf(deps)
+  const prepared = preparePath(clean, platform, api, home)
+  if ('error' in prepared) return prepared
+  const absolute = prepared.path
 
   let target: string
   try {
-    target = mode === 'read' ? await fs.realpath(absolute) : await realPathForWrite(absolute)
+    target = mode === 'read' ? await io.realpath(absolute) : await realPathForWrite(absolute, api, io)
   } catch {
     return { error: `There is no file or folder at ${absolute}.` }
   }
@@ -170,11 +257,13 @@ function listTool(deps: FileToolDeps): Tool {
       const access = await accessPath(deps, ctx, text(input['path']), 'read')
       if ('error' in access) return access.error
 
-      const info = await fs.stat(access.path).catch(() => null)
+      const io = ioOf(deps)
+      const api = apiOf(deps)
+      const info = await io.stat(access.path).catch(() => null)
       if (info === null) return `There is no folder at ${access.path}.`
       if (!info.isDirectory()) return `${access.path} is a file. Use files_read to read it.`
 
-      const entries = await fs.readdir(access.path, { withFileTypes: true }).catch(() => [])
+      const entries = await io.readdir(access.path).catch(() => [])
       if (entries.length === 0) return `${access.path} is empty.`
 
       const rows = entries
@@ -191,7 +280,7 @@ function listTool(deps: FileToolDeps): Tool {
         } else if (entry.isSymbolicLink()) {
           lines.push(`link    ${entry.name}`)
         } else {
-          const size = await fs.stat(join(access.path, entry.name)).then(
+          const size = await io.stat(api.join(access.path, entry.name)).then(
             (stat) => stat.size,
             () => 0,
           )
@@ -219,24 +308,26 @@ function readTool(deps: FileToolDeps): Tool {
       const access = await accessPath(deps, ctx, text(input['path']), 'read')
       if ('error' in access) return access.error
 
-      const info = await fs.stat(access.path).catch(() => null)
+      const io = ioOf(deps)
+      const api = apiOf(deps)
+      const info = await io.stat(access.path).catch(() => null)
       if (info === null) return `There is no file at ${access.path}.`
       if (info.isDirectory()) return `${access.path} is a folder. Use files_list to look inside it.`
 
       if (IMAGE_EXTENSIONS.has(extensionOf(access.path))) {
-        return `## ${basename(access.path)} (${kilobytes(info.size)} KB)\n[[image:${access.path}]]`
+        return `## ${api.basename(access.path)} (${kilobytes(info.size)} KB)\n[[image:${access.path}]]`
       }
 
       const limit = clamp(number(input['maxChars'], DEFAULT_READ_CHARS), 200, MAX_READ_CHARS)
-      const buffer = await readPrefix(access.path, Math.min(info.size, limit * 4 + 4))
+      const buffer = await readPrefix(io, access.path, Math.min(info.size, limit * 4 + 4))
       if (buffer.includes(0)) {
-        return `${basename(access.path)} is a binary file (${kilobytes(info.size)} KB), so I cannot read it as text.`
+        return `${api.basename(access.path)} is a binary file (${kilobytes(info.size)} KB), so I cannot read it as text.`
       }
 
       const content = buffer.toString('utf8')
       const cut = content.length > limit || info.size > buffer.length
       const body = content.slice(0, limit)
-      return `## ${basename(access.path)} (${kilobytes(info.size)} KB)\n${body}${
+      return `## ${api.basename(access.path)} (${kilobytes(info.size)} KB)\n${body}${
         cut ? `\n...(cut, ${info.size} bytes in all)` : ''
       }`
     },
@@ -263,8 +354,10 @@ function writeTool(deps: FileToolDeps): Tool {
       if ('error' in access) return access.error
 
       try {
-        await fs.mkdir(dirname(access.path), { recursive: true })
-        await fs.writeFile(access.path, content, 'utf8')
+        const io = ioOf(deps)
+        const api = apiOf(deps)
+        await io.mkdir(api.dirname(access.path))
+        await io.writeFile(access.path, content)
       } catch (error) {
         return `Could not write ${access.path}: ${messageOf(error)}`
       }
@@ -288,13 +381,13 @@ function findTool(deps: FileToolDeps): Tool {
       const access = await accessPath(deps, ctx, text(input['root']), 'read')
       if ('error' in access) return access.error
 
-      const info = await fs.stat(access.path).catch(() => null)
+      const info = await ioOf(deps).stat(access.path).catch(() => null)
       if (info === null || !info.isDirectory()) return `${access.path} is not a folder.`
 
       const pattern = text(input['pattern']).trim() || '*'
       const platform = deps.platform ?? process.platform
       const match = nameMatcher(pattern, platform === 'win32')
-      const found = await walkForMatches(access.path, match)
+      const found = await walkForMatches(ioOf(deps), apiOf(deps), access.path, match)
       if (found.length === 0) return `Nothing under ${access.path} matches ${pattern}.`
       const shown = found.slice(0, MAX_FIND_RESULTS)
       const tail =
@@ -320,7 +413,7 @@ function pickTool(deps: FileToolDeps): Tool {
       if (paths.length === 0) return 'The user did not pick any files.'
       for (const path of paths) {
         try {
-          deps.picks?.add(await fs.realpath(path))
+          deps.picks?.add(await ioOf(deps).realpath(path))
         } catch {
           // A path that vanished between choosing and reading is simply not granted.
         }
@@ -349,13 +442,14 @@ function moveTool(deps: FileToolDeps): Tool {
       if ('error' in to) return to.error
 
       try {
-        await fs.mkdir(dirname(to.path), { recursive: true })
+        const io = ioOf(deps)
+        await io.mkdir(apiOf(deps).dirname(to.path))
         try {
-          await fs.rename(from.path, to.path)
+          await io.rename(from.path, to.path)
         } catch (error) {
           if (codeOf(error) !== 'EXDEV') throw error
-          await fs.cp(from.path, to.path, { recursive: true })
-          await fs.rm(from.path, { recursive: true, force: true })
+          await io.cp(from.path, to.path)
+          await io.rm(from.path)
         }
       } catch (error) {
         return `Could not move ${from.path}: ${messageOf(error)}`
@@ -367,8 +461,8 @@ function moveTool(deps: FileToolDeps): Tool {
 
 // ---- small helpers -------------------------------------------------------------------------
 
-async function readPrefix(path: string, bytes: number): Promise<Buffer> {
-  const handle = await fs.open(path, 'r')
+async function readPrefix(io: FileSystemLike, path: string, bytes: number): Promise<Buffer> {
+  const handle = await io.open(path)
   try {
     const buffer = Buffer.alloc(Math.max(0, bytes))
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
@@ -378,7 +472,12 @@ async function readPrefix(path: string, bytes: number): Promise<Buffer> {
   }
 }
 
-async function walkForMatches(root: string, match: (name: string) => boolean): Promise<string[]> {
+async function walkForMatches(
+  io: FileSystemLike,
+  api: PathApi,
+  root: string,
+  match: (name: string) => boolean,
+): Promise<string[]> {
   const results: string[] = []
   const queue: Array<{ folder: string; depth: number }> = [{ folder: root, depth: 0 }]
   let visited = 0
@@ -388,7 +487,7 @@ async function walkForMatches(root: string, match: (name: string) => boolean): P
     if (next === undefined) break
     let entries
     try {
-      entries = await fs.readdir(next.folder, { withFileTypes: true })
+      entries = await io.readdir(next.folder)
     } catch {
       continue
     }
@@ -396,7 +495,7 @@ async function walkForMatches(root: string, match: (name: string) => boolean): P
       visited++
       if (visited > MAX_FIND_VISITS) break
       if (entry.name === '.git' || entry.name === 'node_modules') continue
-      const full = join(next.folder, entry.name)
+      const full = api.join(next.folder, entry.name)
       if (entry.isSymbolicLink()) continue
       if (entry.isDirectory()) {
         if (next.depth < MAX_FIND_DEPTH) queue.push({ folder: full, depth: next.depth + 1 })
