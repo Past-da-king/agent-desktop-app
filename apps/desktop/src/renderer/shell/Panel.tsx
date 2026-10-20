@@ -258,6 +258,8 @@ function PanelBody(): JSX.Element {
   const agentName = settings?.agentName.trim() || 'Your agent'
   const hasPage = state !== null && state.tabs.length > 0
   const expanded = state?.expanded === true
+  // A helper open full size covers the window, so the native page steps out of the way until it closes.
+  const helperOpen = usePanel((store) => store.helper !== null)
   const [slotSize, setSlotSize] = useState({ width: 0, height: 0 })
   const used = [...memories]
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
@@ -269,27 +271,53 @@ function PanelBody(): JSX.Element {
     if (!element) return
     // While the page is expanded, the full-window stage owns the native view.
     if (expanded) return
+    if (helperOpen) {
+      void agent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false })
+      return
+    }
     let timer = 0
+    let frame = 0
+    let sent = ''
+    // The native page sits on top of everything, so it must never be anywhere its slot is not: it follows
+    // the slot every frame, and steps out of sight whenever any part of the slot is scrolled or covered.
+    const send = (): void => {
+      const rect = element.getBoundingClientRect()
+      const box = element.closest('.panel-w')?.getBoundingClientRect()
+      const inside =
+        box === undefined ||
+        (rect.top >= box.top - 0.5 && rect.top < box.bottom - 40 && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5)
+      const next = boundsFor(rect, hasPage && inside)
+      const key = `${next.x},${next.y},${next.width},${next.height},${next.visible}`
+      if (key === sent) return
+      sent = key
+      void agent.browser.setBounds(next)
+    }
+    const follow = (): void => {
+      send()
+      frame = window.requestAnimationFrame(follow)
+    }
     const report = (): void => {
       window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         const rect = element.getBoundingClientRect()
         setSlotSize({ width: Math.round(rect.width), height: Math.round(rect.height) })
-        void agent.browser.setBounds(boundsFor(rect, hasPage))
+        send()
       }, 80)
     }
     report()
+    frame = window.requestAnimationFrame(follow)
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(report)
     observer?.observe(element)
     window.addEventListener('resize', report)
     return () => {
       window.clearTimeout(timer)
+      window.cancelAnimationFrame(frame)
       observer?.disconnect()
       window.removeEventListener('resize', report)
       // Leaving Chat (or collapsing the panel) hides the native view.
       void agent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false })
     }
-  }, [hasPage, width, expanded])
+  }, [hasPage, width, expanded, helperOpen])
   const frame = fittedRect(slotSize, state?.view)
 
   const endDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -347,8 +375,7 @@ function PanelBody(): JSX.Element {
         }}
       />
 
-      <HelpersPanel />
-      <section>
+      <section className="panel-browser">
         <div className="panel-h">
           <div className="sec" style={{ margin: 0 }}>
             <span className="eyebrow">AGENT&apos;S BROWSER</span>
@@ -445,6 +472,8 @@ function PanelBody(): JSX.Element {
           </p>
         ) : null}
       </section>
+
+      <HelpersPanel />
 
       <section>
         <div className="sec">

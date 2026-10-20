@@ -15,8 +15,6 @@ import { toast } from '../state/useToast'
 import { CallRow } from '../voice/CallRow'
 import { CallSheet } from '../voice/CallSheet'
 import { DictateButton } from '../voice/DictateButton'
-import { ReadAloud } from '../voice/ReadAloud'
-import { useSpeakReplies } from '../voice/speaker'
 import { useCall } from '../voice/useCall'
 import { VisualCard, visualFromMeta } from '../voice/VisualCard'
 import { VoiceIcon } from '../voice/VoiceIcon'
@@ -486,12 +484,10 @@ function renderItem(
       return visual === null ? (
         <div className="a-msg-wrap">
           <AgentMessage item={item} />
-          <ReadAloud id={item.id} text={item.text} />
         </div>
       ) : (
         <div className="a-msg">
           <VisualCard visual={visual} compact />
-          <ReadAloud id={item.id} text={item.text} />
         </div>
       )
     }
@@ -551,7 +547,6 @@ export function Chat(): JSX.Element {
   const needsYou = waiting.length > 0 || cards.length > 0
   const agentName = settings?.agentName.trim() || 'Your agent'
   const startCall = useCall((state) => state.start)
-  useSpeakReplies(settings?.speakReplies === true && settings.hasVoiceKey)
 
   useEffect(() => {
     // The browser preview can open straight into a call (?demo=1&call=1), so the call view can be screenshotted.
