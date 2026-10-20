@@ -76,8 +76,9 @@ export function iconForText(text: string | null | undefined): UiIcon | null {
 /** The leading icon for an action button, from its label. */
 export function iconForAction(label: string | null | undefined): UiIcon | null {
   const t = (label ?? '').toLowerCase()
-  if (/approve|confirm|accept|yes|done|ok\b|allow/.test(t)) return 'check'
-  if (/decline|reject|cancel|no\b|deny|dismiss|skip/.test(t)) return 'close'
+  // Word-bounded ok and no, so Book and Piano are not read as OK and No (the phone's regex matched inside words).
+  if (/approve|confirm|accept|yes|done|\bok\b|allow/.test(t)) return 'check'
+  if (/decline|reject|cancel|\bno\b|deny|dismiss|skip/.test(t)) return 'close'
   if (/book|schedule|viewing|reserve|appointment/.test(t)) return 'event'
   if (/open|view|see|visit|read|details|listing|link/.test(t)) return 'openInNew'
   if (/call|phone|ring/.test(t)) return 'call'

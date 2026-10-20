@@ -187,9 +187,10 @@
 .oui-ask .oui-card{background:transparent;color:var(--on-tc)}
 .oui-ask .oui-card-in{padding:20px 20px 8px}
 .oui-ask .oui-sub{color:color-mix(in srgb,var(--on-tc) 82%,transparent)}
-.oui-ask .oui-btn.v-secondary{background:var(--bg);color:var(--on-bg)}
+.oui-ask .oui-btn.v-secondary{background:color-mix(in srgb,var(--bg) 72%,var(--tc));color:var(--on-bg)}
 .oui-ask.busy .oui-btn{opacity:.6;pointer-events:none}
 .appr.ask .free,.appr.ask .hint{padding:0 20px}
+.appr.ask .free input{flex:1 0 auto}
 
 @media (max-width:640px){
   .oui-card-in{padding:16px;gap:14px}
