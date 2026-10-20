@@ -5,3 +5,11 @@
 [17:21:55] M7a PASSED
 [17:21:59] M9a: starting
 [17:25:01] M10a PASSED
+[17:26:41] M4 PASSED
+[17:26:56] M7b: starting
+[17:26:56] M5: starting
+[17:35:42] M8a PASSED
+[17:36:01] M6b: starting
+[17:45:46] M9a PASSED
+[17:45:49] merge conflicts in /home/you/agent-desktop-wt/M8b: asking the agent to resolve
+[17:47:37] M8b: starting
