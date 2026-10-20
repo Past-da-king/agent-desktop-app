@@ -232,6 +232,40 @@ export interface SystemInfo {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// The environment scan: what is already on this computer. Read-only; nothing is installed or changed.
+// ---------------------------------------------------------------------------------------------------------------
+
+export type CommandKind = 'exe' | 'cmd' | 'ps1' | 'script'
+
+/** One thing the scan looked for. `found: false` means it is not on this computer. */
+export interface Found {
+  id: string
+  label: string
+  found: boolean
+  /** Absolute path, when it was found. Never shown in the system prompt. */
+  path?: string
+  version?: string
+  kind?: CommandKind
+}
+
+export interface EnvironmentOs {
+  platform: string
+  release: string
+  arch: string
+  hostname: string
+}
+
+export interface EnvironmentReport {
+  os: EnvironmentOs
+  shells: Found[]
+  runtimes: Found[]
+  aiTools: Found[]
+  notes: string[]
+  /** Epoch milliseconds. */
+  scannedAt: number
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The agent's browser
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -388,6 +422,11 @@ export interface AgentApi {
   /** About the computer the app is running on. */
   system: {
     info(): Promise<SystemInfo>
+  }
+
+  /** Looks at what is already installed here (shells, runtimes, AI tools). It never installs anything. */
+  environment: {
+    scan(refresh?: boolean): Promise<EnvironmentReport>
   }
 
   shell: {

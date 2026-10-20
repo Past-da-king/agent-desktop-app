@@ -10,6 +10,7 @@ import type {
   Decision,
   EntityMap,
   EntityName,
+  EnvironmentReport,
   HotkeyStatus,
   ProviderInfo,
   RowInput,
@@ -133,6 +134,10 @@ const api: AgentApi = {
 
   system: {
     info: () => call<SystemInfo>(CHANNELS.system.info),
+  },
+
+  environment: {
+    scan: (refresh?: boolean) => call<EnvironmentReport>(CHANNELS.environment.scan, refresh === true),
   },
 
   shell: {

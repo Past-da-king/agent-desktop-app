@@ -19,6 +19,7 @@ import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
 import { budgeted, type StepBudget } from './budget'
 import type { DataStore } from './data'
+import type { EnvironmentService } from './environment'
 import { helperTools } from '../tools/helpers'
 import type { HelperHost } from './helpers'
 import type { SettingsView } from './runner'
@@ -37,6 +38,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   helpers?: HelperHost
   /** Present for the main agent: action tools stop after this many steps in one turn. */
   mainBudget?: StepBudget
+  /** The environment scan, so shell_run and run_code use only what is really here. */
+  environment?: EnvironmentService
 }
 
 /**
@@ -83,8 +86,15 @@ export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
       ...(deps.filePicks === undefined ? {} : { picks: deps.filePicks }),
       ...(deps.pickFiles === undefined ? {} : { pickFiles: deps.pickFiles }),
     }), // files_list, files_read, files_write, files_find, files_pick, files_move
-    ...shellTools({ settings }), // shell_run
-    ...codeTools(), // run_code
+    ...shellTools({
+      settings,
+      platform: process.platform,
+      ...(deps.environment === undefined ? {} : { environment: deps.environment }),
+    }), // shell_run
+    ...codeTools({
+      platform: process.platform,
+      ...(deps.environment === undefined ? {} : { environment: deps.environment }),
+    }), // run_code
     ...browserTools({
       browser: deps.browser ?? unavailableBrowser,
       ...(name === undefined ? {} : { agentName: name }),

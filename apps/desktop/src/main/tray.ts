@@ -4,7 +4,7 @@
  *
  * The menu itself is built by `tray-menu.ts`, which is pure and tested; this file only talks to Electron.
  */
-import { Menu, Tray, nativeImage, type MenuItemConstructorOptions } from 'electron'
+import { Menu, Tray, nativeImage, screen, type MenuItemConstructorOptions } from 'electron'
 
 import {
   buildTrayMenu,
@@ -29,7 +29,8 @@ export interface TrayHandle {
 /** Null when the desktop has no tray (some Linux sessions), so the app still starts. */
 export function createTray(options: TrayOptions): TrayHandle | null {
   try {
-    const image = nativeImage.createFromPath(options.iconPath)
+    // Windows tray icons are 16 logical pixels; at 125%, 150% and 200% Windows wants more pixels.
+    const image = sizeForDpi(nativeImage.createFromPath(options.iconPath))
     const tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image)
     tray.setToolTip(options.tooltip)
 
@@ -54,6 +55,18 @@ export function createTray(options: TrayOptions): TrayHandle | null {
   } catch (error) {
     options.onError?.(error)
     return null
+  }
+}
+
+function sizeForDpi(image: Electron.NativeImage): Electron.NativeImage {
+  if (process.platform !== 'win32' || image.isEmpty()) return image
+  try {
+    const scale = screen.getPrimaryDisplay().scaleFactor
+    if (scale <= 1) return image
+    const width = Math.round(16 * scale)
+    return image.resize({ width, height: width })
+  } catch {
+    return image
   }
 }
 

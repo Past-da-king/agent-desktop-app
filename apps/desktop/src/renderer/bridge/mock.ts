@@ -8,6 +8,7 @@ import type {
   Decision,
   EntityMap,
   EntityName,
+  EnvironmentReport,
   HotkeyStatus,
   RouteTarget,
   RowInput,
@@ -628,6 +629,53 @@ export const mockAgent: AgentApi = {
         arch: 'x64',
         hostname: 'This computer',
         appVersion: '0.0.0',
+      }
+    },
+  },
+
+  environment: {
+    async scan(): Promise<EnvironmentReport> {
+      return {
+        os: { platform: 'win32', release: '10.0.22631', arch: 'x64', hostname: 'This computer' },
+        shells: [
+          { id: 'pwsh', label: 'PowerShell 7', found: false },
+          {
+            id: 'powershell',
+            label: 'Windows PowerShell',
+            found: true,
+            path: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+            version: '5.1.22621.1',
+            kind: 'exe',
+          },
+          {
+            id: 'cmd',
+            label: 'Command Prompt',
+            found: true,
+            path: 'C:\\Windows\\System32\\cmd.exe',
+            kind: 'exe',
+          },
+        ],
+        runtimes: [
+          {
+            id: 'node',
+            label: 'Node',
+            found: true,
+            path: 'C:\\Program Files\\nodejs\\node.exe',
+            version: '20.11.1',
+            kind: 'exe',
+          },
+          { id: 'python', label: 'Python', found: true, path: 'C:\\Python312\\python.exe', version: '3.12.4', kind: 'exe' },
+          { id: 'git', label: 'Git', found: true, path: 'C:\\Program Files\\Git\\cmd\\git.exe', version: '2.43.0', kind: 'exe' },
+        ],
+        aiTools: [
+          { id: 'claude', label: 'Claude Code', found: true, path: 'C:\\Users\\You\\AppData\\Roaming\\npm\\claude.cmd', version: '1.0.60', kind: 'cmd' },
+          { id: 'opencode', label: 'OpenCode', found: true, path: 'C:\\Users\\You\\AppData\\Roaming\\npm\\opencode.cmd', version: '0.4.5', kind: 'cmd' },
+          { id: 'gemini', label: 'Gemini CLI', found: false },
+          { id: 'codex', label: 'Codex', found: false },
+          { id: 'antigravity', label: 'Antigravity', found: false },
+        ],
+        notes: [],
+        scannedAt: Date.now(),
       }
     },
   },

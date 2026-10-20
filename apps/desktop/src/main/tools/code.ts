@@ -3,7 +3,7 @@
  * and build files. It runs JavaScript with Node or Python with python3, asks first every time, and
  * is stopped after 30 seconds. Files it makes stay in the scratch folder and are reported back.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import type { ChildProcess, spawn } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -11,6 +11,8 @@ import { delimiter, join } from 'node:path'
 
 import { enumOf, schema, str, type Tool } from '@agent/core'
 
+import type { ProgramRef } from '../runtime/environment'
+import { spawnResolved } from '../runtime/spawn'
 import { killProcessTree, sanitiseEnv } from './shell'
 
 export const CODE_TIMEOUT_MS = 30_000
@@ -18,13 +20,26 @@ export const MAX_CODE_OUTPUT_CHARS = 20_000
 
 export type CodeLanguage = 'javascript' | 'python'
 
+/** The scan, as run_code needs it. */
+export interface CodeEnvironment {
+  node(): ProgramRef | null
+  python(): ProgramRef | null
+}
+
 export interface CodeToolDeps {
   platform?: NodeJS.Platform
   env?: NodeJS.ProcessEnv
   /** Tests point the scratch folder somewhere they can clean up. */
   tempRoot?: string
   timeoutMs?: number
+  /** Old-style lookup; kept for callers that only need one name. */
   findCommand?: (name: string) => string | null
+  /** The environment scan. Without it the app's own runtime runs JavaScript. */
+  environment?: CodeEnvironment
+  /** The app's own executable, used when no Node is installed. */
+  execPath?: string
+  /** Tests capture the exact program and arguments without running anything. */
+  spawnImpl?: typeof spawn
 }
 
 export function codeTools(deps: CodeToolDeps = {}): Tool[] {
@@ -81,17 +96,9 @@ function runCodeTool(deps: CodeToolDeps): Tool {
       const code = text(input['code'])
       if (code.trim() === '') return 'Pass the code to run.'
 
-      const platform = deps.platform ?? process.platform
-      const env = deps.env ?? process.env
-      const find = deps.findCommand ?? ((name: string) => findOnPath(name, env, platform))
-      const command =
-        language === 'javascript'
-          ? find('node')
-          : (find('python3') ?? find(platform === 'win32' ? 'python' : 'python3'))
-      if (command === null) {
-        return language === 'javascript'
-          ? 'JavaScript is not available on this computer.'
-          : 'Python is not installed on this computer (no python3 found).'
+      const chosen = resolveCodeProgram(language, deps)
+      if (chosen.program === null) {
+        return 'Python is not installed on this computer (no py, python or python3 found), so I could not run that. I did not try to install anything.'
       }
 
       const approved = await ctx.approve(
@@ -100,21 +107,62 @@ function runCodeTool(deps: CodeToolDeps): Tool {
       )
       if (!approved) return 'The user did not approve running that code, so I did not run it.'
 
-      return execute({ language, code, command, deps, platform, env })
+      return execute({ language, code, program: chosen.program, appRuntime: chosen.appRuntime, deps })
     },
   }
+}
+
+/**
+ * JavaScript always works: the person's own Node when the scan found one, otherwise the runtime
+ * that ships inside the app (`ELECTRON_RUN_AS_NODE`).
+ */
+export function resolveCodeProgram(
+  language: CodeLanguage,
+  deps: CodeToolDeps,
+): { program: ProgramRef | null; appRuntime: boolean } {
+  return language === 'javascript' ? javascriptChoice(deps) : { program: pythonProgram(deps), appRuntime: false }
+}
+
+function javascriptChoice(deps: CodeToolDeps): { program: ProgramRef; appRuntime: boolean } {
+  const found = deps.environment?.node() ?? null
+  if (found !== null) return { program: found, appRuntime: false }
+  if (deps.findCommand !== undefined) {
+    const path = deps.findCommand('node')
+    if (path !== null) return { program: { path, prefix: [], kind: 'exe' }, appRuntime: false }
+  }
+  const fallback = deps.execPath ?? process.execPath
+  return { program: { path: fallback, prefix: [], kind: 'exe' }, appRuntime: true }
+}
+
+/** Python is only ever the one already on this computer. Nothing is installed. */
+function pythonProgram(deps: CodeToolDeps): ProgramRef | null {
+  if (deps.environment !== undefined) return deps.environment.python()
+  if (deps.findCommand !== undefined) {
+    const path = deps.findCommand('python3') ?? deps.findCommand('python')
+    return path === null ? null : { path, prefix: [], kind: 'exe' }
+  }
+  const platform = deps.platform ?? process.platform
+  const env = deps.env ?? process.env
+  if (platform === 'win32') {
+    const launcher = findOnPath('py', env, platform)
+    if (launcher !== null) return { path: launcher, prefix: ['-3'], kind: 'exe' }
+  }
+  const path = findOnPath('python', env, platform) ?? findOnPath('python3', env, platform)
+  return path === null ? null : { path, prefix: [], kind: 'exe' }
 }
 
 interface ExecuteRequest {
   language: CodeLanguage
   code: string
-  command: string
+  program: ProgramRef
+  /** True when JavaScript fell back to the runtime inside the app. */
+  appRuntime: boolean
   deps: CodeToolDeps
-  platform: NodeJS.Platform
-  env: NodeJS.ProcessEnv
 }
 
 async function execute(request: ExecuteRequest): Promise<string> {
+  const platform = request.deps.platform ?? process.platform
+  const env = request.deps.env ?? process.env
   const root = request.deps.tempRoot ?? tmpdir()
   let folder: string
   try {
@@ -132,13 +180,21 @@ async function execute(request: ExecuteRequest): Promise<string> {
   }
 
   const sink = new OutputSink(MAX_CODE_OUTPUT_CHARS)
-  const child = spawn(request.command, [script], {
-    cwd: folder,
-    env: { ...sanitiseEnv(request.env), HOME: folder, USERPROFILE: folder },
-    detached: request.platform !== 'win32',
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
+  const extra = request.appRuntime ? { ELECTRON_RUN_AS_NODE: '1' } : {}
+  let child: ChildProcess
+  try {
+    child = spawnResolved(request.program.path, [...request.program.prefix, script], {
+      platform,
+      cwd: folder,
+      env: { ...sanitiseEnv(env), HOME: folder, USERPROFILE: folder, ...extra },
+      detached: platform !== 'win32',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      ...(request.deps.spawnImpl === undefined ? {} : { spawnImpl: request.deps.spawnImpl }),
+    })
+  } catch (error) {
+    return `Could not run the program: ${messageOf(error)}`
+  }
   child.stdout?.on('data', (chunk: Buffer) => sink.push(chunk))
   child.stderr?.on('data', (chunk: Buffer) => sink.push(chunk))
 
@@ -156,7 +212,7 @@ async function execute(request: ExecuteRequest): Promise<string> {
     }
     const timer = setTimeout(() => {
       timedOut = true
-      killProcessTree(child.pid, request.platform)
+      killProcessTree(child.pid, platform)
     }, timeoutMs)
     child.once('error', (error) => {
       spawnError = messageOf(error)
