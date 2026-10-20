@@ -24,7 +24,7 @@ describe.skipIf(!live)('live: delegation on the Claude plan', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-live-'))
     const db = new Store(join(dir, 'agent.db'))
     const settings = settingsView({ mode: 'subscription', cli: 'claude', cliModel: 'haiku', agentName: 'Nova', userName: 'Sam', onboarded: true })
-    const cli = new CliHost(join(dir, 'cli'), join(__dirname, '..'))
+    const cli = new CliHost(join(dir, 'cli'), () => settings.get(), join(__dirname, '..'))
     const budget = new StepBudget()
     let runner: Runner | null = null
     const delivered: string[] = []

@@ -10,10 +10,11 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 
-import type { AgentEvent, JsonObject, Tool, ToolContext } from '@agent/core'
+import type { AgentEvent, JsonObject, Settings, Tool, ToolContext } from '@agent/core'
 
 import { runCliTurn, type CliId } from './cli-agent'
 import { startToolServer, type ToolServer } from './mcp-server'
+import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
 
 export type { CliId }
 
@@ -58,6 +59,8 @@ export class CliHost {
 
   constructor(
     private readonly workDir: string,
+    /** The person's current settings: Shell commands and granted folders decide what Claude Code may do. */
+    private readonly settings: () => Settings,
     /** The app folder (app.getAppPath()), where the SDK packages are resolved from. */
     appPath: string,
   ) {
@@ -156,7 +159,12 @@ export class CliHost {
   async turn(request: CliTurnRequest): Promise<{ text: string; error?: string }> {
     const server = await this.ensureServer()
     const token = server.open({
-      tools: request.tools.filter((tool) => request.thread === 'main' || !NOT_ON_CLI.test(tool.spec.name)),
+      tools: request.tools.filter(
+        (tool) =>
+          (request.thread === 'main' || !NOT_ON_CLI.test(tool.spec.name)) &&
+          // Claude brings its own (better) shell and file tools, asked through the app; Codex keeps the app's.
+          !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name)),
+      ),
       context: request.context,
       onCall: request.onCall,
       onResult: request.onResult,
@@ -178,6 +186,11 @@ export class CliHost {
           workDir: dir,
           signal: request.signal,
           onEvent: request.onEvent,
+          permission: sdkPermission({
+            settings: this.settings,
+            approve: (summary, details) => request.context.approve(summary, details),
+            alsoAllowed: [dir],
+          }),
         })
       mkdirSync(dir, { recursive: true })
       let result = await run(continues ? (this.sessions()[key] ?? null) : null)
