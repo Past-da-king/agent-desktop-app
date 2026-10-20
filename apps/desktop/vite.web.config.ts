@@ -7,6 +7,9 @@ export default defineConfig({
   root: resolve(__dirname, 'src/renderer'),
   base: './',
   plugins: [react()],
+  resolve: {
+    alias: { '@agent/core': resolve(__dirname, '../../packages/core/src/browser.ts') },
+  },
   server: {
     port: 5173,
     strictPort: true,
