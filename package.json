@@ -17,7 +17,12 @@
     "dev": "npm run dev -w @agent/desktop",
     "dev:web": "npm run dev:web -w @agent/desktop",
     "shoot": "node scripts/shoot.mjs",
-    "gate": "bash scripts/gate.sh"
+    "gate": "bash scripts/gate.sh",
+    "pack": "npm run pack -w @agent/desktop",
+    "dist:win": "npm run dist:win -w @agent/desktop",
+    "dist:mac": "npm run dist:mac -w @agent/desktop",
+    "dist:linux": "npm run dist:linux -w @agent/desktop",
+    "make:icons": "node scripts/make-icons.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

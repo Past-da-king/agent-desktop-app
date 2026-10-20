@@ -1,17 +1,66 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+
+import type { AppPlatform } from '@agent/core'
 
 import { registerIpc, type WindowControls } from './ipc'
 import { AccountService } from './account'
+import { APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
 import { Store } from './db'
+import { Logger } from './logger'
 import { Secrets } from './secrets'
 import { SettingsStore } from './settings'
+import { startUpdates } from './updates'
 import { EVENTS } from '../shared/channels'
 
 const isSmoke = process.argv.includes('--smoke')
 const smokeTimeoutMs = 30_000
+
+app.setName(APP_NAME)
+
+const logsDir = join(app.getPath('userData'), 'logs')
+const logger = new Logger(logsDir)
+let crashDialogOpen = false
+
+function platformId(): AppPlatform {
+  if (process.platform === 'win32') return 'win32'
+  if (process.platform === 'darwin') return 'darwin'
+  return 'linux'
+}
+
+function showCalmDialog(detail: string, offerRestart: boolean): void {
+  if (!app.isReady() || crashDialogOpen) return
+  crashDialogOpen = true
+  const buttons = offerRestart ? ['Keep going', 'Restart'] : ['OK']
+  void dialog
+    .showMessageBox({
+      type: 'error',
+      title: APP_NAME,
+      message: `${APP_NAME} hit an unexpected problem.`,
+      detail,
+      buttons,
+      defaultId: 0,
+      cancelId: 0,
+    })
+    .then(({ response }) => {
+      crashDialogOpen = false
+      if (offerRestart && response === 1) {
+        app.relaunch()
+        app.exit(1)
+      }
+    })
+}
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception', { message: error.message, stack: error.stack })
+  showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true)
+})
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', { reason: String(reason) })
+})
 
 interface WindowState {
   width: number
@@ -142,6 +191,7 @@ function startSmokeCheck(win: BrowserWindow): void {
 function createWindow(stateFile: string): void {
   const saved = readWindowState(stateFile)
   const win = new BrowserWindow({
+    title: windowTitle(),
     width: saved.width,
     height: saved.height,
     ...(saved.x !== null && saved.y !== null ? { x: saved.x, y: saved.y } : {}),
@@ -184,7 +234,23 @@ function createWindow(stateFile: string): void {
     if (url !== win.webContents.getURL()) event.preventDefault()
   })
 
+  win.on('page-title-updated', (event) => {
+    event.preventDefault()
+    win.setTitle(windowTitle())
+  })
+
   watchMaximize(win)
+
+  let rendererReloaded = false
+  win.webContents.on('render-process-gone', (_event, details) => {
+    logger.error('Renderer process gone', { reason: details.reason, exitCode: details.exitCode })
+    if (!rendererReloaded && !win.isDestroyed()) {
+      rendererReloaded = true
+      win.reload()
+      return
+    }
+    showCalmDialog('The window stopped responding. Restart the app to carry on.', true)
+  })
 
   if (isSmoke) startSmokeCheck(win)
 
@@ -207,6 +273,10 @@ function startServices(): void {
     settings.save({ syncUrl: fromEnv })
   }
 
+  logger.info('Starting', { version: app.getVersion(), platform: platformId() })
+  const updates = startUpdates()
+  logger.info('Updates', { status: updates.status })
+
   disposeIpc = registerIpc({
     store,
     settings,
@@ -218,6 +288,20 @@ function startServices(): void {
     shell: {
       openExternal: (url) => shell.openExternal(url),
       showItemInFolder: (path) => shell.showItemInFolder(path),
+    },
+    appInfo: () =>
+      makeAppInfo({
+        version: app.getVersion(),
+        platform: platformId(),
+        electron: process.versions.electron ?? '',
+        logsPath: logsDir,
+      }),
+    openLogsFolder: async () => {
+      mkdirSync(logsDir, { recursive: true })
+      await shell.openPath(logsDir)
+    },
+    openLicences: async () => {
+      await shell.openExternal(LICENCES_URL)
     },
   })
 }

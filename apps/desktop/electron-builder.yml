@@ -1,0 +1,86 @@
+# Packaging for the desktop app. One config, three platforms, one command each.
+#
+# appId is a placeholder: change it (and productName) to the domain the app is distributed under
+# before a public release. Nothing else in this file names a company, server or person.
+appId: app.agent.desktop
+productName: Agent
+executableName: Agent
+
+directories:
+  output: release
+  buildResources: build
+
+# Everything the app needs is bundled by electron-vite. Source maps and TypeScript sources stay out
+# of the release; the renderer, preload and main bundles are all that ship.
+asar: true
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+  - '!**/*.tsx'
+
+npmRebuild: false
+buildDependenciesFromSource: false
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  # Per-user install: no administrator prompt and no machine-wide changes.
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  artifactName: ${productName}-${version}-setup.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+mac:
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  # Hardened runtime is on. Signing and notarisation read credentials from the environment
+  # (CSC_LINK / CSC_KEY_PASSWORD, and APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID).
+  # With none set, electron-builder skips signing and the dmg still builds for local testing.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  icon: build/icon.png
+  category: Utility
+  maintainer: Agent
+  synopsis: A desktop home for your agent
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+deb:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# No update server is baked in. A build may provide AGENT_UPDATE_URL at runtime; see src/main/updates.ts.
+publish: null
