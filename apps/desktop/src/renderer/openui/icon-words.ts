@@ -84,7 +84,7 @@ export function iconForAction(label: string | null | undefined): UiIcon | null {
   if (/call|phone|ring/.test(t)) return 'call'
   if (/boarding|ticket|pass\b/.test(t)) return 'ticket'
   if (/cart|basket|bag/.test(t)) return 'addCart'
-  if (/pay|buy|order|checkout|tip/.test(t)) return 'payments'
+  if (/pay|buy|order|check ?out|tip/.test(t)) return 'payments'
   if (/send|reply|message|email|forward|share/.test(t)) return 'send'
   if (/remind|snooze|later/.test(t)) return 'alarm'
   if (/search|find|compare|check/.test(t)) return 'search'
