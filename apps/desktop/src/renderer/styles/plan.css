@@ -7,3 +7,21 @@
 .plan-opt.on .ri{background:var(--primary);color:var(--on-primary)}
 .plan-opt .linkish{white-space:nowrap}
 .plan-msg{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 12px 8px}.plan-msg .ob-note{margin:0}
+
+/* The model menu under the chat header pill. */
+.model-pick{position:relative}
+.model{cursor:pointer;border:0}
+.model:hover{background:var(--s-highest)}
+.model-menu{position:absolute;right:0;top:calc(100% + 8px);z-index:20;width:300px;background:var(--s-low);border-radius:var(--r-lg);box-shadow:var(--elev-3);padding:12px 8px 8px;display:flex;flex-direction:column;gap:2px;animation:pop .42s var(--spatial)}
+.model-menu .eyebrow{padding:0 10px 6px}
+.model-item{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;padding:9px 12px;border-radius:var(--r-md);color:var(--on-bg);transition:background var(--t-fast,160ms) var(--effects)}
+.model-item:hover{background:var(--s-high)}
+.model-item.on{background:var(--pc);color:var(--on-pc)}
+.model-item .mi-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.model-item .mi-t b{font-weight:500;font-size:14px}
+.model-item .mi-t span{font-size:12px;color:var(--on-sv)}
+.model-item.on .mi-t span{color:color-mix(in srgb,var(--on-pc) 78%,transparent)}
+.model-custom{padding:10px 10px 4px;display:flex;flex-direction:column;gap:6px}
+.model-custom label{font-size:12px;color:var(--on-sv)}
+.model-custom .row{display:flex;gap:8px}
+.model-custom .input{height:40px;padding:0 12px;font-size:14px}
