@@ -1,11 +1,15 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, Notification, ipcMain, safeStorage, shell } from 'electron'
+
+import { providerFor } from '@agent/core'
 
 import { registerIpc, type WindowControls } from './ipc'
 import { AccountService } from './account'
 import { Store } from './db'
+import { Runner } from './runtime/runner'
+import { buildToolset } from './runtime/toolset'
 import { Secrets } from './secrets'
 import { SettingsStore } from './settings'
 import { EVENTS } from '../shared/channels'
@@ -25,12 +29,19 @@ let mainWindow: BrowserWindow | null = null
 let smokeTimer: NodeJS.Timeout | null = null
 let store: Store | null = null
 let account: AccountService | null = null
+let runner: Runner | null = null
 let disposeIpc: (() => void) | null = null
+let disposeStore: (() => void) | null = null
 
 function broadcast(channel: string, payload?: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
+}
+
+function showNotification(title: string, body: string): void {
+  if (!Notification.isSupported()) return
+  new Notification({ title, body }).show()
 }
 
 function windowControls(): WindowControls {
@@ -193,7 +204,7 @@ function createWindow(stateFile: string): void {
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
-function startServices(): void {
+async function startServices(): Promise<void> {
   const dir = app.getPath('userData')
   mkdirSync(dir, { recursive: true })
 
@@ -201,10 +212,34 @@ function startServices(): void {
   const settings = new SettingsStore(join(dir, 'settings.json'))
   const secrets = new Secrets(join(dir, 'secrets'), safeStorage)
   account = new AccountService(store, settings, secrets)
+  disposeStore = store.onChange(() => account?.nudge())
 
   const fromEnv = process.env['AGENT_SYNC_URL']?.trim() ?? ''
   if (settings.get().syncUrl.trim() === '' && fromEnv !== '') {
     settings.save({ syncUrl: fromEnv })
+  }
+
+  const tools = buildToolset({ store })
+  runner = new Runner({
+    store,
+    settings,
+    secrets,
+    tools,
+    providerFactory: (current, key) =>
+      providerFor({
+        provider: current.provider,
+        key,
+        baseUrl: current.baseUrl.trim() || undefined,
+        allowHttp: current.allowHttp,
+      }),
+    notify: showNotification,
+    emit: (event) => broadcast(EVENTS.chat, event),
+    isFocused: () => mainWindow?.isFocused() ?? false,
+  })
+  try {
+    await runner.restore()
+  } catch {
+    // Startup repair is best effort: the app must still open if a row cannot be rewritten.
   }
 
   disposeIpc = registerIpc({
@@ -212,6 +247,7 @@ function startServices(): void {
     settings,
     secrets,
     account,
+    chat: runner,
     ipcMain,
     windows: windowControls(),
     broadcast,
@@ -231,8 +267,8 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus()
   })
 
-  app.whenReady().then(() => {
-    startServices()
+  app.whenReady().then(async () => {
+    await startServices()
     createWindow(join(app.getPath('userData'), 'window-state.json'))
 
     app.on('activate', () => {
@@ -245,6 +281,10 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     disposeIpc?.()
     disposeIpc = null
+    disposeStore?.()
+    disposeStore = null
+    runner?.dispose()
+    runner = null
     account?.dispose()
     account = null
     store?.close()
