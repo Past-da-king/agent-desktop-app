@@ -583,6 +583,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     environment,
     apps,
     learned,
+    voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
   })
   runner = new Runner({
     store,
@@ -690,6 +691,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     emit: (event) => broadcast(EVENTS.voiceCall, event),
     platform: process.platform,
     environment: () => environment.current(),
+    notesDir: join(app.getPath('userData'), 'voice-notes'),
   })
   registerVoiceIpc(voice, ipcMain)
 

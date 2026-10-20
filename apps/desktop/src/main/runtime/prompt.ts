@@ -8,6 +8,7 @@
 import type { EnvironmentReport, Found, GoalRow, MemoryRow, Settings, TaskRow } from '@agent/core'
 
 import { OPENUI_PROMPT } from './openui-prompt'
+import { VOICE_NOTE_GUIDE } from '../tools/voice-note'
 import { formatMemory, rank } from './recall'
 import { formatDateTime, localTimeZone } from './time'
 
@@ -194,6 +195,19 @@ export function buildSystemPrompt(input: PromptInput): string {
   if (main) {
     lines.push('')
     lines.push(OPENUI_PROMPT)
+  }
+
+  // Voice notes are for the person, so only the main agent (not a routine, not a helper) sends them.
+  if (input.role === undefined || input.role === 'main') {
+    if (settings.hasVoiceKey) {
+      lines.push('')
+      lines.push(VOICE_NOTE_GUIDE)
+      lines.push(
+        settings.speakReplies
+          ? '- The user turned on voice notes with every reply: call voice_note on EVERY reply to them, then write your short text. Skip it only for a one-word acknowledgement.'
+          : '- Send one when the user asks to hear something, asks for a voice note, or says they are walking, driving or away from the screen.',
+      )
+    }
   }
 
   const computerLines = [...thisComputerLines(input.environment ?? null), accessLine(settings)]

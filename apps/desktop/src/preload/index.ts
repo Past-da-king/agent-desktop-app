@@ -177,6 +177,7 @@ const api: AgentApi = {
     check: () => call<{ ok: boolean; message: string }>(CHANNELS.voice.check),
     transcribe: (pcm) => call<VoiceResult<{ text: string }>>(CHANNELS.voice.transcribe, pcm),
     speak: (text) => call<VoiceResult<{ data: string }>>(CHANNELS.voice.speak, text),
+    noteAudio: (file) => call<Uint8Array | null>(CHANNELS.voice.noteAudio, file),
     callStart: () => call<{ ok: boolean; message: string }>(CHANNELS.voice.callStart),
     callAudio: (pcm) => {
       ipcRenderer.send(CHANNELS.voice.callAudio, pcm)

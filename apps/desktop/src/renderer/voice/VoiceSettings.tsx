@@ -156,8 +156,8 @@ export function VoiceSettings(): JSX.Element {
             <VoiceIcon name="speaker" size={22} />
           </div>
           <div className="rt">
-            <b>Speak replies</b>
-            <span>{hasKey ? 'Read each finished reply out loud' : 'Add a Gemini key in Settings to talk'}</span>
+            <b>Voice note with every reply</b>
+            <span>{hasKey ? 'Your agent records a short voice note as well as its text, written to be heard' : 'Add a Gemini key in Settings first'}</span>
           </div>
           <Switch
             on={settings?.speakReplies ?? false}
@@ -165,7 +165,7 @@ export function VoiceSettings(): JSX.Element {
             onToggle={(next) => {
               void save({ speakReplies: next })
             }}
-            label="Speak replies"
+            label="Voice note with every reply"
           />
         </div>
       </div>

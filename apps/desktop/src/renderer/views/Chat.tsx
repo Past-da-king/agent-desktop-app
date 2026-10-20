@@ -1,3 +1,4 @@
+import { VoiceNote } from '../voice/VoiceNote'
 import { attachmentProblem, type Attachment, type ChatEvent, type ChatItem } from '@agent/core'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 
@@ -493,6 +494,8 @@ function renderItem(
     }
     case 'call':
       return <CallRow item={item} agentName={agentName} />
+    case 'voice_note':
+      return <VoiceNote item={item} agentName={agentName} />
     case 'activity':
       return <ActivityRow item={item} />
     case 'question':

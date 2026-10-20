@@ -111,6 +111,7 @@ const PATHS = {
   ),
   bell: <path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15zM10 20.5a2 2 0 0 0 4 0" />,
   play: <path d="M8 5.5v13l11-6.5z" />,
+  pause: <path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" />,
   min: <path d="M6 12h12" />,
   max: <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" />,
   panel: (

@@ -94,6 +94,21 @@ export function mockVoice(deps: MockVoiceDeps): VoiceApi {
       if (!deps.settings().hasVoiceKey) return { ok: false, error: 'Add a Gemini key in Settings to talk.' }
       return { ok: true, text: 'Remind me to call the bank tomorrow morning about the new card.' }
     },
+    async noteAudio() {
+      // The preview's notes are a soft hum of the right length, so the player can be tried for real.
+      const rate = 24_000
+      const seconds = 14
+      const pcm = new Int16Array(rate * seconds)
+      for (let i = 0; i < pcm.length; i += 1) pcm[i] = Math.round(Math.sin((i / rate) * 2 * Math.PI * 196) * 1800 * Math.min(1, i / 2400, (pcm.length - i) / 2400))
+      const out = new Uint8Array(44 + pcm.byteLength)
+      const view = new DataView(out.buffer)
+      const put = (at: number, text: string): void => [...text].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)))
+      put(0, 'RIFF'); view.setUint32(4, 36 + pcm.byteLength, true); put(8, 'WAVE'); put(12, 'fmt ')
+      view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, rate, true)
+      view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true); put(36, 'data'); view.setUint32(40, pcm.byteLength, true)
+      out.set(new Uint8Array(pcm.buffer), 44)
+      return out
+    },
     async speak() {
       await wait(300)
       if (!deps.settings().hasVoiceKey) return { ok: false, error: 'Add a Gemini key in Settings to talk.' }
