@@ -11,6 +11,7 @@ export const CHANNELS = {
     setApiKey: 'agent:settings.setApiKey',
     checkKey: 'agent:settings.checkKey',
     checkCli: 'agent:settings.checkCli',
+    cliLogin: 'agent:settings.cliLogin',
     reset: 'agent:settings.reset',
   },
   account: {

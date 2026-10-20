@@ -52,6 +52,7 @@ const api: AgentApi = {
     setApiKey: (key) => call<void>(CHANNELS.settings.setApiKey, key),
     checkKey: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.checkKey),
     checkCli: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.checkCli),
+    cliLogin: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.cliLogin),
     reset: () => call<void>(CHANNELS.settings.reset),
     onChanged: (callback) => on<Settings>(EVENTS.settings, callback),
   },

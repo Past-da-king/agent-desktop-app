@@ -343,6 +343,8 @@ export interface AgentApi {
     checkKey(): Promise<{ ok: boolean; message: string }>
     /** Makes one tiny real turn through the installed AI tool (Claude Code) on the person's own plan. */
     checkCli(): Promise<{ ok: boolean; message: string }>
+    /** Runs the chosen plan's own sign-in (it opens the browser) and resolves when it is done. */
+    cliLogin(): Promise<{ ok: boolean; message: string }>
     /** Wipes local data and settings (not the account on the server). Used by "Start again". */
     reset(): Promise<void>
     onChanged(cb: (s: Settings) => void): Unsubscribe

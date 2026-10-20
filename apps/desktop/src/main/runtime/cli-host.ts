@@ -5,6 +5,7 @@
  * restarts, and knows whether the person has signed in on this computer.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
@@ -95,6 +96,52 @@ export class CliHost {
     }
     const codexHome = process.env['CODEX_HOME'] ?? join(home, '.codex')
     return existsSync(join(codexHome, 'auth.json'))
+  }
+
+  /**
+   * Runs the engine's own sign-in (`claude auth login`, `codex login`). Both open the browser; any sign-in
+   * address they print is opened too, in case the engine could not open it itself. Up to 10 minutes.
+   */
+  login(cli: CliId, openUrl: (url: string) => void): Promise<{ ok: boolean; message: string }> {
+    const program = this.engine(cli)
+    const name = cli === 'claude' ? 'Claude' : 'ChatGPT'
+    if (program === null) return Promise.resolve({ ok: false, message: `The ${name} sign-in is not available in this build.` })
+    return new Promise((resolve) => {
+      const child = spawn(program, cli === 'claude' ? ['auth', 'login'] : ['login'], {
+        cwd: this.workDir,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      const opened = new Set<string>()
+      let output = ''
+      const scan = (chunk: Buffer): void => {
+        const text = chunk.toString('utf8')
+        if (output.length < 8000) output += text
+        for (const match of text.matchAll(/https:\/\/[^\s"'<>]+/g)) {
+          const url = match[0].replace(/[).,]+$/, '')
+          if (!opened.has(url) && /claude\.ai|anthropic\.com|openai\.com|chatgpt\.com/.test(url)) {
+            opened.add(url)
+            openUrl(url)
+          }
+        }
+      }
+      child.stdout?.on('data', scan)
+      child.stderr?.on('data', scan)
+      const timer = setTimeout(() => {
+        child.kill()
+        resolve({ ok: false, message: 'The sign-in took too long. Try again.' })
+      }, 10 * 60 * 1000)
+      child.once('error', (error) => {
+        clearTimeout(timer)
+        resolve({ ok: false, message: `Could not start the ${name} sign-in: ${error.message}` })
+      })
+      child.once('close', (code) => {
+        clearTimeout(timer)
+        if (code === 0) resolve({ ok: true, message: `Signed in to ${name}.` })
+        else resolve({ ok: false, message: output.trim().split('\n').pop()?.slice(0, 200) || `The ${name} sign-in did not finish.` })
+      })
+    })
   }
 
   forget(thread: 'main' | 'routine' = 'main'): void {
