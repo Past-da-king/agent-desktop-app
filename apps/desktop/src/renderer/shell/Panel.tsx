@@ -1,9 +1,10 @@
-import type { BrowserState } from '@agent/core'
+import type { BrowserState, BrowserViewMode } from '@agent/core'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
-import { agent } from '../bridge'
+import { agent, chat } from '../bridge'
 import { skyHopDemo } from '../bridge/seed'
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, boundsFor, displayUrl } from '../lib/panel'
+import { parseMeta, metaStrings } from '../lib/meta'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { useSettings } from '../state/useSettings'
@@ -11,7 +12,77 @@ import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { IconButton } from '../ui/bits'
 import { Chip } from '../ui/Chip'
-import { Icon } from '../ui/Icon'
+import { Icon, type IconName } from '../ui/Icon'
+
+const VIEW_CHOICES: Array<{ mode: Exclude<BrowserViewMode, 'fit'>; label: string; icon: IconName }> = [
+  { mode: 'desktop', label: 'Desktop', icon: 'monitor' },
+  { mode: 'tablet', label: 'Tablet', icon: 'apps' },
+  { mode: 'phone', label: 'Phone', icon: 'phone' },
+]
+
+/** Where the page sits inside a slot: laid out at its own size, scaled down to fit, centred. */
+export function fittedRect(
+  slot: { width: number; height: number },
+  view: BrowserState['view'],
+): { left: number; top: number; width: number; height: number } | null {
+  if (view === undefined || view.mode === 'fit' || view.width <= 0 || view.height <= 0) return null
+  if (slot.width <= 0 || slot.height <= 0) return null
+  const scale = Math.min(1, slot.width / view.width, slot.height / view.height)
+  const width = Math.max(1, Math.round(view.width * scale))
+  const height = Math.max(1, Math.round(view.height * scale))
+  return { left: Math.floor((slot.width - width) / 2), top: Math.floor((slot.height - height) / 2), width, height }
+}
+
+/** The compact device switch: shows the mode and size the page is laid out at, and changes it. */
+function ViewSwitch({ state, disabled }: { state: BrowserState | null; disabled: boolean }): JSX.Element {
+  const view = state?.view
+  const current = view?.mode ?? 'desktop'
+  const size = view !== undefined && view.mode !== 'fit' ? `${view.width}x${view.height}` : 'Panel size'
+  return (
+    <div className="br-modes" role="group" aria-label={`Page shown as ${view?.label ?? 'Desktop'}`}>
+      {VIEW_CHOICES.map((choice) => (
+        <button
+          key={choice.mode}
+          type="button"
+          className={`br-mode${current === choice.mode ? ' on' : ''}`}
+          aria-pressed={current === choice.mode}
+          aria-label={`Show as ${choice.label}`}
+          title={`Show as ${choice.label}`}
+          disabled={disabled}
+          onClick={() => {
+            void agent.browser.setView(choice.mode)
+          }}
+        >
+          <Icon name={choice.icon} size={14} />
+        </button>
+      ))}
+      <span className="br-mode-size" title={view?.label}>
+        {size}
+      </span>
+    </div>
+  )
+}
+
+/** Answers the open handoff card if there is one, so the agent's waiting browser_handoff returns. */
+function useHandBack(): () => void {
+  const items = useEntity('chat_item')
+  return () => {
+    const pending = [...items]
+      .reverse()
+      .find((item) => {
+        if (item.kind !== 'question') return false
+        const meta = parseMeta(item.meta)
+        const answered = typeof meta['answer'] === 'string' && meta['answer'] !== ''
+        return !answered && metaStrings(meta, 'options').includes('Done, carry on')
+      })
+    if (pending !== undefined) {
+      void chat.answer(pending.id, 'Done, carry on').catch(() => undefined)
+    } else {
+      void agent.browser.giveBack()
+    }
+    void agent.browser.setExpanded(false)
+  }
+}
 
 /** The main process pushes a fresh BrowserState on every change it notices. */
 function useBrowserState(): BrowserState | null {
@@ -96,6 +167,25 @@ function BrowserChrome({
           <Icon name="lock" size={14} />
           <span className="url-text">{hasPage ? displayUrl(state?.url ?? '') : 'Not open yet'}</span>
         </span>
+        <IconButton
+          icon="ext"
+          label="Open in my browser"
+          size={18}
+          className="br-expand"
+          disabled={!hasPage}
+          onClick={() => {
+            void agent.browser.openInSystem()
+          }}
+        />
+        <IconButton
+          icon="max"
+          label="Expand the page to the whole window"
+          size={18}
+          disabled={!hasPage}
+          onClick={() => {
+            void agent.browser.setExpanded(true)
+          }}
+        />
       </div>
 
       {tabs.length > 0 ? (
@@ -143,17 +233,7 @@ function BrowserChrome({
           <span className="br-status-mute">No page open</span>
         )}
         <span className="br-status-gap" />
-        <button
-          type="button"
-          className="btn text sm br-open"
-          disabled={!hasPage}
-          onClick={() => {
-            void agent.browser.openInSystem()
-          }}
-        >
-          <Icon name="ext" size={14} />
-          Open in my browser
-        </button>
+        <ViewSwitch state={state} disabled={!hasPage} />
       </div>
     </div>
   )
@@ -176,6 +256,8 @@ function PanelBody(): JSX.Element {
 
   const agentName = settings?.agentName.trim() || 'Your agent'
   const hasPage = state !== null && state.tabs.length > 0
+  const expanded = state?.expanded === true
+  const [slotSize, setSlotSize] = useState({ width: 0, height: 0 })
   const used = [...memories]
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
     .slice(0, 3)
@@ -184,11 +266,15 @@ function PanelBody(): JSX.Element {
   useEffect(() => {
     const element = slot.current
     if (!element) return
+    // While the page is expanded, the full-window stage owns the native view.
+    if (expanded) return
     let timer = 0
     const report = (): void => {
       window.clearTimeout(timer)
       timer = window.setTimeout(() => {
-        void agent.browser.setBounds(boundsFor(element.getBoundingClientRect(), hasPage))
+        const rect = element.getBoundingClientRect()
+        setSlotSize({ width: Math.round(rect.width), height: Math.round(rect.height) })
+        void agent.browser.setBounds(boundsFor(rect, hasPage))
       }, 80)
     }
     report()
@@ -202,7 +288,8 @@ function PanelBody(): JSX.Element {
       // Leaving Chat (or collapsing the panel) hides the native view.
       void agent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false })
     }
-  }, [hasPage, width])
+  }, [hasPage, width, expanded])
+  const frame = fittedRect(slotSize, state?.view)
 
   const endDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (drag.current === null) return
@@ -313,7 +400,21 @@ function PanelBody(): JSX.Element {
             agent.platform === 'web' ? (
               <MockPage agentName={agentName} />
             ) : (
-              <div className="br-live" aria-hidden="true" />
+              <div className="br-live" aria-hidden="true">
+                {expanded ? (
+                  <span className="br-live-away">
+                    <Icon name="max" size={18} />
+                    Open full size
+                  </span>
+                ) : frame !== null ? (
+                  <span
+                    className="br-frame"
+                    style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }}
+                  />
+                ) : (
+                  <span className="br-frame fill" />
+                )}
+              </div>
             )
           ) : (
             <div className="br-empty">
@@ -398,4 +499,122 @@ export function ChatPanel(): JSX.Element {
   }
 
   return <PanelBody />
+}
+
+/**
+ * The page over the whole app window, for when the person helps out: a sign-in, a captcha, a fiddly
+ * page. The same native view, just given a much bigger rectangle, so nothing reloads. While the person
+ * has control the agent's own actions wait; Done, carry on hands the page back.
+ */
+export function BrowserStage(): JSX.Element | null {
+  const state = useBrowserState()
+  const settings = useSettings((store) => store.settings)
+  const navigate = useUi((store) => store.navigate)
+  const handBack = useHandBack()
+  const slot = useRef<HTMLDivElement>(null)
+  const [slotSize, setSlotSize] = useState({ width: 0, height: 0 })
+  const expanded = state?.expanded === true && state.tabs.length > 0
+
+  useEffect(() => {
+    if (!expanded) return
+    const element = slot.current
+    if (!element) return
+    let timer = 0
+    const report = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        const rect = element.getBoundingClientRect()
+        setSlotSize({ width: Math.round(rect.width), height: Math.round(rect.height) })
+        void agent.browser.setBounds(boundsFor(rect, true))
+      }, 40)
+    }
+    report()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(report)
+    observer?.observe(element)
+    window.addEventListener('resize', report)
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        void agent.browser.setExpanded(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.clearTimeout(timer)
+      observer?.disconnect()
+      window.removeEventListener('resize', report)
+      window.removeEventListener('keydown', onKey)
+      // The chat panel reports its own rectangle again once it sees the page is back.
+      void agent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false })
+    }
+  }, [expanded])
+
+  if (!expanded || state === null) return null
+  const agentName = settings?.agentName.trim() || 'Your agent'
+  const needsUser = state.needsUser
+  const personDriving = state.agentActive === false
+  const frame = fittedRect(slotSize, state.view)
+
+  return (
+    <div className="br-stage" role="dialog" aria-modal="true" aria-label="The agent's browser, full size">
+      <div className="br-stage-bar">
+        <span className="br-stage-site" title={state.url}>
+          <Icon name="lock" size={14} />
+          <span className="url-text">{displayUrl(state.url) || 'Untitled page'}</span>
+        </span>
+        <span className={`br-here${needsUser ? ' needs' : ''}`}>
+          {needsUser ? <Icon name="person" size={13} /> : <span className="br-dot" aria-hidden="true" />}
+          {needsUser ? `${agentName} needs you` : personDriving ? 'You have control' : `${agentName} is here`}
+        </span>
+        {needsUser && state.handoffReason !== '' ? (
+          <span className="br-stage-reason" title={state.handoffReason}>
+            {state.handoffReason}
+          </span>
+        ) : (
+          <span className="br-stage-gap" />
+        )}
+        <div className="br-stage-actions">
+          <ViewSwitch state={state} disabled={false} />
+          {personDriving ? (
+            <Button size="sm" onClick={handBack}>
+              <Icon name="check" size={16} />
+              Done, carry on
+            </Button>
+          ) : (
+            <Button
+              variant="tonal"
+              size="sm"
+              onClick={() => {
+                void agent.browser.takeOver()
+              }}
+            >
+              Take over
+            </Button>
+          )}
+          <Button
+            variant="text"
+            size="sm"
+            onClick={() => {
+              void agent.browser.setExpanded(false)
+              navigate({ page: 'chat' })
+            }}
+          >
+            Back to chat
+            <span className="br-stage-kbd">Esc</span>
+          </Button>
+        </div>
+      </div>
+      <div className="br-stage-view" ref={slot}>
+        {agent.platform === 'web' ? (
+          <div className="br-stage-mock">
+            <MockPage agentName={agentName} />
+          </div>
+        ) : frame !== null ? (
+          <span className="br-frame" style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }} />
+        ) : (
+          <span className="br-frame fill" />
+        )}
+      </div>
+    </div>
+  )
 }

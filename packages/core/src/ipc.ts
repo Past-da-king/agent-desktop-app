@@ -301,6 +301,23 @@ export interface BrowserState {
   /** True while the agent is waiting for the person to finish something on a page. */
   needsUser: boolean
   handoffReason: string
+  /** How the page is presented: the device it emulates and the size it is laid out at. */
+  view?: BrowserViewInfo
+  /** The page fills the app window so the person can work in it comfortably. */
+  expanded?: boolean
+}
+
+export type BrowserViewMode = 'desktop' | 'tablet' | 'phone' | 'fit'
+
+export interface BrowserViewInfo {
+  mode: BrowserViewMode
+  /** "Desktop 1440x900", "Phone 390x844", "Fits the panel". */
+  label: string
+  /** CSS pixels the page lays out at; 0 for `fit`. */
+  width: number
+  height: number
+  /** How far the page is scaled down to fit the panel. */
+  scale: number
 }
 
 export type HelperState = 'working' | 'done' | 'failed' | 'stopped'
@@ -486,6 +503,10 @@ export interface AgentApi {
     giveBack(): Promise<void>
     /** Opens the current page in the person's own browser. */
     openInSystem(): Promise<void>
+    /** Shows the page as a desktop, tablet or phone, or at the panel's own size. Remembered for the site. */
+    setView(mode: BrowserViewMode): Promise<void>
+    /** Shows the live page over the whole app window, or back in the panel. */
+    setExpanded(on: boolean): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
   }
   helpers: HelpersApi
