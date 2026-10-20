@@ -117,7 +117,6 @@ function MemoryDialog({
             className="input"
             value={kind}
             onChange={(event) => setKind(event.target.value as MemoryKind)}
-            style={{ paddingRight: 18 }}
           >
             {KIND_ORDER.map((item) => (
               <option key={item} value={item}>
@@ -322,7 +321,7 @@ export function Memory(): JSX.Element {
           <div className="mt">{memory.title}</div>
           <div className="ms">{plainBody(memory.body)}</div>
           <div className="mm">
-            {kindLabel(memory.kind)} · {count} links · {timeAgo(memory.updatedAt)}
+            {kindLabel(memory.kind)} · {count === 1 ? '1 link' : `${count} links`} · {timeAgo(memory.updatedAt)}
           </div>
         </span>
       </button>
@@ -335,7 +334,9 @@ export function Memory(): JSX.Element {
         <div>
           <span className="eyebrow">MEMORY</span>
           <h1 className="h1">
-            {memories.length} {memories.length === 1 ? 'page' : 'pages'} your agent keeps about your world
+            {memories.length === 0
+              ? 'What your agent knows about your world'
+              : `${memories.length} ${memories.length === 1 ? 'page' : 'pages'} your agent keeps about your world`}
           </h1>
         </div>
         <div className="ph-actions">
