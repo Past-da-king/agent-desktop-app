@@ -107,7 +107,7 @@ export function identity(account: unknown): string {
   const data = asObject(a['data'])
   const team = asText(info['team'])
   if (team !== '') return team
-  for (const candidate of [info, info['user'], info['team'], data, data['team'], data['authed_user'], a['profile'], a['team']]) {
+  for (const candidate of [info, info['user'], info['team'], data, data['team'], data['authed_user'], a['profile'], a['team'], a]) {
     const found = pick(candidate)
     if (found !== '') return found
   }
