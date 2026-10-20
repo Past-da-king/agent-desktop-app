@@ -47,6 +47,7 @@ export const CHANNELS = {
     giveBack: 'agent:browser.giveBack',
     openInSystem: 'agent:browser.openInSystem',
     setView: 'agent:browser.setView',
+    setExpanded: 'agent:browser.setExpanded',
   },
   helpers: {
     stop: 'agent:helpers.stop',
