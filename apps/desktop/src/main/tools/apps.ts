@@ -68,9 +68,11 @@ function findToolsTool(apps: AppsService): Tool {
         limit: int('Max results, default 6'),
       }),
     },
-    run: async (input) => {
+    run: async (input, ctx) => {
       const backend = apps.backend()
       if (backend === null) return NO_KEY
+      const refused = outsideProfile(apps, ctx.profile, text(input['toolkit']).trim().toLowerCase())
+      if (refused !== null) return refused
       const raw = input['limit']
       const limit = typeof raw === 'number' && raw > 0 ? Math.min(Math.floor(raw), 20) : 6
       try {
@@ -140,6 +142,9 @@ function connectTool(apps: AppsService): Tool {
       const slug = text(input['toolkit']).trim().toLowerCase()
       if (!/^[a-z0-9_]{2,60}$/.test(slug)) return 'Pass the toolkit slug, for example gmail.'
       const name = appName(slug)
+      if (apps.profileOf(ctx.profile)?.general === true) {
+        return `Your profile (General) holds none of the person's accounts, so you cannot connect or use ${name}. Say in your result that the job needs ${name}; the main agent will send it to the right profile.`
+      }
       let before: string[]
       try {
         before = (await apps.activeAccounts([slug])).map((a) => a.id)
@@ -188,4 +193,20 @@ async function fileInProfile(apps: AppsService, profileId: string | undefined, s
   } catch {
     return ''
   }
+}
+
+/**
+ * A helper may only look up actions for apps its profile has an account of (General has none). The
+ * main agent may look up anything. Null when it may go ahead.
+ */
+export function outsideProfile(apps: AppsService, profileId: string | undefined, toolkit: string): string | null {
+  const profile = apps.profileOf(profileId)
+  if (profile === null) return null
+  if (profile.accounts.length === 0) {
+    return `Your profile (${profile.name}) has none of the person's connected accounts, so you cannot use their apps. If the job needs one, say so in your result.`
+  }
+  if (toolkit !== '' && !profile.accounts.some((a) => a.app.toLowerCase() === toolkit)) {
+    return `Your profile (${profile.name}) has no ${appName(toolkit)} account. It has: ${[...new Set(profile.accounts.map((a) => appName(a.app)))].join(', ')}.`
+  }
+  return null
 }
