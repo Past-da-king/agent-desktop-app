@@ -2,8 +2,8 @@
  * Every `AgentApi` method over real IPC. Handlers validate their arguments, because the renderer
  * is untrusted: it may never make the main process read an arbitrary path or write a huge string.
  *
- * The chat, routine and file groups are deliberately not implemented yet (M6/M7/M8); they answer
- * "not implemented yet" instead of pretending to work.
+ * The file group is deliberately not implemented yet (M8); it answers "not implemented yet"
+ * instead of pretending to work.
  */
 import {
   PROVIDERS,
@@ -55,12 +55,17 @@ export interface ChatRunner {
   decide(itemId: string, decision: Decision): Promise<void>
 }
 
+export interface RoutineService {
+  runNow(id: string): Promise<void>
+}
+
 export interface IpcDeps {
   store: Store
   settings: SettingsStore
   secrets: Secrets
   account: AccountService
   chat: ChatRunner
+  routines?: RoutineService
   ipcMain: IpcMainLike
   windows: WindowControls
   broadcast?: Broadcast
@@ -186,9 +191,16 @@ export function registerIpc(deps: IpcDeps): () => void {
     await chat.decide(id, rawDecision)
   })
 
+  // ---- routines ----
+
+  handle(CHANNELS.routines.runNow, async (_event, rawId) => {
+    const id = requireString(rawId, 'routine id', MAX_STRING)
+    if (deps.routines === undefined) throw new Error('Routines are not ready yet')
+    await deps.routines.runNow(id)
+  })
+
   // ---- not built yet ----
 
-  handle(CHANNELS.routines.runNow, async () => notImplemented())
   handle(CHANNELS.files.pick, async () => notImplemented())
   handle(CHANNELS.files.pickFolder, async () => notImplemented())
 

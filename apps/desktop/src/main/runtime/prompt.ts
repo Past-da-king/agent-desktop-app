@@ -22,6 +22,10 @@ export interface PromptInput {
   latestUserText: string
   /** Tests pin a zone; production uses the computer's own. */
   timeZone?: string
+  /** A routine runs in the background, with nobody watching it (M7). */
+  role?: 'main' | 'routine'
+  /** The routine's own name, when there is one. */
+  routineName?: string
 }
 
 export const NO_NAME = 'Your agent'
@@ -111,6 +115,22 @@ export function buildSystemPrompt(input: PromptInput): string {
       const inGoal = task.goalId !== null && goalIds.has(task.goalId)
       lines.push(`- Task #${task.id} ${taskLine(task)}${inGoal ? ` (goal #${task.goalId})` : ''}`)
     })
+  }
+
+  if (input.role === 'routine') {
+    const name = input.routineName?.trim() ?? ''
+    lines.push('')
+    lines.push('ROUTINE RUN')
+    lines.push(
+      `This is the routine${name === '' ? '' : ` "${name}"`} running in the background. Nobody is watching this run.`,
+    )
+    lines.push(
+      'Do the job described in the instruction and finish with a short summary of what you found or did.',
+    )
+    lines.push(
+      'If you truly need the user, post the question or the approval and the routine ends there. Do not wait for an answer.',
+    )
+    lines.push('Use notify_user only when the result is worth interrupting them for.')
   }
 
   return lines.join('\n')

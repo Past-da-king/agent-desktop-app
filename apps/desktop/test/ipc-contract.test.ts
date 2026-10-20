@@ -27,6 +27,7 @@ let sent: Array<{ channel: string; payload: unknown }>
 let dispose: (() => void) | null = null
 let fakeAi: FakeAi | null = null
 let windowCalls: string[]
+let routineRuns: string[]
 
 const storage: SafeStorageLike = {
   isEncryptionAvailable: () => true,
@@ -43,6 +44,7 @@ beforeEach(() => {
   handlers = new Map()
   sent = []
   windowCalls = []
+  routineRuns = []
 
   const ipcMain: IpcMainLike = {
     handle(channel, listener) {
@@ -65,6 +67,11 @@ beforeEach(() => {
     secrets,
     account,
     chat: runner,
+    routines: {
+      runNow: async (id) => {
+        routineRuns.push(id)
+      },
+    },
     ipcMain,
     windows: {
       minimize: () => windowCalls.push('minimize'),
@@ -187,12 +194,17 @@ describe('registerIpc', () => {
     expect(await invoke(CHANNELS.chat.state)).toMatchObject({ running: false })
   })
 
-  it('rejects a bad chat message and answers not implemented yet for routines and files', async () => {
+  it('runs a routine on demand and validates its id', async () => {
+    await invoke(CHANNELS.routines.runNow, 'routine-1')
+    expect(routineRuns).toEqual(['routine-1'])
+    await expect(invoke(CHANNELS.routines.runNow, 42)).rejects.toThrow('routine id must be text')
+  })
+
+  it('rejects a bad chat message and answers not implemented yet for files', async () => {
     await expect(invoke(CHANNELS.chat.send, 42)).rejects.toThrow('message must be text')
     await expect(invoke(CHANNELS.chat.decide, 'x', 'maybe')).rejects.toThrow(
       'decision must be approve or decline',
     )
-    await expect(invoke(CHANNELS.routines.runNow, 'x')).rejects.toThrow('not implemented yet')
     await expect(invoke(CHANNELS.files.pick)).rejects.toThrow('not implemented yet')
   })
 })
