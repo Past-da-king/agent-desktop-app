@@ -1,20 +1,21 @@
 import type { Attachment, ChatEvent, ChatItem } from '@agent/core'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { agent, chat } from '../bridge'
-import { openCards } from '../lib/cards'
-import { short } from '../lib/format'
+import { attachmentsOf, isDivider, threadItems, threadTitle } from '../lib/thread'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
-import { useEntity, useEntityLoaded, refreshEntity } from '../state/useData'
+import { refreshEntity, useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
+import { useWaiting } from '../state/useWaiting'
 import { Button } from '../ui/Button'
-import { IconButton, Kbd, Pill } from '../ui/bits'
+import { IconButton, Kbd } from '../ui/bits'
 import { Chip } from '../ui/Chip'
+import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon, type IconName } from '../ui/Icon'
-import { Mascot } from '../ui/Mascot'
 import { Markdown } from '../ui/Markdown'
+import { Mascot } from '../ui/Mascot'
 import { Skeleton } from '../ui/Skeleton'
 
 const TOOL_ICONS: Record<string, IconName> = {
@@ -30,30 +31,48 @@ const TOOL_ICONS: Record<string, IconName> = {
   ask_user: 'chat',
   request_approval: 'shield',
   notify_user: 'bell',
+  report: 'chat',
+  now: 'clock',
+}
+
+const TOOL_LABELS: Record<string, string> = {
+  memory_search: 'Memory search',
+  memory_get: 'Memory page',
+  memory_save: 'Memory saved',
+  memory_update: 'Memory updated',
+  web_fetch: 'Web',
+  task_add: 'To-do added',
+  task_list: 'To-dos',
+  task_update: 'To-do updated',
+  goal_create: 'Goal',
+  ask_user: 'Asking you',
+  request_approval: 'Approval',
+  notify_user: 'Notification',
+  report: 'Report',
+  now: 'Clock',
 }
 
 function toolIcon(tool: string): IconName {
   return TOOL_ICONS[tool] ?? 'bolt'
 }
 
-function threadItems(items: ChatItem[]): ChatItem[] {
-  return items
-    .filter((item) => item.kind !== 'branch')
-    .filter((item) => !(item.kind === 'question' && parseMeta(item.meta)['context'] === 'home'))
-    .sort((a, b) => a.createdAt - b.createdAt)
+function toolLabel(tool: string): string {
+  return TOOL_LABELS[tool] ?? 'Tool'
 }
 
 function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
   const meta = parseMeta(item.meta)
   const tool = metaText(meta, 'tool')
-  const status = metaText(meta, 'status')
+  const status = metaText(meta, 'status') || 'done'
   const summary = metaText(meta, 'summary') || item.text
+  const icon: IconName = status === 'error' ? 'x' : status === 'running' ? toolIcon(tool) : 'check'
   return (
-    <div className="tool">
+    <div className={`tool ${status}`} title={tool === '' ? undefined : tool}>
       <i className={status === 'running' ? 'spin' : ''}>
-        <Icon name={toolIcon(tool)} size={16} />
+        <Icon name={icon} size={16} />
       </i>
-      {summary}
+      <span className="tool-tag">{toolLabel(tool)}</span>
+      <span className="tool-sum">{summary}</span>
     </div>
   )
 }
@@ -62,6 +81,9 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   const meta = parseMeta(item.meta)
   const options = metaStrings(meta, 'options')
   const answered = typeof meta['answer'] === 'string' && meta['answer'] !== ''
+  const [custom, setCustom] = useState('')
+  const [sending, setSending] = useState(false)
+
   if (answered) {
     return (
       <div className="appr done">
@@ -74,6 +96,14 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
       </div>
     )
   }
+
+  const answer = (value: string): void => {
+    const clean = value.trim()
+    if (clean === '' || sending) return
+    setSending(true)
+    void chat.answer(item.id, clean).catch(() => setSending(false))
+  }
+
   return (
     <div className="appr">
       <div className="eyebrow">
@@ -81,20 +111,34 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
         QUESTION
       </div>
       <div className="tt">{item.text}</div>
-      <div className="acts">
-        {options.map((option) => (
-          <button
-            key={option}
-            type="button"
-            className="ans"
-            onClick={() => {
-              void chat.answer(item.id, option)
-            }}
-          >
-            {option}
-          </button>
-        ))}
-      </div>
+      {options.length > 0 ? (
+        <div className="acts">
+          {options.map((option) => (
+            <button key={option} type="button" className="ans" disabled={sending} onClick={() => answer(option)}>
+              {option}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <form
+        className="free"
+        onSubmit={(event) => {
+          event.preventDefault()
+          answer(custom)
+        }}
+      >
+        <input
+          type="text"
+          aria-label="Your answer"
+          placeholder="Or type your own answer"
+          value={custom}
+          disabled={sending}
+          onChange={(event) => setCustom(event.target.value)}
+        />
+        <button type="submit" className="btn fill free-send" disabled={custom.trim() === '' || sending}>
+          Answer
+        </button>
+      </form>
       <div className="hint">The run waits until you answer.</div>
     </div>
   )
@@ -105,6 +149,7 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   const decision = metaText(meta, 'decision')
   const summary = metaText(meta, 'summary') || item.text
   const details = metaText(meta, 'details')
+  const [sending, setSending] = useState(false)
 
   if (decision === 'approve' || decision === 'decline') {
     const approved = decision === 'approve'
@@ -125,6 +170,12 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
     )
   }
 
+  const decide = (value: 'approve' | 'decline'): void => {
+    if (sending) return
+    setSending(true)
+    void chat.decide(item.id, value).catch(() => setSending(false))
+  }
+
   return (
     <div className="appr">
       <div className="eyebrow">
@@ -133,21 +184,11 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
       </div>
       <div className="tt">{summary}</div>
       {details ? <pre>{details}</pre> : null}
-      <div className="acts">
-        <Button
-          onClick={() => {
-            void chat.decide(item.id, 'approve')
-          }}
-        >
+      <div className="acts appr-acts">
+        <Button disabled={sending} onClick={() => decide('approve')}>
           Approve and go ahead
         </Button>
-        <button
-          type="button"
-          className="ans"
-          onClick={() => {
-            void chat.decide(item.id, 'decline')
-          }}
-        >
+        <button type="button" className="ans" disabled={sending} onClick={() => decide('decline')}>
           Decline
         </button>
       </div>
@@ -156,17 +197,69 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   )
 }
 
-function ReportRow({ item }: { item: ChatItem }): JSX.Element {
+function reportText(item: ChatItem): { title: string; markdown: string; words: number } {
   const meta = parseMeta(item.meta)
+  const raw = metaText(meta, 'markdown') || item.text
+  const title = metaText(meta, 'title') || item.text || 'Report'
+  const trimmed = raw.replace(/^\s+/, '')
+  const heading = /^(#{1,6})\s+(.*)\r?\n?/.exec(trimmed)
+  const markdown =
+    heading !== null && (heading[2] ?? '').trim().toLowerCase() === title.trim().toLowerCase()
+      ? trimmed.slice(heading[0].length).replace(/^\s+/, '')
+      : raw
+  const words =
+    typeof meta['words'] === 'number' && Number.isFinite(meta['words'])
+      ? meta['words']
+      : markdown.split(/\s+/).filter(Boolean).length
+  return { title, markdown, words }
+}
+
+function plainPreview(markdown: string): string {
+  return markdown
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\*\*|__|`/g, '')
+    .replace(/^\s*[-*]\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function ReportRow({ item, onOpen }: { item: ChatItem; onOpen: (item: ChatItem) => void }): JSX.Element {
+  const report = reportText(item)
+  const preview = plainPreview(report.markdown)
   return (
-    <div className="card" style={{ background: 'var(--s-low)' }}>
-      <span className="eyebrow">REPORT</span>
-      <div className="h3" style={{ margin: '6px 0 8px' }}>
-        {metaText(meta, 'title') || 'Report'}
+    <div className="report">
+      <div className="report-top">
+        <span className="eyebrow">REPORT</span>
+        <span className="report-words">
+          {report.words} {report.words === 1 ? 'word' : 'words'}
+        </span>
       </div>
-      <div style={{ fontSize: 15, lineHeight: 1.6 }}>
-        <Markdown text={item.text} />
+      <div className="report-title">{report.title}</div>
+      <div className="report-preview">{preview.length > 260 ? `${preview.slice(0, 257)}...` : preview}</div>
+      <div>
+        <Button variant="tonal" size="sm" onClick={() => onOpen(item)}>
+          Read the report
+        </Button>
       </div>
+    </div>
+  )
+}
+
+function UserRow({ item }: { item: ChatItem }): JSX.Element {
+  const files = attachmentsOf(item)
+  return (
+    <div className="u-row">
+      {item.text !== '' ? <div className="u-msg">{item.text}</div> : null}
+      {files.length > 0 ? (
+        <div className="u-files">
+          {files.map((file, index) => (
+            <span className="u-file" key={`${file.path}-${file.name}-${index}`}>
+              <Icon name="clip" size={13} />
+              {file.name}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -181,17 +274,19 @@ function HelperRow({ item }: { item: ChatItem }): JSX.Element {
       </span>
       <span className="hn">
         <b>{metaText(meta, 'name') || 'Helper'}</b>
-        <Pill tone={status === 'working' ? 'pri' : 'ok'}>{status === 'working' ? 'Working' : 'Done'}</Pill>
+        <span className={`pill ${status === 'working' ? 'pri' : 'ok'}`}>
+          {status === 'working' ? 'Working' : 'Done'}
+        </span>
         <div>{metaText(meta, 'summary') || item.text}</div>
       </span>
     </div>
   )
 }
 
-function renderItem(item: ChatItem): JSX.Element {
+function renderItem(item: ChatItem, onOpenReport: (item: ChatItem) => void): JSX.Element {
   switch (item.kind) {
     case 'user':
-      return <div className="u-msg">{item.text}</div>
+      return <UserRow item={item} />
     case 'agent':
       return (
         <div className="a-msg">
@@ -207,11 +302,18 @@ function renderItem(item: ChatItem): JSX.Element {
     case 'helper':
       return <HelperRow item={item} />
     case 'report':
-      return <ReportRow item={item} />
+      return <ReportRow item={item} onOpen={onOpenReport} />
     case 'notice':
+      if (isDivider(item)) {
+        return (
+          <div className="divider" role="separator">
+            <span>{item.text || 'New chat'}</span>
+          </div>
+        )
+      }
       return (
         <div className="from">
-          <Icon name="phone" size={14} />
+          <Icon name={parseMeta(item.meta)['from'] === 'phone' ? 'phone' : 'bell'} size={14} />
           {item.text}
         </div>
       )
@@ -225,30 +327,34 @@ export function Chat(): JSX.Element {
   const items = useEntity('chat_item')
   const loaded = useEntityLoaded('chat_item')
   const focusToken = useUi((state) => state.composerFocus)
-  const navigate = useUi((state) => state.navigate)
+  const scrollToken = useUi((state) => state.chatScroll)
+  const waiting = useWaiting()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [running, setRunning] = useState(false)
+  const [reader, setReader] = useState<ChatItem | null>(null)
   const thread = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
+  const stuck = useRef(true)
 
-  const messages = threadItems(items)
-  const cards = openCards(items, true)
-  const branches = items.filter((item) => item.kind === 'branch')
-  const activeBranch = branches.find((item) => parseMeta(item.meta)['active'] === true) ?? branches[0]
-  const branchMeta = activeBranch ? parseMeta(activeBranch.meta) : {}
-  const firstUser = messages.find((item) => item.kind === 'user')
-  const title = metaText(branchMeta, 'title') || (firstUser ? short(firstUser.text, 42) : 'New chat')
+  const messages = useMemo(() => threadItems(items), [items])
+  const title = threadTitle(items)
   const agentName = settings?.agentName.trim() || 'Your agent'
   const model = settings?.model.trim() || 'No model chosen'
 
   useEffect(() => {
-    void chat.state().then((state) => setRunning(state.running))
+    let alive = true
+    void chat.state().then((state) => {
+      if (alive) setRunning(state.running)
+    })
+    return () => {
+      alive = false
+    }
   }, [])
 
   useEffect(() => {
     const off = chat.onEvent((event: ChatEvent) => {
-      if (event.type === 'run_started') setRunning(true)
+      if (event.type === 'run_started' || event.type === 'thinking') setRunning(true)
       if (event.type === 'run_finished') setRunning(false)
       if (event.type === 'chat_changed' || event.type === 'needs_you') refreshEntity('chat_item')
     })
@@ -256,8 +362,19 @@ export function Chat(): JSX.Element {
   }, [])
 
   useEffect(() => {
-    if (thread.current) thread.current.scrollTop = thread.current.scrollHeight
-  }, [messages.length, running, loaded])
+    const el = thread.current
+    if (el && stuck.current) el.scrollTop = el.scrollHeight
+  }, [items, running, loaded])
+
+  useEffect(() => {
+    if (scrollToken === 0) return
+    stuck.current = true
+    const timer = window.setTimeout(() => {
+      const el = thread.current
+      if (el) el.scrollTop = el.scrollHeight
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [scrollToken])
 
   useEffect(() => {
     if (focusToken > 0) composer.current?.focus()
@@ -272,7 +389,8 @@ export function Chat(): JSX.Element {
 
   const send = (): void => {
     const value = text.trim()
-    if (value === '') return
+    if (value === '' && attachments.length === 0) return
+    stuck.current = true
     setText('')
     setAttachments([])
     void chat.send(value, attachments)
@@ -288,18 +406,22 @@ export function Chat(): JSX.Element {
         })
       }
     } catch {
-      // Files arrive in M8. The mock returns an empty list, so nothing to add.
+      // Files arrive in M8. The mock returns an example, Electron returns nothing for now.
     }
   }
+
+  const report = reader === null ? null : reportText(reader)
+  // While a card is waiting the run is suspended on the person, not thinking.
+  const thinking = running && waiting.length === 0
 
   return (
     <div className="chat">
       <div className="chat-h">
-        <Mascot id={settings?.mascot ?? 'scout'} size={40} busy={cards.length === 0} />
+        <Mascot id={settings?.mascot ?? 'scout'} size={40} busy={waiting.length === 0} />
         <div className="ttl">
           <b>{title}</b>
-          <span className={cards.length > 0 ? 'warn' : ''}>
-            {cards.length > 0 ? 'Waiting for you' : running ? 'Working' : 'Ready'}
+          <span className={waiting.length > 0 ? 'warn' : ''}>
+            {waiting.length > 0 ? 'Waiting for you' : running ? 'Working' : 'Ready'}
           </span>
         </div>
         <span className="model" title="Change the model in Settings">
@@ -310,7 +432,15 @@ export function Chat(): JSX.Element {
         <IconButton icon="phone" label="Talk" comingSoon size={22} />
       </div>
 
-      <div className="thread" ref={thread}>
+      <div
+        className="thread"
+        ref={thread}
+        onScroll={() => {
+          const el = thread.current
+          if (!el) return
+          stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 56
+        }}
+      >
         {!loaded ? (
           <div className="thread-in">
             <Skeleton rows={5} />
@@ -338,16 +468,18 @@ export function Chat(): JSX.Element {
           <div className="thread-in">
             {messages.map((item) => (
               <div key={item.id} style={{ display: 'contents' }}>
-                {renderItem(item)}
+                {renderItem(item, (row) => setReader(row))}
               </div>
             ))}
-            {running ? (
-              <div className="a-msg">
-                <div className="typing" aria-label={`${agentName} is thinking`}>
+            {thinking ? (
+              <div className="a-msg think" role="status" aria-live="polite">
+                <Mascot id={settings?.mascot ?? 'scout'} size={30} busy />
+                <div className="typing" aria-hidden="true">
                   <i />
                   <i />
                   <i />
                 </div>
+                <span className="think-label">{agentName} is thinking</span>
               </div>
             ) : null}
           </div>
@@ -405,7 +537,13 @@ export function Chat(): JSX.Element {
               <Icon name="stop" size={22} />
             </button>
           ) : (
-            <button type="button" className="send" onClick={send} aria-label="Send" disabled={text.trim() === ''}>
+            <button
+              type="button"
+              className="send"
+              onClick={send}
+              aria-label="Send"
+              disabled={text.trim() === '' && attachments.length === 0}
+            >
               <Icon name="arrow" size={22} />
             </button>
           )}
@@ -422,6 +560,24 @@ export function Chat(): JSX.Element {
           </span>
         </div>
       </div>
+
+      {report !== null && reader !== null ? (
+        <Dialog label={report.title} onClose={() => setReader(null)}>
+          <div className="reader-top">
+            <span className="eyebrow">REPORT</span>
+            <span className="small muted">
+              {report.words} {report.words === 1 ? 'word' : 'words'}
+            </span>
+          </div>
+          <h2 className="h2">{report.title}</h2>
+          <div className="reader">
+            <Markdown text={report.markdown} />
+          </div>
+          <div className="dialog-actions">
+            <Button onClick={() => setReader(null)}>Close</Button>
+          </div>
+        </Dialog>
+      ) : null}
     </div>
   )
 }

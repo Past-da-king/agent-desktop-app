@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 
 import { agent, chat } from '../bridge'
+import { startNewChat } from '../lib/chat-actions'
 import { isDarkNow } from '../state/theme'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -129,8 +130,7 @@ export function Palette(): JSX.Element | null {
       icon: 'plus',
       run: () => {
         close()
-        navigate({ page: 'chat' })
-        focusComposer()
+        void startNewChat()
       },
     },
     { id: 'do-todo', label: 'Add a to-do', icon: 'plus', run: addTodo },

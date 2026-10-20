@@ -43,6 +43,16 @@
   .chat-h{padding:10px 12px 8px 16px}
   .compose{padding:6px 12px 92px}
   .u-msg{max-width:88%}
+  .u-row{max-width:88%}
+  .appr{padding:18px 18px;max-width:none}
+  .appr .acts{flex-direction:column;align-items:stretch}
+  .appr .acts .btn,.appr .acts .ans{width:100%}
+  .free{flex-direction:column;align-items:stretch}
+  .free input{min-width:0;width:100%}
+  .free .btn{width:100%}
+  .report{padding:16px 16px}
+  .reader{max-height:60vh}
+  .dialog{padding:20px 18px}
   .cols2{grid-template-columns:minmax(0,1fr)}
   .detail{padding:22px 20px}
   .next{padding:22px 20px}

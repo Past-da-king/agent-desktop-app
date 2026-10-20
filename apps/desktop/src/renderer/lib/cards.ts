@@ -20,3 +20,15 @@ export function openCards(items: ChatItem[], forChat = false): ChatItem[] {
     .filter((item) => !forChat || parseMeta(item.meta)['context'] !== 'home')
     .sort((a, b) => a.createdAt - b.createdAt)
 }
+
+/**
+ * The rows the main process says are waiting. A card that was answered or decided since is left out,
+ * even if the last `chat.state()` reading is a moment old.
+ */
+export function cardsForIds(items: ChatItem[], ids: string[], forChat = false): ChatItem[] {
+  const waiting = new Set(ids)
+  return items
+    .filter((item) => waiting.has(item.id) && isOpenCard(item))
+    .filter((item) => !forChat || parseMeta(item.meta)['context'] !== 'home')
+    .sort((a, b) => a.createdAt - b.createdAt)
+}
