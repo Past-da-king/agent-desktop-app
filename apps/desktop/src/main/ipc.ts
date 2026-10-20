@@ -10,9 +10,12 @@ import {
   ProviderException,
   isEntityName,
   providerFor,
+  type Attachment,
+  type Decision,
   type EntityMap,
   type EntityName,
   type RowInput,
+  type RunState,
   type Settings,
 } from '@agent/core'
 
@@ -43,11 +46,21 @@ export interface ShellLike {
 
 export type Broadcast = (channel: string, payload?: unknown) => void
 
+/** The chat side the renderer can reach. Runner implements this; tests can pass a small fake. */
+export interface ChatRunner {
+  send(text: string, attachments?: Attachment[]): Promise<void>
+  stop(): void
+  state(): RunState
+  answer(itemId: string, answer: string): Promise<void>
+  decide(itemId: string, decision: Decision): Promise<void>
+}
+
 export interface IpcDeps {
   store: Store
   settings: SettingsStore
   secrets: Secrets
   account: AccountService
+  chat: ChatRunner
   ipcMain: IpcMainLike
   windows: WindowControls
   broadcast?: Broadcast
@@ -58,9 +71,12 @@ export interface IpcDeps {
 const NOT_IMPLEMENTED = 'not implemented yet'
 const MAX_STRING = 4096
 const MAX_KEY = 8192
+const MAX_MESSAGE = 20_000
+const MAX_ANSWER = 4_000
+const MAX_ATTACHMENTS = 20
 
 export function registerIpc(deps: IpcDeps): () => void {
-  const { store, settings, secrets, account, ipcMain, windows } = deps
+  const { store, settings, secrets, account, chat, ipcMain, windows } = deps
   const send: Broadcast = deps.broadcast ?? (() => undefined)
 
   const handle = (
@@ -142,13 +158,36 @@ export function registerIpc(deps: IpcDeps): () => void {
     account.nudge()
   })
 
+  // ---- chat ----
+
+  handle(CHANNELS.chat.send, async (_event, rawText, rawAttachments) => {
+    const text = requireString(rawText, 'message', MAX_MESSAGE)
+    const attachments = requireAttachments(rawAttachments)
+    await chat.send(text, attachments)
+  })
+
+  handle(CHANNELS.chat.stop, async () => {
+    chat.stop()
+  })
+
+  handle(CHANNELS.chat.state, async () => chat.state())
+
+  handle(CHANNELS.chat.answer, async (_event, rawId, rawAnswer) => {
+    const id = requireString(rawId, 'card id', MAX_STRING)
+    const answer = requireString(rawAnswer, 'answer', MAX_ANSWER)
+    await chat.answer(id, answer)
+  })
+
+  handle(CHANNELS.chat.decide, async (_event, rawId, rawDecision) => {
+    const id = requireString(rawId, 'card id', MAX_STRING)
+    if (rawDecision !== 'approve' && rawDecision !== 'decline') {
+      throw new Error('decision must be approve or decline')
+    }
+    await chat.decide(id, rawDecision)
+  })
+
   // ---- not built yet ----
 
-  handle(CHANNELS.chat.send, async () => notImplemented())
-  handle(CHANNELS.chat.stop, async () => notImplemented())
-  handle(CHANNELS.chat.state, async () => notImplemented())
-  handle(CHANNELS.chat.answer, async () => notImplemented())
-  handle(CHANNELS.chat.decide, async () => notImplemented())
   handle(CHANNELS.routines.runNow, async () => notImplemented())
   handle(CHANNELS.files.pick, async () => notImplemented())
   handle(CHANNELS.files.pickFolder, async () => notImplemented())
@@ -250,6 +289,20 @@ function requireString(value: unknown, name: string, max: number): string {
   if (typeof value !== 'string') throw new Error(`${name} must be text`)
   if (value.length > max) throw new Error(`${name} is too long`)
   return value
+}
+
+function requireAttachments(value: unknown): Attachment[] {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) throw new Error('attachments must be a list')
+  if (value.length > MAX_ATTACHMENTS) throw new Error('too many attachments')
+  return value.map((item) => {
+    const row = requireObject(item, 'attachment')
+    return {
+      path: requireString(row['path'], 'attachment path', MAX_STRING),
+      name: requireString(row['name'], 'attachment name', MAX_STRING),
+      mime: requireString(row['mime'], 'attachment type', MAX_STRING),
+    }
+  })
 }
 
 function entityArg(value: unknown): EntityName {
