@@ -73,11 +73,12 @@ remote_one() { # id dir branch deps... : build on the server, bring the result b
   local id="$1" dir="$2" branch="$3"; shift 3
   prepare "$id" "$dir" "$branch" "$@" || return 1
   log "$id: starting on $BUILD_HOST"
-  ssh "$BUILD_HOST" "mkdir -p ~/aw/$id" || { log "FAILED $id: ssh"; touch "logs/FAILED-$id"; return 1; }
-  rsync -a --delete --exclude node_modules --exclude out --exclude .git --exclude shots --exclude .gate --exclude .remote-result "$dir/" "$BUILD_HOST:aw/$id/" >/dev/null 2>&1
-  rsync -a "$REPO/scripts/" "$BUILD_HOST:aw/$id/scripts/" >/dev/null 2>&1   # always the current judge scripts
+  # the server has no rsync: a tar stream over ssh does the same job
+  local ex="--exclude=node_modules --exclude=out --exclude=.git --exclude=shots --exclude=.gate --exclude=.remote-result"
+  tar -C "$dir" $ex -czf - . | ssh "$BUILD_HOST" "mkdir -p ~/aw/$id && tar -xzf - -C ~/aw/$id" || { log "FAILED $id: copy to $BUILD_HOST"; touch "logs/FAILED-$id"; return 1; }
+  tar -C "$REPO" -czf - scripts | ssh "$BUILD_HOST" "tar -xzf - -C ~/aw/$id"   # always the current judge scripts
   ssh "$BUILD_HOST" "bash ~/aw/$id/scripts/remote-milestone.sh $id" >"$REPO/logs/$id.remote.log" 2>&1
-  rsync -a --delete --exclude node_modules --exclude out --exclude .git --exclude shots --exclude .gate --exclude scripts --exclude '.install.log' --exclude '.gate*.log' "$BUILD_HOST:aw/$id/" "$dir/" >/dev/null 2>&1
+  ssh "$BUILD_HOST" "cd ~/aw/$id && tar $ex --exclude=scripts --exclude='.*.log' -czf - ." | tar -xzf - -C "$dir" || { log "FAILED $id: copy back"; touch "logs/FAILED-$id"; return 1; }
   if [ "$(ssh "$BUILD_HOST" "cat ~/aw/$id/.remote-result 2>/dev/null")" != "PASSED" ]; then log "STOPPED at $id: the gate never passed on $BUILD_HOST"; touch "logs/FAILED-$id"; return 1; fi
   rm -f "$dir/.remote-result"
   git -C "$dir" add -A && git -C "$dir" commit -q -m "$id: implemented (built on the build server)"
