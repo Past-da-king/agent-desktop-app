@@ -8,6 +8,7 @@ import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { AccountService } from '../src/main/account'
 import { Store } from '../src/main/db'
 import { registerIpc, type IpcMainLike } from '../src/main/ipc'
+import type { HelperHost } from '../src/main/runtime/helpers'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset } from '../src/main/runtime/toolset'
 import { Secrets, type SafeStorageLike } from '../src/main/secrets'
@@ -27,6 +28,7 @@ let sent: Array<{ channel: string; payload: unknown }>
 let dispose: (() => void) | null = null
 let fakeAi: FakeAi | null = null
 let windowCalls: string[]
+let helperCalls: string[]
 
 const storage: SafeStorageLike = {
   isEncryptionAvailable: () => true,
@@ -43,6 +45,23 @@ beforeEach(() => {
   handlers = new Map()
   sent = []
   windowCalls = []
+  helperCalls = []
+
+  const helpers: HelperHost = {
+    delegate: async () => '',
+    steer: async () => '',
+    push: async () => '',
+    status: async () => '',
+    stop: async (id) => {
+      helperCalls.push(id)
+      return true
+    },
+    stopAll: async () => {
+      helperCalls.push('all')
+      return 2
+    },
+    live: () => [],
+  }
 
   const ipcMain: IpcMainLike = {
     handle(channel, listener) {
@@ -65,6 +84,7 @@ beforeEach(() => {
     secrets,
     account,
     chat: runner,
+    helpers,
     ipcMain,
     windows: {
       minimize: () => windowCalls.push('minimize'),
@@ -100,6 +120,7 @@ const METHODS: Record<string, string[]> = {
   data: ['list', 'upsert', 'remove'],
   chat: ['send', 'stop', 'state', 'answer', 'decide'],
   routines: ['runNow'],
+  helpers: ['stop', 'stopAll'],
   window: ['minimize', 'toggleMaximize', 'close', 'isMaximized'],
   files: ['pick', 'pickFolder'],
   shell: ['openExternal', 'reveal'],
@@ -185,6 +206,13 @@ describe('registerIpc', () => {
     expect(items.some((item) => item.kind === 'notice' && item.text.includes('Add an AI key'))).toBe(true)
     expect(sent.some((event) => event.channel === EVENTS.chat)).toBe(true)
     expect(await invoke(CHANNELS.chat.state)).toMatchObject({ running: false })
+  })
+
+  it('stops helpers through the manager and rejects a bad id', async () => {
+    expect(await invoke(CHANNELS.helpers.stop, 'helper-1')).toBe(true)
+    expect(await invoke(CHANNELS.helpers.stopAll)).toBe(2)
+    expect(helperCalls).toEqual(['helper-1', 'all'])
+    await expect(invoke(CHANNELS.helpers.stop, 42)).rejects.toThrow('helper id must be text')
   })
 
   it('rejects a bad chat message and answers not implemented yet for routines and files', async () => {

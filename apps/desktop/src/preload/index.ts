@@ -79,6 +79,11 @@ const api: AgentApi = {
     runNow: (id) => call<void>(CHANNELS.routines.runNow, id),
   },
 
+  helpers: {
+    stop: (id) => call<boolean>(CHANNELS.helpers.stop, id),
+    stopAll: () => call<number>(CHANNELS.helpers.stopAll),
+  },
+
   window: {
     minimize: () => {
       void call<void>(CHANNELS.window.minimize)
