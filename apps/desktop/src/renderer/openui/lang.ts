@@ -656,3 +656,68 @@ export function actionsOf(v: unknown): UiAction[] {
   if (Array.isArray(v)) return v.filter(isAction)
   return []
 }
+
+// ---- Where each tap is (shared by the view and the tests) ----------------------------------------
+
+/** The name a card goes by: its header title, else its first section heading. */
+export function cardTitle(card: UiNode): string | null {
+  const kids = Array.isArray(card.props['children']) ? (card.props['children'] as unknown[]).filter(isNode) : []
+  const header = kids.find((k) => k.type === 'CardHeader')
+  const t = header?.props['title']
+  if (typeof t === 'string') return t
+  const ih = kids.find((k) => k.type === 'InlineHeader')?.props['heading']
+  return typeof ih === 'string' ? ih : null
+}
+
+export interface TapSpot {
+  label: string
+  scope: Scope
+  actions: UiAction[]
+  /** What a quiet tap tells the agent, or null when the button only opens a link. */
+  message: string | null
+}
+
+/** Every button and tappable row in a tree, with the card and item its tap names, as the view resolves them. */
+export function tapsIn(root: UiNode | null): TapSpot[] {
+  const out: TapSpot[] = []
+  const spot = (label: string, action: unknown, scope: Scope): void => {
+    const steps = actionsOf(action)
+    const actions: UiAction[] = steps.length === 0 && action === undefined && label.trim() !== '' ? [{ kind: 'assistant', text: label, context: null }] : steps
+    const first = actions.find((a) => a.kind === 'assistant')
+    out.push({ label, scope, actions, message: first !== undefined && first.kind === 'assistant' ? messageFor(first, scope) : null })
+  }
+  const walk = (v: unknown, scope: Scope): void => {
+    if (Array.isArray(v)) {
+      v.forEach((x) => walk(x, scope))
+      return
+    }
+    if (!isNode(v)) return
+    if (v.type === 'Card') {
+      const title = cardTitle(v)
+      const kids = Array.isArray(v.props['children']) ? (v.props['children'] as unknown[]).filter(isNode) : []
+      const hasHeader = kids.some((k) => k.type === 'CardHeader')
+      let section: string | null = null
+      kids.forEach((k) => {
+        if (k.type === 'InlineHeader' && hasHeader) section = typeof k.props['heading'] === 'string' ? k.props['heading'] : null
+        walk(k, { card: title, item: section })
+      })
+      return
+    }
+    if (v.type === 'Product') {
+      walk(v.props['actions'], { card: typeof v.props['name'] === 'string' ? v.props['name'] : '' })
+      return
+    }
+    if (v.type === 'Button') {
+      spot(typeof v.props['label'] === 'string' ? v.props['label'] : '', v.props['action'], scope)
+      return
+    }
+    if (v.type === 'ListItem' && v.props['action'] !== undefined) {
+      const title = typeof v.props['title'] === 'string' ? v.props['title'] : ''
+      spot(title, v.props['action'], { ...scope, item: title })
+      return
+    }
+    Object.values(v.props).forEach((x) => walk(x, scope))
+  }
+  walk(root, {})
+  return out
+}
