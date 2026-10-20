@@ -106,6 +106,9 @@ export class AgentLoop {
         completion = await this.provider.complete(system, history, this.specs(), this.model)
       }
 
+      // Stop was pressed while the provider was answering: drop the reply and end the run cleanly.
+      if (signal?.aborted) return lastText
+
       const reply = completion.message
       history.push(reply)
       await onAppend?.(reply)
