@@ -11,7 +11,7 @@ import { Button } from '../ui/Button'
 import { Icon, type IconName } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
-import { ConnectedAppsSection } from './ConnectedApps'
+import { ConnectedAppsSection, LearnedAppsSection } from './ConnectedApps'
 
 function Row({
   icon,
@@ -39,18 +39,13 @@ function Row({
 }
 
 function FoundRow({ item }: { item: Found }): JSX.Element {
-  const line = item.found ? (item.version === undefined ? 'Found' : `Version ${item.version}`) : 'Not found on this computer'
+  const line = item.found ? (item.version === undefined ? 'Found' : item.version) : 'Not found'
   return (
-    <div className="rowc">
-      <div className="ri">
-        <Icon name={item.found ? 'check' : 'x'} size={20} />
-      </div>
-      <div className="rt">
-        <b>{item.label}</b>
-        <span>{line}</span>
-      </div>
-      <span className={item.found ? 'pill ok' : 'pill mute'}>{item.found ? 'Found' : 'Not found'}</span>
-    </div>
+    <span className={`found-chip${item.found ? ' on' : ''}`} title={item.found ? `${item.label}: ${line}` : `${item.label} is not on this computer`}>
+      <Icon name={item.found ? 'check' : 'x'} size={14} />
+      <b>{item.label}</b>
+      {item.found && item.version !== undefined ? <span>{item.version}</span> : null}
+    </span>
   )
 }
 
@@ -65,7 +60,11 @@ function FoundGroup({ title, items }: { title: string; items: Found[] }): JSX.El
           Nothing looked for yet.
         </p>
       ) : (
-        items.map((item) => <FoundRow key={item.id} item={item} />)
+        <div className="found-chips">
+          {items.map((item) => (
+            <FoundRow key={item.id} item={item} />
+          ))}
+        </div>
       )}
     </div>
   )
@@ -151,7 +150,77 @@ export function Connections(): JSX.Element {
         </div>
       </div>
 
-      <div className="two">
+      <ConnectedAppsSection />
+
+      <div className="two conn-rest">
+        <div className="stack">
+          <LearnedAppsSection />
+
+          <section>
+            <SectionHeader eyebrow="BUILT IN" line="On this computer, plus the machines you add" />
+            <div className="list" style={{ padding: 6 }}>
+              <Row
+                icon="globe"
+                title="Agent's browser"
+                line="Its own browser, with separate sign-ins for each profile. It shows in Chat while it works, and hands over to you when a page needs you"
+                right={<span className="pill ok">Ready</span>}
+              />
+              <Row
+                icon="bell"
+                title="Notifications"
+                line="Results and questions reach you, even when the window is closed"
+                right={
+                  <Switch
+                    on={settings?.notifications ?? true}
+                    onToggle={(next) => {
+                      void save({ notifications: next })
+                    }}
+                    label="Desktop notifications"
+                  />
+                }
+              />
+              <Row
+                icon="folder"
+                title="Files on this computer"
+                line={
+                  allowed.length === 0
+                    ? 'Let your agent find and read files you point it to'
+                    : `${allowed.length} ${allowed.length === 1 ? 'folder' : 'folders'} granted`
+                }
+                right={
+                  <Button
+                    variant="tonal"
+                    size="sm"
+                    onClick={() => {
+                      void askForFolder()
+                    }}
+                  >
+                    Allow
+                  </Button>
+                }
+              />
+              <Row
+                icon="clip"
+                title="Drop zone"
+                line="Drag files onto a chat to attach them, up to 20 MB each"
+                right={<span className="pill ok">Ready</span>}
+              />
+              <Row
+                icon="bolt"
+                title="Quick ask shortcut"
+                line="Opens a small box from anywhere"
+                right={
+                  <span className="kbds">
+                    {keys.map((key) => (
+                      <kbd key={key}>{key}</kbd>
+                    ))}
+                  </span>
+                }
+              />
+            </div>
+          </section>
+        </div>
+
         <div className="stack">
           <section>
             <SectionHeader eyebrow="THIS COMPUTER" line="What your agent can use here" />
@@ -220,10 +289,6 @@ export function Connections(): JSX.Element {
               )}
             </div>
           </section>
-        </div>
-
-        <div className="stack">
-          <ConnectedAppsSection />
 
           <section>
             <SectionHeader
@@ -253,98 +318,6 @@ export function Connections(): JSX.Element {
             <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
               Your agent only sees the names. Addresses, passwords and keys stay encrypted on this computer.
             </p>
-          </section>
-
-          <section>
-            <SectionHeader eyebrow="BUILT IN" line="On this computer, plus the machines you add" />
-            <div className="list" style={{ padding: 6 }}>
-              <Row
-                icon="globe"
-                title="Agent's browser"
-                line="Its own browser, with its own cookies. It shows in Chat while it works, and hands over to you when a page needs you"
-                right={<span className="pill ok">Ready</span>}
-              />
-              <Row
-                icon="bell"
-                title="Notifications"
-                line="Results and questions reach you, even when the window is closed"
-                right={
-                  <Switch
-                    on={settings?.notifications ?? true}
-                    onToggle={(next) => {
-                      void save({ notifications: next })
-                    }}
-                    label="Desktop notifications"
-                  />
-                }
-              />
-              <Row
-                icon="folder"
-                title="Files on this computer"
-                line={
-                  allowed.length === 0
-                    ? 'Let your agent find and read files you point it to'
-                    : `${allowed.length} ${allowed.length === 1 ? 'folder' : 'folders'} granted`
-                }
-                right={
-                  <Button
-                    variant="tonal"
-                    size="sm"
-                    onClick={() => {
-                      void askForFolder()
-                    }}
-                  >
-                    Allow
-                  </Button>
-                }
-              />
-              <Row
-                icon="clip"
-                title="Drop zone"
-                line="Drag files onto a chat to attach them, up to 20 MB each"
-                right={<span className="pill ok">Ready</span>}
-              />
-              <Row
-                icon="bolt"
-                title="Quick ask shortcut"
-                line="Opens a small box from anywhere"
-                right={
-                  <span className="kbds">
-                    {keys.map((key) => (
-                      <kbd key={key}>{key}</kbd>
-                    ))}
-                  </span>
-                }
-              />
-            </div>
-          </section>
-
-          <section>
-            <SectionHeader eyebrow="PROFILES" line="Group accounts by part of your life" />
-            <div className="prof" title="Coming soon">
-              <div className="ri">
-                <Icon name="person" size={24} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div className="h3">Work</div>
-                <div className="small muted">Group your work accounts. Coming soon.</div>
-              </div>
-              <Button variant="tonal" size="sm" comingSoon>
-                Open
-              </Button>
-            </div>
-            <div className="prof" style={{ marginTop: 10 }} title="Coming soon">
-              <div className="ri" style={{ background: 'var(--sc)', color: 'var(--on-sc)' }}>
-                <Icon name="mail" size={24} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div className="h3">Personal</div>
-                <div className="small muted">Group your personal accounts. Coming soon.</div>
-              </div>
-              <Button variant="tonal" size="sm" comingSoon>
-                Open
-              </Button>
-            </div>
           </section>
         </div>
       </div>
