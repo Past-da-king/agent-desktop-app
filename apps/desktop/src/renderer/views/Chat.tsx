@@ -630,7 +630,7 @@ export function Chat(): JSX.Element {
       onDrop={onDrop}
     >
       <div className="chat-h">
-        <Mascot id={settings?.mascot ?? 'scout'} size={40} busy={!needsYou} />
+        <Mascot id={settings?.mascot ?? 'scout'} size={40} busy={!needsYou} needsYou={needsYou} />
         <div className="ttl">
           <b>{title}</b>
           <span className={needsYou ? 'warn' : ''}>
