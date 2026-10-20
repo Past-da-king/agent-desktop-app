@@ -3,6 +3,7 @@
  * Read, Write, Edit, Glob, Grep), which are better than the app's copies. Every one of them asks the app
  * first, through the Agent SDK's canUseTool hook, and the app applies the person's rules:
  *  - commands: an approval card with the exact command, every time; refused when Shell commands is Never;
+ *  - everything below runs without a card when the person chose Run without asking;
  *  - changes to files: free inside a granted folder, an approval card anywhere else;
  *  - reading files: free inside a granted folder, an approval card anywhere else;
  *  - anything else: refused, so a new built-in tool cannot act around the app.
@@ -49,7 +50,10 @@ export function sdkPermission(deps: PermissionDeps): (name: string, input: Recor
   }
 
   return async (name, input) => {
+    // "Run without asking": the person lets the agent act anywhere on this computer.
+    const free = deps.settings().shell === 'always'
     if (COMMANDS.has(name)) {
+      if (free) return { allow: true }
       if (deps.settings().shell === 'never') {
         return { allow: false, message: 'Shell commands are turned off on this computer (Settings, This computer). Do the job another way or ask the user to turn them on.' }
       }
@@ -59,13 +63,13 @@ export function sdkPermission(deps: PermissionDeps): (name: string, input: Recor
     }
     if (CHANGES.has(name)) {
       const path = pathOf(input)
-      if (inside(path)) return { allow: true }
+      if (free || inside(path)) return { allow: true }
       const ok = await deps.approve('Change a file on this computer', path === '' ? 'A file outside your folders' : path)
       return ok ? { allow: true } : { allow: false, message: 'The user declined this change.' }
     }
     if (READS.has(name)) {
       const path = pathOf(input)
-      if (path === '' || inside(path)) return { allow: true }
+      if (free || path === '' || inside(path)) return { allow: true }
       const ok = await deps.approve('Read files on this computer', path)
       return ok ? { allow: true } : { allow: false, message: 'The user declined. Ask them to grant the folder in Settings if it is needed.' }
     }

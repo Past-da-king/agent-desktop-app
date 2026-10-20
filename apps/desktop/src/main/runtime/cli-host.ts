@@ -12,7 +12,7 @@ import { dirname, join, sep } from 'node:path'
 
 import type { AgentEvent, JsonObject, Settings, Tool, ToolContext } from '@agent/core'
 
-import { runCliTurn, type CliId } from './cli-agent'
+import { planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
 import { startToolServer, type ToolServer } from './mcp-server'
 import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
 
@@ -43,6 +43,14 @@ export interface CliTurnRequest {
   onCall: (call: CliCall) => Promise<void>
   onResult: (call: CliCall, result: string, isError: boolean) => Promise<void>
 }
+
+/**
+ * Bump when the agent gains something a resumed conversation would not know about (a new way to answer, a
+ * new setting). A session that started before it is told once, so it stops repeating what it said earlier.
+ */
+export const PROMPT_REVISION = 2
+const UPDATE_NOTE =
+  '[The Agent app was updated since earlier in this conversation. Read your instructions again: they now include GENERATIVE UI (OpenUI Lang), the "visual response" cards you draw by writing an openui-lang block, and the user\'s current choice for commands and files. Anything you said before about not having these is out of date.]'
 
 /** Helpers never delegate further: only the main agent gets these. */
 const NOT_ON_CLI = /^(delegate|helper_|helpers_)/
@@ -150,6 +158,13 @@ export class CliHost {
     })
   }
 
+  /** What the plan offers right now, from the engine itself. */
+  async models(cli: CliId): Promise<PlanModel[]> {
+    const dir = join(this.workDir, cli, 'models')
+    mkdirSync(dir, { recursive: true })
+    return planModels(cli, this.engine(cli), dir)
+  }
+
   forget(thread = 'main'): void {
     const sessions = this.sessions()
     delete sessions[thread]
@@ -173,12 +188,14 @@ export class CliHost {
     const dir = join(this.workDir, request.cli, request.thread.replace(/[^a-z0-9-]/gi, '_'))
     try {
       const key = `${request.cli}:${request.thread}`
+      const stored = continues ? (this.sessions()[key] ?? null) : null
+      const stale = stored !== null && this.sessions()[`${key}#rev`] !== String(PROMPT_REVISION)
       const run = (sessionId: string | null) =>
         runCliTurn({
           cli: request.cli,
           program: this.engine(request.cli),
           system: request.system,
-          prompt: request.prompt,
+          prompt: sessionId !== null && stale ? `${UPDATE_NOTE}\n\n${request.prompt}` : request.prompt,
           images: request.images ?? [],
           sessionId,
           ...(request.model === undefined ? {} : { model: request.model }),
@@ -193,10 +210,10 @@ export class CliHost {
           }),
         })
       mkdirSync(dir, { recursive: true })
-      let result = await run(continues ? (this.sessions()[key] ?? null) : null)
+      let result = await run(stored)
       if (result.error === 'SESSION_LOST') result = await run(null)
       if (continues && result.sessionId !== null) {
-        this.saveSessions({ ...this.sessions(), [key]: result.sessionId })
+        this.saveSessions({ ...this.sessions(), [key]: result.sessionId, [`${key}#rev`]: String(PROMPT_REVISION) })
       }
       return result.error === undefined ? { text: result.text } : { text: result.text, error: result.error }
     } finally {

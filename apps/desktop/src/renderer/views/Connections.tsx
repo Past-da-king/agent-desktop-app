@@ -185,8 +185,8 @@ export function Connections(): JSX.Element {
               <Row
                 icon="shield"
                 title="Shell commands"
-                line={settings?.shell === 'never' ? 'Never run on this computer' : 'Ask before every command'}
-                right={<span className="pill mute">{settings?.shell === 'never' ? 'Off' : 'Ask first'}</span>}
+                line={settings?.shell === 'never' ? 'Never run on this computer' : settings?.shell === 'always' ? 'Runs without asking' : 'Ask before every command'}
+                right={<span className="pill mute">{settings?.shell === 'never' ? 'Off' : settings?.shell === 'always' ? 'No asking' : 'Ask first'}</span>}
               />
             </div>
           </section>

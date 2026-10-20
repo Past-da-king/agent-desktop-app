@@ -597,23 +597,28 @@ export function Settings(): JSX.Element {
                   <Icon name="shield" size={22} />
                 </div>
                 <div className="rt">
-                  <b>Shell commands</b>
+                  <b>Commands and files</b>
                   <span>
                     {settings?.shell === 'never'
-                      ? 'Never run a command on this computer'
-                      : 'Ask me before every command, every time'}
+                      ? 'Never run a command or code on this computer'
+                      : settings?.shell === 'always'
+                        ? 'Runs commands and code, and opens files anywhere, without asking'
+                        : 'Asks before every command, and before files outside your folders'}
                   </span>
                 </div>
-                <Pill tone="mute">{settings?.shell === 'never' ? 'Off' : 'Ask first'}</Pill>
+                <Pill tone={settings?.shell === 'always' ? 'pri' : 'mute'}>
+                  {settings?.shell === 'never' ? 'Off' : settings?.shell === 'always' ? 'No asking' : 'Ask first'}
+                </Pill>
               </div>
               <div style={{ padding: '0 18px 14px 78px' }}>
                 <Segmented
-                  ariaLabel="Shell commands"
-                  value={settings?.shell === 'never' ? 'never' : 'ask'}
+                  ariaLabel="Commands and files"
+                  value={settings?.shell ?? 'ask'}
                   onChange={(value) => {
                     void save({ shell: value })
                   }}
                   options={[
+                    { value: 'always', label: 'Run without asking' },
                     { value: 'ask', label: 'Ask first' },
                     { value: 'never', label: 'Never' },
                   ]}

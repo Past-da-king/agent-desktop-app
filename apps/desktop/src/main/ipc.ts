@@ -32,6 +32,7 @@ import { POPULAR_APPS } from './apps/catalog'
 import type { AppsService } from './apps/service'
 import { isRule } from './apps/store'
 import type { Store } from './db'
+import { listModels } from './models'
 import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
 import type { SettingsStore } from './settings'
@@ -76,6 +77,7 @@ export interface ChatRunner {
   /** Optional: only the real runner can drive an installed AI tool. */
   checkCli?(): Promise<{ ok: boolean; message: string }>
   cliLogin?(): Promise<{ ok: boolean; message: string }>
+  planModels?(): Promise<Array<{ id: string; label: string; line: string }>>
 }
 
 export interface RoutineService {
@@ -176,6 +178,24 @@ export function registerIpc(deps: IpcDeps): () => void {
   })
 
   handle(CHANNELS.settings.checkKey, async () => checkKey(deps))
+  handle(CHANNELS.settings.listModels, async () => {
+    const current = deps.settings.get()
+    if (current.mode === 'subscription') {
+      const models = (await deps.chat.planModels?.()) ?? []
+      const name = current.cli === 'codex' ? 'ChatGPT' : 'Claude'
+      return models.length > 0
+        ? { ok: true, models, message: `${models.length} models on your ${name} plan.` }
+        : { ok: false, models: [], message: `Could not get the models from your ${name} plan yet. Send one message first, then try again.` }
+    }
+    const key = deps.secrets.get('apiKey')
+    if (key === null || key.trim() === '') return { ok: false, models: [], message: 'Add an API key first.' }
+    return listModels({
+      provider: current.provider,
+      key,
+      ...(current.baseUrl.trim() === '' ? {} : { baseUrl: current.baseUrl.trim() }),
+      ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
+    })
+  })
   handle(CHANNELS.settings.cliLogin, async () =>
     deps.chat.cliLogin === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.cliLogin(),
   )

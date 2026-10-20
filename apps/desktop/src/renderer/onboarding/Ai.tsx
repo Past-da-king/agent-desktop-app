@@ -1,5 +1,5 @@
 import { PROVIDERS } from '@agent/core'
-import type { Found, ProviderId, ProviderInfo } from '@agent/core'
+import type { Found, ProviderId, ProviderInfo, ModelOption } from '@agent/core'
 import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
@@ -8,6 +8,7 @@ import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
 import { Icon } from '../ui/Icon'
+import { ModelList } from '../ui/ModelList'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
 import { OnboardingLayout } from './OnboardingLayout'
@@ -30,7 +31,11 @@ export function Ai(): JSX.Element {
   const initialProvider = settings?.provider ?? 'anthropic'
   const initialInfo = PROVIDERS.find((item) => item.id === initialProvider)
   const [provider, setProvider] = useState<ProviderId>(initialProvider)
-  const [model, setModel] = useState(settings?.model || initialInfo?.defaultModel || '')
+  // Never prefilled: the model is picked from the list the provider returns for this key.
+  const [model, setModel] = useState(settings?.model || '')
+  const [models, setModels] = useState<ModelOption[]>([])
+  // The list came back and only the pick is missing: a calm line, not an error.
+  const [picking, setPicking] = useState(false)
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? '')
   const [allowHttp, setAllowHttp] = useState(settings?.allowHttp ?? false)
   const [key, setKey] = useState('')
@@ -129,8 +134,9 @@ export function Ai(): JSX.Element {
     setOk(false)
     setMessage('')
     const next = providers.find((item) => item.id === value) ?? PROVIDERS.find((item) => item.id === value)
-    setModel(next?.defaultModel ?? '')
-    void save({ provider: value, model: next?.defaultModel ?? '' })
+    setModel('')
+    setModels([])
+    void save({ provider: value, model: '' })
   }
 
   const check = async (): Promise<boolean> => {
@@ -144,13 +150,38 @@ export function Ai(): JSX.Element {
     try {
       await save({
         provider,
-        model: model.trim() || info?.defaultModel || '',
+        model: model.trim(),
         baseUrl: custom ? baseUrl.trim() : '',
         allowHttp,
       })
       if (current !== '') {
         await agent.settings.setApiKey(current)
         setKey('')
+      }
+      // The provider's own model list proves the key and gives the choices in one request.
+      const listed = await agent.settings.listModels()
+      if (listed.ok && listed.models.length > 0) {
+        setModels(listed.models)
+        const keep = model.trim() !== '' && listed.models.some((m) => m.id === model.trim())
+        if (!keep) {
+          // Some providers list models to anyone, so the key itself is checked once a model is picked.
+          setModel('')
+          setOk(false)
+          setPicking(true)
+          setMessage(`${listed.models.length} models to choose from. Pick one below.`)
+          return false
+        }
+      }
+      if (/not accepted|reach/.test(listed.message)) {
+        setOk(false)
+        setMessage(listed.message)
+        return false
+      }
+      // A provider that does not list its models: the typed name is checked with one tiny request.
+      if (model.trim() === '') {
+        setOk(false)
+        setMessage('This provider does not list its models. Type the model name, then check again.')
+        return false
       }
       const result = await agent.settings.checkKey()
       setOk(result.ok)
@@ -166,17 +197,21 @@ export function Ai(): JSX.Element {
   }
 
   const skip = async (): Promise<void> => {
-    await save({ mode: ok ? 'api_key' : 'none', provider, model: model.trim() || info?.defaultModel || '' })
+    await save({ mode: ok && model.trim() !== '' ? 'api_key' : 'none', provider, model: model.trim() })
     navigate({ page: 'onboarding', step: 'style' })
   }
 
   const cont = async (): Promise<void> => {
     // One primary action: if the key has not been checked yet, check it first and only move on when it works.
     if (!ok && !(await check())) return
+    if (model.trim() === '') {
+      setMessage('Pick a model first.')
+      return
+    }
     await save({
       mode: 'api_key',
       provider,
-      model: model.trim() || info?.defaultModel || '',
+      model: model.trim(),
       baseUrl: custom ? baseUrl.trim() : '',
       allowHttp,
     })
@@ -318,26 +353,56 @@ export function Ai(): JSX.Element {
           }}
           placeholder={settings?.hasKey ? 'A key is already saved on this computer' : 'Paste your key'}
           autoComplete="off"
-          error={ok ? '' : message}
-          ok={ok ? message : ''}
+          error={ok || picking ? '' : message}
+          ok={ok || picking ? message : ''}
           onEnter={() => {
             void check()
           }}
         />
 
-        <Field
-          label="Model"
-          value={model}
-          onChange={(value) => {
-            setModel(value)
-            setOk(false)
-            setMessage('')
-          }}
-          placeholder={info?.defaultModel ?? 'Model name'}
-          onEnter={() => {
-            void check()
-          }}
-        />
+        {models.length > 0 ? (
+          <div className="ob-models">
+            <span className="eyebrow mute">MODEL</span>
+            <ModelList
+              models={models}
+              value={model}
+              onPick={(id) => {
+                setModel(id)
+                setOk(false)
+                setPicking(false)
+                setBusy(true)
+                setMessage(`Checking your key with ${id}`)
+                void (async () => {
+                  try {
+                    await save({ provider, model: id })
+                    const result = await agent.settings.checkKey()
+                    setOk(result.ok)
+                    setMessage(result.ok ? `Your key works with ${id}.` : result.message)
+                    if (result.ok) await save({ mode: 'api_key', provider, model: id })
+                  } catch (cause) {
+                    setMessage(cause instanceof Error ? cause.message : 'Could not check that key.')
+                  } finally {
+                    setBusy(false)
+                  }
+                })()
+              }}
+            />
+          </div>
+        ) : (
+          <Field
+            label="Model"
+            value={model}
+            onChange={(value) => {
+              setModel(value)
+              setOk(false)
+              setMessage('')
+            }}
+            placeholder="Check your key to see your models"
+            onEnter={() => {
+              void check()
+            }}
+          />
+        )}
 
         <div className="ob-keyrow">
           <Button variant="tonal" size="sm" onClick={() => void check()} disabled={busy}>
