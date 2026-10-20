@@ -8,6 +8,7 @@ import {
   isEntityName,
   mimeForFile,
   providerFor,
+  type AppInfo,
   type Attachment,
   type BrowserBounds,
   type BrowserState,
@@ -21,6 +22,8 @@ import {
 } from '@agent/core'
 import { readFile, stat } from 'node:fs/promises'
 import { arch as osArch, hostname as osHostname, platform as osPlatform } from 'node:os'
+
+import { APP_NAME, LICENCES_URL } from './app-info'
 
 import type { AccountService, SignInArgs } from './account'
 import type { Store } from './db'
@@ -100,6 +103,9 @@ export interface IpcDeps {
   fetchImpl?: typeof fetch
   /** Filled by `index.ts` from Electron; tests fall back to this machine's own values. */
   systemInfo?: SystemInfo
+  appInfo?: () => AppInfo
+  openLogsFolder?: () => void | Promise<void>
+  openLicences?: () => void | Promise<void>
 }
 
 const NOT_IMPLEMENTED = 'not implemented yet'
@@ -364,6 +370,20 @@ export function registerIpc(deps: IpcDeps): () => void {
     deps.shell?.showItemInFolder(path)
   })
 
+  // ---- app identity ----
+
+  handle(CHANNELS.app.info, async () => {
+    return deps.appInfo?.() ?? fallbackAppInfo()
+  })
+
+  handle(CHANNELS.app.openLogsFolder, async () => {
+    await deps.openLogsFolder?.()
+  })
+
+  handle(CHANNELS.app.openLicences, async () => {
+    await deps.openLicences?.()
+  })
+
   // ---- events out ----
 
   const offSettings = settings.onChange((next) => send(EVENTS.settings, next))
@@ -417,6 +437,17 @@ async function checkKey(deps: IpcDeps): Promise<{ ok: boolean; message: string }
       ok: false,
       message: error instanceof Error ? error.message : 'Could not check the key.',
     }
+  }
+}
+
+function fallbackAppInfo(): AppInfo {
+  return {
+    name: APP_NAME,
+    version: '0.0.0',
+    platform: 'linux',
+    electron: '0.0.0',
+    logsPath: '',
+    licencesUrl: LICENCES_URL,
   }
 }
 

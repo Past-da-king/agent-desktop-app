@@ -279,9 +279,21 @@ export interface HelpersApi {
 
 export type Unsubscribe = () => void
 
+/** 'web' means the mock bridge in a plain browser. */
+export type AppPlatform = 'win32' | 'darwin' | 'linux' | 'web'
+
+/** What the About dialog shows. The logs path is resolved by the main process, never guessed here. */
+export interface AppInfo {
+  name: string
+  version: string
+  platform: AppPlatform
+  electron: string
+  logsPath: string
+  licencesUrl: string
+}
+
 export interface AgentApi {
-  /** 'web' means the mock bridge in a plain browser. */
-  platform: 'win32' | 'darwin' | 'linux' | 'web'
+  platform: AppPlatform
   version: string
 
   settings: {
@@ -382,6 +394,13 @@ export interface AgentApi {
     openExternal(url: string): Promise<void>
     /** Reveal a path in the OS file manager. */
     reveal(path: string): Promise<void>
+  }
+
+  /** Identity and housekeeping for the About dialog. */
+  app: {
+    info(): Promise<AppInfo>
+    openLogsFolder(): Promise<void>
+    openLicences(): Promise<void>
   }
 }
 

@@ -5,7 +5,8 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@agent/core": ["../../packages/core/src/index.ts"]
+      "@agent/core": ["../../packages/core/src/index.ts"],
+      "@agent/core/ipc": ["../../packages/core/src/ipc.ts"]
     }
   },
   "include": ["src", "electron.vite.config.ts", "vite.web.config.ts"]

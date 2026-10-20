@@ -68,6 +68,11 @@ export const CHANNELS = {
     openExternal: 'agent:shell.openExternal',
     reveal: 'agent:shell.reveal',
   },
+  app: {
+    info: 'agent:app.info',
+    openLogsFolder: 'agent:app.openLogsFolder',
+    openLicences: 'agent:app.openLicences',
+  },
 } as const
 
 export const EVENTS = {
