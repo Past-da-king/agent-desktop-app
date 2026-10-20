@@ -286,7 +286,7 @@ export function Ai(): JSX.Element {
           <>
         <div>
           <div className="eyebrow mute" style={{ marginBottom: 10 }}>
-            OR BRING AN API KEY
+            WHICH SERVICE
           </div>
           <div className="prov" role="radiogroup" aria-label="Provider">
             {providers.map((item) => (
@@ -372,11 +372,8 @@ export function Ai(): JSX.Element {
           </div>
         ) : null}
 
-        <ol className="steps">
-          <li>
-            <b>1</b>
-            <span>
-              Open {label}'s console and sign in.{' '}
+            <p className="ob-note">
+              No key yet? Open {label}'s console, add a little credit, create a key and paste it above.{' '}
               {consoleUrl ? (
                 <button
                   type="button"
@@ -388,17 +385,7 @@ export function Ai(): JSX.Element {
                   Open {label}
                 </button>
               ) : null}
-            </span>
-          </li>
-          <li>
-            <b>2</b>
-            <span>Add a little credit. A few dollars lasts a long time.</span>
-          </li>
-          <li>
-            <b>3</b>
-            <span>Create a key, copy it, and paste it above.</span>
-          </li>
-        </ol>
+            </p>
 
           </>
         ) : null}
