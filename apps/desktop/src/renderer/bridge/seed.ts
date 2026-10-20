@@ -19,6 +19,28 @@ export interface SeedResult {
 const DAY = 86_400_000
 const HOUR = 3_600_000
 
+/**
+ * The page the mock bridge pretends the agent opened. Only the browser preview uses it; the real
+ * app shows the live page in the panel instead.
+ */
+export interface SkyHopFlight {
+  time: string
+  code: string
+  fare: string
+  selected: boolean
+}
+
+export const skyHopDemo = {
+  brand: 'SkyHop',
+  action: 'Sign in',
+  route: 'Johannesburg to Durban, Fri 30 Oct',
+  flights: [
+    { time: '06:05', code: 'SH 151', fare: 'R 899', selected: true },
+    { time: '07:30', code: 'BA 220', fare: 'R 1,020', selected: false },
+    { time: '09:40', code: 'SH 157', fare: 'R 1,049', selected: false },
+  ] as SkyHopFlight[],
+} as const
+
 /** Only the query string chooses a mode; everything else is a fresh install. */
 export function readMode(search: string): DemoMode {
   const demo = new URLSearchParams(search).get('demo')
