@@ -161,6 +161,12 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push(
       '- Keep the user\'s to-do list and the agent\'s goals and tasks accurate as you work (task_add, task_update).',
     )
+    lines.push(
+      "- Connected apps (Gmail, Calendar, Slack...) run through apps_connected, apps_find_tools and apps_run; if one the task needs is not connected, apps_connect asks the user and opens the sign-in. Never paste sign-in links. Each account's rules are enforced for you.",
+    )
+    lines.push(
+      "- A website you will need again (a site with no API): check webapp_list for tools you already wrote and run them with webapp_run. If there are none, teach yourself the site once (webapp_guide, then browser_network and browser_eval to map it, then webapp_save).",
+    )
   }
 
   lines.push(
