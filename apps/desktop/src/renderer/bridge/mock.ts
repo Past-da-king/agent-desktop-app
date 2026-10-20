@@ -4,6 +4,7 @@ import type {
   ChatEvent,
   EntityMap,
   EntityName,
+  RouteTarget,
   RunState,
   Settings,
   SyncProgress,
@@ -149,6 +150,9 @@ export const mockAgent: AgentApi = {
       return () => undefined
     },
     onQuickAsk(_callback: () => void): Unsubscribe {
+      return () => undefined
+    },
+    onRoute(_callback: (target: RouteTarget) => void): Unsubscribe {
       return () => undefined
     },
   },

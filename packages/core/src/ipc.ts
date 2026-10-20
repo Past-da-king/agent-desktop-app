@@ -207,6 +207,13 @@ export interface RunState {
 
 export type Decision = 'approve' | 'decline'
 
+/** Where a notification click should take the person. */
+export interface RouteTarget {
+  view: 'home' | 'chat' | 'tasks' | 'memory' | 'routines'
+  /** The row to show, when there is one. */
+  id: string
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The api
 // ---------------------------------------------------------------------------------------------------------------
@@ -273,6 +280,8 @@ export interface AgentApi {
     onMaximizeChange(cb: (maximized: boolean) => void): Unsubscribe
     /** Quick Ask overlay: the main process shows/hides it; the renderer listens. */
     onQuickAsk(cb: () => void): Unsubscribe
+    /** A notification was clicked: open this view and this row. */
+    onRoute(cb: (target: RouteTarget) => void): Unsubscribe
   }
 
   files: {

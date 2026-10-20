@@ -1,14 +1,16 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { app, BrowserWindow, Notification, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, Notification, ipcMain, powerMonitor, safeStorage, shell } from 'electron'
 
 import { providerFor } from '@agent/core'
 
 import { registerIpc, type WindowControls } from './ipc'
 import { AccountService } from './account'
 import { Store } from './db'
+import { Notifier } from './notify'
 import { Runner } from './runtime/runner'
+import { Scheduler } from './runtime/scheduler'
 import { buildToolset } from './runtime/toolset'
 import { Secrets } from './secrets'
 import { SettingsStore } from './settings'
@@ -30,6 +32,7 @@ let smokeTimer: NodeJS.Timeout | null = null
 let store: Store | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+let scheduler: Scheduler | null = null
 let disposeIpc: (() => void) | null = null
 let disposeStore: (() => void) | null = null
 
@@ -214,6 +217,21 @@ async function startServices(): Promise<void> {
   account = new AccountService(store, settings, secrets)
   disposeStore = store.onChange(() => account?.nudge())
 
+  const notifier = new Notifier({
+    supported: () => Notification.isSupported(),
+    create: (options) => new Notification(options),
+    isFocused: () => mainWindow?.isFocused() ?? false,
+    enabled: () => settings.get().notifications,
+    focus: () => {
+      const win = mainWindow
+      if (win === null) return
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+    },
+    route: (target) => broadcast(EVENTS.route, target),
+  })
+
   const fromEnv = process.env['AGENT_SYNC_URL']?.trim() ?? ''
   if (settings.get().syncUrl.trim() === '' && fromEnv !== '') {
     settings.save({ syncUrl: fromEnv })
@@ -233,6 +251,7 @@ async function startServices(): Promise<void> {
         allowHttp: current.allowHttp,
       }),
     notify: showNotification,
+    notifyCard: (itemId, title, body) => notifier.needsYou(itemId, title, body),
     emit: (event) => broadcast(EVENTS.chat, event),
     isFocused: () => mainWindow?.isFocused() ?? false,
   })
@@ -242,12 +261,20 @@ async function startServices(): Promise<void> {
     // Startup repair is best effort: the app must still open if a row cannot be rewritten.
   }
 
+  scheduler = new Scheduler({
+    store,
+    runner,
+    notifyRoutine: (triggerId, name, result) => notifier.routineResult(triggerId, name, result),
+  })
+  scheduler.start()
+
   disposeIpc = registerIpc({
     store,
     settings,
     secrets,
     account,
     chat: runner,
+    routines: scheduler,
     ipcMain,
     windows: windowControls(),
     broadcast,
@@ -270,6 +297,9 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     await startServices()
     createWindow(join(app.getPath('userData'), 'window-state.json'))
+    powerMonitor.on('resume', () => {
+      void scheduler?.resume()
+    })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -283,6 +313,8 @@ if (!app.requestSingleInstanceLock()) {
     disposeIpc = null
     disposeStore?.()
     disposeStore = null
+    scheduler?.stop()
+    scheduler = null
     runner?.dispose()
     runner = null
     account?.dispose()
