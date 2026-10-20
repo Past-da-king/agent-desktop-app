@@ -17,6 +17,7 @@ import { Dialog } from '../ui/Dialog'
 import { Icon } from '../ui/Icon'
 import { MASCOT_ORDER, Mascot, MASCOTS } from '../ui/Mascot'
 import { SectionHeader } from '../ui/SectionHeader'
+import { VoiceSettings } from '../voice/VoiceSettings'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
 
@@ -387,6 +388,8 @@ export function Settings(): JSX.Element {
               </div>
             </div>
           </section>
+
+          <VoiceSettings />
         </div>
 
         <div className="stack">

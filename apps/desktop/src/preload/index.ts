@@ -7,6 +7,8 @@ import type {
   AppsStatus,
   AppInfo,
   Attachment,
+  CallEvent,
+  CallSummary,
   BrowserBounds,
   BrowserState,
   ChatEvent,
@@ -26,6 +28,7 @@ import type {
   SyncStatus,
   SystemInfo,
   Unsubscribe,
+  VoiceResult,
 } from '@agent/core'
 
 import { CHANNELS, EVENTS } from '../shared/channels'
@@ -164,6 +167,20 @@ const api: AgentApi = {
   shell: {
     openExternal: (url) => call<void>(CHANNELS.shell.openExternal, url),
     reveal: (path) => call<void>(CHANNELS.shell.reveal, path),
+  },
+
+  voice: {
+    setKey: (key) => call<void>(CHANNELS.voice.setKey, key),
+    check: () => call<{ ok: boolean; message: string }>(CHANNELS.voice.check),
+    transcribe: (pcm) => call<VoiceResult<{ text: string }>>(CHANNELS.voice.transcribe, pcm),
+    speak: (text) => call<VoiceResult<{ data: string }>>(CHANNELS.voice.speak, text),
+    callStart: () => call<{ ok: boolean; message: string }>(CHANNELS.voice.callStart),
+    callAudio: (pcm) => {
+      ipcRenderer.send(CHANNELS.voice.callAudio, pcm)
+    },
+    callMute: (muted) => call<void>(CHANNELS.voice.callMute, muted),
+    callEnd: () => call<CallSummary | null>(CHANNELS.voice.callEnd),
+    onCall: (callback) => on<CallEvent>(EVENTS.voiceCall, callback),
   },
 
   app: {
