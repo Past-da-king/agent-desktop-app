@@ -22,6 +22,13 @@ export interface BrowserDriver {
   /** While the agent drives, the page ignores the person's mouse and keyboard. */
   setAgentDriving(on: boolean, reason?: string): void
   hasPage(): boolean
+  /**
+   * Learned apps: run script text in the page's own world (so the site's fetch, cookies and globals are
+   * there) and resolve with its JSON-able result. Optional so small test fakes need not implement it.
+   */
+  evaluate?(code: string, timeoutMs?: number): Promise<unknown>
+  /** The address of the active tab, or ''. */
+  currentUrl?(): string
 }
 
 /** Stands in until the window exists, and in tests that do not care about the browser. */

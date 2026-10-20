@@ -191,6 +191,7 @@ const METHODS: Record<string, string[]> = {
     'openInSystem',
   ],
   helpers: ['stop', 'stopAll'],
+  apps: ['status', 'setKey', 'catalog', 'connect', 'disconnect', 'setRules', 'learned', 'removeLearned', 'setTrusted'],
   window: ['minimize', 'toggleMaximize', 'close', 'isMaximized'],
   files: ['pick', 'pickFolder', 'thumbnail'],
   system: ['info'],

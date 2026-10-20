@@ -314,6 +314,91 @@ export interface HelpersApi {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Connected apps (Composio, with the person's own key) and learned apps (sites the agent mapped itself)
+// ---------------------------------------------------------------------------------------------------------------
+
+/** What the agent may do in one account: go ahead, ask first, or never. */
+export type AppRule = 'allow' | 'ask' | 'never'
+
+/** Per account: reading and changing things are each allowed, ask first, or never. */
+export interface AccountRules {
+  read: AppRule
+  change: AppRule
+}
+
+/** Reading runs, changing asks: what a new account starts with. */
+export const DEFAULT_ACCOUNT_RULES: AccountRules = { read: 'allow', change: 'ask' }
+
+/** One signed-in account of a connected app (work Gmail, personal Gmail...). */
+export interface ConnectedAccount {
+  /** Composio's connected account id. */
+  id: string
+  /** Composio toolkit slug, for example gmail. */
+  app: string
+  appName: string
+  /** Who it is signed in as, or the app name when Composio does not say. */
+  label: string
+  status: 'active' | 'pending' | 'failed'
+  rules: AccountRules
+}
+
+/** Which kind of Composio key is stored. Never the key itself. */
+export type ComposioKeyKind = 'project' | 'user' | 'org' | 'consumer' | ''
+
+export interface AppsStatus {
+  hasKey: boolean
+  keyKind: ComposioKeyKind
+  accounts: ConnectedAccount[]
+  /** Apps whose sign-in was opened and is still being waited for. */
+  connecting: string[]
+  /** A plain sentence when the accounts could not be read (bad key, offline), else ''. */
+  message: string
+}
+
+/** An app the person can connect. */
+export interface AppChoice {
+  slug: string
+  name: string
+  line: string
+}
+
+export interface LearnedToolInfo {
+  name: string
+  description: string
+  readOnly: boolean
+}
+
+/** A site the agent mapped once in its own browser, with the tools it saved for it. */
+export interface LearnedAppInfo {
+  id: string
+  name: string
+  startUrl: string
+  host: string
+  about: string
+  /** The person lets its tools that change things run without asking each time. */
+  trusted: boolean
+  updatedAt: number
+  tools: LearnedToolInfo[]
+}
+
+export interface AppsApi {
+  status(): Promise<AppsStatus>
+  /** Checks the Composio key with Composio and stores it in the secrets module only. Pass '' to remove it. */
+  setKey(key: string): Promise<{ ok: boolean; message: string }>
+  /** The popular apps to pick from. */
+  catalog(): Promise<AppChoice[]>
+  /** Opens the app's sign-in in the person's own browser and waits in the background until it is connected. */
+  connect(app: string): Promise<{ ok: boolean; message: string }>
+  disconnect(accountId: string): Promise<void>
+  setRules(accountId: string, rules: AccountRules): Promise<void>
+  learned(): Promise<LearnedAppInfo[]>
+  removeLearned(id: string): Promise<void>
+  setTrusted(id: string, trusted: boolean): Promise<void>
+  /** Fires when accounts, rules, the key or the learned apps change. */
+  onChanged(cb: () => void): Unsubscribe
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The api
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -404,6 +489,7 @@ export interface AgentApi {
     onState(cb: (state: BrowserState) => void): Unsubscribe
   }
   helpers: HelpersApi
+  apps: AppsApi
 
   window: {
     minimize(): void
