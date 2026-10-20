@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 
 import { agent } from '../bridge'
+import { startNewChat } from '../lib/chat-actions'
 import { useUi } from './useUi'
 
 /** Ctrl/Cmd+K, Ctrl/Cmd+N, Ctrl/Cmd+, and the browser stand-in for the Quick Ask hotkey. */
@@ -18,8 +19,7 @@ export function useGlobalKeys(): void {
       }
       if (mod && event.key.toLowerCase() === 'n' && !onboarding) {
         event.preventDefault()
-        state.navigate({ page: 'chat' })
-        state.focusComposer()
+        void startNewChat()
         return
       }
       if (mod && event.key === ',' && !onboarding) {

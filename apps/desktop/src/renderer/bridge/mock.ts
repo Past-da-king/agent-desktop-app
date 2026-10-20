@@ -373,7 +373,7 @@ export const mockAgent: AgentApi = {
     async send(text, attachments) {
       const value = text.trim()
       if (value === '') return
-      insertChat({ kind: 'user', text: value, meta: JSON.stringify({ attachments: attachments?.length ?? 0 }) })
+      insertChat({ kind: 'user', text: value, meta: JSON.stringify({ attachments: attachments ?? [] }) })
       running = true
       runState.running = true
       emitChat({ type: 'run_started' })

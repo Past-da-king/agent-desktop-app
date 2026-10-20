@@ -2,12 +2,13 @@ import type { ChatItem, TaskRow, TriggerRow } from '@agent/core'
 import { useMemo } from 'react'
 
 import { agent, chat } from '../bridge'
-import { openCards } from '../lib/cards'
+import { startNewChat } from '../lib/chat-actions'
 import { dueLabel, greeting, nextRun, scheduleLabel, short, todayEyebrow } from '../lib/format'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
+import { useWaiting } from '../state/useWaiting'
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon } from '../ui/Icon'
@@ -68,7 +69,7 @@ function QuestionCard({ item, agentName }: { item: ChatItem; agentName: string }
           </button>
         ))}
         <button type="button" className="ans" onClick={() => navigate({ page: 'chat' })}>
-          Show me more
+          Open in chat
         </button>
       </div>
       <div className="small muted" style={{ color: 'color-mix(in srgb, var(--on-tc) 82%, transparent)' }}>
@@ -112,7 +113,6 @@ export function Home(): JSX.Element {
   const selectTask = useUi((state) => state.selectTask)
   const setTaskTab = useUi((state) => state.setTaskTab)
 
-  const chat = useEntity('chat_item')
   const tasks = useEntity('task')
   const goals = useEntity('goal')
   const triggers = useEntity('trigger')
@@ -125,9 +125,7 @@ export function Home(): JSX.Element {
   const agentName = settings?.agentName.trim() || 'Your agent'
   const firstName = (settings?.userName.trim() || 'there').split(' ')[0] ?? 'there'
 
-  const needs = openCards(chat)
-  const question = needs.find((item) => item.kind === 'question')
-  const approvals = needs.filter((item) => item.kind === 'approval')
+  const needs = useWaiting()
   const openGoal = goals.find((goal) => goal.status === 'open')
   const goalTasks = openGoal ? tasks.filter((task) => task.goalId === openGoal.id) : []
   const doneSteps = goalTasks.filter((task) => task.status === 'done').length
@@ -190,8 +188,7 @@ export function Home(): JSX.Element {
           </Button>
           <Button
             onClick={() => {
-              navigate({ page: 'chat' })
-              focusComposer()
+              void startNewChat()
             }}
           >
             <Icon name="plus" size={18} />
@@ -370,11 +367,15 @@ export function Home(): JSX.Element {
                   <div className="q">You are all clear.</div>
                   <div className="small muted">I will keep going and tell you when something needs a decision.</div>
                 </div>
-              ) : null}
-              {question ? <QuestionCard item={question} agentName={agentName} /> : null}
-              {approvals.map((item) => (
-                <ApprovalCard key={item.id} item={item} />
-              ))}
+              ) : (
+                needs.map((item) =>
+                  item.kind === 'question' ? (
+                    <QuestionCard key={item.id} item={item} agentName={agentName} />
+                  ) : (
+                    <ApprovalCard key={item.id} item={item} />
+                  ),
+                )
+              )}
             </div>
           </section>
 

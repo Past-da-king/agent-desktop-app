@@ -67,8 +67,37 @@
 .a-msg ol{padding-left:24px;margin:10px 0;display:flex;flex-direction:column;gap:6px}
 .a-msg ol li::marker{color:var(--primary);font-weight:700}
 .a-msg code{font:500 13px/1.4 'Roboto Mono',ui-monospace,monospace;background:var(--s-mid);padding:2px 6px;border-radius:6px}
-.tool{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--on-sv)}
+.a-msg ul,.reader ul{padding-left:24px;margin:8px 0;display:flex;flex-direction:column;gap:5px;list-style:disc}
+.a-msg ul li::marker,.reader ul li::marker{color:var(--primary)}
+.md-h{font:500 20px/1.3 'Roboto Flex','Roboto',sans-serif;margin:10px 0 2px;overflow-wrap:anywhere}
+.md-h.sub{font-size:17px;margin-top:8px}
+.u-row{align-self:flex-end;max-width:72%;display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:0}
+.u-row .u-msg{max-width:100%}
+.u-files{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;min-width:0}
+.u-file{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:999px;background:var(--s-mid);color:var(--on-sv);font-size:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.divider{display:flex;align-items:center;gap:12px;color:var(--on-sv);font-size:12px;padding:2px 0}
+.divider::before,.divider::after{content:'';height:1px;flex:1;background:var(--outline-v)}
+.a-msg.think{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--on-sv);min-height:32px}
+.think .typing{padding:0}
+.think-label{font-size:13px}
+.tool{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--on-sv);min-width:0}
 .tool i{width:28px;height:28px;border-radius:50%;background:var(--sc);color:var(--on-sc);display:grid;place-items:center;flex:none}
+.tool-tag{flex:none;height:24px;padding:0 10px;border-radius:999px;background:var(--s-mid);color:var(--on-bg);font:500 12px/24px 'Roboto',sans-serif}
+.tool-sum{min-width:0;overflow-wrap:anywhere}
+.tool.err i{background:var(--ec);color:var(--err)}
+.tool.err .tool-sum{color:var(--err)}
+.report{background:var(--s-low);border-radius:var(--r-lg);padding:18px 20px;display:flex;flex-direction:column;gap:10px;max-width:760px;min-width:0}
+.report-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.report-words{font-size:12px;color:var(--on-sv)}
+.report-title{font:500 19px/1.3 'Roboto Flex','Roboto',sans-serif;overflow-wrap:anywhere}
+.report-preview{font-size:14px;line-height:1.6;color:var(--on-sv);overflow-wrap:anywhere}
+.reader-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.reader{max-height:52vh;overflow:auto;font-size:15px;line-height:1.7;padding-right:4px}
+.free{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.free input{flex:1;min-width:180px;height:44px;border-radius:999px;border:1.5px solid color-mix(in srgb,var(--on-tc) 40%,transparent);background:var(--bg);color:var(--on-bg);padding:0 18px;font-size:14px;outline:none}
+.free input:focus{border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 25%,transparent)}
+.free input::placeholder{color:var(--on-sv)}
+.free .btn{height:44px;flex:none}
 .hrow{display:flex;align-items:center;gap:14px;background:var(--s-low);border-radius:var(--r-lg);padding:12px 18px 12px 14px;text-align:left;width:100%;transition:background .2s}
 .hrow:hover{background:var(--s-mid)}
 .hrow .hs{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--okc);color:var(--ok)}

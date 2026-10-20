@@ -1,6 +1,7 @@
 import type { ChatItem } from '@agent/core'
 
 import { metaText, parseMeta } from '../lib/meta'
+import { startNewChat } from '../lib/chat-actions'
 import { short, timeAgo } from '../lib/format'
 import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
@@ -58,7 +59,6 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const route = useRoute()
   const navigate = useUi((state) => state.navigate)
-  const focusComposer = useUi((state) => state.focusComposer)
   const items = useEntity('chat_item')
   const goals = useEntity('goal')
   const chats = recentChats(items)
@@ -89,8 +89,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
         className="btn fill newchat lg"
         aria-label="New chat"
         onClick={() => {
-          navigate({ page: 'chat' })
-          focusComposer()
+          void startNewChat()
         }}
       >
         <Icon name="plus" size={22} />

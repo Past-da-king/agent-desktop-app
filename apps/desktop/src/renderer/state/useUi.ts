@@ -18,6 +18,8 @@ interface UiState {
   memKind: MemoryFilter
   /** Bumped when New chat or a palette action should put the cursor in the composer. */
   composerFocus: number
+  /** Bumped when New chat should bring the newest part of the thread back into view. */
+  chatScroll: number
   navigate: (route: Route) => void
   applyHash: (hash: string) => void
   setOverlay: (overlay: OverlayName) => void
@@ -31,6 +33,7 @@ interface UiState {
   setMemoryQuery: (query: string) => void
   setMemoryKind: (kind: MemoryFilter) => void
   focusComposer: () => void
+  scrollChat: () => void
 }
 
 export const useUi = create<UiState>((set) => ({
@@ -43,6 +46,7 @@ export const useUi = create<UiState>((set) => ({
   memQuery: '',
   memKind: 'all',
   composerFocus: 0,
+  chatScroll: 0,
 
   navigate: (route) => {
     const hash = hashFor(route)
@@ -75,6 +79,7 @@ export const useUi = create<UiState>((set) => ({
   setMemoryQuery: (memQuery) => set({ memQuery }),
   setMemoryKind: (memKind) => set({ memKind }),
   focusComposer: () => set((state) => ({ composerFocus: state.composerFocus + 1, overlay: null })),
+  scrollChat: () => set((state) => ({ chatScroll: state.chatScroll + 1 })),
 }))
 
 export function useRoute(): Route {

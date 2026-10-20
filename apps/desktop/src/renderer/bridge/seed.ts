@@ -299,7 +299,11 @@ export function demoRows(): SeedResult['rows'] {
       createdAt: now - 2 * HOUR + 60_000,
       kind: 'user',
       text: 'Find me the three cheapest flights from Joburg to Durban on Friday 30 October, morning only',
-      meta: '{}',
+      meta: JSON.stringify({
+        attachments: [
+          { path: 'C:\\Users\\You\\Pictures\\october-trip.png', name: 'october-trip.png', mime: 'image/png' },
+        ],
+      }),
     },
     {
       id: 'c4',
@@ -316,11 +320,30 @@ export function demoRows(): SeedResult['rows'] {
       meta: '{}',
     },
     {
+      id: 'c5b',
+      createdAt: now - 2 * HOUR + 3 * 60_000 + 30_000,
+      kind: 'report',
+      text: 'Durban trip: what I found',
+      meta: JSON.stringify({
+        title: 'Durban trip: what I found',
+        markdown:
+          '# Durban trip: what I found\n\n## Morning flights\n\n- **SkyHop 06:05**, R 899, window seats left\n- **Breeze Air 07:30**, R 1,020\n- **SkyHop 09:40**, R 1,049\n\nPrices were checked just now. The 06:05 is the best value and gives you the whole morning.\n\n## Guesthouse\n\nOcean Breeze has a quiet room from R 1,150 a night, two minutes from the beach.',
+        words: 68,
+      }),
+    },
+    {
       id: 'c6',
       createdAt: now - 2 * HOUR + 4 * 60_000,
       kind: 'user',
       text: 'Yes, hold the 06:05',
       meta: '{}',
+    },
+    {
+      id: 'c6b',
+      createdAt: now - 2 * HOUR + 4 * 60_000 + 30_000,
+      kind: 'question',
+      text: 'Do you want a window seat on the way back too?',
+      meta: JSON.stringify({ options: ['Yes, a window', 'No preference'], answer: '' }),
     },
     {
       id: 'c7',
