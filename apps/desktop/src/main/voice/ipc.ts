@@ -29,6 +29,11 @@ export function registerVoiceIpc(
     if (typeof text !== 'string' || text.length > MAX_SPEAK) throw new Error('text must be text')
     return voice.speak(text)
   })
+  ipcMain.handle(CHANNELS.voice.noteAudio, async (_event, file) => {
+    if (typeof file !== 'string' || file.length > 120) throw new Error('file must be a note name')
+    const audio = voice.noteAudio(file)
+    return audio === null ? null : new Uint8Array(audio.buffer, audio.byteOffset, audio.byteLength)
+  })
   ipcMain.handle(CHANNELS.voice.callStart, async () => voice.callStart())
   ipcMain.handle(CHANNELS.voice.callMute, async (_event, muted) => {
     voice.callMute(muted === true)

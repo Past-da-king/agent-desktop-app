@@ -6,6 +6,10 @@
  * transcript lands in the chat as one compact `call` row; anything it showed is already there as an
  * agent message.
  */
+import { randomBytes } from 'node:crypto'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import type {
   CallEvent,
   CallSummary,
@@ -28,6 +32,9 @@ import {
   explain,
   speak as speakText,
   transcribe as transcribeAudio,
+  voiceNoteAudio,
+  wavOf,
+  OUTPUT_RATE,
   type ModelChoice,
 } from './gemini'
 import { LiveSession, type SocketFactory, type SocketLike } from './live'
@@ -60,6 +67,8 @@ export interface VoiceDeps {
   platform?: string
   environment?: () => EnvironmentReport | null
   timeZone?: string
+  /** Where voice notes are saved on this computer. */
+  notesDir?: string
 }
 
 const KEY = 'geminiKey'
@@ -71,6 +80,7 @@ export class VoiceService {
   private readonly deps: VoiceDeps
   private readonly now: () => number
   private choice: ModelChoice = DEFAULT_CHOICE
+  private checked = false
   private call: LiveSession | null = null
   private visuals: CallVisual[] = []
   private handoffs = 0
@@ -100,6 +110,7 @@ export class VoiceService {
   async check(): Promise<{ ok: boolean; message: string }> {
     const result = await checkKey(this.gemini())
     if (result.choice !== undefined) this.choice = result.choice
+    this.checked = result.ok
     return { ok: result.ok, message: result.message }
   }
 
@@ -111,6 +122,39 @@ export class VoiceService {
       return { ok: true, text: await transcribeAudio(this.gemini(), pcm, this.choice) }
     } catch (error) {
       return { ok: false, error: explain(error) }
+    }
+  }
+
+  hasKey(): boolean {
+    return this.key() !== null
+  }
+
+  /** A voice note: the agent's own script said in `style`, saved as a WAV under notesDir. */
+  async note(script: string, style: string): Promise<{ ok: true; file: string; durationMs: number } | { ok: false; error: string }> {
+    if (this.key() === null) return { ok: false, error: 'Add a Gemini key in Settings to send voice notes.' }
+    const dir = this.deps.notesDir
+    if (dir === undefined) return { ok: false, error: 'Voice notes are not available in this build.' }
+    try {
+      // The first note of a session asks the key which speech models it has, newest first.
+      if (!this.checked) await this.check()
+      const { pcm } = await voiceNoteAudio(this.gemini(), script, this.deps.settings.get().voiceName || 'Kore', style, this.choice)
+      mkdirSync(dir, { recursive: true })
+      const file = `${this.now()}-${randomBytes(4).toString('hex')}.wav`
+      writeFileSync(join(dir, file), wavOf(pcm))
+      return { ok: true, file, durationMs: Math.round((pcm.length / 2 / OUTPUT_RATE) * 1000) }
+    } catch (error) {
+      return { ok: false, error: explain(error) }
+    }
+  }
+
+  /** A saved note's audio, for the chat's player. Only plain note names: nothing outside notesDir. */
+  noteAudio(file: string): Buffer | null {
+    const dir = this.deps.notesDir
+    if (dir === undefined || !/^[\w-]+\.wav$/.test(file)) return null
+    try {
+      return readFileSync(join(dir, file))
+    } catch {
+      return null
     }
   }
 

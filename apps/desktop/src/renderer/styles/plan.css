@@ -97,3 +97,25 @@
 
 /* The agent's browser stays put at the top of the panel; helpers and memory scroll beneath it. */
 .panel-w .panel-browser{position:sticky;top:-22px;z-index:2;margin:-22px -20px 0;padding:22px 20px 14px;background:var(--s-lowest);border-radius:var(--r-lg) var(--r-lg) 0 0}
+
+/* A voice note from the agent. */
+.vnote-wrap{display:flex;flex-direction:column;align-items:flex-start;gap:6px;max-width:min(440px,100%)}
+.vnote{display:flex;align-items:center;gap:12px;width:100%;padding:8px 10px 8px 8px;border-radius:999px;background:var(--s-low);color:var(--on-bg)}
+.vnote-play{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--primary);color:var(--on-primary);transition:transform .42s var(--spatial),border-radius .42s var(--spatial)}
+.vnote-play:hover{transform:scale(1.04)}
+.vnote-play:active{transform:scale(.94)}
+.vnote.live .vnote-play{border-radius:14px}
+.vnote-play:disabled{background:var(--s-high);color:var(--on-sv)}
+.vnote-spin{width:18px;height:18px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:vnspin .8s linear infinite}
+@keyframes vnspin{to{transform:rotate(360deg)}}
+.vnote-wave{flex:1;min-width:0;height:30px;display:flex;align-items:center;gap:2px;cursor:pointer;border-radius:8px}
+.vnote-wave:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+.vnote-wave i{flex:1;min-width:2px;border-radius:2px;background:var(--outline);opacity:.55;transition:background var(--t-fast,160ms) var(--effects),opacity var(--t-fast,160ms) var(--effects)}
+.vnote-wave i.on{background:var(--primary);opacity:1}
+.vnote-time{margin-left:4px;font:500 12px/1 var(--font);font-variant-numeric:tabular-nums;color:var(--on-sv);min-width:34px;text-align:right}
+.vnote-speed{height:28px;min-width:40px;padding:0 8px;border-radius:999px;background:var(--s-high);color:var(--on-bg);font:600 12px/1 var(--font);font-variant-numeric:tabular-nums}
+.vnote-speed:hover{background:var(--s-highest,var(--s-high))}
+.vnote-words{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:999px;color:var(--on-sv);font:500 12px/1 var(--font)}
+.vnote-words:hover{background:var(--s-high)}
+.vnote-script{margin:0;padding:10px 14px;border-radius:var(--r-md);background:var(--s-low);font-size:14px;line-height:1.55;max-width:65ch;color:var(--on-bg)}
+@media (prefers-reduced-motion:reduce){.vnote-spin{animation:none}}

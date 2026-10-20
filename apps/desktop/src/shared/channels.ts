@@ -93,6 +93,7 @@ export const CHANNELS = {
     check: 'agent:voice.check',
     transcribe: 'agent:voice.transcribe',
     speak: 'agent:voice.speak',
+    noteAudio: 'agent:voice.noteAudio',
     callStart: 'agent:voice.callStart',
     callAudio: 'agent:voice.callAudio',
     callMute: 'agent:voice.callMute',

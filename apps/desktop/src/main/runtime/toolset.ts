@@ -24,6 +24,7 @@ import { taskTools } from '../tools/tasks'
 import { browserRunner, webAppTools } from '../tools/webapps'
 import { budgeted, type StepBudget } from './budget'
 import { browserOwner } from '../browser/owner'
+import { voiceNoteTool, type VoiceNoteMaker } from '../tools/voice-note'
 import type { DataStore } from './data'
 import type { EnvironmentService } from './environment'
 import { helperTools } from '../tools/helpers'
@@ -50,6 +51,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   apps?: AppsService
   /** Sites the agent learned. Omitted in tests that do not need them. */
   learned?: LearnedStore
+  /** Makes voice notes (the voice module). Main agent only. */
+  voiceNotes?: () => VoiceNoteMaker | null
 }
 
 /**
@@ -76,6 +79,7 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   'helper_push',
   'helpers_status',
   'helper_stop',
+  'voice_note',
   // Reserved for M7: routines are the main agent's to propose; a helper carries them out.
   'routine_create',
   'routine_list',
@@ -131,6 +135,8 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
   if (deps.helpers !== undefined) {
     tools.push(...helperTools(deps.helpers)) // delegate, helper_steer, helper_push, helpers_status, helper_stop
   }
+  // Voice notes are for the person only, so helpers never get this.
+  if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
   const budget = deps.mainBudget
   if (budget === undefined) return tools
   return tools.map((tool) => (MAIN_OWN_TOOLS.has(tool.spec.name) ? tool : budgeted(tool, budget)))

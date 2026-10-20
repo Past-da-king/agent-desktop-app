@@ -522,6 +522,8 @@ export interface VoiceApi {
   transcribe(pcm: Uint8Array): Promise<VoiceResult<{ text: string }>>
   /** Speak text with Gemini TTS. Returns 24 kHz mono PCM16, base64. */
   speak(text: string): Promise<VoiceResult<{ data: string }>>
+  /** A voice note's audio (a WAV), by the file name in its chat row. Null when it is not on this computer. */
+  noteAudio(file: string): Promise<Uint8Array | null>
   callStart(): Promise<{ ok: boolean; message: string }>
   /** One chunk of 16 kHz mono PCM16 from the microphone. Fire and forget. */
   callAudio(pcm: Uint8Array): void

@@ -345,6 +345,13 @@ export function demoRows(): SeedResult['rows'] {
       meta: '{}',
     },
     {
+      id: 'c5v',
+      createdAt: now - 2 * HOUR + 3 * 60_000 + 10_000,
+      kind: 'voice_note',
+      text: "Hey Sam. Good news on Durban. <short pause> The cheapest morning flight is SkyHop at five past six, eight hundred and ninety nine rand, and there are still window seats. The other two are a bit pricier and later. <short pause> I can hold the early one for you, just say the word.",
+      meta: JSON.stringify({ file: 'demo.wav', durationMs: 14_000, style: 'upbeat and pleased, quick' }),
+    },
+    {
       id: 'c5b',
       createdAt: now - 2 * HOUR + 3 * 60_000 + 30_000,
       kind: 'report',
