@@ -260,6 +260,30 @@ export class AgentBrowser implements BrowserDriver {
     return tab !== null && isRealPage(tab.view)
   }
 
+  currentUrl(): string {
+    const tab = this.activeTab()
+    return tab === null ? '' : safeUrl(tab.view)
+  }
+
+  /**
+   * Runs script text in the page's main world, for learned apps (reference phone PageJs.direct): the
+   * app injects the text itself, so the site's content security policy does not stop it. A promise
+   * result is awaited. Rejects on a syntax error, a thrown error or the timeout.
+   */
+  async evaluate(code: string, timeoutMs = 30_000): Promise<unknown> {
+    const tab = this.activeTab()
+    if (tab === null || !isRealPage(tab.view)) throw new Error('No page is open yet. Use browser_open with a web address.')
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`The page did not answer within ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs)
+    })
+    try {
+      return await Promise.race([tab.view.webContents.executeJavaScript(code, true), timeout])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
   async open(raw: string): Promise<string> {
     const policy = checkBrowserUrl(raw)
     if (!policy.ok) return policy.reason

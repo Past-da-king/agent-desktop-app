@@ -14,7 +14,7 @@ export interface SafeStorageLike {
   decryptString(encrypted: Buffer): string
 }
 
-export type SecretName = 'apiKey' | 'syncToken'
+export type SecretName = 'apiKey' | 'syncToken' | 'composioKey'
 
 export class Secrets {
   private readonly dir: string

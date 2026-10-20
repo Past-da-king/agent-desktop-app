@@ -33,6 +33,8 @@ import { HelperManager } from './runtime/helpers'
 import { Runner } from './runtime/runner'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
+import { AppsService } from './apps/service'
+import { ConnectedAppsFile, LearnedStore } from './apps/store'
 import { CliHost } from './runtime/cli-host'
 import { Secrets } from './secrets'
 import { SettingsStore } from './settings'
@@ -495,6 +497,14 @@ async function startServices(win: BrowserWindow): Promise<void> {
     openExternal: (url) => shell.openExternal(url),
   })
 
+  const learned = new LearnedStore(join(dir, 'learned-apps.json'))
+  const apps = new AppsService({
+    secrets,
+    file: new ConnectedAppsFile(join(dir, 'connected-apps.json')),
+    learned,
+    openExternal: (url) => shell.openExternal(url),
+  })
+
   const factory = (current: ReturnType<SettingsStore['get']>, key: string): ReturnType<typeof providerFor> =>
     providerFor({
       provider: current.provider,
@@ -514,6 +524,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
       browser: agentBrowser,
       agentName: () => settings.get().agentName,
       environment,
+      apps,
+      learned,
     }),
     deliver: async (note) => {
       if (runner !== null) await runner.deliver(note)
@@ -532,6 +544,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     helpers,
     mainBudget: budget,
     environment,
+    apps,
+    learned,
   })
   // On a subscription the installed AI tool gets the full worker toolset (no main-agent step budget,
   // no helpers: the CLI does that work itself), with the same file picks and approvals.
@@ -543,6 +557,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     browser: agentBrowser,
     agentName: () => settings.get().agentName,
     environment,
+    apps,
+    learned,
   })
   cliHost = new CliHost(() => cliTools, join(app.getPath('userData'), 'cli'), app.getAppPath())
   runner = new Runner({
@@ -613,6 +629,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
     dialogs,
     environment,
+    apps,
     systemInfo: {
       platform: process.platform,
       arch: process.arch,

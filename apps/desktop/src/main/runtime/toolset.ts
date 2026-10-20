@@ -9,6 +9,9 @@
 import { DEFAULT_SETTINGS, type Tool } from '@agent/core'
 
 import { unavailableBrowser, type BrowserDriver } from '../browser/types'
+import type { AppsService } from '../apps/service'
+import type { LearnedStore } from '../apps/store'
+import { appTools } from '../tools/apps'
 import { codeTools } from '../tools/code'
 import { browserTools } from '../tools/browser'
 import { coreTools, type CoreToolDeps } from '../tools/core'
@@ -17,6 +20,7 @@ import { memoryTools } from '../tools/memory'
 import { routineTools } from '../tools/routines'
 import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
+import { browserRunner, webAppTools } from '../tools/webapps'
 import { budgeted, type StepBudget } from './budget'
 import type { DataStore } from './data'
 import type { EnvironmentService } from './environment'
@@ -40,6 +44,10 @@ export interface ToolsetDeps extends CoreToolDeps {
   mainBudget?: StepBudget
   /** The environment scan, so shell_run and run_code use only what is really here. */
   environment?: EnvironmentService
+  /** Connected apps through Composio. Omitted in tests that do not need them. */
+  apps?: AppsService
+  /** Sites the agent learned. Omitted in tests that do not need them. */
+  learned?: LearnedStore
 }
 
 /**
@@ -99,6 +107,8 @@ export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
       browser: deps.browser ?? unavailableBrowser,
       ...(name === undefined ? {} : { agentName: name }),
     }), // browser_open through browser_show_user
+    ...appTools(deps.apps), // apps_connected, apps_find_tools, apps_run, apps_connect
+    ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)), // webapp_*, browser_eval, browser_network
 
   ]
 }
