@@ -64,6 +64,9 @@ export const CHANNELS = {
   system: {
     info: 'agent:system.info',
   },
+  environment: {
+    scan: 'agent:environment.scan',
+  },
   shell: {
     openExternal: 'agent:shell.openExternal',
     reveal: 'agent:shell.reveal',

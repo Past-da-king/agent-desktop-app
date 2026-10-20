@@ -5,7 +5,7 @@
  * desktop changes PLAN.md 5.2 asks for: it lives on the person's computer rather than a handheld, and
  * the parts about connected apps, machines, cards and voice are gone. Branches are not in v1.
  */
-import type { GoalRow, MemoryRow, Settings, TaskRow } from '@agent/core'
+import type { EnvironmentReport, Found, GoalRow, MemoryRow, Settings, TaskRow } from '@agent/core'
 
 import { formatMemory, rank } from './recall'
 import { formatDateTime, localTimeZone } from './time'
@@ -31,6 +31,8 @@ export interface PromptInput {
   liveHelpers?: Array<{ id: string; label: string; brief: string }>
   /** The model every helper runs on. The roster is one model in v1. */
   helperModel?: string
+  /** What the environment scan found. When absent, the block is left out. */
+  environment?: EnvironmentReport | null
 }
 
 export const NO_NAME = 'Your agent'
@@ -167,6 +169,13 @@ export function buildSystemPrompt(input: PromptInput): string {
       : 'STYLE: short. Lead with the answer. Use short bullets for lists. No walls of text. Plain words. No emoji. No em dashes.',
   )
 
+  const computerLines = thisComputerLines(input.environment ?? null)
+  if (computerLines.length > 0) {
+    lines.push('')
+    lines.push('THIS COMPUTER')
+    lines.push(...computerLines)
+  }
+
   if (pinned.length > 0) {
     lines.push('')
     lines.push('CORE MEMORIES (pinned)')
@@ -221,6 +230,39 @@ function taskLine(task: TaskRow): string {
   const owner = task.owner === 'user' ? ", user's to-do" : ''
   const blocker = task.blocker.trim() === '' ? '' : ` (blocked: ${task.blocker.trim()})`
   return `[${task.status}${owner}] ${task.title}${blocker}`
+}
+
+/** OS, the shell the tool will use, and what is really installed. Names and versions only. */
+function thisComputerLines(report: EnvironmentReport | null): string[] {
+  if (report === null) return []
+  const lines: string[] = []
+  const system = platformName(report.os.platform)
+  const release = report.os.release.trim()
+  const osLine = [system, release, report.os.arch].filter((part) => part !== '').join(' ')
+  if (osLine !== '') lines.push(`- System: ${osLine}.`)
+
+  const shell = report.shells.find((item) => item.found)
+  if (shell !== undefined) lines.push(`- shell_run uses: ${shell.label}.`)
+
+  const runtimes = foundLine(report.runtimes)
+  if (runtimes !== '') lines.push(`- Runtimes found: ${runtimes}.`)
+  const aiTools = foundLine(report.aiTools)
+  if (aiTools !== '') lines.push(`- AI tools found: ${aiTools}.`)
+  const missing = report.aiTools
+    .filter((item) => !item.found)
+    .map((item) => item.label)
+  if (missing.length > 0) lines.push(`- Not found: ${missing.join(', ')}.`)
+  lines.push(
+    'Only suggest or use tools that are listed as found. Never tell the person to install something unless they ask.',
+  )
+  return lines
+}
+
+function foundLine(items: Found[]): string {
+  return items
+    .filter((item) => item.found)
+    .map((item) => (item.version === undefined ? item.label : `${item.label} ${item.version}`))
+    .join(', ')
 }
 
 function platformName(platform: string): string {
