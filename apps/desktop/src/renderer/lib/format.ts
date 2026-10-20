@@ -40,6 +40,36 @@ export function dueLabel(task: Pick<TaskRow, 'dueAt'>): string {
   return withTime ? `${label}, ${clock(task.dueAt)}` : label
 }
 
+function pad(value: number): string {
+  return value < 10 ? `0${value}` : String(value)
+}
+
+/** `2026-10-20`, in the computer's own timezone, for an `<input type="date">`. */
+export function dateInputValue(ms: number | null): string {
+  if (ms === null) return ''
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/**
+ * Read an `<input type="date">` back as epoch milliseconds at the time of day the task already had.
+ * A new date with no earlier time gets 09:00, matching the rest of the app.
+ */
+export function dueAtFromDateInput(value: string, previous: number | null): number | null {
+  if (value.trim() === '') return null
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const before = previous === null ? null : new Date(previous)
+  const hours = before !== null && !Number.isNaN(before.getTime()) ? before.getHours() : 9
+  const minutes = before !== null && !Number.isNaN(before.getTime()) ? before.getMinutes() : 0
+  const date = new Date(year, month - 1, day, hours, minutes, 0, 0)
+  return Number.isNaN(date.getTime()) ? null : date.getTime()
+}
+
 export function timeAgo(ms: number | null): string {
   if (ms === null) return ''
   const diff = Date.now() - ms

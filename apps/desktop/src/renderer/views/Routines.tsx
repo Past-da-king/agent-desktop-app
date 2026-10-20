@@ -2,9 +2,10 @@ import type { TriggerRow } from '@agent/core'
 import { useState } from 'react'
 
 import { agent } from '../bridge'
-import { dayLabel, clock, nextRun, scheduleLabel } from '../lib/format'
+import { dayLabel, clock, nextRun, scheduleLabel, timeAgo } from '../lib/format'
 import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
+import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
@@ -17,7 +18,14 @@ import { Segmented } from '../ui/Segmented'
 import { Skeleton } from '../ui/Skeleton'
 import { Switch } from '../ui/Switch'
 
-const TEMPLATES: Array<{ name: string; kind: TriggerRow['kind']; spec: string; prompt: string }> = [
+interface Template {
+  name: string
+  kind: TriggerRow['kind']
+  spec: string
+  prompt: string
+}
+
+const TEMPLATES: Template[] = [
   {
     name: 'Morning brief',
     kind: 'daily',
@@ -50,47 +58,89 @@ const TEMPLATES: Array<{ name: string; kind: TriggerRow['kind']; spec: string; p
   },
 ]
 
+function pad(value: number): string {
+  return value < 10 ? `0${value}` : String(value)
+}
+
+function localDateTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 function nextLabel(trigger: TriggerRow): string {
   const next = nextRun(trigger)
   if (next === null) return 'Off'
   return `${dayLabel(next)}, ${clock(next)}`
 }
 
+function lastLabel(trigger: TriggerRow): string {
+  if (trigger.lastRunAt === null) return 'Not run yet'
+  const result = trigger.lastResult.trim() || 'Ran'
+  const when = timeAgo(trigger.lastRunAt)
+  const readable = when === 'now' ? 'just now' : when === 'Yesterday' || /^[A-Z][a-z]{2}$/.test(when) ? when : `${when} ago`
+  return `Last run ${readable}: ${result}`
+}
+
 function RoutineDialog({
+  trigger,
   template,
   onClose,
 }: {
-  template: (typeof TEMPLATES)[number] | null
+  trigger: TriggerRow | null
+  template: Template | null
   onClose: () => void
 }): JSX.Element {
-  const [name, setName] = useState(template?.name ?? '')
-  const [kind, setKind] = useState<TriggerRow['kind']>(template?.kind ?? 'daily')
-  const [spec, setSpec] = useState(template?.spec ?? '07:00')
-  const [prompt, setPrompt] = useState(template?.prompt ?? '')
+  const [name, setName] = useState(trigger?.name ?? template?.name ?? '')
+  const [kind, setKind] = useState<TriggerRow['kind']>(trigger?.kind ?? template?.kind ?? 'daily')
+  const [spec, setSpec] = useState(trigger?.spec ?? template?.spec ?? '07:00')
+  const [prompt, setPrompt] = useState(trigger?.prompt ?? template?.prompt ?? '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  const changeKind = (next: TriggerRow['kind']): void => {
+    setKind(next)
+    setError('')
+    if (next === 'daily') setSpec('07:00')
+    else if (next === 'interval') setSpec('60')
+    else {
+      const later = new Date(Date.now() + 60 * 60_000)
+      later.setSeconds(0, 0)
+      setSpec(later.toISOString())
+    }
+  }
 
   const save = async (): Promise<void> => {
     if (name.trim() === '') {
       setError('Give the routine a name first.')
       return
     }
-    if (spec.trim() === '') {
-      setError('Choose when it should run.')
-      return
+    if (kind === 'interval') {
+      const minutes = Number(spec)
+      if (!Number.isFinite(minutes) || minutes < 1) {
+        setError('Use a number of minutes of 1 or more.')
+        return
+      }
+    }
+    if (kind === 'at') {
+      const when = new Date(spec).getTime()
+      if (!Number.isFinite(when)) {
+        setError('Choose the day and time it should run.')
+        return
+      }
     }
     setBusy(true)
     const now = Date.now()
     const row: TriggerRow = {
-      id: '',
-      createdAt: now,
+      id: trigger?.id ?? '',
+      createdAt: trigger?.createdAt ?? now,
       name: name.trim(),
       kind,
       spec: spec.trim(),
       prompt: prompt.trim(),
-      enabled: true,
-      lastRunAt: null,
-      lastResult: 'Not run yet',
+      enabled: trigger?.enabled ?? true,
+      lastRunAt: trigger?.lastRunAt ?? null,
+      lastResult: trigger?.lastResult ?? 'Not run yet',
     }
     try {
       await agent.data.upsert('trigger', row)
@@ -102,11 +152,15 @@ function RoutineDialog({
   }
 
   return (
-    <Dialog label="New routine" onClose={onClose} labelledBy="routine-dialog-title">
+    <Dialog
+      label={trigger ? 'Edit routine' : 'New routine'}
+      onClose={onClose}
+      labelledBy="routine-dialog-title"
+    >
       <div>
-        <span className="eyebrow">NEW ROUTINE</span>
+        <span className="eyebrow">{trigger ? 'EDIT ROUTINE' : 'NEW ROUTINE'}</span>
         <h2 className="h2" id="routine-dialog-title" style={{ marginTop: 6 }}>
-          A job on a schedule
+          {trigger ? 'Change this routine' : 'A job on a schedule'}
         </h2>
       </div>
       <Field
@@ -122,10 +176,7 @@ function RoutineDialog({
       <Segmented
         ariaLabel="How often"
         value={kind}
-        onChange={(value) => {
-          setKind(value)
-          setSpec(value === 'daily' ? '07:00' : value === 'interval' ? '60' : new Date().toISOString())
-        }}
+        onChange={changeKind}
         options={[
           { value: 'daily', label: 'Every day' },
           { value: 'interval', label: 'Every few minutes' },
@@ -133,17 +184,20 @@ function RoutineDialog({
         ]}
       />
       <div className="field">
-        <label htmlFor="routine-spec">{kind === 'daily' ? 'Time' : kind === 'interval' ? 'Minutes' : 'When'}</label>
+        <label htmlFor="routine-spec">
+          {kind === 'daily' ? 'Time' : kind === 'interval' ? 'Minutes between runs' : 'When'}
+        </label>
         <input
           id="routine-spec"
           className="input"
           type={kind === 'daily' ? 'time' : kind === 'interval' ? 'number' : 'datetime-local'}
-          value={kind === 'at' ? spec.slice(0, 16) : spec}
+          min={kind === 'interval' ? 1 : undefined}
+          value={kind === 'at' ? localDateTime(spec) : spec}
           onChange={(event) => {
             const value = event.target.value
             if (kind === 'at') {
               const date = new Date(value)
-              setSpec(value === '' || Number.isNaN(date.getTime()) ? '' : date.toISOString())
+              setSpec(value === '' || Number.isNaN(date.getTime()) ? value : date.toISOString())
             } else {
               setSpec(value)
             }
@@ -172,7 +226,7 @@ function RoutineDialog({
           }}
           disabled={busy}
         >
-          {busy ? 'Saving...' : 'Create routine'}
+          {busy ? 'Saving...' : trigger ? 'Save changes' : 'Create routine'}
         </Button>
       </div>
     </Dialog>
@@ -184,7 +238,8 @@ export function Routines(): JSX.Element {
   const triggers = useEntity('trigger')
   const loaded = useEntityLoaded('trigger')
   const navigate = useUi((state) => state.navigate)
-  const [creating, setCreating] = useState<(typeof TEMPLATES)[number] | null | 'blank'>(null)
+  const [dialog, setDialog] = useState<{ trigger: TriggerRow | null; template: Template | null } | null>(null)
+  const [runningId, setRunningId] = useState<string | null>(null)
 
   const sorted = [...triggers].sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name))
   const enabled = sorted.filter((trigger) => trigger.enabled)
@@ -194,7 +249,37 @@ export function Routines(): JSX.Element {
     .sort((a, b) => a.when - b.when)[0]
 
   const toggle = (trigger: TriggerRow): void => {
-    void agent.data.upsert('trigger', { ...trigger, enabled: !trigger.enabled })
+    void agent.data.upsert('trigger', { ...trigger, enabled: !trigger.enabled }).catch((cause: unknown) => {
+      toast(cause instanceof Error ? cause.message : 'Could not change that routine.')
+    })
+  }
+
+  const runNow = async (trigger: TriggerRow): Promise<void> => {
+    setRunningId(trigger.id)
+    try {
+      await agent.routines.runNow(trigger.id)
+      toast(`${trigger.name} is running now.`)
+    } catch {
+      toast(`${trigger.name} is saved and ready. Running it from here needs the scheduler, which is not switched on in this build.`)
+    } finally {
+      setRunningId(null)
+    }
+  }
+
+  const remove = (trigger: TriggerRow): void => {
+    void agent.data
+      .remove('trigger', trigger.id)
+      .then(() => {
+        toast('Routine deleted.', {
+          actionLabel: 'Undo',
+          onAction: () => {
+            void agent.data.upsert('trigger', trigger)
+          },
+        })
+      })
+      .catch((cause: unknown) => {
+        toast(cause instanceof Error ? cause.message : 'Could not delete that routine.')
+      })
   }
 
   return (
@@ -206,7 +291,7 @@ export function Routines(): JSX.Element {
           <p className="lead">Jobs your agent does without being asked.</p>
         </div>
         <div className="ph-actions">
-          <Button onClick={() => setCreating('blank')}>
+          <Button onClick={() => setDialog({ trigger: null, template: null })}>
             <Icon name="plus" size={18} />
             New routine
           </Button>
@@ -221,7 +306,7 @@ export function Routines(): JSX.Element {
           title="No routines yet"
           line="A routine is a small job the agent does on its own, like a morning brief or an inbox sweep."
           action={
-            <Button variant="tonal" size="sm" onClick={() => setCreating('blank')}>
+            <Button variant="tonal" size="sm" onClick={() => setDialog({ trigger: null, template: null })}>
               Create a routine
             </Button>
           }
@@ -237,9 +322,15 @@ export function Routines(): JSX.Element {
                   {nextLabel(next.trigger)}. {next.trigger.prompt || 'It runs on its own and reports back.'}
                 </div>
               </div>
-              <Button variant="fill" comingSoon>
+              <Button
+                variant="fill"
+                disabled={runningId === next.trigger.id}
+                onClick={() => {
+                  void runNow(next.trigger)
+                }}
+              >
                 <Icon name="play" size={18} />
-                Run it now
+                {runningId === next.trigger.id ? 'Running...' : 'Run it now'}
               </Button>
             </div>
           ) : null}
@@ -256,15 +347,42 @@ export function Routines(): JSX.Element {
                     <b>{trigger.name}</b>
                     <span>{scheduleLabel(trigger)}</span>
                     <br />
-                    <span>
-                      {trigger.lastRunAt === null ? 'Not run yet' : `Last: ${trigger.lastResult || 'Ran'}`}
-                    </span>
+                    <span>{lastLabel(trigger)}</span>
                   </div>
-                  <Switch
-                    on={trigger.enabled}
-                    onToggle={() => toggle(trigger)}
-                    label={`Run ${trigger.name}`}
-                  />
+                  <div className="rtn-actions">
+                    <button
+                      type="button"
+                      className="ib"
+                      aria-label={`Run ${trigger.name} now`}
+                      disabled={runningId === trigger.id}
+                      onClick={() => {
+                        void runNow(trigger)
+                      }}
+                    >
+                      <Icon name="play" size={18} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ib"
+                      aria-label={`Edit ${trigger.name}`}
+                      onClick={() => setDialog({ trigger, template: null })}
+                    >
+                      <Icon name="edit" size={18} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ib"
+                      aria-label={`Delete ${trigger.name}`}
+                      onClick={() => remove(trigger)}
+                    >
+                      <Icon name="trash" size={18} />
+                    </button>
+                    <Switch
+                      on={trigger.enabled}
+                      onToggle={() => toggle(trigger)}
+                      label={`Run ${trigger.name}`}
+                    />
+                  </div>
                 </div>
               ))}
             </div>
@@ -278,7 +396,7 @@ export function Routines(): JSX.Element {
                   key={template.name}
                   type="button"
                   className="chip"
-                  onClick={() => setCreating(template)}
+                  onClick={() => setDialog({ trigger: null, template })}
                 >
                   <Icon name="plus" size={16} />
                   {template.name}
@@ -290,7 +408,7 @@ export function Routines(): JSX.Element {
       )}
 
       <div className="banner" style={{ marginTop: 28 }}>
-        Routines run while the app is open. The scheduler and notifications arrive with the live data milestone.
+        Routines run while the app is open. Anything missed while it was closed runs once on the next start.
         {' '}
         <button
           type="button"
@@ -301,13 +419,14 @@ export function Routines(): JSX.Element {
         >
           Notification settings
         </button>{' '}
-        already save for when it does.
+        decide whether results are shown on screen.
       </div>
 
-      {creating !== null ? (
+      {dialog ? (
         <RoutineDialog
-          template={creating === 'blank' ? null : creating}
-          onClose={() => setCreating(null)}
+          trigger={dialog.trigger}
+          template={dialog.template}
+          onClose={() => setDialog(null)}
         />
       ) : null}
     </div>
