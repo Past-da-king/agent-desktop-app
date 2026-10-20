@@ -391,25 +391,27 @@ export function Routines(): JSX.Element {
               ))}
             </div>
           </div>
-
-          <div style={{ marginTop: 34 }}>
-            <SectionHeader eyebrow="START FROM" line="Pick one and change anything" />
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              {TEMPLATES.map((template) => (
-                <button
-                  key={template.name}
-                  type="button"
-                  className="chip"
-                  onClick={() => setDialog({ trigger: null, template })}
-                >
-                  <Icon name="plus" size={16} />
-                  {template.name}
-                </button>
-              ))}
-            </div>
-          </div>
         </>
       )}
+
+      {loaded ? (
+        <div style={{ marginTop: 34 }}>
+          <SectionHeader eyebrow="START FROM" line="Pick one and change anything" />
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {TEMPLATES.map((template) => (
+              <button
+                key={template.name}
+                type="button"
+                className="chip"
+                onClick={() => setDialog({ trigger: null, template })}
+              >
+                <Icon name="plus" size={16} />
+                {template.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="banner" style={{ marginTop: 28 }}>
         Routines run while the app is open. Anything missed while it was closed runs once on the next start.
