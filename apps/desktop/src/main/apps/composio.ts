@@ -440,11 +440,42 @@ export class ConnectBackend implements ComposioBackend {
     return (await this.call('COMPOSIO_SEARCH_TOOLS', { queries: [{ use_case: useCase }] })).slice(0, 16_000)
   }
 
+  private placement: { top: string | null; item: string | null } | null = null
+
+  /**
+   * Where Composio Connect's multi-execute tool takes the account to run in (its docs name an `account`
+   * field, an account id or alias, but not whether it sits on the call or on each tool entry). Read once from
+   * the server's own schema so the choice of account always reaches Composio.
+   */
+  private async accountPlacement(): Promise<{ top: string | null; item: string | null }> {
+    if (this.placement !== null) return this.placement
+    const names = ['account', 'connected_account_id', 'account_id', 'connectedAccountId']
+    let top: string | null = null
+    let item: string | null = null
+    try {
+      await this.ensure()
+      const listed = await this.send('tools/list', {})
+      const tool = asArray(listed['tools']).map(asObject).find((t) => asText(t['name']) === 'COMPOSIO_MULTI_EXECUTE_TOOL')
+      const schema = asObject(tool?.['inputSchema'])
+      const props = asObject(schema['properties'])
+      top = names.find((n) => n in props) ?? null
+      const itemProps = asObject(asObject(asObject(props['tools'])['items'])['properties'])
+      item = names.find((n) => n in itemProps) ?? null
+    } catch {
+      // Unknown schema: fall back to sending it in both places below.
+    }
+    this.placement = { top, item }
+    return this.placement
+  }
+
   async execute(slug: string, args: JsonObject, account: string | null): Promise<{ ok: boolean; text: string }> {
-    const text = await this.call('COMPOSIO_MULTI_EXECUTE_TOOL', {
-      tools: [{ tool_slug: slug, arguments: args }],
-      ...(account === null ? {} : { account }),
-    })
+    const where = account === null ? { top: null, item: null } : await this.accountPlacement()
+    const neither = account !== null && where.top === null && where.item === null
+    const entry: JsonObject = { tool_slug: slug, arguments: args }
+    if (account !== null && (where.item !== null || neither)) entry[where.item ?? 'account'] = account
+    const input: JsonObject = { tools: [entry] }
+    if (account !== null && (where.top !== null || neither)) input[where.top ?? 'account'] = account
+    const text = await this.call('COMPOSIO_MULTI_EXECUTE_TOOL', input)
     return { ok: !text.startsWith('Error:'), text: text.slice(0, 20_000) }
   }
 }
