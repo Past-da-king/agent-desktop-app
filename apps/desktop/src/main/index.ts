@@ -8,8 +8,10 @@ import { providerFor } from '@agent/core'
 import { registerIpc, type WindowControls } from './ipc'
 import { AccountService } from './account'
 import { Store } from './db'
+import { StepBudget } from './runtime/budget'
+import { HelperManager } from './runtime/helpers'
 import { Runner } from './runtime/runner'
-import { buildToolset } from './runtime/toolset'
+import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { Secrets } from './secrets'
 import { SettingsStore } from './settings'
 import { EVENTS } from '../shared/channels'
@@ -219,19 +221,36 @@ async function startServices(): Promise<void> {
     settings.save({ syncUrl: fromEnv })
   }
 
-  const tools = buildToolset({ store })
+  const factory = (current: ReturnType<SettingsStore['get']>, key: string): ReturnType<typeof providerFor> =>
+    providerFor({
+      provider: current.provider,
+      key,
+      baseUrl: current.baseUrl.trim() || undefined,
+      allowHttp: current.allowHttp,
+    })
+  const budget = new StepBudget()
+  const helpers = new HelperManager({
+    store,
+    settings,
+    secrets,
+    providerFactory: factory,
+    workerTools: buildWorkerToolset({ store }),
+    deliver: async (note) => {
+      if (runner !== null) await runner.deliver(note)
+    },
+    platform: process.platform,
+    emit: (event) => broadcast(EVENTS.chat, event),
+    notify: showNotification,
+  })
+  const tools = buildToolset({ store, helpers, mainBudget: budget })
   runner = new Runner({
     store,
     settings,
     secrets,
     tools,
-    providerFactory: (current, key) =>
-      providerFor({
-        provider: current.provider,
-        key,
-        baseUrl: current.baseUrl.trim() || undefined,
-        allowHttp: current.allowHttp,
-      }),
+    helpers,
+    budget,
+    providerFactory: factory,
     notify: showNotification,
     emit: (event) => broadcast(EVENTS.chat, event),
     isFocused: () => mainWindow?.isFocused() ?? false,
