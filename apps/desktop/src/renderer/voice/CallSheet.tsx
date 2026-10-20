@@ -63,14 +63,16 @@ export function CallSheet(): JSX.Element | null {
   const call = useCall()
   const settings = useSettings((state) => state.settings)
   const navigate = useUi((state) => state.navigate)
-  const hangRef = useRef<HTMLButtonElement>(null)
+  const sheetRef = useRef<HTMLElement>(null)
   const live = call.open && call.state !== 'error' && call.state !== 'ended'
   const elapsed = useElapsed(call.startedAt, live)
   const agentName = settings?.agentName.trim() || 'Your agent'
 
   useEffect(() => {
     if (!call.open) return
-    hangRef.current?.focus()
+    sheetRef.current?.focus()
+    // The phone-width bottom bar would sit on top of the call controls.
+    document.body.classList.add('in-call')
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -78,7 +80,10 @@ export function CallSheet(): JSX.Element | null {
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.classList.remove('in-call')
+    }
   }, [call.open])
 
   if (!call.open) return null
@@ -86,7 +91,7 @@ export function CallSheet(): JSX.Element | null {
   const hasVisuals = call.visuals.length > 0
 
   return (
-    <section className={`call-sheet${hasVisuals ? ' has-visuals' : ''}`} role="dialog" aria-modal="true" aria-label={`Call with ${agentName}`}>
+    <section ref={sheetRef} tabIndex={-1} className={`call-sheet${hasVisuals ? ' has-visuals' : ''}`} role="dialog" aria-modal="true" aria-label={`Call with ${agentName}`}>
       <header className="call-top">
         <div className="call-id">
           <span className="eyebrow">LIVE CALL</span>
@@ -147,7 +152,6 @@ export function CallSheet(): JSX.Element | null {
           <span>{call.muted ? 'Unmute' : 'Mute'}</span>
         </button>
         <button
-          ref={hangRef}
           type="button"
           className="call-btn hang"
           aria-label={live ? 'Hang up' : 'Close'}
