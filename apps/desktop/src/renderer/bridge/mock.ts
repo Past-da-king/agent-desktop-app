@@ -1,7 +1,10 @@
-import { DEFAULT_SETTINGS, PROVIDERS } from '@agent/core'
+import { DEFAULT_SETTINGS, GENERAL_PROFILE, PROFILE_COLORS, PROVIDERS } from '@agent/core'
 import type {
   AccountRules,
   AgentApi,
+  AgentProfileInfo,
+  ProfileAccount,
+  ProfileDraft,
   AppChoice,
   AppsStatus,
   ConnectedAccount,
@@ -255,36 +258,95 @@ function notifyBrowser(): void {
 // ---- connected apps and learned apps ----
 
 const MOCK_CATALOG: AppChoice[] = [
-  { slug: 'gmail', name: 'Gmail', line: 'Read, search, draft and send email' },
-  { slug: 'googlecalendar', name: 'Google Calendar', line: 'See your day, find time, add events' },
-  { slug: 'googledrive', name: 'Google Drive', line: 'Find, read and share your files' },
-  { slug: 'googledocs', name: 'Google Docs', line: 'Read and write documents' },
-  { slug: 'googlesheets', name: 'Google Sheets', line: 'Read and update spreadsheets' },
-  { slug: 'outlook', name: 'Outlook', line: 'Microsoft email and calendar' },
-  { slug: 'microsoft_teams', name: 'Microsoft Teams', line: 'Chats, channels and meetings' },
-  { slug: 'one_drive', name: 'OneDrive', line: 'Microsoft files' },
-  { slug: 'slack', name: 'Slack', line: 'Read channels and send messages' },
-  { slug: 'notion', name: 'Notion', line: 'Notes, docs and databases' },
-  { slug: 'todoist', name: 'Todoist', line: 'Tasks and projects' },
-  { slug: 'trello', name: 'Trello', line: 'Boards and cards' },
-  { slug: 'asana', name: 'Asana', line: 'Team tasks and projects' },
-  { slug: 'clickup', name: 'ClickUp', line: 'Tasks, docs and goals' },
-  { slug: 'linear', name: 'Linear', line: 'Issues and projects' },
-  { slug: 'github', name: 'GitHub', line: 'Repos, issues and pull requests' },
-  { slug: 'dropbox', name: 'Dropbox', line: 'Files and folders' },
-  { slug: 'zoom', name: 'Zoom', line: 'Meetings and recordings' },
-  { slug: 'hubspot', name: 'HubSpot', line: 'Contacts, deals and CRM' },
-  { slug: 'airtable', name: 'Airtable', line: 'Bases and records' },
+  { slug: 'gmail', name: 'Gmail', line: 'Read, search, draft and send email', logo: '', categories: ['Email'] },
+  { slug: 'googlecalendar', name: 'Google Calendar', line: 'See your day, find time, add events', logo: '', categories: ['Calendar'] },
+  { slug: 'googledrive', name: 'Google Drive', line: 'Find, read and share your files', logo: '', categories: ['Files'] },
+  { slug: 'googledocs', name: 'Google Docs', line: 'Read and write documents', logo: '', categories: ['Documents'] },
+  { slug: 'googlesheets', name: 'Google Sheets', line: 'Read and update spreadsheets', logo: '', categories: ['Documents'] },
+  { slug: 'googlemeet', name: 'Google Meet', line: 'Meetings, links and recordings', logo: '', categories: ['Meetings'] },
+  { slug: 'outlook', name: 'Outlook', line: 'Microsoft email and calendar', logo: '', categories: ['Email'] },
+  { slug: 'microsoft_teams', name: 'Microsoft Teams', line: 'Chats, channels and meetings', logo: '', categories: ['Chat'] },
+  { slug: 'one_drive', name: 'OneDrive', line: 'Microsoft files', logo: '', categories: ['Files'] },
+  { slug: 'slack', name: 'Slack', line: 'Read channels and send messages', logo: '', categories: ['Chat'] },
+  { slug: 'notion', name: 'Notion', line: 'Notes, docs and databases', logo: '', categories: ['Documents'] },
+  { slug: 'todoist', name: 'Todoist', line: 'Tasks and projects', logo: '', categories: ['Tasks'] },
+  { slug: 'trello', name: 'Trello', line: 'Boards and cards', logo: '', categories: ['Tasks'] },
+  { slug: 'asana', name: 'Asana', line: 'Team tasks and projects', logo: '', categories: ['Tasks'] },
+  { slug: 'clickup', name: 'ClickUp', line: 'Tasks, docs and goals', logo: '', categories: ['Tasks'] },
+  { slug: 'linear', name: 'Linear', line: 'Issues and projects', logo: '', categories: ['Developer'] },
+  { slug: 'github', name: 'GitHub', line: 'Repos, issues and pull requests', logo: '', categories: ['Developer'] },
+  { slug: 'gitlab', name: 'GitLab', line: 'Repos, merge requests and pipelines', logo: '', categories: ['Developer'] },
+  { slug: 'jira', name: 'Jira', line: 'Issues, sprints and boards', logo: '', categories: ['Developer'] },
+  { slug: 'confluence', name: 'Confluence', line: 'Team pages and spaces', logo: '', categories: ['Documents'] },
+  { slug: 'bitbucket', name: 'Bitbucket', line: 'Repos and pull requests', logo: '', categories: ['Developer'] },
+  { slug: 'dropbox', name: 'Dropbox', line: 'Files and folders', logo: '', categories: ['Files'] },
+  { slug: 'box', name: 'Box', line: 'Business files and sharing', logo: '', categories: ['Files'] },
+  { slug: 'zoom', name: 'Zoom', line: 'Meetings and recordings', logo: '', categories: ['Meetings'] },
+  { slug: 'calendly', name: 'Calendly', line: 'Booking links and meetings', logo: '', categories: ['Calendar'] },
+  { slug: 'hubspot', name: 'HubSpot', line: 'Contacts, deals and CRM', logo: '', categories: ['Sales'] },
+  { slug: 'salesforce', name: 'Salesforce', line: 'Accounts, leads and opportunities', logo: '', categories: ['Sales'] },
+  { slug: 'pipedrive', name: 'Pipedrive', line: 'Deals and pipelines', logo: '', categories: ['Sales'] },
+  { slug: 'zendesk', name: 'Zendesk', line: 'Support tickets', logo: '', categories: ['Support'] },
+  { slug: 'intercom', name: 'Intercom', line: 'Customer conversations', logo: '', categories: ['Support'] },
+  { slug: 'freshdesk', name: 'Freshdesk', line: 'Helpdesk tickets', logo: '', categories: ['Support'] },
+  { slug: 'airtable', name: 'Airtable', line: 'Bases and records', logo: '', categories: ['Documents'] },
+  { slug: 'monday', name: 'monday.com', line: 'Boards and workflows', logo: '', categories: ['Tasks'] },
+  { slug: 'basecamp', name: 'Basecamp', line: 'Projects, to-dos and messages', logo: '', categories: ['Tasks'] },
+  { slug: 'miro', name: 'Miro', line: 'Whiteboards and boards', logo: '', categories: ['Design'] },
+  { slug: 'figma', name: 'Figma', line: 'Design files and comments', logo: '', categories: ['Design'] },
+  { slug: 'canva', name: 'Canva', line: 'Designs and brand kits', logo: '', categories: ['Design'] },
+  { slug: 'linkedin', name: 'LinkedIn', line: 'Posts and profile', logo: '', categories: ['Social'] },
+  { slug: 'instagram', name: 'Instagram', line: 'Posts, stories and messages', logo: '', categories: ['Social'] },
+  { slug: 'facebook', name: 'Facebook', line: 'Pages, posts and messages', logo: '', categories: ['Social'] },
+  { slug: 'youtube', name: 'YouTube', line: 'Videos, playlists and comments', logo: '', categories: ['Social'] },
+  { slug: 'twitter', name: 'X', line: 'Posts and messages', logo: '', categories: ['Social'] },
+  { slug: 'reddit', name: 'Reddit', line: 'Posts, comments and messages', logo: '', categories: ['Social'] },
+  { slug: 'discord', name: 'Discord', line: 'Servers and messages', logo: '', categories: ['Chat'] },
+  { slug: 'telegram', name: 'Telegram', line: 'Chats and bots', logo: '', categories: ['Chat'] },
+  { slug: 'whatsapp', name: 'WhatsApp Business', line: 'Messages to customers', logo: '', categories: ['Chat'] },
+  { slug: 'spotify', name: 'Spotify', line: 'Playlists and playback', logo: '', categories: ['Media'] },
+  { slug: 'shopify', name: 'Shopify', line: 'Orders, products and customers', logo: '', categories: ['Commerce'] },
+  { slug: 'stripe', name: 'Stripe', line: 'Payments and invoices', logo: '', categories: ['Finance'] },
+  { slug: 'quickbooks', name: 'QuickBooks', line: 'Invoices and accounts', logo: '', categories: ['Finance'] },
+  { slug: 'xero', name: 'Xero', line: 'Invoices, bills and bank', logo: '', categories: ['Finance'] },
+  { slug: 'paypal', name: 'PayPal', line: 'Payments and transactions', logo: '', categories: ['Finance'] },
+  { slug: 'mailchimp', name: 'Mailchimp', line: 'Audiences and campaigns', logo: '', categories: ['Marketing'] },
+  { slug: 'sendgrid', name: 'SendGrid', line: 'Transactional email', logo: '', categories: ['Marketing'] },
+  { slug: 'typeform', name: 'Typeform', line: 'Forms and responses', logo: '', categories: ['Marketing'] },
+  { slug: 'googleanalytics', name: 'Google Analytics', line: 'Traffic and reports', logo: '', categories: ['Marketing'] },
+  { slug: 'wordpress', name: 'WordPress', line: 'Posts and pages', logo: '', categories: ['Marketing'] },
+  { slug: 'webflow', name: 'Webflow', line: 'Sites and CMS items', logo: '', categories: ['Marketing'] },
+  { slug: 'docusign', name: 'DocuSign', line: 'Envelopes and signatures', logo: '', categories: ['Documents'] },
+  { slug: 'evernote', name: 'Evernote', line: 'Notes and notebooks', logo: '', categories: ['Documents'] },
+  { slug: 'onenote', name: 'OneNote', line: 'Microsoft notebooks', logo: '', categories: ['Documents'] },
+  { slug: 'excel', name: 'Excel', line: 'Microsoft workbooks', logo: '', categories: ['Documents'] },
+  { slug: 'sharepoint', name: 'SharePoint', line: 'Sites, lists and files', logo: '', categories: ['Files'] },
+  { slug: 'googletasks', name: 'Google Tasks', line: 'Your Google to-dos', logo: '', categories: ['Tasks'] },
+  { slug: 'googlecontacts', name: 'Google Contacts', line: 'People and groups', logo: '', categories: ['Contacts'] },
 ]
 
 const seededApps = mode === 'demo' || mode === 'big'
 let appsKeyKind: AppsStatus['keyKind'] = seededApps ? 'project' : ''
 let appsAccounts: ConnectedAccount[] = seededApps
   ? [
-      { id: 'ca_work_gmail', app: 'gmail', appName: 'Gmail', label: 'ana@example.com', status: 'active', rules: { read: 'allow', change: 'ask' } },
-      { id: 'ca_home_gmail', app: 'gmail', appName: 'Gmail', label: 'ana.home@example.org', status: 'active', rules: { read: 'allow', change: 'never' } },
-      { id: 'ca_calendar', app: 'googlecalendar', appName: 'Google Calendar', label: 'ana@example.com', status: 'active', rules: { read: 'allow', change: 'allow' } },
-      { id: 'ca_slack', app: 'slack', appName: 'Slack', label: 'Example Studio workspace', status: 'pending', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_gmail_work', app: 'gmail', appName: 'Gmail', label: 'ana@example.com', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_gmail_sales', app: 'gmail', appName: 'Gmail', label: 'sales@example.com', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_gmail_home', app: 'gmail', appName: 'Gmail', label: 'ana.home@example.org', logo: '', status: 'active', rules: { read: 'allow', change: 'never' } },
+      { id: 'ca_gmail_old', app: 'gmail', appName: 'Gmail', label: 'ana.archive@example.net', logo: '', status: 'active', rules: { read: 'ask', change: 'never' } },
+      { id: 'ca_slack_studio', app: 'slack', appName: 'Slack', label: 'Example Studio workspace', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_slack_club', app: 'slack', appName: 'Slack', label: 'Running club workspace', logo: '', status: 'pending', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_github_work', app: 'github', appName: 'GitHub', label: 'ana-studio', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_github_own', app: 'github', appName: 'GitHub', label: 'ana-codes', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_calendar', app: 'googlecalendar', appName: 'Google Calendar', label: 'ana@example.com', logo: '', status: 'active', rules: { read: 'allow', change: 'allow' } },
+      { id: 'ca_meet', app: 'googlemeet', appName: 'Google Meet', label: 'ana@example.com', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_outlook', app: 'outlook', appName: 'Outlook', label: 'ana@client.example', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_teams', app: 'microsoft_teams', appName: 'Microsoft Teams', label: 'ana@client.example', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_onedrive', app: 'one_drive', appName: 'OneDrive', label: 'ana@client.example', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_clickup', app: 'clickup', appName: 'ClickUp', label: 'Example Studio', logo: '', status: 'active', rules: { read: 'allow', change: 'allow' } },
+      { id: 'ca_linkedin', app: 'linkedin', appName: 'LinkedIn', label: 'Ana Example', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_instagram', app: 'instagram', appName: 'Instagram', label: '@ana.example', logo: '', status: 'active', rules: { read: 'allow', change: 'never' } },
+      { id: 'ca_facebook', app: 'facebook', appName: 'Facebook', label: 'Ana Example', logo: '', status: 'failed', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_youtube', app: 'youtube', appName: 'YouTube', label: 'Ana Example channel', logo: '', status: 'active', rules: { read: 'allow', change: 'ask' } },
     ]
   : []
 const appsConnecting = new Set<string>(seededApps ? ['slack'] : [])
@@ -324,6 +386,74 @@ const appsListeners = new Set<() => void>()
 
 function emitApps(): void {
   for (const listener of appsListeners) listener()
+}
+
+// ---- profiles: General (no accounts), and in the demo Work and Personal ----
+
+function profileAccount(id: string): ProfileAccount | null {
+  const account = appsAccounts.find((each) => each.id === id)
+  return account === undefined ? null : { id: account.id, app: account.app, label: account.label }
+}
+
+let profiles: AgentProfileInfo[] = [
+  { id: 'general', name: GENERAL_PROFILE, color: 'graphite', accounts: [], learned: [], browser: '', general: true },
+  ...(seededApps
+    ? [
+        {
+          id: 'p_work',
+          name: 'Work',
+          color: 'ocean' as const,
+          accounts: [
+            { id: 'ca_gmail_work', app: 'gmail', label: 'ana@example.com' },
+            { id: 'ca_gmail_sales', app: 'gmail', label: 'sales@example.com' },
+            { id: 'ca_slack_studio', app: 'slack', label: 'Example Studio workspace' },
+            { id: 'ca_github_work', app: 'github', label: 'ana-studio' },
+            { id: 'ca_calendar', app: 'googlecalendar', label: 'ana@example.com' },
+            { id: 'ca_meet', app: 'googlemeet', label: 'ana@example.com' },
+            { id: 'ca_outlook', app: 'outlook', label: 'ana@client.example' },
+            { id: 'ca_teams', app: 'microsoft_teams', label: 'ana@client.example' },
+            { id: 'ca_onedrive', app: 'one_drive', label: 'ana@client.example' },
+            { id: 'ca_clickup', app: 'clickup', label: 'Example Studio' },
+            { id: 'ca_linkedin', app: 'linkedin', label: 'Ana Example' },
+          ],
+          learned: ['example_shop'],
+          browser: '',
+          general: false,
+        },
+        {
+          id: 'p_personal',
+          name: 'Personal',
+          color: 'ember' as const,
+          accounts: [
+            { id: 'ca_gmail_home', app: 'gmail', label: 'ana.home@example.org' },
+            { id: 'ca_gmail_old', app: 'gmail', label: 'ana.archive@example.net' },
+            { id: 'ca_slack_club', app: 'slack', label: 'Running club workspace' },
+            { id: 'ca_github_own', app: 'github', label: 'ana-codes' },
+            { id: 'ca_calendar', app: 'googlecalendar', label: 'ana@example.com' },
+            { id: 'ca_linkedin', app: 'linkedin', label: 'Ana Example' },
+            { id: 'ca_instagram', app: 'instagram', label: '@ana.example' },
+            { id: 'ca_facebook', app: 'facebook', label: 'Ana Example' },
+            { id: 'ca_youtube', app: 'youtube', label: 'Ana Example channel' },
+          ],
+          learned: ['hacker_news'],
+          browser: '',
+          general: false,
+        },
+      ]
+    : []),
+]
+const profileListeners = new Set<() => void>()
+
+function emitProfiles(): void {
+  for (const listener of profileListeners) listener()
+}
+
+function nextProfileColor(): AgentProfileInfo['color'] {
+  return PROFILE_COLORS.find((color) => color !== 'graphite' && !profiles.some((p) => p.color === color)) ?? 'iris'
+}
+
+function cleanProfileName(raw: string): string {
+  return raw.trim().replace(/\s+/g, ' ').slice(0, 40)
 }
 
 function appName(slug: string): string {
@@ -751,6 +881,8 @@ export const mockAgent: AgentApi = {
     async disconnect(accountId: string) {
       const gone = appsAccounts.find((account) => account.id === accountId)
       appsAccounts = appsAccounts.filter((account) => account.id !== accountId)
+      profiles = profiles.map((p) => ({ ...p, accounts: p.accounts.filter((a) => a.id !== accountId) }))
+      emitProfiles()
       if (gone && !appsAccounts.some((account) => account.app === gone.app && account.status === 'pending')) {
         appsConnecting.delete(gone.app)
       }
@@ -767,6 +899,8 @@ export const mockAgent: AgentApi = {
     },
     async removeLearned(id: string) {
       learnedApps = learnedApps.filter((app) => app.id !== id)
+      profiles = profiles.map((p) => ({ ...p, learned: p.learned.filter((x) => x !== id) }))
+      emitProfiles()
       emitApps()
     },
     async setTrusted(id: string, trusted: boolean) {
@@ -777,6 +911,81 @@ export const mockAgent: AgentApi = {
       appsListeners.add(callback)
       return () => {
         appsListeners.delete(callback)
+      }
+    },
+  },
+
+  profiles: {
+    async list() {
+      return copy(profiles)
+    },
+    async create(draft: ProfileDraft) {
+      const name = cleanProfileName(draft.name)
+      if (name === '') return { ok: false, message: 'Give the profile a name.' }
+      if (profiles.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+        return { ok: false, message: `There is already a profile called ${name}.` }
+      }
+      const accounts = (draft.accounts ?? []).map(profileAccount).filter((a): a is ProfileAccount => a !== null)
+      const profile: AgentProfileInfo = {
+        id: newId('p'),
+        name,
+        color: draft.color ?? nextProfileColor(),
+        accounts,
+        learned: (draft.learned ?? []).filter((id) => learnedApps.some((app) => app.id === id)),
+        browser: draft.browser ?? '',
+        general: false,
+      }
+      profiles = [...profiles, profile]
+      emitProfiles()
+      return { ok: true, message: `Made ${name}.`, profile: copy(profile) }
+    },
+    async update(id: string, patch: Partial<ProfileDraft>) {
+      const current = profiles.find((p) => p.id === id)
+      if (current === undefined) return { ok: false, message: 'That profile is gone.' }
+      const name = patch.name === undefined ? current.name : cleanProfileName(patch.name)
+      if (name === '') return { ok: false, message: 'Give the profile a name.' }
+      if (current.general && name !== current.name) return { ok: false, message: 'General keeps its name.' }
+      if (profiles.some((p) => p.id !== id && p.name.toLowerCase() === name.toLowerCase())) {
+        return { ok: false, message: `There is already a profile called ${name}.` }
+      }
+      const learned = current.general
+        ? []
+        : patch.learned === undefined
+          ? current.learned
+          : patch.learned.filter((x) => learnedApps.some((app) => app.id === x))
+      const accounts = current.general
+        ? []
+        : patch.accounts === undefined
+          ? current.accounts
+          : patch.accounts.map(profileAccount).filter((a): a is ProfileAccount => a !== null)
+      profiles = profiles.map((p) =>
+        p.id === id
+          ? { ...p, name, color: patch.color ?? p.color, accounts, learned, browser: patch.browser ?? p.browser }
+          : p,
+      )
+      emitProfiles()
+      return { ok: true, message: 'Saved.' }
+    },
+    async remove(id: string) {
+      if (profiles.find((p) => p.id === id)?.general === true) return
+      profiles = profiles
+        .filter((p) => p.id !== id)
+        .map((p) => (p.browser === id ? { ...p, browser: '' } : p))
+      emitProfiles()
+    },
+    async setMember(profileId: string, accountId: string, member: boolean) {
+      const account = profileAccount(accountId)
+      profiles = profiles.map((p) => {
+        if (p.id !== profileId || p.general) return p
+        const rest = p.accounts.filter((a) => a.id !== accountId)
+        return { ...p, accounts: member && account !== null ? [...rest, account] : rest }
+      })
+      emitProfiles()
+    },
+    onChanged(callback: () => void): Unsubscribe {
+      profileListeners.add(callback)
+      return () => {
+        profileListeners.delete(callback)
       }
     },
   },

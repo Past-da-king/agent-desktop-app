@@ -8,7 +8,7 @@
  *     through its COMPOSIO_* tools there.
  * Both sit behind `ComposioBackend`, so the agent's tools and Connections do not care which.
  */
-import type { ComposioKeyKind, JsonObject, JsonValue } from '@agent/core'
+import type { AppChoice, ComposioKeyKind, JsonObject, JsonValue } from '@agent/core'
 
 import { appName, POPULAR_APPS, workspaceLabel } from './catalog'
 
@@ -21,6 +21,32 @@ export interface AppAccount {
   app: string
   status: string
   label: string
+  /** The Composio user the account hangs off (REST only); actions on it are run as that user. */
+  userId?: string
+}
+
+/** Composio's logo service: every toolkit's logo by slug. Used when the toolkit list did not give one. */
+export function logoFor(slug: string): string {
+  return /^[a-z0-9_]{2,60}$/.test(slug) ? `https://logos.composio.dev/api/${slug}` : ''
+}
+
+/** One toolkit from GET /toolkits as an app to pick. Exported for tests. */
+export function toolkitChoice(raw: unknown): AppChoice | null {
+  const o = asObject(raw)
+  const slug = asText(o['slug']).toLowerCase()
+  if (!/^[a-z0-9_]{2,60}$/.test(slug)) return null
+  const meta = asObject(o['meta'])
+  const categories = asArray(meta['categories'])
+    .map((c) => (typeof c === 'string' ? c : asText(asObject(c)['name']) || asText(asObject(c)['id'])))
+    .filter((c) => c !== '')
+  const logo = asText(meta['logo'])
+  return {
+    slug,
+    name: asText(o['name']) || appName(slug),
+    line: asText(meta['description']).replace(/\s+/g, ' ').trim().slice(0, 140),
+    logo: /^https:\/\//.test(logo) ? logo : logoFor(slug),
+    categories,
+  }
 }
 
 export interface ComposioBackend {
@@ -36,6 +62,8 @@ export interface ComposioBackend {
   findTools(query: string, toolkit: string, limit: number): Promise<string>
   /** Runs one action. The text is what the model sees; `ok` false means it failed. */
   execute(slug: string, args: JsonObject, account: string | null): Promise<{ ok: boolean; text: string }>
+  /** Every toolkit Composio offers, with logos. Null when this kind of key cannot list them. */
+  toolkits?(): Promise<AppChoice[] | null>
 }
 
 export class ComposioError extends Error {
@@ -211,18 +239,57 @@ export class RestBackend implements ComposioBackend {
     return `Composio did not accept that key (${last}). Use a key from your Composio project's Settings, API Keys.`
   }
 
+  /** Which Composio user each account hangs off, so an action on it runs as that user. */
+  private readonly owners = new Map<string, string>()
+
+  /**
+   * Every account in the person's Composio project, every page of them. Not only this install's own
+   * user: accounts connected from the phone app or Composio's dashboard hang off other user ids, and
+   * filtering on ours hid them (Connections showed nothing although the person had 18 connected).
+   */
   async accounts(apps?: string[]): Promise<AppAccount[]> {
-    const query = new URLSearchParams({ user_ids: this.userId, limit: '200' })
-    const res = await this.request('GET', `/connected_accounts?${query.toString()}`)
-    const all = asArray(res['items']).map((item): AppAccount => {
-      const c = asObject(item)
-      const app = asText(asObject(c['toolkit'])['slug'])
-      const id = asText(c['id'])
-      const alias = asText(c['alias'])
-      const label = alias || identity(c) || workspaceLabel(app, id) || appName(app)
-      return { id, app, status: asText(c['status']).toUpperCase(), label }
-    })
+    const all: AppAccount[] = []
+    let cursor = ''
+    for (let page = 0; page < 20; page += 1) {
+      const query = new URLSearchParams({ limit: '100' })
+      if (cursor !== '') query.set('cursor', cursor)
+      const res = await this.request('GET', `/connected_accounts?${query.toString()}`)
+      for (const item of asArray(res['items'])) {
+        const c = asObject(item)
+        if (c['is_disabled'] === true) continue
+        const app = asText(asObject(c['toolkit'])['slug'])
+        const id = asText(c['id'])
+        if (id === '' || app === '') continue
+        const alias = asText(c['alias'])
+        const label = alias || identity(c) || workspaceLabel(app, id) || appName(app)
+        const owner = asText(c['user_id'])
+        if (owner !== '') this.owners.set(id, owner)
+        all.push({ id, app, status: asText(c['status']).toUpperCase(), label, ...(owner === '' ? {} : { userId: owner }) })
+      }
+      cursor = asText(res['next_cursor'])
+      if (cursor === '') break
+    }
     return apps === undefined ? all : all.filter((a) => apps.includes(a.app))
+  }
+
+  async toolkits(): Promise<AppChoice[]> {
+    const out: AppChoice[] = []
+    const seen = new Set<string>()
+    let cursor = ''
+    for (let page = 0; page < 5; page += 1) {
+      const query = new URLSearchParams({ limit: '1000', sort_by: 'usage' })
+      if (cursor !== '') query.set('cursor', cursor)
+      const res = await this.request('GET', `/toolkits?${query.toString()}`)
+      for (const item of asArray(res['items'])) {
+        const choice = toolkitChoice(item)
+        if (choice === null || seen.has(choice.slug)) continue
+        seen.add(choice.slug)
+        out.push(choice)
+      }
+      cursor = asText(res['next_cursor'])
+      if (cursor === '') break
+    }
+    return out
   }
 
   /** Find or create a Composio-managed auth config for a toolkit. */
@@ -275,7 +342,7 @@ export class RestBackend implements ComposioBackend {
 
   async execute(slug: string, args: JsonObject, account: string | null): Promise<{ ok: boolean; text: string }> {
     const res = await this.request('POST', `/tools/execute/${encodeURIComponent(slug)}`, {
-      user_id: this.userId,
+      user_id: (account === null ? undefined : this.owners.get(account)) ?? this.userId,
       arguments: args,
       ...(account === null ? {} : { connected_account_id: account }),
     })

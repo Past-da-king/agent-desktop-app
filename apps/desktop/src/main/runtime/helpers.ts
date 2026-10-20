@@ -23,6 +23,7 @@ import {
   type Decision,
   type LlmProvider,
   type Msg,
+  type AgentProfileInfo,
   type Tool,
   type ToolContext,
 } from '@agent/core'
@@ -45,6 +46,15 @@ export interface HelperTask {
   brief: string
   /** Accepted so an old brief still parses; in v1 there is one model on the roster. */
   model?: string
+  /** The profile it works in, by name or id. None named: General, which has none of the person's accounts. */
+  profile?: string
+}
+
+/** What the helper manager needs from the profiles: finding one by name or id, and General. */
+export interface ProfileLookup {
+  find(ref: string): AgentProfileInfo | null
+  general(): AgentProfileInfo
+  all(): AgentProfileInfo[]
 }
 
 /** What the main agent's tools need from the manager. */
@@ -70,6 +80,8 @@ export interface HelperLive {
   brief: string
   state: HelperState
   startedAt: number
+  /** The name of the profile it works in. */
+  profile?: string
 }
 
 export interface HelperManagerDeps {
@@ -93,6 +105,10 @@ export interface HelperManagerDeps {
   notify?: (title: string, body: string) => void
   /** On the person's own plan, every helper is its own Claude Agent SDK / Codex SDK session. */
   cli?: CliHost | null
+  /** Every helper works inside one profile. Without this, every helper is in General. */
+  profiles?: ProfileLookup
+  /** Learned app id -> name, for the helper's YOUR PROFILE line. */
+  learnedNames?: () => Record<string, string>
 }
 
 interface Ready {
@@ -103,6 +119,8 @@ interface Ready {
 interface HelperRun {
   id: string
   label: string
+  /** The profile it works in: it may use only that profile's accounts and browser sign-ins. */
+  profileId: string
   brief: string
   model: string
   pushes: number
@@ -134,6 +152,8 @@ export class HelperManager implements HelperHost {
   private readonly secrets: SecretsView
   private readonly providerFactory: ProviderFactory
   private readonly cli: CliHost | null
+  private readonly profiles: ProfileLookup | null
+  private readonly learnedNames: () => Record<string, string>
   private readonly workerTools: Tool[]
   private readonly deliver: (text: string) => Promise<void> | void
   private readonly platform: string
@@ -161,6 +181,8 @@ export class HelperManager implements HelperHost {
     this.secrets = deps.secrets
     this.providerFactory = deps.providerFactory
     this.cli = deps.cli ?? null
+    this.profiles = deps.profiles ?? null
+    this.learnedNames = deps.learnedNames ?? (() => ({}))
     this.workerTools = deps.workerTools
     this.deliver = deps.deliver
     this.platform = deps.platform ?? process.platform
@@ -182,16 +204,31 @@ export class HelperManager implements HelperHost {
     const clean = tasks.filter((task) => task.brief.trim() !== '').slice(0, MAX_TASKS)
     if (clean.length === 0) return 'No tasks given.'
 
+    // Every helper works inside exactly one profile; with none named it gets General. An unknown name
+    // stops the whole call before anything starts, so the main agent can fix it and send them again.
+    const chosen: AgentProfileInfo[] = []
+    for (const task of clean) {
+      const wanted = (task.profile ?? '').trim()
+      const found = wanted === '' ? this.generalProfile() : (this.profiles?.find(wanted) ?? null)
+      if (found === null) {
+        const names = (this.profiles?.all() ?? []).map((p) => p.name).join(', ')
+        return `No profile called "${wanted}". The user's profiles: ${names === '' ? 'none yet' : names}. Pick one, or make one with profile_create, then delegate again. Nothing was started.`
+      }
+      chosen.push(found)
+    }
+
     const batch = together && clean.length > 1 ? `b${randomUUID().replace(/-/g, '').slice(0, 8)}` : null
     if (batch !== null) this.batches.set(batch, { results: new Map() })
 
     const started: Array<{ id: string; label: string }> = []
-    for (const task of clean) {
+    for (const [index, task] of clean.entries()) {
       const label = (task.label.trim() || labelFromBrief(task.brief)).slice(0, 40)
-      const id = await this.createHelperRow(label, task.brief, ready.model, batch)
+      const profile = chosen[index] ?? this.generalProfile()
+      const id = await this.createHelperRow(label, task.brief, ready.model, batch, profile)
       this.runs.set(id, {
         id,
         label,
+        profileId: profile.id,
         brief: task.brief,
         model: this.modelFor(ready.model, task.model),
         pushes: 0,
@@ -206,7 +243,9 @@ export class HelperManager implements HelperHost {
 
     this.pump()
 
-    const list = started.map((entry) => `#${entry.id} ${entry.label}`).join(', ')
+    const list = started
+      .map((entry, index) => `#${entry.id} ${entry.label}${chosen[index] === undefined ? '' : ` (in ${chosen[index]?.name})`}`)
+      .join(', ')
     return (
       `Started: ${list}. They run in the background and ` +
       (batch === null
@@ -248,6 +287,7 @@ export class HelperManager implements HelperHost {
       this.runs.set(id, {
         id,
         label,
+        profileId: this.profileIdFrom(meta),
         brief: row.text,
         model: '',
         pushes,
@@ -275,6 +315,7 @@ export class HelperManager implements HelperHost {
     this.runs.set(id, {
       id,
       label,
+      profileId: this.profileIdFrom(meta),
       brief: row.text,
       model: this.modelFor(ready.model, stringField(meta['model'])),
       pushes,
@@ -374,6 +415,7 @@ export class HelperManager implements HelperHost {
         brief: run.brief,
         state: 'working',
         startedAt: run.startedAt,
+        profile: this.profiles?.find(run.profileId)?.name ?? this.generalProfile().name,
       }))
   }
 
@@ -657,6 +699,7 @@ export class HelperManager implements HelperHost {
     return {
       agentLabel: run.label,
       owner: `helper:${run.id}`,
+      profile: run.profileId,
       activity: async (text, meta) => {
         const id = ++this.activitySeq
         const row = await this.store.upsert('chat_item', {
@@ -794,6 +837,7 @@ export class HelperManager implements HelperHost {
     brief: string,
     model: string,
     batch: string | null,
+    profile: AgentProfileInfo,
   ): Promise<string> {
     const row = await this.store.upsert('chat_item', {
       kind: 'helper',
@@ -806,6 +850,9 @@ export class HelperManager implements HelperHost {
         queued: true,
         startedAt: this.now(),
         model,
+        profile: profile.name,
+        profileId: profile.id,
+        profileColor: profile.color,
         ...(batch === null ? {} : { batch }),
       }),
     })
@@ -865,8 +912,30 @@ export class HelperManager implements HelperHost {
       latestUserText: run.brief,
       role: 'helper',
       helper: { label: run.label, brief: run.brief },
+      profile: this.profiles?.find(run.profileId) ?? this.generalProfile(),
+      learnedNames: this.learnedNames(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
+  }
+
+  private generalProfile(): AgentProfileInfo {
+    return (
+      this.profiles?.general() ?? {
+        id: 'general',
+        name: 'General',
+        color: 'graphite',
+        accounts: [],
+        learned: [],
+        browser: '',
+        general: true,
+      }
+    )
+  }
+
+  /** A helper sent back keeps the profile it started in (General when that profile is gone). */
+  private profileIdFrom(meta: Record<string, unknown>): string {
+    const id = stringField(meta['profileId'])
+    return (id !== '' ? this.profiles?.find(id)?.id : undefined) ?? this.generalProfile().id
   }
 
   private onPlan(): boolean {

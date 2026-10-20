@@ -164,6 +164,8 @@ export interface ToolContext {
   agentLabel: string
   /** A stable id for who is acting ("main", "routine", "helper:<id>"): each one gets its own browser tab. */
   owner?: string
+  /** The id of the profile a helper works in (its accounts and browser sign-ins). Absent for the main agent. */
+  profile?: string
   /** Show a short line of activity in the chat ("Searched memory"). Returns an id to update. */
   activity(text: string, meta?: JsonObject): Promise<number>
   updateActivity(id: number, text: string, meta?: JsonObject): Promise<void>

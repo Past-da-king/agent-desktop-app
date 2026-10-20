@@ -66,6 +66,13 @@ export const CHANNELS = {
     removeLearned: 'agent:apps.removeLearned',
     setTrusted: 'agent:apps.setTrusted',
   },
+  profiles: {
+    list: 'agent:profiles.list',
+    create: 'agent:profiles.create',
+    update: 'agent:profiles.update',
+    remove: 'agent:profiles.remove',
+    setMember: 'agent:profiles.setMember',
+  },
   window: {
     minimize: 'agent:window.minimize',
     toggleMaximize: 'agent:window.toggleMaximize',
@@ -119,4 +126,5 @@ export const EVENTS = {
   hotkey: 'agent:evt:window.hotkey',
   apps: 'agent:evt:apps.changed',
   voiceCall: 'agent:evt:voice.call',
+  profiles: 'agent:evt:profiles.changed',
 } as const

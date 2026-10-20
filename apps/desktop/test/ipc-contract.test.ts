@@ -192,6 +192,7 @@ const METHODS: Record<string, string[]> = {
   ],
   helpers: ['stop', 'stopAll'],
   apps: ['status', 'setKey', 'catalog', 'connect', 'disconnect', 'setRules', 'learned', 'removeLearned', 'setTrusted'],
+  profiles: ['list', 'create', 'update', 'remove', 'setMember'],
   window: ['minimize', 'toggleMaximize', 'close', 'isMaximized'],
   files: ['pick', 'pickFolder', 'thumbnail'],
   system: ['info'],
@@ -208,6 +209,13 @@ describe('registerIpc', () => {
         expect(handlers.has(channel!), `${group}.${method} has no handler`).toBe(true)
       }
     }
+  })
+
+  it('answers profiles plainly without connected apps, and rejects bad input', async () => {
+    expect(await invoke(CHANNELS.profiles.list)).toEqual([])
+    expect(await invoke(CHANNELS.profiles.create, { name: 'Work' })).toEqual({ ok: false, message: 'Not available in this build.' })
+    await expect(invoke(CHANNELS.profiles.setMember, 'p1', 'ca_1', 'yes')).rejects.toThrow('Invalid member')
+    expect(EVENTS.profiles).toBe('agent:evt:profiles.changed')
   })
 
   it('round trips settings and broadcasts the change', async () => {

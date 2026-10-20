@@ -6,14 +6,18 @@
 import {
   DEFAULT_ACCOUNT_RULES,
   type AccountRules,
+  type AgentProfileInfo,
+  type AppChoice,
   type AppsStatus,
+  type ProfileAccount,
   type ConnectedAccount,
   type LearnedAppInfo,
 } from '@agent/core'
 
-import { appName } from './catalog'
-import { backendFor, keyKind, type AppAccount, type ComposioBackend } from './composio'
+import { appName, POPULAR_APPS } from './catalog'
+import { backendFor, keyKind, logoFor, type AppAccount, type ComposioBackend } from './composio'
 import { AppGuard } from './guard'
+import { ProfileStore } from './profiles'
 import { hostOf, type ConnectedAppsFile, type LearnedStore } from './store'
 
 export const COMPOSIO_SECRET = 'composioKey'
@@ -30,6 +34,8 @@ export interface AppsServiceDeps {
   secrets: SecretsLike
   file: ConnectedAppsFile
   learned: LearnedStore
+  /** Profiles (profiles.json). Without one, an in-memory store with only General is used. */
+  profiles?: ProfileStore
   openExternal: (url: string) => Promise<void>
   fetchImpl?: typeof fetch
   /** How often to look while waiting for a sign-in, and for how long. Tests shorten both. */
@@ -37,6 +43,7 @@ export interface AppsServiceDeps {
   waitMs?: number
 }
 
+const CATALOG_MS = 6 * 60 * 60_000
 const POLL_MS = 4_000
 const WAIT_MS = 5 * 60_000
 
@@ -52,14 +59,19 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export class AppsService {
   readonly guard: AppGuard
+  readonly profiles: ProfileStore
   private cached: { key: string; backend: ComposioBackend } | null = null
   private readonly listeners = new Set<() => void>()
   private readonly connecting = new Set<string>()
+  /** Composio's toolkit list for the current key, kept for six hours. */
+  private toolkitCache: { key: string; at: number; list: AppChoice[] } | null = null
 
   constructor(private readonly deps: AppsServiceDeps) {
+    this.profiles = deps.profiles ?? new ProfileStore(null)
     this.guard = new AppGuard({
       rulesFor: (id) => deps.file.rulesFor(id),
       accountsFor: (apps) => this.activeAccounts(apps),
+      profileOf: (ctx) => this.profileOf(ctx.profile),
     })
     deps.learned.onChange(() => this.changed())
   }
@@ -129,6 +141,7 @@ export class AppsService {
           label: a.label,
           status: a.status === 'ACTIVE' ? 'active' : a.status === 'FAILED' || a.status === 'EXPIRED' ? 'failed' : 'pending',
           rules: this.deps.file.rulesFor(a.id),
+          logo: this.logoOf(a.app),
         }),
       )
     } catch (cause) {
@@ -192,7 +205,55 @@ export class AppsService {
     if (account === undefined) return
     await backend.disconnect(account)
     this.deps.file.forget(accountId)
+    this.profiles.forgetAccount(accountId)
     this.changed()
+  }
+
+  /**
+   * Every app Composio offers, popular ones first, with logos. Without a key, or with a Connect key
+   * (which cannot list toolkits), the popular list with Composio's logo for each.
+   */
+  async catalog(): Promise<AppChoice[]> {
+    const popular = POPULAR_APPS.map((app) => ({ ...app, logo: logoFor(app.slug) }))
+    const key = (this.deps.secrets.get(COMPOSIO_SECRET) ?? '').trim()
+    const backend = this.backend()
+    if (backend === null || backend.toolkits === undefined) return popular
+    if (this.toolkitCache?.key === key && Date.now() - this.toolkitCache.at < CATALOG_MS) return this.toolkitCache.list
+    let all: AppChoice[] | null = null
+    try {
+      all = await backend.toolkits()
+    } catch {
+      all = null
+    }
+    if (all === null || all.length === 0) return this.toolkitCache?.list ?? popular
+    // Popular apps first (with our plain one-line descriptions), then everything else as Composio sorts it.
+    const bySlug = new Map(all.map((app) => [app.slug, app]))
+    const first = POPULAR_APPS.filter((app) => bySlug.has(app.slug)).map((app) => ({ ...bySlug.get(app.slug), ...app, logo: bySlug.get(app.slug)?.logo ?? logoFor(app.slug) }))
+    const firstSlugs = new Set(first.map((app) => app.slug))
+    const list = [...first, ...all.filter((app) => !firstSlugs.has(app.slug))]
+    this.toolkitCache = { key, at: Date.now(), list }
+    return list
+  }
+
+  private logoOf(app: string): string {
+    return this.toolkitCache?.list.find((choice) => choice.slug === app)?.logo ?? logoFor(app)
+  }
+
+  /** The profile a helper works in (by its id from ToolContext.profile), or null for the main agent. */
+  profileOf(profileId: string | undefined): AgentProfileInfo | null {
+    if (profileId === undefined || profileId === '') return null
+    // A helper whose profile was deleted mid-job falls back to General: none of the person's accounts.
+    return this.profiles.find(profileId) ?? this.profiles.general()
+  }
+
+  /** Connected accounts by id, as a profile remembers them. Unknown ids are left out. */
+  async accountRefs(ids: string[]): Promise<ProfileAccount[]> {
+    if (ids.length === 0) return []
+    const all = await this.accounts()
+    return ids
+      .map((id) => all.find((a) => a.id === id))
+      .filter((a): a is AppAccount => a !== undefined)
+      .map((a) => ({ id: a.id, app: a.app, label: a.label }))
   }
 
   rulesFor(accountId: string | null): AccountRules {
@@ -219,6 +280,7 @@ export class AppsService {
 
   removeLearned(id: string): void {
     this.deps.learned.remove(id)
+    this.profiles.forgetLearned(id)
   }
 
   setTrusted(id: string, trusted: boolean): void {

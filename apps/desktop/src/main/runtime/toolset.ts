@@ -28,6 +28,8 @@ import { voiceNoteTool, type VoiceNoteMaker } from '../tools/voice-note'
 import type { DataStore } from './data'
 import type { EnvironmentService } from './environment'
 import { helperTools } from '../tools/helpers'
+import { gateTool } from '../tools/profile-gate'
+import { profileTools } from '../tools/profiles'
 import type { HelperHost } from './helpers'
 import type { SettingsView } from './runner'
 
@@ -84,6 +86,7 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   'routine_create',
   'routine_list',
   'routine_delete',
+  'profile_create',
 ])
 
 /** Everything a helper may use: all the working groups, never delegate or helper_*. */
@@ -96,9 +99,27 @@ function asOwner(tools: Tool[]): Tool[] {
 }
 
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
+  const tools = workerTools(deps)
+  const apps = deps.apps
+  // Outermost, so everything a tool does (the profile switch included) is done as its own agent.
+  if (apps === undefined) return asOwner(tools)
+  // Each helper's profile: its own browser sign-ins and only its learned apps (profile-gate.ts).
+  const browser = deps.browser
+  return asOwner(tools.map((tool) =>
+    gateTool(tool, {
+      profileOf: (ctx) => apps.profileOf(ctx.profile),
+      partitionOf: (id) => apps.profiles.partitionOf(id),
+      ...(browser?.usePartition === undefined ? {} : { usePartition: (partition: string) => browser.usePartition?.(partition) }),
+      ...(deps.learned === undefined ? {} : { learned: deps.learned }),
+      addLearned: (profileId, appId) => apps.profiles.setLearned(profileId, appId, true),
+    }),
+  ))
+}
+
+function workerTools(deps: ToolsetDeps): Tool[] {
   const settings = deps.settings ?? { get: () => DEFAULT_SETTINGS }
   const name = deps.agentName
-  return asOwner([
+  return [
     ...coreTools(deps), // now, ask_user, request_approval, notify_user, web_fetch, report
     ...memoryTools(deps.store), // memory_search, memory_get, memory_save, memory_update
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
@@ -127,13 +148,14 @@ export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
     ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)).filter((tool) => tool.spec.name !== 'browser_eval'), // webapp_*, browser_network
     ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
 
-  ])
+  ]
 }
 
 export function buildToolset(deps: ToolsetDeps): Tool[] {
   const tools = buildWorkerToolset(deps)
   if (deps.helpers !== undefined) {
     tools.push(...helperTools(deps.helpers)) // delegate, helper_steer, helper_push, helpers_status, helper_stop
+    tools.push(...profileTools(deps.apps, deps.learned)) // profile_create
   }
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
