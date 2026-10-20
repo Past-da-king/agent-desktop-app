@@ -154,6 +154,12 @@ const PATHS = {
     </>
   ),
   trash: <path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13" />,
+  edit: (
+    <>
+      <path d="M4 20h4l11-11a2.4 2.4 0 0 0-3.4-3.4L5 16.5z" />
+      <path d="m14.5 6.5 3 3" />
+    </>
+  ),
   cal: (
     <>
       <rect x="4" y="5.5" width="16" height="14.5" rx="2" />

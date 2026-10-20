@@ -63,6 +63,10 @@
   .cfoot{display:none}
   .model{display:none}
   .compose-in .ib.hide-m{display:none}
+  .toasts{bottom:calc(94px + env(safe-area-inset-bottom,0px))}
+  .rtn{flex-wrap:wrap}
+  .rtn .rt{flex:1 1 150px}
+  .rtn-actions{margin-left:auto}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}

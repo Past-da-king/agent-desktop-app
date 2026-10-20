@@ -150,9 +150,11 @@ describe('SyncClient push and pull', () => {
     const { token } = await account(fake.url)
     const client = new SyncClient(fake.url, token)
 
-    const started = Date.now()
+    // A monotonic clock: the system wall clock can be corrected mid-test on WSL, which once made
+    // this elapsed value negative even though the long poll waited the full second.
+    const started = performance.now()
     const pulled = await client.pull(0, { wait: 1 })
-    const elapsed = Date.now() - started
+    const elapsed = performance.now() - started
     expect(pulled.changes).toEqual([])
     expect(elapsed).toBeGreaterThanOrEqual(900)
   })
