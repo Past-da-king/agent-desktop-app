@@ -50,7 +50,7 @@ function listFolder(path: string): string[] {
   }
 }
 
-const fileProbe: EnvironmentFs = {
+export const fileProbe: EnvironmentFs = {
   exists: existsSync,
   isDirectory,
   size: sizeOf,

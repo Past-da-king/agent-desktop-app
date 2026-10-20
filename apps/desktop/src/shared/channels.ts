@@ -10,6 +10,7 @@ export const CHANNELS = {
     providers: 'agent:settings.providers',
     setApiKey: 'agent:settings.setApiKey',
     checkKey: 'agent:settings.checkKey',
+    checkCli: 'agent:settings.checkCli',
     reset: 'agent:settings.reset',
   },
   account: {

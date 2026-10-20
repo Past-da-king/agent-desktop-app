@@ -258,6 +258,10 @@ export const mockAgent: AgentApi = {
       saveSettings({ hasKey: true })
       return { ok: true, message: 'Key works.' }
     },
+    async checkCli() {
+      await delay(900)
+      return { ok: true, message: 'Claude Code is signed in and working on your plan.' }
+    },
     async reset() {
       rows = {
         chat_item: [],

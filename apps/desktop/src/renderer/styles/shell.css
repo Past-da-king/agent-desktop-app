@@ -8,7 +8,7 @@
 .shell.col.panel{grid-template-columns:76px minmax(0,1fr) var(--panel-w,380px)}
 .shell.panel-collapsed{grid-template-columns:272px minmax(0,1fr) 56px}
 .shell.col.panel-collapsed{grid-template-columns:76px minmax(0,1fr) 56px}
-.rail{display:flex;flex-direction:column;gap:4px;min-height:0;overflow:auto;padding:2px 4px 4px;scrollbar-width:thin}
+.rail{display:flex;flex-direction:column;gap:4px;min-height:0;overflow:auto;padding:2px 4px 4px;}
 .me{display:flex;align-items:center;gap:12px;padding:6px 8px 12px;text-align:left;border-radius:var(--r-md)}
 .me:hover{background:var(--s-mid)}
 .me .nm{font:500 18px/1.2 var(--font)}
@@ -40,7 +40,7 @@
 .col .badge.pos{position:absolute;top:2px;right:6px;min-width:18px;height:18px;line-height:18px;font-size:12px;padding:0 5px}
 .nav{position:relative}
 
-.sheet{background:var(--s-lowest);border-radius:var(--r-lg);overflow:auto;min-height:0;scrollbar-width:thin}
+.sheet{background:var(--s-lowest);border-radius:var(--r-lg);overflow:auto;min-height:0;}
 .page{padding:36px 44px 56px;max-width:1240px;margin:0 auto}
 .ph{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:30px;flex-wrap:wrap}
 .ph .eyebrow{margin-bottom:6px;display:block}
