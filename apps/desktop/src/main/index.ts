@@ -267,6 +267,7 @@ async function startServices(): Promise<void> {
     secrets,
     account,
     chat: runner,
+    helpers,
     ipcMain,
     windows: windowControls(),
     broadcast,

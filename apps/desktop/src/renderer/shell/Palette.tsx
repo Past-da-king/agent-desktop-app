@@ -135,6 +135,15 @@ export function Palette(): JSX.Element | null {
     },
     { id: 'do-todo', label: 'Add a to-do', icon: 'plus', run: addTodo },
     {
+      id: 'do-stop-helpers',
+      label: 'Stop all helpers',
+      icon: 'stop',
+      run: () => {
+        close()
+        void agent.helpers.stopAll()
+      },
+    },
+    {
       id: 'do-quick',
       label: 'Quick ask',
       icon: 'bolt',

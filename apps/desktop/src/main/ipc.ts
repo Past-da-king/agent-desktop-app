@@ -21,6 +21,7 @@ import {
 
 import type { AccountService, SignInArgs } from './account'
 import type { Store } from './db'
+import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
 import type { SettingsStore } from './settings'
 import { CHANNELS, EVENTS } from '../shared/channels'
@@ -61,6 +62,7 @@ export interface IpcDeps {
   secrets: Secrets
   account: AccountService
   chat: ChatRunner
+  helpers?: HelperHost
   ipcMain: IpcMainLike
   windows: WindowControls
   broadcast?: Broadcast
@@ -184,6 +186,19 @@ export function registerIpc(deps: IpcDeps): () => void {
       throw new Error('decision must be approve or decline')
     }
     await chat.decide(id, rawDecision)
+  })
+
+  // ---- helpers ----
+
+  handle(CHANNELS.helpers.stop, async (_event, rawId) => {
+    const id = requireString(rawId, 'helper id', MAX_STRING)
+    if (deps.helpers === undefined) return false
+    return deps.helpers.stop(id)
+  })
+
+  handle(CHANNELS.helpers.stopAll, async () => {
+    if (deps.helpers === undefined) return 0
+    return deps.helpers.stopAll()
   })
 
   // ---- not built yet ----

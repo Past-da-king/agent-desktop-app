@@ -34,6 +34,10 @@ export const CHANNELS = {
   routines: {
     runNow: 'agent:routines.runNow',
   },
+  helpers: {
+    stop: 'agent:helpers.stop',
+    stopAll: 'agent:helpers.stopAll',
+  },
   window: {
     minimize: 'agent:window.minimize',
     toggleMaximize: 'agent:window.toggleMaximize',

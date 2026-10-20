@@ -441,6 +441,37 @@ export const mockAgent: AgentApi = {
     },
   },
 
+  helpers: {
+    async stop(id) {
+      const index = rows.chat_item.findIndex((item) => item.id === id && item.kind === 'helper')
+      const current = rows.chat_item[index]
+      if (index < 0 || !current) return false
+      const meta = parseMeta(current.meta)
+      if (meta['state'] !== 'working') return false
+      patchCard(id, {
+        state: 'stopped',
+        summary: 'Stopped',
+        endedAt: Date.now(),
+        queued: false,
+      })
+      return true
+    },
+    async stopAll() {
+      const working = rows.chat_item.filter(
+        (item) => item.kind === 'helper' && parseMeta(item.meta)['state'] === 'working',
+      )
+      for (const item of working) {
+        patchCard(item.id, {
+          state: 'stopped',
+          summary: 'Stopped',
+          endedAt: Date.now(),
+          queued: false,
+        })
+      }
+      return working.length
+    },
+  },
+
   window: {
     minimize() {
       return undefined
