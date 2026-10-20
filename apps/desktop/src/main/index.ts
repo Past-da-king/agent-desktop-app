@@ -23,9 +23,11 @@ import { AgentBrowser } from './browser/browser'
 import { Store } from './db'
 import { Notifier } from './notify'
 import { HotkeyBinder, QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
+import { StepBudget } from './runtime/budget'
+import { HelperManager } from './runtime/helpers'
 import { Runner } from './runtime/runner'
 import { Scheduler } from './runtime/scheduler'
-import { buildToolset } from './runtime/toolset'
+import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { Secrets } from './secrets'
 import { SettingsStore } from './settings'
 import { createTray, type TrayHandle } from './tray'
@@ -412,6 +414,32 @@ async function startServices(win: BrowserWindow): Promise<void> {
     openExternal: (url) => shell.openExternal(url),
   })
 
+  const factory = (current: ReturnType<SettingsStore['get']>, key: string): ReturnType<typeof providerFor> =>
+    providerFor({
+      provider: current.provider,
+      key,
+      baseUrl: current.baseUrl.trim() || undefined,
+      allowHttp: current.allowHttp,
+    })
+  const budget = new StepBudget()
+  const helpers = new HelperManager({
+    store,
+    settings,
+    secrets,
+    providerFactory: factory,
+    workerTools: buildWorkerToolset({
+      store,
+      settings,
+      browser: agentBrowser,
+      agentName: () => settings.get().agentName,
+    }),
+    deliver: async (note) => {
+      if (runner !== null) await runner.deliver(note)
+    },
+    platform: process.platform,
+    emit: (event) => broadcast(EVENTS.chat, event),
+    notify: showNotification,
+  })
   const tools = buildToolset({
     store,
     settings,
@@ -419,19 +447,17 @@ async function startServices(win: BrowserWindow): Promise<void> {
     pickFiles: pickFilePaths,
     browser: agentBrowser,
     agentName: () => settings.get().agentName,
+    helpers,
+    mainBudget: budget,
   })
   runner = new Runner({
     store,
     settings,
     secrets,
     tools,
-    providerFactory: (current, key) =>
-      providerFor({
-        provider: current.provider,
-        key,
-        baseUrl: current.baseUrl.trim() || undefined,
-        allowHttp: current.allowHttp,
-      }),
+    helpers,
+    budget,
+    providerFactory: factory,
     notify: showNotification,
     notifyCard: (itemId, title, body) => notifier.needsYou(itemId, title, body),
     emit: (event) => {

@@ -1,6 +1,10 @@
 /**
  * The one tool registry. Every group is one line, so a later milestone adds its tools by appending a
  * single line here (routines in M7, files/shell in M8, browser in M9, helpers in M10).
+ *
+ * The main agent gets everything, plus the helper tools, plus a budget on its action tools. The
+ * worker toolset (what a helper runs with) is the same groups without the helper tools and without
+ * the budget.
  */
 import { DEFAULT_SETTINGS, type Tool } from '@agent/core'
 
@@ -13,7 +17,10 @@ import { memoryTools } from '../tools/memory'
 import { routineTools } from '../tools/routines'
 import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
+import { budgeted, type StepBudget } from './budget'
 import type { DataStore } from './data'
+import { helperTools } from '../tools/helpers'
+import type { HelperHost } from './helpers'
 import type { SettingsView } from './runner'
 
 export interface ToolsetDeps extends CoreToolDeps {
@@ -26,9 +33,44 @@ export interface ToolsetDeps extends CoreToolDeps {
   /** Omitted in tests and before the window exists; the browser tools then say it is not open. */
   browser?: BrowserDriver
   agentName?: () => string
+  /** Present in the main process: lets the main agent hand work to helpers. */
+  helpers?: HelperHost
+  /** Present for the main agent: action tools stop after this many steps in one turn. */
+  mainBudget?: StepBudget
 }
 
-export function buildToolset(deps: ToolsetDeps): Tool[] {
+/**
+ * The tools the main agent always does itself: memory, goals and tasks, asking, the report card and
+ * the helper controls. Everything else (web, files, shell, code, the browser, routines) is an action
+ * and is budgeted or handed to a helper.
+ */
+const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
+  'now',
+  'ask_user',
+  'request_approval',
+  'notify_user',
+  'report',
+  'memory_search',
+  'memory_get',
+  'memory_save',
+  'memory_update',
+  'task_add',
+  'task_list',
+  'task_update',
+  'goal_create',
+  'delegate',
+  'helper_steer',
+  'helper_push',
+  'helpers_status',
+  'helper_stop',
+  // Reserved for M7: routines are the main agent's to propose; a helper carries them out.
+  'routine_create',
+  'routine_list',
+  'routine_delete',
+])
+
+/** Everything a helper may use: all the working groups, never delegate or helper_*. */
+export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
   const settings = deps.settings ?? { get: () => DEFAULT_SETTINGS }
   const name = deps.agentName
   return [
@@ -49,6 +91,16 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
     }), // browser_open through browser_show_user
 
   ]
+}
+
+export function buildToolset(deps: ToolsetDeps): Tool[] {
+  const tools = buildWorkerToolset(deps)
+  if (deps.helpers !== undefined) {
+    tools.push(...helperTools(deps.helpers)) // delegate, helper_steer, helper_push, helpers_status, helper_stop
+  }
+  const budget = deps.mainBudget
+  if (budget === undefined) return tools
+  return tools.map((tool) => (MAIN_OWN_TOOLS.has(tool.spec.name) ? tool : budgeted(tool, budget)))
 }
 
 /** Re-exported so a caller only needs this module to build a toolset. */
