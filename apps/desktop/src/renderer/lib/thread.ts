@@ -1,7 +1,7 @@
 import type { Attachment, ChatItem } from '@agent/core'
 
 import { short } from './format'
-import { helperVisible, isHelper, isHelperActivity } from './helpers'
+import { isHelper, isHelperActivity } from './helpers'
 import { metaText, parseMeta } from './meta'
 
 /**
@@ -14,7 +14,8 @@ export function threadItems(items: ChatItem[]): ChatItem[] {
     .filter((item) => item.kind !== 'branch')
     .filter((item) => !(item.kind === 'question' && parseMeta(item.meta)['context'] === 'home'))
     .filter((item) => !isHelperActivity(item))
-    .filter((item) => !isHelper(item) || helperVisible(item, items))
+    // Helpers live in the side panel (shell/HelpersPanel.tsx), not in the thread.
+    .filter((item) => !isHelper(item))
     .sort((a, b) => a.createdAt - b.createdAt)
 }
 

@@ -35,6 +35,7 @@ import {
   type FitResult,
   type ViewSpec,
 } from './emulation'
+import { currentOwner } from './owner'
 import {
   assessPage,
   diagnosis,
@@ -263,6 +264,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (index === -1) return
     const [tab] = this.tabs.splice(index, 1)
     if (tab === undefined) return
+    for (const [owner, tabId] of this.ownerTabs) if (tabId === tab.id) this.ownerTabs.delete(owner)
     this.inputCss.delete(tab.id)
     try {
       this.window?.contentView.removeChildView(tab.view)
@@ -1225,7 +1227,16 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   // ---- tabs and the window ----------------------------------------------------------------
 
+  /** Which tab each agent drives ("main", "routine", "helper:<id>"): never shared between them. */
+  private readonly ownerTabs = new Map<string, string>()
+
   private activeTab(): Tab | null {
+    const owner = currentOwner()
+    if (owner !== undefined) {
+      const id = this.ownerTabs.get(owner)
+      // An agent that has not opened a page of its own has none: it never borrows another agent's tab.
+      return id === undefined ? null : (this.tabs.find((tab) => tab.id === id) ?? null)
+    }
     return this.tabs.find((tab) => tab.id === this.activeId) ?? this.tabs[0] ?? null
   }
 
@@ -1255,6 +1266,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
     this.tabs.push(tab)
     this.activeId = tab.id
+    const owner = currentOwner()
+    if (owner !== undefined && !this.ownerTabs.has(owner)) this.ownerTabs.set(owner, tab.id)
     this.configureSession(view.webContents.session)
     this.wireTab(tab)
 

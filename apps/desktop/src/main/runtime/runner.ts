@@ -737,6 +737,7 @@ export class Runner {
   private toolContext(signal: AbortSignal, role: 'main' | 'routine' = 'main'): ToolContext {
     return {
       agentLabel: role === 'routine' ? 'routine' : 'main',
+      owner: role,
       activity: async (text, meta) => {
         if (role === 'routine') return ++this.activitySeq
         const id = ++this.activitySeq
