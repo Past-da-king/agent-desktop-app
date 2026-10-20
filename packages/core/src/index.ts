@@ -1,4 +1,5 @@
 export * from './ipc'
+export * from './attachments'
 export * from './model'
 export * from './http-policy'
 export * from './repair'

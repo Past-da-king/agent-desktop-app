@@ -80,6 +80,10 @@ beforeEach(() => {
       isMaximized: () => true,
     },
     broadcast: (channel, payload) => sent.push({ channel, payload }),
+    dialogs: {
+      pickFiles: async () => [{ path: '/tmp/report.txt', name: 'report.txt', mime: 'text/plain' }],
+      pickFolder: async () => '/tmp/box',
+    },
   })
 })
 
@@ -200,11 +204,46 @@ describe('registerIpc', () => {
     await expect(invoke(CHANNELS.routines.runNow, 42)).rejects.toThrow('routine id must be text')
   })
 
-  it('rejects a bad chat message and answers not implemented yet for files', async () => {
+  it('rejects a bad chat message', async () => {
     await expect(invoke(CHANNELS.chat.send, 42)).rejects.toThrow('message must be text')
     await expect(invoke(CHANNELS.chat.decide, 'x', 'maybe')).rejects.toThrow(
       'decision must be approve or decline',
     )
-    await expect(invoke(CHANNELS.files.pick)).rejects.toThrow('not implemented yet')
+  })
+
+  it('opens the real file and folder pickers through the injected dialogs', async () => {
+    expect(await invoke(CHANNELS.files.pick)).toEqual([
+      { path: '/tmp/report.txt', name: 'report.txt', mime: 'text/plain' },
+    ])
+    expect(await invoke(CHANNELS.files.pickFolder)).toBe('/tmp/box')
+  })
+
+  it('answers not implemented yet for files when no dialogs are injected', async () => {
+    const localHandlers = new Map<string, Handler>()
+    const stop = registerIpc({
+      store,
+      settings,
+      secrets,
+      account,
+      chat: runner,
+      ipcMain: {
+        handle(channel, listener) {
+          localHandlers.set(channel, listener)
+        },
+      },
+      windows: {
+        minimize: () => undefined,
+        toggleMaximize: () => undefined,
+        close: () => undefined,
+        isMaximized: () => false,
+      },
+    })
+    try {
+      const pick = localHandlers.get(CHANNELS.files.pick)
+      if (pick === undefined) throw new Error('no handler for files.pick')
+      await expect(pick({})).rejects.toThrow('not implemented yet')
+    } finally {
+      stop()
+    }
   })
 })
