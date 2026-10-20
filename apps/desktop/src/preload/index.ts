@@ -9,6 +9,7 @@ import type {
   EntityName,
   ProviderInfo,
   RowInput,
+  RouteTarget,
   RunState,
   Settings,
   SignInResult,
@@ -92,6 +93,7 @@ const api: AgentApi = {
     isMaximized: () => call<boolean>(CHANNELS.window.isMaximized),
     onMaximizeChange: (callback) => on<boolean>(EVENTS.maximize, callback),
     onQuickAsk: (callback) => on<null>(EVENTS.quickAsk, () => callback()),
+    onRoute: (callback) => on<RouteTarget>(EVENTS.route, callback),
   },
 
   files: {
