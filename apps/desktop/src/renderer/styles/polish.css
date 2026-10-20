@@ -155,8 +155,7 @@ details.adv[open]>summary::before{transform:rotate(45deg)}
 
 /* ---------- routines: two roomy columns, never three cramped ones ---------- */
 .rtn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:14px}
-.rtn{min-height:92px;transition:background var(--t-fast) var(--effects)}
-.rtn:hover{background:var(--s-mid)}
+.rtn{min-height:92px}
 .rtn .rt span{display:block;line-height:1.4}
 .rtn .rt .rt-when{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rtn .rt .rt-last{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
