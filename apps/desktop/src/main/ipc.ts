@@ -44,6 +44,12 @@ export interface ShellLike {
   showItemInFolder(path: string): void
 }
 
+/** The OS pickers. Injected so the handlers can be tested without a display. */
+export interface DialogLike {
+  pickFiles(): Promise<Attachment[]>
+  pickFolder(): Promise<string | null>
+}
+
 export type Broadcast = (channel: string, payload?: unknown) => void
 
 /** The chat side the renderer can reach. Runner implements this; tests can pass a small fake. */
@@ -65,6 +71,7 @@ export interface IpcDeps {
   windows: WindowControls
   broadcast?: Broadcast
   shell?: ShellLike
+  dialogs?: DialogLike
   fetchImpl?: typeof fetch
 }
 
@@ -189,8 +196,25 @@ export function registerIpc(deps: IpcDeps): () => void {
   // ---- not built yet ----
 
   handle(CHANNELS.routines.runNow, async () => notImplemented())
-  handle(CHANNELS.files.pick, async () => notImplemented())
-  handle(CHANNELS.files.pickFolder, async () => notImplemented())
+
+  // ---- files ----
+
+  handle(CHANNELS.files.pick, async () => {
+    if (deps.dialogs === undefined) return notImplemented()
+    const picked = await deps.dialogs.pickFiles()
+    return picked.slice(0, MAX_ATTACHMENTS).map((attachment) => ({
+      path: requireString(attachment.path, 'attachment path', MAX_STRING),
+      name: requireString(attachment.name, 'attachment name', MAX_STRING),
+      mime: requireString(attachment.mime, 'attachment type', MAX_STRING),
+    }))
+  })
+
+  handle(CHANNELS.files.pickFolder, async () => {
+    if (deps.dialogs === undefined) return notImplemented()
+    const folder = await deps.dialogs.pickFolder()
+    if (folder === null) return null
+    return requireString(folder, 'folder', MAX_STRING)
+  })
 
   // ---- window ----
 

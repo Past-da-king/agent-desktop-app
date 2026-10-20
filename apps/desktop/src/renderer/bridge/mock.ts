@@ -4,6 +4,7 @@ import type {
   ChatEvent,
   EntityMap,
   EntityName,
+  HotkeyStatus,
   RunState,
   Settings,
   SyncProgress,
@@ -149,6 +150,9 @@ export const mockAgent: AgentApi = {
       return () => undefined
     },
     onQuickAsk(_callback: () => void): Unsubscribe {
+      return () => undefined
+    },
+    onHotkeyStatus(_callback: (status: HotkeyStatus) => void): Unsubscribe {
       return () => undefined
     },
   },
