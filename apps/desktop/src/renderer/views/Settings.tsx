@@ -334,7 +334,7 @@ export function Settings(): JSX.Element {
                     <Icon name="bolt" size={22} />
                   </div>
                   <div className="rt">
-                    <b>Claude Code, on your Claude plan</b>
+                    <b>{settings.cli === 'codex' ? 'Your ChatGPT plan, through Codex' : 'Your Claude plan'}</b>
                     <span>{cliStatus === '' ? 'No API key needed. Billed by your plan, not by the app.' : cliStatus}</span>
                   </div>
                   <Button variant="tonal" size="sm" disabled={cliBusy} onClick={() => void checkCli()}>
@@ -374,7 +374,7 @@ export function Settings(): JSX.Element {
                 </div>
                 <div className="rt">
                   <b>Change how your agent thinks</b>
-                  <span>Switch between your Claude plan and an API key</span>
+                  <span>Switch between your Claude plan, your ChatGPT plan and an API key</span>
                 </div>
                 <Button variant="tonal" size="sm" onClick={() => navigateTo({ page: 'onboarding', step: 'ai' })}>
                   Change

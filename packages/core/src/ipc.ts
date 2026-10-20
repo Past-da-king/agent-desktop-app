@@ -23,7 +23,7 @@ export type MascotId = 'scout' | 'ghost' | 'clover' | 'bloom' | 'puff' | 'gem' |
 export interface Settings {
   mode: PowerMode
   /** With mode 'subscription': the installed AI tool that does the thinking on the person's own plan. */
-  cli: 'claude' | ''
+  cli: 'claude' | 'codex' | ''
   provider: ProviderId
   model: string
   hasKey: boolean

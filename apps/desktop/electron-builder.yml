@@ -13,6 +13,11 @@ directories:
 # Everything the app needs is bundled by electron-vite. Source maps and TypeScript sources stay out
 # of the release; the renderer, preload and main bundles are all that ship.
 asar: true
+# The AI engines the Claude Agent SDK and the Codex SDK ship are native programs: they must sit outside
+# app.asar to be started (runtime/cli-host.ts maps the path to app.asar.unpacked).
+asarUnpack:
+  - '**/node_modules/@anthropic-ai/claude-agent-sdk-*/**'
+  - '**/node_modules/@openai/codex-*/**'
 files:
   - out/**/*
   - package.json

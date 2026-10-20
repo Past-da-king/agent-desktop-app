@@ -505,7 +505,7 @@ export class Runner {
       latestUserText: text,
       role,
       ...(routineName === undefined ? {} : { routineName }),
-      helperModel: 'Claude Code',
+      helperModel: current.cli === 'codex' ? 'Codex' : 'Claude',
       liveHelpers: [],
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
@@ -518,13 +518,13 @@ export class Runner {
       return undefined
     }
     const current = this.settings.get()
-    const prompt = images.length === 0 ? text : `${text}\n\nAttached files on this computer:\n${images.map((path) => `- ${path}`).join('\n')}`
     this.emit({ type: 'thinking', step: 1 })
     const result = await this.cli.turn({
       cli: current.cli === '' ? 'claude' : current.cli,
       thread: 'main',
       system: await this.cliSystem(text, 'main'),
-      prompt,
+      prompt: text,
+      images,
       context: this.toolContext(signal),
       signal,
       onEvent: (event) => this.render(event),
@@ -565,17 +565,17 @@ export class Runner {
     return { text: summary === '' ? 'The routine finished without a summary.' : summary, waiting: false }
   }
 
-  /** One tiny real turn, so onboarding and Settings can say whether the installed tool works. */
+  /** One tiny real turn, so onboarding and Settings can say whether the person's plan works here. */
   async checkCli(): Promise<{ ok: boolean; message: string }> {
     if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a subscription.' }
-    if (this.cli.program('claude') === null) {
-      return { ok: false, message: 'Claude Code was not found on this computer.' }
-    }
+    const chosen = this.settings.get().cli
+    const cli = chosen === '' ? 'claude' : chosen
+    const name = cli === 'claude' ? 'Claude' : 'Codex'
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 90_000)
     try {
       const result = await this.cli.turn({
-        cli: 'claude',
+        cli,
         thread: 'routine',
         system: 'Reply with exactly the word OK and nothing else.',
         prompt: 'Reply with exactly the word OK.',
@@ -585,9 +585,9 @@ export class Runner {
         onCall: async () => undefined,
         onResult: async () => undefined,
       })
-      if (controller.signal.aborted) return { ok: false, message: 'Claude Code took too long to answer. Try again.' }
+      if (controller.signal.aborted) return { ok: false, message: `${name} took too long to answer. Try again.` }
       if (result.error !== undefined) return { ok: false, message: result.error }
-      return { ok: true, message: 'Claude Code is signed in and working on your plan.' }
+      return { ok: true, message: `${name} is signed in and working on your plan.` }
     } finally {
       clearTimeout(timer)
     }

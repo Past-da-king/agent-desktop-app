@@ -1,0 +1,8 @@
+/* The AI step's plan choice: two selectable rows, the chosen one lifted onto the accent container. */
+.plan-opt{width:100%;text-align:left;border-radius:var(--r-md);transition:background var(--t-fast,160ms) var(--effects),transform .42s var(--spatial)}
+.plan-opt:hover{background:var(--s-mid)}
+.plan-opt:active{transform:scale(.985)}
+.plan-opt.on{background:var(--pc);color:var(--on-pc)}
+.plan-opt.on .rt span{color:color-mix(in srgb,var(--on-pc) 78%,transparent)}
+.plan-opt.on .ri{background:var(--primary);color:var(--on-primary)}
+.plan-opt .linkish{white-space:nowrap}
