@@ -382,6 +382,8 @@ export interface ConnectedAccount {
   label: string
   status: 'active' | 'pending' | 'failed'
   rules: AccountRules
+  /** The app's logo (an https URL from Composio's toolkit list), or '' to show a lettered tile. */
+  logo?: string
 }
 
 /** Which kind of Composio key is stored. Never the key itself. */
@@ -402,6 +404,10 @@ export interface AppChoice {
   slug: string
   name: string
   line: string
+  /** The app's logo (an https URL from Composio), or '' to show a lettered tile. */
+  logo?: string
+  /** Composio's categories for it, for example Productivity. */
+  categories?: string[]
 }
 
 export interface LearnedToolInfo {
@@ -427,7 +433,7 @@ export interface AppsApi {
   status(): Promise<AppsStatus>
   /** Checks the Composio key with Composio and stores it in the secrets module only. Pass '' to remove it. */
   setKey(key: string): Promise<{ ok: boolean; message: string }>
-  /** The popular apps to pick from. */
+  /** Every app Composio offers (with logos), popular ones first; the popular list alone when there is no key. */
   catalog(): Promise<AppChoice[]>
   /** Opens the app's sign-in in the person's own browser and waits in the background until it is connected. */
   connect(app: string): Promise<{ ok: boolean; message: string }>
@@ -437,6 +443,67 @@ export interface AppsApi {
   removeLearned(id: string): Promise<void>
   setTrusted(id: string, trusted: boolean): Promise<void>
   /** Fires when accounts, rules, the key or the learned apps change. */
+  onChanged(cb: () => void): Unsubscribe
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Profiles: parts of the person's life (Work, Personal...), each a set of connected accounts and its own
+// browser sign-ins. Every helper works inside exactly one. Ported from the phone's data/Profiles.kt.
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * The colours a profile can take, in the order new profiles get them. They are the app's own accent
+ * colours plus graphite (the neutral surface tokens), so every one has tuned light and dark tones.
+ */
+export const PROFILE_COLORS = ['ocean', 'ember', 'violet', 'rose', 'teal', 'forest', 'magenta', 'iris', 'graphite'] as const
+export type ProfileColor = (typeof PROFILE_COLORS)[number]
+
+/** The profile for jobs that need none of the person's accounts. It always exists and keeps the original browser. */
+export const GENERAL_PROFILE = 'General'
+
+/** One connected account as a profile remembers it. */
+export interface ProfileAccount {
+  /** Composio's connected account id. */
+  id: string
+  /** Composio toolkit slug, for example gmail. */
+  app: string
+  label: string
+}
+
+export interface AgentProfileInfo {
+  id: string
+  name: string
+  color: ProfileColor
+  /** The accounts its helpers may use, and nothing else. */
+  accounts: ProfileAccount[]
+  /** Ids of the learned apps (sites the agent mapped) its helpers may run. */
+  learned: string[]
+  /** Whose browser sign-ins its helpers browse with: '' for its own, or another profile's id. */
+  browser: string
+  /** General: none of the person's accounts, cannot be renamed or deleted. */
+  general: boolean
+}
+
+export interface ProfileDraft {
+  name: string
+  color?: ProfileColor
+  /** Connected account ids. */
+  accounts?: string[]
+  /** Learned app ids. */
+  learned?: string[]
+  browser?: string
+}
+
+export interface ProfilesApi {
+  /** General first, then the rest in the order they were made. */
+  list(): Promise<AgentProfileInfo[]>
+  create(draft: ProfileDraft): Promise<{ ok: boolean; message: string; profile?: AgentProfileInfo }>
+  /** Rename, recolour, change its accounts or its browser sign-ins. */
+  update(id: string, patch: Partial<ProfileDraft>): Promise<{ ok: boolean; message: string }>
+  remove(id: string): Promise<void>
+  /** Puts an account in a profile or takes it out. One account can sit in any number of profiles. */
+  setMember(profileId: string, accountId: string, member: boolean): Promise<void>
+  /** Fires when a profile changes (also when the agent makes one). */
   onChanged(cb: () => void): Unsubscribe
 }
 
@@ -635,6 +702,7 @@ export interface AgentApi {
   }
   helpers: HelpersApi
   apps: AppsApi
+  profiles: ProfilesApi
 
   window: {
     minimize(): void

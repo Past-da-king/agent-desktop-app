@@ -5,7 +5,9 @@
  * desktop changes PLAN.md 5.2 asks for: it lives on the person's computer rather than a handheld, and
  * the parts about connected apps, machines, cards and voice are gone. Branches are not in v1.
  */
-import type { EnvironmentReport, Found, GoalRow, MemoryRow, Settings, TaskRow } from '@agent/core'
+import type { AgentProfileInfo, EnvironmentReport, Found, GoalRow, MemoryRow, Settings, TaskRow } from '@agent/core'
+
+import { appName } from '../apps/catalog'
 
 import { OPENUI_PROMPT } from './openui-prompt'
 import { VOICE_NOTE_GUIDE } from '../tools/voice-note'
@@ -30,13 +32,60 @@ export interface PromptInput {
   /** The helper's own name and brief (HELPER role only). */
   helper?: { label: string; brief: string }
   /** Helpers working right now, so the main agent can answer "how's it going?". */
-  liveHelpers?: Array<{ id: string; label: string; brief: string }>
+  liveHelpers?: Array<{ id: string; label: string; brief: string; profile?: string }>
   /** The model every helper runs on. The roster is one model in v1. */
   helperModel?: string
   /** False when the agent runs on the person's plan without helpers: it does the work itself. */
   canDelegate?: boolean
   /** What the environment scan found. When absent, the block is left out. */
   environment?: EnvironmentReport | null
+  /** The user's profiles, for the main agent's PROFILES section. When absent, the section is left out. */
+  profiles?: AgentProfileInfo[]
+  /** The profile a helper works in (HELPER role only). */
+  profile?: AgentProfileInfo | null
+  /** Learned app id -> name, so a profile's learned apps read by name. */
+  learnedNames?: Record<string, string>
+}
+
+function accountLine(profile: AgentProfileInfo): string {
+  return profile.accounts.map((a) => `${appName(a.app)} ${a.label}`.trim()).join(', ')
+}
+
+/** The main agent's PROFILES section (reference phone AgentRuntime.systemPrompt). */
+export function profileLines(profiles: AgentProfileInfo[], learnedNames: Record<string, string> = {}): string[] {
+  const out: string[] = ['PROFILES: every helper works inside exactly one (parts of the user\'s life, each with its own connected accounts, learned apps and browser sign-ins)']
+  const general = profiles.find((p) => p.general)
+  for (const p of profiles) {
+    if (p.general) continue
+    const parts = [p.accounts.length === 0 ? 'no accounts' : accountLine(p)]
+    if (p.learned.length > 0) parts.push(`learned apps: ${p.learned.map((id) => learnedNames[id] ?? id).join(', ')}`)
+    const lender = p.browser === '' ? null : profiles.find((q) => q.id === p.browser)
+    if (lender) parts.push(`browser sign-ins: ${lender.name}'s`)
+    out.push(`- ${p.name}: ${parts.join('; ')}`)
+  }
+  const generalName = general?.name ?? 'General'
+  out.push(`- ${generalName}: none of the user's accounts and no learned apps (the default)`)
+  out.push(
+    `- Name the profile for each brief with \`profile\` in delegate. A helper can ONLY use its profile's accounts and learned apps, and browses with that profile's own sign-ins; with one account of an app in it, that one is picked for it. Jobs that need none of their accounts (web research, files on this computer) go in ${generalName}, which is also what a helper gets when you name none.`,
+  )
+  out.push('- If no profile fits the job, make one with profile_create (a clear name, the apps it needs) before delegating. The user sees it in Connections in its own colour.')
+  out.push('- You yourself may use any account in any profile; helpers may not.')
+  return out
+}
+
+/** A helper's YOUR PROFILE section. */
+export function helperProfileLines(profile: AgentProfileInfo, learnedNames: Record<string, string> = {}): string[] {
+  if (profile.general || (profile.accounts.length === 0 && profile.learned.length === 0)) {
+    return [
+      `YOUR PROFILE: ${profile.name}. It has none of the user's connected accounts and no learned apps, so apps_* and webapp_run will refuse. If the job needs one, say so in your result and the main agent will send it to the right profile.`,
+    ]
+  }
+  const accounts = profile.accounts.map((a) => `${appName(a.app)} ${a.label} (account ${a.id})`.trim()).join(', ')
+  const learned = profile.learned.map((id) => learnedNames[id] ?? id).join(', ')
+  return [
+    `YOUR PROFILE: ${profile.name}. This job belongs to that part of the user's life. Use ONLY these connected accounts: ${accounts === '' ? 'none' : accounts}.${learned === '' ? '' : ` Learned apps you may run: ${learned}.`} Any other account is off limits and the app refuses it; if the job needs one that is not here, say so in your result.`,
+    `Your browser is signed in as this profile (its own cookies and sign-ins), so sites you open see ${profile.name}'s accounts.`,
+  ]
 }
 
 export const NO_NAME = 'Your agent'
@@ -156,11 +205,15 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push(
       '- Fit the brief to that model: give the goal, all the context and what to bring back, plus the steps in order if the job is fiddly.',
     )
+    if (input.profiles !== undefined && input.profiles.length > 0) {
+      lines.push('')
+      lines.push(...profileLines(input.profiles, input.learnedNames))
+    }
     const live = input.liveHelpers ?? []
     if (live.length > 0) {
       lines.push('')
       lines.push('HELPERS WORKING RIGHT NOW')
-      live.forEach((helper) => lines.push(`- #${helper.id} ${helper.label}: ${clip(helper.brief, 160)}`))
+      live.forEach((helper) => lines.push(`- #${helper.id} ${helper.label}${helper.profile === undefined ? '' : ` (in ${helper.profile})`}: ${clip(helper.brief, 160)}`))
     }
     lines.push('')
   } else {
@@ -183,6 +236,10 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push(
       "- A website you will need again (a site with no API): check webapp_list for tools you already wrote and run them with webapp_run. If there are none, teach yourself the site once (webapp_guide, then browser_network and browser_eval to map it, then webapp_save).",
     )
+    if (input.role === 'helper' && input.profile !== undefined && input.profile !== null) {
+      lines.push('')
+      lines.push(...helperProfileLines(input.profile, input.learnedNames))
+    }
   }
 
   lines.push(

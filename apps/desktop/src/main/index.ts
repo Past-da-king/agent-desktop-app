@@ -34,6 +34,7 @@ import { Runner } from './runtime/runner'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
+import { ProfileStore } from './apps/profiles'
 import { ConnectedAppsFile, LearnedStore } from './apps/store'
 import { CliHost } from './runtime/cli-host'
 import { Secrets } from './secrets'
@@ -536,8 +537,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     secrets,
     file: new ConnectedAppsFile(join(dir, 'connected-apps.json')),
     learned,
+    // Profiles stay on this computer (not a synced entity yet).
+    profiles: new ProfileStore(join(dir, 'profiles.json')),
     openExternal: (url) => shell.openExternal(url),
   })
+  const learnedNames = (): Record<string, string> => Object.fromEntries(learned.apps().map((a) => [a.id, a.name]))
 
   const factory = (current: ReturnType<SettingsStore['get']>, key: string): ReturnType<typeof providerFor> =>
     providerFor({
@@ -570,6 +574,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     platform: process.platform,
     emit: (event) => broadcast(EVENTS.chat, event),
     notify: showNotification,
+    profiles: apps.profiles,
+    learnedNames,
   })
   const tools = buildToolset({
     store,
@@ -596,6 +602,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       void shell.openExternal(url)
     },
     budget,
+    profiles: () => ({ profiles: apps.profiles.all(), learnedNames: learnedNames() }),
     environment: () => environment.current(),
     providerFactory: factory,
     notify: showNotification,

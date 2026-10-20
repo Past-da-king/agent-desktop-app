@@ -5,6 +5,7 @@ import type {
   AccountRules,
   AgentApi,
   AppChoice,
+  AgentProfileInfo,
   AppsStatus,
   AppInfo,
   Attachment,
@@ -129,6 +130,15 @@ const api: AgentApi = {
     removeLearned: (id: string) => call<void>(CHANNELS.apps.removeLearned, id),
     setTrusted: (id: string, trusted: boolean) => call<void>(CHANNELS.apps.setTrusted, id, trusted),
     onChanged: (callback) => on<null>(EVENTS.apps, () => callback()),
+  },
+
+  profiles: {
+    list: () => call<AgentProfileInfo[]>(CHANNELS.profiles.list),
+    create: (draft) => call<{ ok: boolean; message: string; profile?: AgentProfileInfo }>(CHANNELS.profiles.create, draft),
+    update: (id, patch) => call<{ ok: boolean; message: string }>(CHANNELS.profiles.update, id, patch),
+    remove: (id) => call<void>(CHANNELS.profiles.remove, id),
+    setMember: (profileId, accountId, member) => call<void>(CHANNELS.profiles.setMember, profileId, accountId, member),
+    onChanged: (callback) => on<null>(EVENTS.profiles, () => callback()),
   },
 
   window: {

@@ -32,9 +32,17 @@ function delegateTool(host: HelperHost): Tool {
               label: str('A 2 to 4 word name per helper, e.g. Uber to airport. The user sees this.'),
               brief: str('The full, standalone brief for this helper'),
               model: str('Optional. Leave it out: every helper runs on the user\'s chosen model.'),
+              profile: str(
+                "The user's profile this helper works in (e.g. Work). It can then only use that profile's connected accounts, learned apps and browser sign-ins. Leave it out for General: none of their accounts.",
+              ),
             },
             required: ['label', 'brief'],
           },
+        },
+        profiles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional, the same as each task\'s profile, in task order (for briefs written without it).',
         },
         together: bool(
           'These briefs are parts of ONE answer: hold every result until all are done and hand them to you as one message. Default false.',
@@ -42,7 +50,7 @@ function delegateTool(host: HelperHost): Tool {
       }),
     },
     run: async (input) => {
-      const tasks = parseTasks(input['tasks'])
+      const tasks = parseTasks(input['tasks'], input['profiles'])
       if (tasks.length === 0) return 'No tasks given.'
       return host.delegate(tasks, input['together'] === true)
     },
@@ -110,17 +118,19 @@ function helperStopTool(host: HelperHost): Tool {
   }
 }
 
-function parseTasks(value: unknown): HelperTask[] {
+export function parseTasks(value: unknown, profiles?: unknown): HelperTask[] {
   if (!Array.isArray(value)) return []
+  const byOrder = Array.isArray(profiles) ? profiles.map((p) => text(p).trim()) : []
   const tasks: HelperTask[] = []
-  for (const item of value) {
+  for (const [index, item] of value.entries()) {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
     const row = item as Record<string, unknown>
     const brief = text(row['brief']).trim()
     if (brief === '') continue
     const label = text(row['label']).trim()
     const model = text(row['model']).trim()
-    tasks.push({ label, brief, ...(model === '' ? {} : { model }) })
+    const profile = text(row['profile']).trim() || (byOrder[index] ?? '')
+    tasks.push({ label, brief, ...(model === '' ? {} : { model }), ...(profile === '' ? {} : { profile }) })
   }
   return tasks
 }
