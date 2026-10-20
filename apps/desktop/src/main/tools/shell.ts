@@ -281,6 +281,7 @@ function shellRunTool(deps: ShellToolDeps): Tool {
         (await ctx.approve(
         `Run: ${command}`,
         `${cwd === undefined ? '' : `In ${cwd}\n`}Shell: ${plan.label}\nThis runs a real command on this computer. It stops after ${timeoutSec} seconds.`,
+          'computer',
         ))
       if (!approved) return 'The user did not approve that command, so I did not run it.'
 

@@ -148,48 +148,88 @@ function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
 
 type Segment = { kind: 'item'; item: ChatItem } | { kind: 'tools'; id: string; items: ChatItem[] }
 
-/** Back-to-back tool steps become ONE row: the live step while it runs, then a single summary. */
+/** An approval the person already answered: history, so it folds in with the tool steps. */
+function decidedApproval(item: ChatItem): boolean {
+  if (item.kind !== 'approval') return false
+  const decision = metaText(parseMeta(item.meta), 'decision')
+  return decision === 'approve' || decision === 'decline'
+}
+
+/** A step for the folded row: a tool step, or an answered approval. */
+function isStep(item: ChatItem): boolean {
+  return item.kind === 'activity' || decidedApproval(item)
+}
+
+/** Back-to-back tool steps (and answered approvals) become ONE row: the live step while it runs, then a summary. */
 function segmentsOf(messages: ChatItem[]): Segment[] {
   const out: Segment[] = []
   for (const item of messages) {
     const last = out[out.length - 1]
-    if (item.kind === 'activity' && last !== undefined && last.kind === 'tools') last.items.push(item)
-    else if (item.kind === 'activity') out.push({ kind: 'tools', id: item.id, items: [item] })
+    if (isStep(item) && last !== undefined && last.kind === 'tools') last.items.push(item)
+    else if (isStep(item)) out.push({ kind: 'tools', id: item.id, items: [item] })
     else out.push({ kind: 'item', item })
   }
   return out
 }
 
+/** One answered approval, as a small line. */
+function ApprovalLine({ item }: { item: ChatItem }): JSX.Element {
+  const meta = parseMeta(item.meta)
+  const approved = metaText(meta, 'decision') === 'approve'
+  return (
+    <div className={`appr-line${approved ? '' : ' no'}`}>
+      <i>
+        <Icon name={approved ? 'check' : 'x'} size={14} />
+      </i>
+      <span>
+        <b>{approved ? 'Approved' : 'Declined'}</b> {metaText(meta, 'summary') || item.text}
+      </span>
+    </div>
+  )
+}
+
+function StepRow({ item }: { item: ChatItem }): JSX.Element {
+  return item.kind === 'approval' ? <ApprovalLine item={item} /> : <ActivityRow item={item} />
+}
+
 function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.Element {
   const [open, setOpen] = useState(false)
-  const statuses = items.map((item) => metaText(parseMeta(item.meta), 'status') || 'done')
+  const statuses = items.map((item) => (item.kind === 'approval' ? 'done' : metaText(parseMeta(item.meta), 'status') || 'done'))
   const running = live && statuses.includes('running')
   const failed = statuses.filter((status) => status === 'error').length
+  const approvals = items.filter((item) => item.kind === 'approval')
+  const tools = items.length - approvals.length
+  const approvedCount = approvals.filter((item) => metaText(parseMeta(item.meta), 'decision') === 'approve').length
+  const declined = approvals.length - approvedCount
+  const parts = [
+    tools > 0 ? `Used ${tools} ${tools === 1 ? 'tool' : 'tools'}` : '',
+    approvedCount > 0 ? `${approvedCount} approved` : '',
+    declined > 0 ? `${declined} declined` : '',
+    failed > 0 ? `${failed} failed` : '',
+  ].filter((part) => part !== '')
   const current = [...items].reverse().find((_, index) => statuses[items.length - 1 - index] === 'running') ?? items[items.length - 1]
   if (running && current !== undefined) {
     return (
       <div className="tool-live">
-        <ActivityRow item={current} />
+        <StepRow item={current} />
         {items.length > 1 ? <span className="tool-count">Step {items.length}</span> : null}
       </div>
     )
   }
-  if (items.length === 1 && items[0] !== undefined) return <ActivityRow item={items[0]} />
+  if (items.length === 1 && items[0] !== undefined) return <StepRow item={items[0]} />
   return (
     <div className="tool-group">
       <button type="button" className="tool-sum-row" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <i>
           <Icon name={failed > 0 ? 'x' : 'check'} size={16} />
         </i>
-        <span>
-          Used {items.length} tools{failed > 0 ? `, ${failed} failed` : ''}
-        </span>
+        <span>{parts.join(', ')}</span>
         <Icon name={open ? 'chevd' : 'chev'} size={16} />
       </button>
       {open ? (
         <div className="tool-list">
           {items.map((item) => (
-            <ActivityRow key={item.id} item={item} />
+            <StepRow key={item.id} item={item} />
           ))}
         </div>
       ) : null}
@@ -285,6 +325,8 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   const decision = metaText(meta, 'decision')
   const summary = metaText(meta, 'summary') || item.text
   const details = metaText(meta, 'details')
+  const computer = meta['scope'] === 'computer'
+  const save = useSettings((state) => state.save)
   const [sending, setSending] = useState(false)
 
   if (decision === 'approve' || decision === 'decline') {
@@ -324,11 +366,31 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
         <Button disabled={sending} onClick={() => decide('approve')}>
           Approve and go ahead
         </Button>
+        {computer ? (
+          <button
+            type="button"
+            className="ans"
+            disabled={sending}
+            onClick={() => {
+              if (sending) return
+              setSending(true)
+              // Settings, Commands and files: Run without asking. The main process then lets this card and any
+              // other waiting command, code or file card go ahead. Connected apps and anything sent still ask.
+              void save({ shell: 'always' }).catch(() => setSending(false))
+            }}
+          >
+            Always allow on this computer
+          </button>
+        ) : null}
         <button type="button" className="ans" disabled={sending} onClick={() => decide('decline')}>
           Decline
         </button>
       </div>
-      <div className="hint">Nothing happens until you approve.</div>
+      <div className="hint">
+        {computer
+          ? 'Always allow covers commands, code and files on this computer. Connected apps and anything sent in your name still ask. Change it in Settings.'
+          : 'Nothing happens until you approve.'}
+      </div>
     </div>
   )
 }

@@ -642,6 +642,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     const changed = (Object.keys(next) as Array<keyof typeof next>).filter((key) => JSON.stringify(next[key]) !== JSON.stringify(lastSettings[key]))
     lastSettings = next
     if (changed.length > 0) logger.info('Settings changed', { keys: changed.join(',') })
+    if (changed.includes('shell') && next.shell === 'always') void runner?.approveComputerCards()
     applyLoginItem(next)
     applyHotkey(next)
     tray?.refresh()

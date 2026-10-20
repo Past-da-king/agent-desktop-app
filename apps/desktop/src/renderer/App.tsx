@@ -13,7 +13,6 @@ import { Routines } from './views/Routines'
 import { Settings } from './views/Settings'
 import { Tasks } from './views/Tasks'
 import { BrowserStage, ChatPanel } from './shell/Panel'
-import { HelperStage } from './shell/HelpersPanel'
 import { Palette } from './shell/Palette'
 import { QuickAsk } from './shell/QuickAsk'
 import { QuickWindow } from './shell/QuickWindow'
@@ -82,7 +81,6 @@ function Main({ route }: { route: Route }): JSX.Element {
       <TitleBar onboarding={onboarding} />
       <div className="stage">{onboarding ? <Onboarding step={route.step} /> : <Page />}</div>
       {onboarding ? null : <BrowserStage />}
-      {onboarding ? null : <HelperStage />}
       <div className="overlay">
         <Palette />
         <QuickAsk />

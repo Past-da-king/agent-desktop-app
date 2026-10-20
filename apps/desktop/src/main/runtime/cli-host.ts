@@ -205,7 +205,7 @@ export class CliHost {
           onEvent: request.onEvent,
           permission: sdkPermission({
             settings: this.settings,
-            approve: (summary, details) => request.context.approve(summary, details),
+            approve: (summary, details) => request.context.approve(summary, details, 'computer'),
             alsoAllowed: [dir],
           }),
         })
