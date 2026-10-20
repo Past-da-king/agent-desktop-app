@@ -11,6 +11,8 @@ import {
   isEntityName,
   providerFor,
   type Attachment,
+  type BrowserBounds,
+  type BrowserState,
   type Decision,
   type EntityMap,
   type EntityName,
@@ -55,6 +57,20 @@ export interface ChatRunner {
   decide(itemId: string, decision: Decision): Promise<void>
 }
 
+/** The browser side the renderer can reach. AgentBrowser implements this. */
+export interface BrowserControl {
+  setBounds(bounds: BrowserBounds): void
+  state(): BrowserState
+  /** Resolves when navigation settled; the string result is for the tools, not the renderer. */
+  back(): Promise<unknown>
+  reload(): Promise<void>
+  selectTab(id: string): void
+  closeTab(id: string): void
+  takeOver(): void
+  giveBack(): void
+  openInSystem(): Promise<void>
+}
+
 export interface IpcDeps {
   store: Store
   settings: SettingsStore
@@ -63,6 +79,7 @@ export interface IpcDeps {
   chat: ChatRunner
   ipcMain: IpcMainLike
   windows: WindowControls
+  browser?: BrowserControl
   broadcast?: Broadcast
   shell?: ShellLike
   fetchImpl?: typeof fetch
@@ -74,6 +91,17 @@ const MAX_KEY = 8192
 const MAX_MESSAGE = 20_000
 const MAX_ANSWER = 4_000
 const MAX_ATTACHMENTS = 20
+const MAX_BOUND = 10_000
+
+const EMPTY_BROWSER: BrowserState = {
+  url: '',
+  title: '',
+  tabs: [],
+  visible: false,
+  agentActive: true,
+  needsUser: false,
+  handoffReason: '',
+}
 
 export function registerIpc(deps: IpcDeps): () => void {
   const { store, settings, secrets, account, chat, ipcMain, windows } = deps
@@ -184,6 +212,40 @@ export function registerIpc(deps: IpcDeps): () => void {
       throw new Error('decision must be approve or decline')
     }
     await chat.decide(id, rawDecision)
+  })
+
+  // ---- the agent's browser ----
+
+  handle(CHANNELS.browser.setBounds, async (_event, rawBounds) => {
+    deps.browser?.setBounds(boundsArg(rawBounds))
+  })
+
+  handle(CHANNELS.browser.state, async () => deps.browser?.state() ?? EMPTY_BROWSER)
+  handle(CHANNELS.browser.back, async () => {
+    await deps.browser?.back()
+  })
+  handle(CHANNELS.browser.reload, async () => {
+    await deps.browser?.reload()
+  })
+
+  handle(CHANNELS.browser.selectTab, async (_event, rawId) => {
+    deps.browser?.selectTab(requireString(rawId, 'tab id', MAX_STRING))
+  })
+
+  handle(CHANNELS.browser.closeTab, async (_event, rawId) => {
+    deps.browser?.closeTab(requireString(rawId, 'tab id', MAX_STRING))
+  })
+
+  handle(CHANNELS.browser.takeOver, async () => {
+    deps.browser?.takeOver()
+  })
+
+  handle(CHANNELS.browser.giveBack, async () => {
+    deps.browser?.giveBack()
+  })
+
+  handle(CHANNELS.browser.openInSystem, async () => {
+    await deps.browser?.openInSystem()
   })
 
   // ---- not built yet ----
@@ -303,6 +365,24 @@ function requireAttachments(value: unknown): Attachment[] {
       mime: requireString(row['mime'], 'attachment type', MAX_STRING),
     }
   })
+}
+
+function boundsArg(value: unknown): BrowserBounds {
+  const raw = requireObject(value, 'browser bounds')
+  return {
+    x: requireNumber(raw['x'], 'x', -MAX_BOUND, MAX_BOUND),
+    y: requireNumber(raw['y'], 'y', -MAX_BOUND, MAX_BOUND),
+    width: requireNumber(raw['width'], 'width', 0, MAX_BOUND),
+    height: requireNumber(raw['height'], 'height', 0, MAX_BOUND),
+    visible: raw['visible'] === true,
+  }
+}
+
+function requireNumber(value: unknown, name: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`${name} must be a number between ${min} and ${max}`)
+  }
+  return value
 }
 
 function entityArg(value: unknown): EntityName {
