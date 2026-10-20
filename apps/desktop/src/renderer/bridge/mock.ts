@@ -785,6 +785,15 @@ export const mockAgent: AgentApi = {
     async openInSystem() {
       return undefined
     },
+    async frame() {
+      return null
+    },
+    async go() {
+      return undefined
+    },
+    async newTab() {
+      return undefined
+    },
     async setExpanded(on: boolean) {
       mockBrowser.expanded = on
       notifyBrowser()

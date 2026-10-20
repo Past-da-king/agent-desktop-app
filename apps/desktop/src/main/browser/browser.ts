@@ -302,6 +302,30 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.setAgentDriving(true)
   }
 
+  /**
+   * The person typed an address (or words to search) in the browser's own bar: it opens in the tab in front of
+   * them, like any browser. Words with no dot become a search.
+   */
+  async personOpen(raw: string): Promise<void> {
+    const url = addressOf(raw)
+    if (url === null) return
+    const tab = this.shownTab()
+    if (tab === null || tab.view.webContents.isDestroyed()) {
+      this.createTab(url)
+      return
+    }
+    this.currentView = this.sites.viewFor(url)
+    await this.prepare(tab).catch(() => undefined)
+    await tab.view.webContents.loadURL(url).catch(() => undefined)
+    this.emit()
+  }
+
+  /** A new empty tab for the person, in front. */
+  personNewTab(): void {
+    this.createTab()
+    this.emit()
+  }
+
   async openInSystem(): Promise<void> {
     const tab = this.activeTab()
     if (tab === null) return
@@ -530,6 +554,19 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const line = result.ok ? "It's there." : "Didn't appear in time."
     this.emit()
     return `${line}\n\n${await this.snapshot()}`
+  }
+
+  /** The page as it is drawn in the panel, as a small JPEG, for the still picture shown while it steps aside. */
+  async frame(): Promise<string | null> {
+    const tab = this.shownTab()
+    if (tab === null || !isRealPage(tab.view) || !this.bounds.visible) return null
+    try {
+      const image = await Promise.race([tab.view.webContents.capturePage(), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000))])
+      if (image === null || image.isEmpty()) return null
+      return `data:image/jpeg;base64,${image.toJPEG(72).toString('base64')}`
+    } catch {
+      return null
+    }
   }
 
   /** A PNG of the page at the size it is laid out at (1440x900 for desktop), not the small panel copy. */
@@ -1678,3 +1715,12 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | nu
 }
 
 export type { BrowserBounds, BrowserState }
+
+/** What the person typed in the address bar, as an address to open. Plain words become a web search. */
+export function addressOf(raw: string): string | null {
+  const text = raw.trim()
+  if (text === '') return null
+  if (/^https?:\/\//i.test(text)) return text
+  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(text) || /^localhost(:\d+)?(\/\S*)?$/i.test(text)) return `https://${text}`
+  return `https://duckduckgo.com/?q=${encodeURIComponent(text)}`
+}

@@ -236,6 +236,7 @@ async function accessPath(
   const approved = await ctx.approve(
     `${verb} ${target}`,
     `${mode === 'read' ? 'This file is outside' : 'This file is outside'} the folders you have granted. Allow the agent to ${mode === 'read' ? 'read' : 'write'} it this once?`,
+    'computer'
   )
   if (!approved) return { error: `You did not approve access to ${target}, so I left it alone.` }
   return { path: target }

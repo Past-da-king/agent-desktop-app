@@ -111,6 +111,9 @@ const api: AgentApi = {
     openInSystem: () => call<void>(CHANNELS.browser.openInSystem),
     setView: (mode) => call<void>(CHANNELS.browser.setView, mode),
     setExpanded: (on) => call<void>(CHANNELS.browser.setExpanded, on),
+    frame: () => call<string | null>(CHANNELS.browser.frame),
+    go: (address) => call<void>(CHANNELS.browser.go, address),
+    newTab: () => call<void>(CHANNELS.browser.newTab),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
   },
 

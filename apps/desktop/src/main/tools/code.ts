@@ -110,6 +110,7 @@ function runCodeTool(deps: CodeToolDeps): Tool {
         (await ctx.approve(
           `Run ${language} code`,
           code.length > 4_000 ? `${code.slice(0, 4_000)}\n...(the rest is cut here, but all of it runs)` : code,
+          'computer',
         ))
       if (!approved) return 'The user did not approve running that code, so I did not run it.'
 

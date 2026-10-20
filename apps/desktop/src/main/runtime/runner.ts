@@ -226,6 +226,23 @@ export class Runner {
     await this.continueAfterCard(`The user answered your question "${row.text}" with: ${answer}`)
   }
 
+  /**
+   * The person chose Run without asking for this computer: every card still waiting on a command, code or a
+   * file (the main agent's or a helper's) goes ahead too. Cards for anything sent or done elsewhere stay.
+   */
+  async approveComputerCards(): Promise<number> {
+    const rows = await this.store.list('chat_item')
+    let count = 0
+    for (const row of rows) {
+      if (row.kind !== 'approval') continue
+      const meta = parseMeta(row.meta)
+      if (meta['scope'] !== 'computer' || (typeof meta['decision'] === 'string' && meta['decision'] !== '')) continue
+      await this.decide(row.id, 'approve')
+      count += 1
+    }
+    return count
+  }
+
   /** Approve or decline an approval card, now or after a restart. */
   async decide(itemId: string, decision: Decision): Promise<void> {
     const row = await this.store.get('chat_item', itemId)
@@ -787,8 +804,8 @@ export class Runner {
       },
       ask: (question, options) =>
         role === 'routine' ? this.askInRoutine(question, options) : this.ask(question, options, signal),
-      approve: (summary, details) =>
-        role === 'routine' ? this.approveInRoutine(summary, details) : this.approve(summary, details, signal),
+      approve: (summary, details, scope) =>
+        role === 'routine' ? this.approveInRoutine(summary, details) : this.approve(summary, details, signal, scope),
       notify: async (title, body) => this.sendNotification(title, body, false),
       signal,
     }
@@ -846,11 +863,12 @@ export class Runner {
     summary: string,
     details: string | undefined,
     signal: AbortSignal,
+    scope?: 'computer',
   ): Promise<boolean> {
     const row = await this.store.upsert('chat_item', {
       kind: 'approval',
       text: summary,
-      meta: JSON.stringify({ summary, details: details ?? '', decision: '' }),
+      meta: JSON.stringify({ summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }) }),
     })
     // Register the waiter before telling the UI, so an instant decision finds it.
     const pending = new Promise<boolean>((resolve) => {

@@ -13,7 +13,7 @@ import { Button } from '../ui/Button'
 import { IconButton } from '../ui/bits'
 import { Chip } from '../ui/Chip'
 import { Icon, type IconName } from '../ui/Icon'
-import { HelpersPanel } from './HelpersPanel'
+import { HelperStage, HelpersPanel } from './HelpersPanel'
 
 const VIEW_CHOICES: Array<{ mode: Exclude<BrowserViewMode, 'fit'>; label: string; icon: IconName }> = [
   { mode: 'desktop', label: 'Desktop', icon: 'monitor' },
@@ -133,12 +133,20 @@ function MockPage({ agentName }: { agentName: string }): JSX.Element {
 function BrowserChrome({
   state,
   agentName,
+  full = false,
+  actions,
 }: {
   state: BrowserState | null
   agentName: string
+  /** In the full-size view: the expand button becomes a way back. */
+  full?: boolean
+  /** Extra controls at the end of the address row (the full-size view's status and buttons). */
+  actions?: JSX.Element
 }): JSX.Element {
   const tabs = state?.tabs ?? []
   const hasPage = tabs.length > 0
+  const [address, setAddress] = useState<string | null>(null)
+  const shownAddress = address ?? (hasPage ? (state?.url ?? '') : '')
   const active = state?.agentActive !== false
   const needsUser = state?.needsUser === true
 
@@ -164,10 +172,41 @@ function BrowserChrome({
             void agent.browser.reload()
           }}
         />
-        <span className="url" title={state?.url === undefined || state.url === '' ? undefined : state.url}>
+        <form
+          className="url url-form"
+          title={state?.url === undefined || state.url === '' ? undefined : state.url}
+          onSubmit={(event) => {
+            event.preventDefault()
+            const typed = (address ?? '').trim()
+            if (typed === '') return
+            setAddress(null)
+            ;(document.activeElement as HTMLElement | null)?.blur()
+            void agent.browser.go(typed)
+          }}
+        >
           <Icon name="lock" size={14} />
-          <span className="url-text">{hasPage ? displayUrl(state?.url ?? '') : 'Not open yet'}</span>
-        </span>
+          <input
+            className="url-input"
+            aria-label="Address, or words to search"
+            spellCheck={false}
+            value={address ?? (hasPage ? displayUrl(shownAddress) : '')}
+            placeholder="Type an address or search"
+            onFocus={(event) => {
+              setAddress(hasPage ? (state?.url ?? '') : '')
+              const input = event.currentTarget
+              window.setTimeout(() => input.select(), 0)
+            }}
+            onBlur={() => setAddress(null)}
+            onChange={(event) => setAddress(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                setAddress(null)
+                event.currentTarget.blur()
+              }
+            }}
+          />
+        </form>
         <IconButton
           icon="ext"
           label="Open in my browser"
@@ -178,15 +217,18 @@ function BrowserChrome({
             void agent.browser.openInSystem()
           }}
         />
-        <IconButton
-          icon="max"
-          label="Expand the page to the whole window"
-          size={18}
-          disabled={!hasPage}
-          onClick={() => {
-            void agent.browser.setExpanded(true)
-          }}
-        />
+        {full ? null : (
+          <IconButton
+            icon="max"
+            label="Expand the page to the whole window"
+            size={18}
+            disabled={!hasPage}
+            onClick={() => {
+              void agent.browser.setExpanded(true)
+            }}
+          />
+        )}
+        {actions}
       </div>
 
       {tabs.length > 0 ? (
@@ -221,6 +263,17 @@ function BrowserChrome({
               </span>
             )
           })}
+          <button
+            type="button"
+            className="br-tab-new"
+            aria-label="New tab"
+            title="New tab"
+            onClick={() => {
+              void agent.browser.newTab()
+            }}
+          >
+            <Icon name="plus" size={16} />
+          </button>
         </div>
       ) : null}
 
@@ -261,6 +314,8 @@ function PanelBody(): JSX.Element {
   // A helper open full size covers the window, so the native page steps out of the way until it closes.
   const helperOpen = usePanel((store) => store.helper !== null)
   const [slotSize, setSlotSize] = useState({ width: 0, height: 0 })
+  const [live, setLive] = useState(true)
+  const [still, setStill] = useState<string | null>(null)
   const used = [...memories]
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
     .slice(0, 3)
@@ -278,14 +333,30 @@ function PanelBody(): JSX.Element {
     let timer = 0
     let frame = 0
     let sent = ''
+    let shownLive = true
+    // Keep a fresh still of the page, so it is ready the moment the live page has to step aside.
+    const still = window.setInterval(() => {
+      if (!hasPage || !shownLive) return
+      void agent.browser
+        .frame()
+        .then((url) => {
+          if (url !== null) setStill(url)
+        })
+        .catch(() => undefined)
+    }, 1500)
     // The native page sits on top of everything, so it must never be anywhere its slot is not: it follows
     // the slot every frame, and steps out of sight whenever any part of the slot is scrolled or covered.
     const send = (): void => {
       const rect = element.getBoundingClientRect()
       const box = element.closest('.panel-w')?.getBoundingClientRect()
+      // Live only while the whole card is in view; any part scrolled away and the still picture stands in.
       const inside =
         box === undefined ||
-        (rect.top >= box.top - 0.5 && rect.top < box.bottom - 40 && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5)
+        (rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5)
+      if (inside !== shownLive) {
+        shownLive = inside
+        setLive(inside)
+      }
       const next = boundsFor(rect, hasPage && inside)
       const key = `${next.x},${next.y},${next.width},${next.height},${next.visible}`
       if (key === sent) return
@@ -311,6 +382,7 @@ function PanelBody(): JSX.Element {
     window.addEventListener('resize', report)
     return () => {
       window.clearTimeout(timer)
+      window.clearInterval(still)
       window.cancelAnimationFrame(frame)
       observer?.disconnect()
       window.removeEventListener('resize', report)
@@ -329,6 +401,15 @@ function PanelBody(): JSX.Element {
     } catch {
       // The pointer may already be released.
     }
+  }
+
+  // A helper opened from the list fills this side panel (only the panel), until its X puts the panel back.
+  if (helperOpen) {
+    return (
+      <aside className="panel-w panel-helper" aria-label="Helper">
+        <HelperStage />
+      </aside>
+    )
   }
 
   return (
@@ -435,6 +516,8 @@ function PanelBody(): JSX.Element {
                     <Icon name="max" size={18} />
                     Open full size
                   </span>
+                ) : !live && still !== null ? (
+                  <img className="br-still" src={still} alt="" />
                 ) : frame !== null ? (
                   <span
                     className="br-frame"
@@ -588,52 +671,49 @@ export function BrowserStage(): JSX.Element | null {
 
   return (
     <div className="br-stage" role="dialog" aria-modal="true" aria-label="The agent's browser, full size">
-      <div className="br-stage-bar">
-        <span className="br-stage-site" title={state.url}>
-          <Icon name="lock" size={14} />
-          <span className="url-text">{displayUrl(state.url) || 'Untitled page'}</span>
-        </span>
-        <span className={`br-here${needsUser ? ' needs' : ''}`}>
-          {needsUser ? <Icon name="person" size={13} /> : <span className="br-dot" aria-hidden="true" />}
-          {needsUser ? `${agentName} needs you` : personDriving ? 'You have control' : `${agentName} is here`}
-        </span>
-        {needsUser && state.handoffReason !== '' ? (
-          <span className="br-stage-reason" title={state.handoffReason}>
-            {state.handoffReason}
-          </span>
-        ) : (
-          <span className="br-stage-gap" />
-        )}
-        <div className="br-stage-actions">
-          <ViewSwitch state={state} disabled={false} />
-          {personDriving ? (
-            <Button size="sm" onClick={handBack}>
-              <Icon name="check" size={16} />
-              Done, carry on
-            </Button>
-          ) : (
-            <Button
-              variant="tonal"
-              size="sm"
-              onClick={() => {
-                void agent.browser.takeOver()
-              }}
-            >
-              Take over
-            </Button>
-          )}
-          <Button
-            variant="text"
-            size="sm"
-            onClick={() => {
-              void agent.browser.setExpanded(false)
-              navigate({ page: 'chat' })
-            }}
-          >
-            Back to chat
-            <span className="br-stage-kbd">Esc</span>
-          </Button>
-        </div>
+      <div className="br-stage-chrome">
+        <BrowserChrome
+          state={state}
+          agentName={agentName}
+          full
+          actions={
+            <div className="br-stage-actions">
+              <span className={`br-here${needsUser ? ' needs' : ''}`}>
+                {needsUser ? <Icon name="person" size={13} /> : <span className="br-dot" aria-hidden="true" />}
+                {needsUser ? `${agentName} needs you` : personDriving ? 'You have control' : `${agentName} is here`}
+              </span>
+              <ViewSwitch state={state} disabled={false} />
+              {personDriving ? (
+                <Button size="sm" onClick={handBack}>
+                  <Icon name="check" size={16} />
+                  Done, carry on
+                </Button>
+              ) : (
+                <Button
+                  variant="tonal"
+                  size="sm"
+                  onClick={() => {
+                    void agent.browser.takeOver()
+                  }}
+                >
+                  Take over
+                </Button>
+              )}
+              <Button
+                variant="text"
+                size="sm"
+                onClick={() => {
+                  void agent.browser.setExpanded(false)
+                  navigate({ page: 'chat' })
+                }}
+              >
+                Back to chat
+                <span className="br-stage-kbd">Esc</span>
+              </Button>
+            </div>
+          }
+        />
+        {needsUser && state.handoffReason !== '' ? <p className="br-stage-reason">{state.handoffReason}</p> : null}
       </div>
       <div className="br-stage-view" ref={slot}>
         {agent.platform === 'web' ? (

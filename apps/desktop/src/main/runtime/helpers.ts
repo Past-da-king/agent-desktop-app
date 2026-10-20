@@ -733,7 +733,7 @@ export class HelperManager implements HelperHost {
         this.emit({ type: 'chat_changed' })
       },
       ask: (question, options) => this.ask(run, question, options, signal),
-      approve: (summary, details) => this.approve(run, summary, details, signal),
+      approve: (summary, details, scope) => this.approve(run, summary, details, signal, scope),
       notify: async (title, body) => {
         if (!this.settings.get().notifications) return
         try {
@@ -788,6 +788,7 @@ export class HelperManager implements HelperHost {
     summary: string,
     details: string | undefined,
     signal: AbortSignal,
+    scope?: 'computer',
   ): Promise<boolean> {
     const row = await this.store.upsert('chat_item', {
       kind: 'approval',
@@ -796,6 +797,7 @@ export class HelperManager implements HelperHost {
         summary,
         details: details ?? '',
         decision: '',
+        ...(scope === undefined ? {} : { scope }),
         helper: run.id,
         by: run.label,
       }),

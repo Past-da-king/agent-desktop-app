@@ -50,6 +50,9 @@ export const CHANNELS = {
     openInSystem: 'agent:browser.openInSystem',
     setView: 'agent:browser.setView',
     setExpanded: 'agent:browser.setExpanded',
+    frame: 'agent:browser.frame',
+    go: 'agent:browser.go',
+    newTab: 'agent:browser.newTab',
   },
   helpers: {
     stop: 'agent:helpers.stop',

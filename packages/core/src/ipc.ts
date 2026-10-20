@@ -698,6 +698,12 @@ export interface AgentApi {
     setView(mode: BrowserViewMode): Promise<void>
     /** Shows the live page over the whole app window, or back in the panel. */
     setExpanded(on: boolean): Promise<void>
+    /** A still picture (JPEG data URL) of the page as it is drawn in the panel, shown while the live page steps aside. */
+    frame(): Promise<string | null>
+    /** The person typed an address or a search in the bar: open it in the tab in front of them. */
+    go(address: string): Promise<void>
+    /** A new empty tab for the person. */
+    newTab(): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
   }
   helpers: HelpersApi

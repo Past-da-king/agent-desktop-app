@@ -172,7 +172,11 @@ export interface ToolContext {
   /** Ask the person and wait for the answer. Null when nobody can answer (a background run). */
   ask(question: string, options: string[]): Promise<string | null>
   /** Ask permission before something that changes the outside world. */
-  approve(summary: string, details?: string): Promise<boolean>
+  /**
+   * Ask the person to approve. `scope: 'computer'` marks an action that stays on this computer (a command, code,
+   * a file): its card can also offer "Always allow on this computer". Anything sent or done elsewhere has no scope.
+   */
+  approve(summary: string, details?: string, scope?: 'computer'): Promise<boolean>
   notify(title: string, body: string): Promise<void>
   signal: AbortSignal
 }

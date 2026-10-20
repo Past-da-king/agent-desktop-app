@@ -102,6 +102,9 @@ export interface BrowserControl {
   /** Optional so older fakes keep compiling; AgentBrowser has it. */
   setViewMode?(mode: BrowserViewMode): Promise<void>
   setExpanded?(on: boolean): void
+  frame?(): Promise<string | null>
+  personOpen?(address: string): Promise<void>
+  personNewTab?(): void
 }
 
 export interface IpcDeps {
@@ -351,6 +354,14 @@ export function registerIpc(deps: IpcDeps): () => void {
       throw new Error('view must be desktop, tablet, phone or fit')
     }
     await deps.browser?.setViewMode?.(mode)
+  })
+  handle(CHANNELS.browser.frame, async () => (await deps.browser?.frame?.()) ?? null)
+  handle(CHANNELS.browser.go, async (_event, rawAddress) => {
+    if (typeof rawAddress !== 'string' || rawAddress.length > 4000) throw new Error('address must be text')
+    await deps.browser?.personOpen?.(rawAddress)
+  })
+  handle(CHANNELS.browser.newTab, async () => {
+    deps.browser?.personNewTab?.()
   })
   handle(CHANNELS.browser.setExpanded, async (_event, rawOn) => {
     if (typeof rawOn !== 'boolean') throw new Error('expanded must be true or false')
