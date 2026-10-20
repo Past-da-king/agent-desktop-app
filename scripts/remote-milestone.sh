@@ -7,7 +7,7 @@ export PATH="$HOME/node24/bin:$HOME/.opencode/bin:$PATH"
 export GATE_SKIP_SMOKE=1
 cd "$HOME/aw/$ID"
 rm -f .remote-result
-MODEL="opencode-go/deepseek-v4.1-flash"
+MODEL="${REMOTE_MODEL:-opencode/deepseek-v4.1-flash-free}"   # the server's paid key expired; the free tier serves the same model
 echo "[remote] node $(node -v), opencode $(opencode --version)"
 npm install --no-audit --no-fund >.install.log 2>&1 || { echo "[remote] npm install failed"; tail -20 .install.log; echo FAILED >.remote-result; exit 1; }
 prompt="You are implementing milestone $ID of the Agent desktop app in this folder (a copy of a git worktree; other milestones are being built elsewhere in parallel, so stay inside this folder). There is NO git here: do not run any git command and skip the commit step in AGENTS.md; the runner commits afterwards. Read AGENTS.md, PLAN.md and tasks/$ID.md completely first, then implement it exactly as written. Work step by step and run npm run typecheck as you go. When done, run: bash scripts/gate.sh $ID  and keep fixing until it prints GATE $ID PASSED. Then write tasks/reports/$ID.md. Do not touch scripts/ or any tasks/*.md file (except your own report)."
