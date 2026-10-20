@@ -540,6 +540,10 @@ export const mockAgent: AgentApi = {
     async openInSystem() {
       return undefined
     },
+    async setExpanded(on: boolean) {
+      mockBrowser.expanded = on
+      notifyBrowser()
+    },
     async setView(viewMode: BrowserViewMode) {
       mockBrowser.view = { ...MOCK_VIEWS[viewMode] }
       notifyBrowser()

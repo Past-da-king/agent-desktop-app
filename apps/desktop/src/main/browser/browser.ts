@@ -139,6 +139,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private lastFit: FitResult = { bounds: { x: 0, y: 0, width: 0, height: 0 }, scale: 1 }
   /** browser_open applies the site's view itself; navigation listeners leave it alone meanwhile. */
   private opening = false
+  private expanded = false
 
   constructor(options: AgentBrowserOptions) {
     this.window = options.window
@@ -197,6 +198,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       agentActive: this.agentDriving,
       needsUser: this.handoffReason !== '',
       handoffReason: this.handoffReason,
+      expanded: this.expanded,
       view: {
         mode: this.currentView.mode,
         label: viewLabel(this.currentView),
@@ -205,6 +207,18 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         scale: Math.round(this.lastFit.scale * 1000) / 1000,
       },
     }
+  }
+
+  /** While the person drives, the agent's own input waits: one pair of hands at a time. */
+  private pausedLine(): string {
+    return 'The person has the browser right now, so I am paused. Wait for them to hand it back (they press Done, carry on), or ask them in the chat.'
+  }
+
+  /** The page over the whole app window (the person helping out), or back in the chat panel. */
+  setExpanded(on: boolean): void {
+    if (this.expanded === on) return
+    this.expanded = on
+    this.emit()
   }
 
   /** The panel's own switch: the person picks a device; it is remembered for the site like the agent's choice. */
@@ -341,6 +355,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   async open(raw: string, asked: ViewRequest | null = null): Promise<string> {
+    if (!this.agentDriving) return this.pausedLine()
     const policy = checkBrowserUrl(raw)
     if (!policy.ok) return policy.reason
     const tab = this.activeTab() ?? this.createTab()
@@ -606,6 +621,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         }),
       ].join('\n')
     }
+    if (!this.agentDriving) return this.pausedLine()
     if (tab === null || !isRealPage(tab.view) || site === null) {
       return 'Open the site first (browser_open), then fix it.'
     }
@@ -682,6 +698,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   // ---- acting with trusted input --------------------------------------------------------------
 
   async act(request: ActRequest): Promise<string> {
+    if (!this.agentDriving) return this.pausedLine()
     const tab = this.activeTab()
     if (tab === null || !isRealPage(tab.view)) {
       return 'No page is open yet. Use browser_open with a web address.'
@@ -902,6 +919,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   // ---- running the agent's own script in the page --------------------------------------------
 
   async evaluate(code: string, seconds: number, signal?: AbortSignal): Promise<string> {
+    if (!this.agentDriving) return this.pausedLine()
     const tab = this.activeTab()
     if (tab === null || !isRealPage(tab.view)) {
       return 'No page is open yet. Use browser_open with a web address.'
@@ -1140,6 +1158,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   setAgentDriving(on: boolean, reason = ''): void {
     this.agentDriving = on
     this.handoffReason = on ? '' : reason
+    // A handoff opens the page full size so the person can sign in or pass a check comfortably;
+    // handing back puts it in the panel again.
+    if (!on && reason !== '' && this.hasPage()) this.expanded = true
+    if (on) this.expanded = false
     for (const tab of this.tabs) void this.refreshInputGuard(tab)
     this.emit()
   }
@@ -1229,7 +1251,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return { action: 'deny' }
     })
 
-    wc.on('before-input-event', (event) => {
+    wc.on('before-input-event', (event, input) => {
+      // Escape shrinks the full-size page back into the panel, as the bar says.
+      if (this.expanded && input.type === 'keyDown' && input.key === 'Escape' && !input.shift && !input.control && !input.alt && !input.meta) {
+        event.preventDefault()
+        this.setExpanded(false)
+        return
+      }
       // A key the agent sends itself must still reach the page.
       if (this.agentDriving && !this.injectingInput) event.preventDefault()
     })

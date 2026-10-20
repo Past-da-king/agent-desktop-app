@@ -91,6 +91,7 @@ export interface BrowserControl {
   openInSystem(): Promise<void>
   /** Optional so older fakes keep compiling; AgentBrowser has it. */
   setViewMode?(mode: BrowserViewMode): Promise<void>
+  setExpanded?(on: boolean): void
 }
 
 export interface IpcDeps {
@@ -312,6 +313,10 @@ export function registerIpc(deps: IpcDeps): () => void {
       throw new Error('view must be desktop, tablet, phone or fit')
     }
     await deps.browser?.setViewMode?.(mode)
+  })
+  handle(CHANNELS.browser.setExpanded, async (_event, rawOn) => {
+    if (typeof rawOn !== 'boolean') throw new Error('expanded must be true or false')
+    deps.browser?.setExpanded?.(rawOn)
   })
   handle(CHANNELS.browser.openInSystem, async () => {
     await deps.browser?.openInSystem()

@@ -303,6 +303,8 @@ export interface BrowserState {
   handoffReason: string
   /** How the page is presented: the device it emulates and the size it is laid out at. */
   view?: BrowserViewInfo
+  /** The page fills the app window so the person can work in it comfortably. */
+  expanded?: boolean
 }
 
 export type BrowserViewMode = 'desktop' | 'tablet' | 'phone' | 'fit'
@@ -418,6 +420,8 @@ export interface AgentApi {
     openInSystem(): Promise<void>
     /** Shows the page as a desktop, tablet or phone, or at the panel's own size. Remembered for the site. */
     setView(mode: BrowserViewMode): Promise<void>
+    /** Shows the live page over the whole app window, or back in the panel. */
+    setExpanded(on: boolean): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
   }
   helpers: HelpersApi
