@@ -117,7 +117,6 @@ function MemoryDialog({
             className="input"
             value={kind}
             onChange={(event) => setKind(event.target.value as MemoryKind)}
-            style={{ paddingRight: 18 }}
           >
             {KIND_ORDER.map((item) => (
               <option key={item} value={item}>
