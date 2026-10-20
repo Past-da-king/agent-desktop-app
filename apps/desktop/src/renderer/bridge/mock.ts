@@ -1,6 +1,11 @@
 import { DEFAULT_SETTINGS, PROVIDERS } from '@agent/core'
 import type {
+  AccountRules,
   AgentApi,
+  AppChoice,
+  AppsStatus,
+  ConnectedAccount,
+  LearnedAppInfo,
   BrowserBounds,
   BrowserState,
   ChatEvent,
@@ -234,6 +239,90 @@ function notifyBrowser(): void {
     tabs: mockBrowser.tabs.map((tab) => ({ ...tab })),
   }
   for (const listener of browserListeners) listener(snapshot)
+}
+
+// ---- connected apps and learned apps ----
+
+const MOCK_CATALOG: AppChoice[] = [
+  { slug: 'gmail', name: 'Gmail', line: 'Read, search, draft and send email' },
+  { slug: 'googlecalendar', name: 'Google Calendar', line: 'See your day, find time, add events' },
+  { slug: 'googledrive', name: 'Google Drive', line: 'Find, read and share your files' },
+  { slug: 'googledocs', name: 'Google Docs', line: 'Read and write documents' },
+  { slug: 'googlesheets', name: 'Google Sheets', line: 'Read and update spreadsheets' },
+  { slug: 'outlook', name: 'Outlook', line: 'Microsoft email and calendar' },
+  { slug: 'microsoft_teams', name: 'Microsoft Teams', line: 'Chats, channels and meetings' },
+  { slug: 'one_drive', name: 'OneDrive', line: 'Microsoft files' },
+  { slug: 'slack', name: 'Slack', line: 'Read channels and send messages' },
+  { slug: 'notion', name: 'Notion', line: 'Notes, docs and databases' },
+  { slug: 'todoist', name: 'Todoist', line: 'Tasks and projects' },
+  { slug: 'trello', name: 'Trello', line: 'Boards and cards' },
+  { slug: 'asana', name: 'Asana', line: 'Team tasks and projects' },
+  { slug: 'clickup', name: 'ClickUp', line: 'Tasks, docs and goals' },
+  { slug: 'linear', name: 'Linear', line: 'Issues and projects' },
+  { slug: 'github', name: 'GitHub', line: 'Repos, issues and pull requests' },
+  { slug: 'dropbox', name: 'Dropbox', line: 'Files and folders' },
+  { slug: 'zoom', name: 'Zoom', line: 'Meetings and recordings' },
+  { slug: 'hubspot', name: 'HubSpot', line: 'Contacts, deals and CRM' },
+  { slug: 'airtable', name: 'Airtable', line: 'Bases and records' },
+]
+
+const seededApps = mode === 'demo' || mode === 'big'
+let appsKeyKind: AppsStatus['keyKind'] = seededApps ? 'project' : ''
+let appsAccounts: ConnectedAccount[] = seededApps
+  ? [
+      { id: 'ca_work_gmail', app: 'gmail', appName: 'Gmail', label: 'ana@example.com', status: 'active', rules: { read: 'allow', change: 'ask' } },
+      { id: 'ca_home_gmail', app: 'gmail', appName: 'Gmail', label: 'ana.home@example.org', status: 'active', rules: { read: 'allow', change: 'never' } },
+      { id: 'ca_calendar', app: 'googlecalendar', appName: 'Google Calendar', label: 'ana@example.com', status: 'active', rules: { read: 'allow', change: 'allow' } },
+      { id: 'ca_slack', app: 'slack', appName: 'Slack', label: 'Example Studio workspace', status: 'pending', rules: { read: 'allow', change: 'ask' } },
+    ]
+  : []
+const appsConnecting = new Set<string>(seededApps ? ['slack'] : [])
+let learnedApps: LearnedAppInfo[] = seededApps
+  ? [
+      {
+        id: 'hacker_news',
+        name: 'Hacker News',
+        startUrl: 'https://news.ycombinator.com',
+        host: 'news.ycombinator.com',
+        about: 'The front page, comments and search. No sign-in needed.',
+        trusted: false,
+        updatedAt: Date.now() - 3 * 86_400_000,
+        tools: [
+          { name: 'front_page', description: 'The stories on the front page, with points and links', readOnly: true },
+          { name: 'read_comments', description: 'The top comments on one story', readOnly: true },
+          { name: 'search', description: 'Search stories by words', readOnly: true },
+        ],
+      },
+      {
+        id: 'example_shop',
+        name: 'Example Shop',
+        startUrl: 'https://shop.example',
+        host: 'shop.example',
+        about: 'You sign in yourself in the agent browser. It never pays.',
+        trusted: false,
+        updatedAt: Date.now() - 86_400_000,
+        tools: [
+          { name: 'search_products', description: 'Find products by name, with prices', readOnly: true },
+          { name: 'order_history', description: 'Your recent orders and their status', readOnly: true },
+          { name: 'add_to_cart', description: 'Put one product in the cart', readOnly: false },
+        ],
+      },
+    ]
+  : []
+const appsListeners = new Set<() => void>()
+
+function emitApps(): void {
+  for (const listener of appsListeners) listener()
+}
+
+function appName(slug: string): string {
+  return (
+    MOCK_CATALOG.find((item) => item.slug === slug)?.name ??
+    slug
+      .split('_')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ')
+  )
 }
 
 export const mockAgent: AgentApi = {
@@ -566,6 +655,85 @@ export const mockAgent: AgentApi = {
         })
       }
       return working.length
+    },
+  },
+
+  apps: {
+    async status(): Promise<AppsStatus> {
+      return {
+        hasKey: appsKeyKind !== '',
+        keyKind: appsKeyKind,
+        accounts: copy(appsAccounts),
+        connecting: [...appsConnecting],
+        message: '',
+      }
+    },
+    async setKey(key: string) {
+      const value = key.trim()
+      if (value === '') {
+        appsKeyKind = ''
+        appsAccounts = []
+        appsConnecting.clear()
+        emitApps()
+        return { ok: true, message: 'Removed your Composio key.' }
+      }
+      await delay(400)
+      if (value.length < 8) return { ok: false, message: "Composio didn't accept that key. Copy it again from your project's Settings, API Keys." }
+      appsKeyKind = value.startsWith('ck_') ? 'consumer' : value.startsWith('uak_') ? 'user' : 'project'
+      emitApps()
+      return { ok: true, message: 'Your Composio key works. Connect your first app.' }
+    },
+    async catalog() {
+      return copy(MOCK_CATALOG)
+    },
+    async connect(app: string) {
+      if (appsKeyKind === '') return { ok: false, message: 'Add your Composio key first.' }
+      const id = newId('ca')
+      appsConnecting.add(app)
+      appsAccounts = [
+        ...appsAccounts,
+        { id, app, appName: appName(app), label: appName(app), status: 'pending', rules: { read: 'allow', change: 'ask' } },
+      ]
+      emitApps()
+      setTimeout(() => {
+        appsConnecting.delete(app)
+        appsAccounts = appsAccounts.map((account) =>
+          account.id === id ? { ...account, status: 'active', label: 'you@example.com' } : account,
+        )
+        emitApps()
+      }, 1500)
+      return { ok: true, message: 'Sign in in your browser. This page updates when it is connected.' }
+    },
+    async disconnect(accountId: string) {
+      const gone = appsAccounts.find((account) => account.id === accountId)
+      appsAccounts = appsAccounts.filter((account) => account.id !== accountId)
+      if (gone && !appsAccounts.some((account) => account.app === gone.app && account.status === 'pending')) {
+        appsConnecting.delete(gone.app)
+      }
+      emitApps()
+    },
+    async setRules(accountId: string, rules: AccountRules) {
+      appsAccounts = appsAccounts.map((account) =>
+        account.id === accountId ? { ...account, rules: { read: rules.read, change: rules.change } } : account,
+      )
+      emitApps()
+    },
+    async learned() {
+      return copy(learnedApps)
+    },
+    async removeLearned(id: string) {
+      learnedApps = learnedApps.filter((app) => app.id !== id)
+      emitApps()
+    },
+    async setTrusted(id: string, trusted: boolean) {
+      learnedApps = learnedApps.map((app) => (app.id === id ? { ...app, trusted } : app))
+      emitApps()
+    },
+    onChanged(callback: () => void): Unsubscribe {
+      appsListeners.add(callback)
+      return () => {
+        appsListeners.delete(callback)
+      }
     },
   },
 

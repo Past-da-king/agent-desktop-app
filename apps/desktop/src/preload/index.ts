@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 
 import type {
+  AccountRules,
   AgentApi,
+  AppChoice,
+  AppsStatus,
   AppInfo,
   Attachment,
   BrowserBounds,
@@ -12,6 +15,7 @@ import type {
   EntityName,
   EnvironmentReport,
   HotkeyStatus,
+  LearnedAppInfo,
   ProviderInfo,
   RowInput,
   RouteTarget,
@@ -104,6 +108,19 @@ const api: AgentApi = {
   helpers: {
     stop: (id) => call<boolean>(CHANNELS.helpers.stop, id),
     stopAll: () => call<number>(CHANNELS.helpers.stopAll),
+  },
+
+  apps: {
+    status: () => call<AppsStatus>(CHANNELS.apps.status),
+    setKey: (key: string) => call<{ ok: boolean; message: string }>(CHANNELS.apps.setKey, key),
+    catalog: () => call<AppChoice[]>(CHANNELS.apps.catalog),
+    connect: (app: string) => call<{ ok: boolean; message: string }>(CHANNELS.apps.connect, app),
+    disconnect: (accountId: string) => call<void>(CHANNELS.apps.disconnect, accountId),
+    setRules: (accountId: string, rules: AccountRules) => call<void>(CHANNELS.apps.setRules, accountId, rules),
+    learned: () => call<LearnedAppInfo[]>(CHANNELS.apps.learned),
+    removeLearned: (id: string) => call<void>(CHANNELS.apps.removeLearned, id),
+    setTrusted: (id: string, trusted: boolean) => call<void>(CHANNELS.apps.setTrusted, id, trusted),
+    onChanged: (callback) => on<null>(EVENTS.apps, () => callback()),
   },
 
   window: {

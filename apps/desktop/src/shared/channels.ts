@@ -51,6 +51,17 @@ export const CHANNELS = {
     stop: 'agent:helpers.stop',
     stopAll: 'agent:helpers.stopAll',
   },
+  apps: {
+    status: 'agent:apps.status',
+    setKey: 'agent:apps.setKey',
+    catalog: 'agent:apps.catalog',
+    connect: 'agent:apps.connect',
+    disconnect: 'agent:apps.disconnect',
+    setRules: 'agent:apps.setRules',
+    learned: 'agent:apps.learned',
+    removeLearned: 'agent:apps.removeLearned',
+    setTrusted: 'agent:apps.setTrusted',
+  },
   window: {
     minimize: 'agent:window.minimize',
     toggleMaximize: 'agent:window.toggleMaximize',
@@ -91,4 +102,5 @@ export const EVENTS = {
   quickAsk: 'agent:evt:window.quickAsk',
   route: 'agent:evt:window.route',
   hotkey: 'agent:evt:window.hotkey',
+  apps: 'agent:evt:apps.changed',
 } as const
