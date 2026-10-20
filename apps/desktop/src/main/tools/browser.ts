@@ -235,7 +235,7 @@ function handoffTool(deps: BrowserToolDeps): Tool {
     spec: {
       name: 'browser_handoff',
       description:
-        'When a page needs a human (a sign-in, captcha, two-factor code or consent), hand the browser to the person and wait until they say they are done. The page opens full size for them and your own browser actions wait until they hand it back. Use browser_wait_for or browser_read afterwards to check.',
+        'When a page needs a human (a sign-in, captcha, two-factor code or consent), hand the browser to the person and wait until they say they are done. The page opens full size for them; only that tab is theirs until they hand it back (other agents keep working in their own tabs). Use browser_wait_for or browser_read afterwards to check.',
       schema: schema(['reason'], {
         reason: str('What they need to do, in one line'),
       }),

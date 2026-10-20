@@ -135,7 +135,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   private activeId: string | null = null
   private bounds: BrowserBounds = { ...EMPTY_BOUNDS }
-  private agentDriving = true
+  /**
+   * The tab the person is using, if any. Only that tab is theirs: agents keep working in their own tabs, and
+   * an agent whose tab the person took simply opens a new one. Closing that tab hands it back.
+   */
+  private personTab: string | null = null
   private handoffReason = ''
   private blockedReason = ''
   /** Partitions whose session is set up: one header listener and one download handler per session. */
@@ -209,7 +213,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       title: active === null ? '' : safeTitle(active.view),
       tabs,
       visible: this.bounds.visible,
-      agentActive: this.agentDriving,
+      agentActive: this.personTab === null || this.personTab !== (this.shownTab()?.id ?? null),
       needsUser: this.handoffReason !== '',
       handoffReason: this.handoffReason,
       expanded: this.expanded,
@@ -225,7 +229,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   /** While the person drives, the agent's own input waits: one pair of hands at a time. */
   private pausedLine(): string {
-    return 'The person has the browser right now, so I am paused. Wait for them to hand it back (they press Done, carry on), or ask them in the chat.'
+    return 'The person is using this tab right now. Leave it to them: open your own page with browser_open (it opens a new tab for you) and carry on there, or wait until they hand this one back.'
+  }
+
+  /** The agent acting now is on the tab the person is using. */
+  private heldByPerson(): boolean {
+    return this.personTab !== null && this.activeTab()?.id === this.personTab
   }
 
   /** The page over the whole app window (the person helping out), or back in the chat panel. */
@@ -276,6 +285,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const [tab] = this.tabs.splice(index, 1)
     if (tab === undefined) return
     for (const [owner, tabId] of this.ownerTabs) if (tabId === tab.id) this.ownerTabs.delete(owner)
+    // Closing the tab the person was using hands control back.
+    if (this.personTab === tab.id) {
+      this.personTab = null
+      this.handoffReason = ''
+    }
     this.inputCss.delete(tab.id)
     try {
       this.window?.contentView.removeChildView(tab.view)
@@ -314,6 +328,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       this.createTab(url)
       return
     }
+    // Typing an address in a tab makes it the person's tab.
+    this.personTab = tab.id
+    for (const each of this.tabs) void this.refreshInputGuard(each)
     this.currentView = this.sites.viewFor(url)
     await this.prepare(tab).catch(() => undefined)
     await tab.view.webContents.loadURL(url).catch(() => undefined)
@@ -322,7 +339,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   /** A new tab for the person, in front, on Google. */
   personNewTab(): void {
-    this.createTab(NEW_TAB_PAGE)
+    const tab = this.createTab(NEW_TAB_PAGE)
+    // A tab the person opened is theirs to use.
+    if (tab !== null) {
+      this.personTab = tab.id
+      for (const each of this.tabs) void this.refreshInputGuard(each)
+    }
     this.emit()
   }
 
@@ -421,7 +443,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   async open(raw: string, asked: ViewRequest | null = null): Promise<string> {
-    if (!this.agentDriving) return this.pausedLine()
+    if (this.heldByPerson()) {
+      // The person took this agent's tab: the agent gets a fresh tab of its own instead of waiting.
+      const owner = currentOwner()
+      if (owner === undefined) return this.pausedLine()
+      this.ownerTabs.delete(owner)
+    }
     return this.openChecked(checkBrowserUrl(raw), asked)
   }
 
@@ -711,7 +738,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         }),
       ].join('\n')
     }
-    if (!this.agentDriving) return this.pausedLine()
+    if (this.heldByPerson()) return this.pausedLine()
     if (tab === null || !isRealPage(tab.view) || site === null) {
       return 'Open the site first (browser_open), then fix it.'
     }
@@ -788,7 +815,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   // ---- acting with trusted input --------------------------------------------------------------
 
   async act(request: ActRequest): Promise<string> {
-    if (!this.agentDriving) return this.pausedLine()
+    if (this.heldByPerson()) return this.pausedLine()
     const tab = this.activeTab()
     if (tab === null || !isRealPage(tab.view)) {
       return 'No page is open yet. Use browser_open with a web address.'
@@ -1014,7 +1041,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   // ---- running the agent's own script in the page --------------------------------------------
 
   async evaluate(code: string, seconds: number, signal?: AbortSignal): Promise<string> {
-    if (!this.agentDriving) return this.pausedLine()
+    if (this.heldByPerson()) return this.pausedLine()
     const tab = this.activeTab()
     if (tab === null || !isRealPage(tab.view)) {
       return 'No page is open yet. Use browser_open with a web address.'
@@ -1263,7 +1290,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   setAgentDriving(on: boolean, reason = ''): void {
-    this.agentDriving = on
+    // Off: the person takes the tab in question (the agent's own when it asks for help, else the one in front).
+    this.personTab = on ? null : ((this.activeTab() ?? this.shownTab())?.id ?? null)
     this.handoffReason = on ? '' : reason
     // A handoff opens the page full size so the person can sign in or pass a check comfortably;
     // handing back puts it in the panel again.
@@ -1379,7 +1407,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const wc = tab.view.webContents
 
     const guard = (event: Electron.Event, url: string): void => {
-      const policy = checkBrowserUrl(url, { personTyped: !this.agentDriving })
+      const policy = checkBrowserUrl(url, { personTyped: tab.id === this.personTab })
       if (policy.ok) return
       event.preventDefault()
       this.blockedReason = policy.reason
@@ -1389,7 +1417,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     wc.on('will-redirect', guard)
 
     wc.setWindowOpenHandler(({ url }) => {
-      const policy = checkBrowserUrl(url, { personTyped: !this.agentDriving })
+      const policy = checkBrowserUrl(url, { personTyped: tab.id === this.personTab })
       if (!policy.ok) {
         this.blockedReason = policy.reason
         this.emit()
@@ -1413,7 +1441,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         return
       }
       // A key the agent sends itself must still reach the page.
-      if (this.agentDriving && !this.injectingInput) event.preventDefault()
+      if (tab.id !== this.personTab && !this.injectingInput) event.preventDefault()
     })
 
     wc.on('did-navigate', (_event, _url, httpResponseCode) => {
@@ -1521,7 +1549,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private async refreshInputGuard(tab: Tab): Promise<void> {
     const wc = tab.view.webContents
     if (wc.isDestroyed()) return
-    const wanted = (): boolean => this.agentDriving && (this.lifted.get(tab.id) ?? 0) === 0
+    const wanted = (): boolean => tab.id !== this.personTab && (this.lifted.get(tab.id) ?? 0) === 0
     const current = this.inputCss.get(tab.id)
     if (wanted()) {
       if (current !== undefined) return

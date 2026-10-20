@@ -126,6 +126,7 @@ const api: AgentApi = {
     status: () => call<AppsStatus>(CHANNELS.apps.status),
     setKey: (key: string) => call<{ ok: boolean; message: string }>(CHANNELS.apps.setKey, key),
     catalog: () => call<AppChoice[]>(CHANNELS.apps.catalog),
+    search: (query) => call<AppChoice[]>(CHANNELS.apps.search, query),
     connect: (app: string) => call<{ ok: boolean; message: string }>(CHANNELS.apps.connect, app),
     disconnect: (accountId: string) => call<void>(CHANNELS.apps.disconnect, accountId),
     setRules: (accountId: string, rules: AccountRules) => call<void>(CHANNELS.apps.setRules, accountId, rules),

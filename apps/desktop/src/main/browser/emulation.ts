@@ -117,9 +117,13 @@ export const DESKTOP_MIN_WIDTH = 1280
  * a desktop width and takes the slot's height, so the scaled page fills the slot with no empty bands.
  */
 export function shapedView(view: ViewSpec, slot: Rect): ViewSpec {
-  if (view.mode !== 'desktop' || view.fixed === true || slot.width <= 0 || slot.height <= 0) return view
+  if (view.mode !== 'desktop' || slot.width <= 0 || slot.height <= 0) return view
   const zoom = view.zoom > 0 ? view.zoom : 1
-  const width = slot.width >= DESKTOP_MIN_WIDTH ? Math.round(slot.width / zoom) : Math.max(PRESETS.desktop.width, DESKTOP_MIN_WIDTH)
+  // The narrowest the page lays out at: the width the agent asked for, or a real desktop width. A wider slot (the
+  // full-size view) gets its own width, drawn 1:1; a narrower one (the panel) keeps that width, scaled down. The
+  // height always follows the slot's shape, so the card or the window is filled with no empty bands.
+  const least = view.fixed === true ? view.width : Math.max(PRESETS.desktop.width, DESKTOP_MIN_WIDTH)
+  const width = slot.width / zoom >= least ? Math.round(slot.width / zoom) : least
   const height = Math.round((width * slot.height) / slot.width)
   return { ...view, width: clampSide(width), height: clampSide(height) }
 }

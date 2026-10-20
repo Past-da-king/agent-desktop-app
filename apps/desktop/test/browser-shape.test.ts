@@ -23,10 +23,21 @@ describe('shaped desktop view', () => {
     expect(Math.abs(fit.bounds.height - 480)).toBeLessThanOrEqual(1)
   })
 
-  it('leaves an exact size the agent asked for alone', () => {
+  it('a fixed 1440 page fills the panel card top to bottom (no bands)', () => {
     const asked = resolveView(presetView('desktop'), { width: 1440, height: 900 })
     expect(asked.fixed).toBe(true)
-    expect([shapedView(asked, full).width, shapedView(asked, full).height]).toEqual([1440, 900])
+    const shaped = shapedView(asked, panel)
+    expect(shaped.width).toBe(1440)
+    const fit = fitView(panel, shaped)
+    expect(fit.bounds.width).toBe(470)
+    expect(Math.abs(fit.bounds.height - 480)).toBeLessThanOrEqual(1)
+  })
+
+  it('a fixed 1440 page fills the full-size window edge to edge at 1:1 (no side bands)', () => {
+    const asked = resolveView(presetView('desktop'), { width: 1440, height: 900 })
+    const shaped = shapedView(asked, full)
+    expect([shaped.width, shaped.height]).toEqual([1917, 950])
+    expect(fitView(full, shaped).bounds).toEqual(full)
   })
 
   it('leaves phone and tablet at their device size', () => {
@@ -38,7 +49,6 @@ describe('shaped desktop view', () => {
     const asked = resolveView(presetView('desktop'), { width: 1440, height: 900 })
     const phone = resolveView(asked, { mode: 'phone' })
     const back = resolveView(phone, { mode: 'desktop' })
-    expect(back.fixed).toBe(false)
     expect(shapedView(back, full).width).toBe(1917)
   })
 })

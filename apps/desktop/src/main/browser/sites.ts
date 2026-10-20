@@ -233,8 +233,10 @@ function profileFrom(value: unknown): SiteProfile | null {
   if (typeof raw['reason'] === 'string') profile.reason = raw['reason']
   const css = strings('css')
   if (css !== undefined) profile.css = css
-  const js = strings('js')
-  if (js !== undefined) profile.js = js
+  // Scripts used to be kept by default, so probes the agent wrote to look around ended up running on every visit.
+  // One that pins its own box over the page is such a leftover, never a fix: it is dropped as the profile loads.
+  const js = strings('js')?.filter((script) => !isLeftoverProbe(script))
+  if (js !== undefined && js.length > 0) profile.js = js
   if (typeof raw['headers'] === 'object' && raw['headers'] !== null) {
     const headers: Record<string, string> = {}
     for (const [name, header] of Object.entries(raw['headers'] as Record<string, unknown>)) {
@@ -402,4 +404,9 @@ export function diagnosis(verdict: Verdict, tried: string[]): string {
   }
   lines.push("3. Otherwise tell the user plainly what the site refuses and what the options are. Don't retry the same thing.")
   return `${lines.join('\n')}\n`
+}
+
+/** A kept script that adds a fixed-position element of its own over the page: a debugging probe, not a fix. */
+export function isLeftoverProbe(script: string): boolean {
+  return /createElement\s*\(/.test(script) && /position\s*:\s*fixed/i.test(script)
 }

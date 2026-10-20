@@ -480,6 +480,10 @@ export function registerIpc(deps: IpcDeps): () => void {
   })
 
   handle(CHANNELS.apps.catalog, async () => (deps.apps === undefined ? POPULAR_APPS : deps.apps.catalog()))
+  handle(CHANNELS.apps.search, async (_event, rawQuery) => {
+    if (typeof rawQuery !== 'string' || rawQuery.length > 200) throw new Error('query must be text')
+    return deps.apps === undefined ? [] : deps.apps.searchApps(rawQuery)
+  })
 
   handle(CHANNELS.apps.connect, async (_event, rawApp) => {
     const app = requireString(rawApp, 'app', 64).trim().toLowerCase()
