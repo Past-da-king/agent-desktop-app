@@ -7,6 +7,7 @@ import { providerFor } from '@agent/core'
 
 import { registerIpc, type WindowControls } from './ipc'
 import { AccountService } from './account'
+import { AgentBrowser } from './browser/browser'
 import { Store } from './db'
 import { Runner } from './runtime/runner'
 import { buildToolset } from './runtime/toolset'
@@ -30,6 +31,7 @@ let smokeTimer: NodeJS.Timeout | null = null
 let store: Store | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+let agentBrowser: AgentBrowser | null = null
 let disposeIpc: (() => void) | null = null
 let disposeStore: (() => void) | null = null
 
@@ -132,9 +134,23 @@ function startSmokeCheck(win: BrowserWindow): void {
     }
   }
 
+  const browserCheck = async (): Promise<boolean> => {
+    const browser = agentBrowser
+    if (browser === null) return false
+    const ok = await browser.smokeOutline(
+      '<!doctype html><html><head><title>Smoke</title></head><body><h1>Smoke</h1><button>Save</button></body></html>',
+    )
+    if (!ok) {
+      console.error('BROWSER FAILED: the outline helper did not see the data: page')
+      app.exit(1)
+    }
+    if (ok) console.log('BROWSER OK')
+    return ok
+  }
+
   const poll = async (): Promise<void> => {
     while (Date.now() < deadline) {
-      if (await check()) {
+      if ((await check()) && (await browserCheck())) {
         if (smokeTimer) clearTimeout(smokeTimer)
         smokeTimer = null
         console.log('SMOKE OK')
@@ -150,7 +166,7 @@ function startSmokeCheck(win: BrowserWindow): void {
   })
 }
 
-function createWindow(stateFile: string): void {
+function createWindow(stateFile: string): BrowserWindow {
   const saved = readWindowState(stateFile)
   const win = new BrowserWindow({
     width: saved.width,
@@ -184,6 +200,7 @@ function createWindow(stateFile: string): void {
 
   win.on('close', () => {
     writeWindowState(stateFile, win)
+    agentBrowser?.detach()
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -199,12 +216,16 @@ function createWindow(stateFile: string): void {
 
   if (isSmoke) startSmokeCheck(win)
 
+  return win
+}
+
+function loadWindow(win: BrowserWindow): void {
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) void win.loadURL(devUrl)
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
-async function startServices(): Promise<void> {
+async function startServices(win: BrowserWindow): Promise<void> {
   const dir = app.getPath('userData')
   mkdirSync(dir, { recursive: true })
 
@@ -219,7 +240,17 @@ async function startServices(): Promise<void> {
     settings.save({ syncUrl: fromEnv })
   }
 
-  const tools = buildToolset({ store })
+  agentBrowser = new AgentBrowser({
+    window: win,
+    onState: (state) => broadcast(EVENTS.browser, state),
+    openExternal: (url) => shell.openExternal(url),
+  })
+
+  const tools = buildToolset({
+    store,
+    browser: agentBrowser,
+    agentName: () => settings.get().agentName,
+  })
   runner = new Runner({
     store,
     settings,
@@ -250,6 +281,7 @@ async function startServices(): Promise<void> {
     chat: runner,
     ipcMain,
     windows: windowControls(),
+    browser: agentBrowser,
     broadcast,
     shell: {
       openExternal: (url) => shell.openExternal(url),
@@ -268,12 +300,15 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.whenReady().then(async () => {
-    await startServices()
-    createWindow(join(app.getPath('userData'), 'window-state.json'))
+    const win = createWindow(join(app.getPath('userData'), 'window-state.json'))
+    await startServices(win)
+    loadWindow(win)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow(join(app.getPath('userData'), 'window-state.json'))
+        const next = createWindow(join(app.getPath('userData'), 'window-state.json'))
+        agentBrowser?.attach(next)
+        loadWindow(next)
       }
     })
   })
@@ -285,6 +320,8 @@ if (!app.requestSingleInstanceLock()) {
     disposeStore = null
     runner?.dispose()
     runner = null
+    agentBrowser?.destroy()
+    agentBrowser = null
     account?.dispose()
     account = null
     store?.close()

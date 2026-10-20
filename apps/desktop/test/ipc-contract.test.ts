@@ -4,10 +4,12 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import type { BrowserBounds, BrowserState } from '@agent/core'
+
 import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { AccountService } from '../src/main/account'
 import { Store } from '../src/main/db'
-import { registerIpc, type IpcMainLike } from '../src/main/ipc'
+import { registerIpc, type BrowserControl, type IpcMainLike } from '../src/main/ipc'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset } from '../src/main/runtime/toolset'
 import { Secrets, type SafeStorageLike } from '../src/main/secrets'
@@ -27,6 +29,18 @@ let sent: Array<{ channel: string; payload: unknown }>
 let dispose: (() => void) | null = null
 let fakeAi: FakeAi | null = null
 let windowCalls: string[]
+let browserCalls: string[]
+let browserBounds: BrowserBounds | null
+
+const browserState: BrowserState = {
+  url: 'https://example.com/',
+  title: 'Example',
+  tabs: [{ id: 'tab-1', title: 'Example', url: 'https://example.com/', active: true }],
+  visible: true,
+  agentActive: true,
+  needsUser: false,
+  handoffReason: '',
+}
 
 const storage: SafeStorageLike = {
   isEncryptionAvailable: () => true,
@@ -43,10 +57,43 @@ beforeEach(() => {
   handlers = new Map()
   sent = []
   windowCalls = []
+  browserCalls = []
+  browserBounds = null
 
   const ipcMain: IpcMainLike = {
     handle(channel, listener) {
       handlers.set(channel, listener)
+    },
+  }
+
+  const browser: BrowserControl = {
+    setBounds(bounds) {
+      browserBounds = bounds
+      browserCalls.push('setBounds')
+    },
+    state() {
+      return browserState
+    },
+    async back() {
+      browserCalls.push('back')
+    },
+    async reload() {
+      browserCalls.push('reload')
+    },
+    selectTab(id) {
+      browserCalls.push(`selectTab:${id}`)
+    },
+    closeTab(id) {
+      browserCalls.push(`closeTab:${id}`)
+    },
+    takeOver() {
+      browserCalls.push('takeOver')
+    },
+    giveBack() {
+      browserCalls.push('giveBack')
+    },
+    async openInSystem() {
+      browserCalls.push('openInSystem')
     },
   }
 
@@ -65,6 +112,7 @@ beforeEach(() => {
     secrets,
     account,
     chat: runner,
+    browser,
     ipcMain,
     windows: {
       minimize: () => windowCalls.push('minimize'),
@@ -100,6 +148,17 @@ const METHODS: Record<string, string[]> = {
   data: ['list', 'upsert', 'remove'],
   chat: ['send', 'stop', 'state', 'answer', 'decide'],
   routines: ['runNow'],
+  browser: [
+    'setBounds',
+    'state',
+    'back',
+    'reload',
+    'selectTab',
+    'closeTab',
+    'takeOver',
+    'giveBack',
+    'openInSystem',
+  ],
   window: ['minimize', 'toggleMaximize', 'close', 'isMaximized'],
   files: ['pick', 'pickFolder'],
   shell: ['openExternal', 'reveal'],
@@ -168,6 +227,40 @@ describe('registerIpc', () => {
       ok: false,
       message: 'That key was not accepted.',
     })
+  })
+
+  it('sets the browser rectangle, reports its state and drives its controls', async () => {
+    await invoke(CHANNELS.browser.setBounds, { x: 10, y: 20, width: 320, height: 480, visible: true })
+    expect(browserBounds).toEqual({ x: 10, y: 20, width: 320, height: 480, visible: true })
+    expect(await invoke(CHANNELS.browser.state)).toEqual(browserState)
+
+    await invoke(CHANNELS.browser.back)
+    await invoke(CHANNELS.browser.reload)
+    await invoke(CHANNELS.browser.selectTab, 'tab-1')
+    await invoke(CHANNELS.browser.closeTab, 'tab-1')
+    await invoke(CHANNELS.browser.takeOver)
+    await invoke(CHANNELS.browser.giveBack)
+    await invoke(CHANNELS.browser.openInSystem)
+    expect(browserCalls).toEqual([
+      'setBounds',
+      'back',
+      'reload',
+      'selectTab:tab-1',
+      'closeTab:tab-1',
+      'takeOver',
+      'giveBack',
+      'openInSystem',
+    ])
+  })
+
+  it('rejects a browser rectangle that is not made of sane numbers', async () => {
+    await expect(
+      invoke(CHANNELS.browser.setBounds, { x: 0, y: 0, width: -2, height: 10, visible: true }),
+    ).rejects.toThrow('width must be a number')
+    await expect(invoke(CHANNELS.browser.setBounds, 'nope')).rejects.toThrow(
+      'browser bounds must be an object',
+    )
+    await expect(invoke(CHANNELS.browser.selectTab, 7)).rejects.toThrow('tab id must be text')
   })
 
   it('drives the window controls through the injected window', async () => {

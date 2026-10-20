@@ -34,6 +34,17 @@ export const CHANNELS = {
   routines: {
     runNow: 'agent:routines.runNow',
   },
+  browser: {
+    setBounds: 'agent:browser.setBounds',
+    state: 'agent:browser.state',
+    back: 'agent:browser.back',
+    reload: 'agent:browser.reload',
+    selectTab: 'agent:browser.selectTab',
+    closeTab: 'agent:browser.closeTab',
+    takeOver: 'agent:browser.takeOver',
+    giveBack: 'agent:browser.giveBack',
+    openInSystem: 'agent:browser.openInSystem',
+  },
   window: {
     minimize: 'agent:window.minimize',
     toggleMaximize: 'agent:window.toggleMaximize',
@@ -56,6 +67,7 @@ export const EVENTS = {
   accountProgress: 'agent:evt:account.progress',
   data: 'agent:evt:data.changed',
   chat: 'agent:evt:chat.event',
+  browser: 'agent:evt:browser.state',
   maximize: 'agent:evt:window.maximized',
   quickAsk: 'agent:evt:window.quickAsk',
 } as const
