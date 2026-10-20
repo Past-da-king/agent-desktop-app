@@ -168,10 +168,19 @@ function BrowserChrome({
           <span className="url-text">{hasPage ? displayUrl(state?.url ?? '') : 'Not open yet'}</span>
         </span>
         <IconButton
+          icon="ext"
+          label="Open in my browser"
+          size={18}
+          className="br-expand"
+          disabled={!hasPage}
+          onClick={() => {
+            void agent.browser.openInSystem()
+          }}
+        />
+        <IconButton
           icon="max"
           label="Expand the page to the whole window"
           size={18}
-          className="br-expand"
           disabled={!hasPage}
           onClick={() => {
             void agent.browser.setExpanded(true)
@@ -225,17 +234,6 @@ function BrowserChrome({
         )}
         <span className="br-status-gap" />
         <ViewSwitch state={state} disabled={!hasPage} />
-        <button
-          type="button"
-          className="btn text sm br-open"
-          disabled={!hasPage}
-          onClick={() => {
-            void agent.browser.openInSystem()
-          }}
-        >
-          <Icon name="ext" size={14} />
-          <span className="br-open-label">Open in my browser</span>
-        </button>
       </div>
     </div>
   )
