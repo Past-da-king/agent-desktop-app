@@ -21,6 +21,7 @@ import type {
   Unsubscribe,
 } from '@agent/core'
 
+import { mockVoice } from '../voice/mock-voice'
 import { readMode, seedFor, type DemoMode } from './seed'
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
@@ -700,6 +701,15 @@ export const mockAgent: AgentApi = {
       return undefined
     },
   },
+
+  voice: mockVoice({
+    settings: () => settings,
+    save: (patch) => {
+      saveSettings(patch)
+    },
+    insertChat: (item) => insertChat(item),
+    send: (text) => mockAgent.chat.send(text),
+  }),
 
   app: {
     async info() {
