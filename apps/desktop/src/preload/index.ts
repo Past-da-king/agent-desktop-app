@@ -7,6 +7,7 @@ import type {
   Decision,
   EntityMap,
   EntityName,
+  HotkeyStatus,
   ProviderInfo,
   RowInput,
   RouteTarget,
@@ -94,6 +95,7 @@ const api: AgentApi = {
     onMaximizeChange: (callback) => on<boolean>(EVENTS.maximize, callback),
     onQuickAsk: (callback) => on<null>(EVENTS.quickAsk, () => callback()),
     onRoute: (callback) => on<RouteTarget>(EVENTS.route, callback),
+    onHotkeyStatus: (callback) => on<HotkeyStatus>(EVENTS.hotkey, callback),
   },
 
   files: {

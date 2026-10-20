@@ -214,6 +214,13 @@ export interface RouteTarget {
   id: string
 }
 
+/** Whether the Quick Ask shortcut is live. A failure is explained in Settings. */
+export interface HotkeyStatus {
+  accelerator: string
+  ok: boolean
+  message: string
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The api
 // ---------------------------------------------------------------------------------------------------------------
@@ -282,6 +289,8 @@ export interface AgentApi {
     onQuickAsk(cb: () => void): Unsubscribe
     /** A notification was clicked: open this view and this row. */
     onRoute(cb: (target: RouteTarget) => void): Unsubscribe
+    /** The global shortcut was registered, or could not be. Settings shows the message. */
+    onHotkeyStatus(cb: (status: HotkeyStatus) => void): Unsubscribe
   }
 
   files: {

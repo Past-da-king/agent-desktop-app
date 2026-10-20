@@ -6,6 +6,7 @@ import type {
   Decision,
   EntityMap,
   EntityName,
+  HotkeyStatus,
   RouteTarget,
   RowInput,
   RunState,
@@ -462,6 +463,9 @@ export const mockAgent: AgentApi = {
       return () => undefined
     },
     onRoute(_callback: (target: RouteTarget) => void): Unsubscribe {
+      return () => undefined
+    },
+    onHotkeyStatus(_callback: (status: HotkeyStatus) => void): Unsubscribe {
       return () => undefined
     },
   },
