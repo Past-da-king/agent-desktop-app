@@ -23,6 +23,9 @@ import { Skeleton } from '../ui/Skeleton'
 import { Wave } from '../ui/Wave'
 import { TaskDialog } from './TaskDialog'
 
+/** Home shows the soonest few; the Tasks view holds the whole list. */
+const HOME_TODOS = 6
+
 interface Upcoming {
   id: string
   title: string
@@ -413,7 +416,7 @@ export function Home(): JSX.Element {
               />
             ) : (
               <div className="list">
-                {todos.map((task) => (
+                {todos.slice(0, HOME_TODOS).map((task) => (
                   <div key={task.id} className="todo">
                     <button
                       type="button"
@@ -444,6 +447,12 @@ export function Home(): JSX.Element {
                     </button>
                   </div>
                 ))}
+                {todos.length > HOME_TODOS ? (
+                  <button type="button" className="todo-more" onClick={() => navigate({ page: 'tasks' })}>
+                    {todos.length - HOME_TODOS} more on your list
+                    <Icon name="arrow" size={16} />
+                  </button>
+                ) : null}
               </div>
             )}
             <AddTodoInline />
