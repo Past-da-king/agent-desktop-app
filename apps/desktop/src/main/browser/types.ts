@@ -29,6 +29,11 @@ export interface BrowserDriver {
   evaluateRaw?(code: string, timeoutMs?: number): Promise<unknown>
   /** The address of the active tab, or ''. */
   currentUrl?(): string
+  /**
+   * Profiles: browse in this persistent partition (a profile's own cookies and sign-ins) from now on.
+   * The agent's tab becomes that partition's latest tab, or a new one on the next open.
+   */
+  usePartition?(partition: string): void
 }
 
 /** Stands in until the window exists, and in tests that do not care about the browser. */

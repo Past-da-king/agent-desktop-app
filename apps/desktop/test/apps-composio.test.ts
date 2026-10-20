@@ -254,7 +254,8 @@ describe('the apps_* tools', () => {
     const run = toolNamed(appTools(service(fake.fetchImpl)), 'apps_run')
     const out = await run.run({ slug: 'GMAIL_FETCH_EMAILS', arguments: { max: 3 } }, testContext())
     expect(out).toContain('hello')
-    expect(fake.state.executed[0]?.body).toEqual({ user_id: expect.any(String), arguments: { max: 3 } })
+    // The only Gmail account is picked by id, so one connected from the phone or the dashboard works too.
+    expect(fake.state.executed[0]?.body).toEqual({ user_id: expect.any(String), arguments: { max: 3 }, connected_account_id: 'a1' })
   })
 
   it('apps_run asks before a change, and a no means nothing is sent', async () => {

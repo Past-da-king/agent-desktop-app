@@ -26,6 +26,8 @@ import { budgeted, type StepBudget } from './budget'
 import type { DataStore } from './data'
 import type { EnvironmentService } from './environment'
 import { helperTools } from '../tools/helpers'
+import { gateTool } from '../tools/profile-gate'
+import { profileTools } from '../tools/profiles'
 import type { HelperHost } from './helpers'
 import type { SettingsView } from './runner'
 
@@ -79,10 +81,28 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   'routine_create',
   'routine_list',
   'routine_delete',
+  'profile_create',
 ])
 
 /** Everything a helper may use: all the working groups, never delegate or helper_*. */
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
+  const tools = workerTools(deps)
+  const apps = deps.apps
+  if (apps === undefined) return tools
+  // Each helper's profile: its own browser sign-ins and only its learned apps (profile-gate.ts).
+  const browser = deps.browser
+  return tools.map((tool) =>
+    gateTool(tool, {
+      profileOf: (ctx) => apps.profileOf(ctx.profile),
+      partitionOf: (id) => apps.profiles.partitionOf(id),
+      ...(browser?.usePartition === undefined ? {} : { usePartition: (partition: string) => browser.usePartition?.(partition) }),
+      ...(deps.learned === undefined ? {} : { learned: deps.learned }),
+      addLearned: (profileId, appId) => apps.profiles.setLearned(profileId, appId, true),
+    }),
+  )
+}
+
+function workerTools(deps: ToolsetDeps): Tool[] {
   const settings = deps.settings ?? { get: () => DEFAULT_SETTINGS }
   const name = deps.agentName
   return [
@@ -120,6 +140,7 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
   const tools = buildWorkerToolset(deps)
   if (deps.helpers !== undefined) {
     tools.push(...helperTools(deps.helpers)) // delegate, helper_steer, helper_push, helpers_status, helper_stop
+    tools.push(...profileTools(deps.apps, deps.learned)) // profile_create
   }
   const budget = deps.mainBudget
   if (budget === undefined) return tools

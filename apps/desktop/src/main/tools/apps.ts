@@ -31,12 +31,19 @@ function connectedTool(apps: AppsService): Tool {
       description: "List the person's connected apps (Gmail, Calendar, Drive, Slack... via Composio), with each account and what it allows.",
       schema: schema([], {}),
     },
-    run: async () => {
+    run: async (_input, ctx) => {
       if (apps.backend() === null) return NO_KEY
       try {
-        const list = await apps.accounts()
+        // A helper sees only its profile's accounts: they are the only ones it may use.
+        const profile = apps.profileOf(ctx.profile)
+        const all = await apps.accounts()
+        const list = profile === null ? all : all.filter((a) => profile.accounts.some((p) => p.id === a.id))
+        if (profile !== null && list.length === 0) {
+          return `Your profile (${profile.name}) has none of the person's connected accounts${all.length > 0 ? ', so you cannot use their apps' : ''}. If the job needs one, say so in your result.`
+        }
         if (list.length === 0) return 'No apps connected yet. Use apps_connect to offer one.'
-        return list
+        const head = profile === null ? '' : `Your profile (${profile.name}) has these accounts:\n`
+        return head + list
           .map((a) => {
             const r = apps.rulesFor(a.id)
             return `${a.app}: ${a.status} · ${a.label} · account ${a.id} · reading ${r.read}, changing ${r.change}`
@@ -133,12 +140,13 @@ function connectTool(apps: AppsService): Tool {
       const slug = text(input['toolkit']).trim().toLowerCase()
       if (!/^[a-z0-9_]{2,60}$/.test(slug)) return 'Pass the toolkit slug, for example gmail.'
       const name = appName(slug)
-      let existing: number
+      let before: string[]
       try {
-        existing = (await apps.activeAccounts([slug])).length
+        before = (await apps.activeAccounts([slug])).map((a) => a.id)
       } catch (cause) {
         return failure(cause)
       }
+      const existing = before.length
       const reason = text(input['reason']).trim().replace(/^so I can /i, '').replace(/[.?]+$/, '')
       const question =
         (existing > 0 ? `Connect another ${name} account` : `Connect ${name}`) + (reason === '' ? '?' : ` so I can ${reason}?`)
@@ -156,9 +164,28 @@ function connectTool(apps: AppsService): Tool {
       const id = await ctx.activity(`Waiting for you to sign in to ${name}`, { tool: 'apps' })
       const result = await started.wait(ctx.signal)
       await ctx.updateActivity(id, result === 'connected' ? `${name} connected` : `${name} sign-in not finished`, { tool: 'apps' })
-      if (result === 'connected') return `${name} (${slug}) is connected now. Carry on with the task.`
+      if (result === 'connected') return `${name} (${slug}) is connected now. ${await fileInProfile(apps, ctx.profile, slug, before)}Carry on with the task.`
       if (result === 'stopped') return 'Stopped.'
       return `The person has not finished signing in to ${name} yet. Do not paste a link; say you will continue once it is connected (they can also connect it in Connections).`
     },
+  }
+}
+
+/**
+ * A new account connected by a helper goes into that helper's own profile, so it can use it straight
+ * away (reference phone AgentRuntime.onAccountConnected). General never holds accounts.
+ */
+async function fileInProfile(apps: AppsService, profileId: string | undefined, slug: string, before: string[]): Promise<string> {
+  const profile = apps.profileOf(profileId)
+  if (profile === null) return ''
+  if (profile.general) {
+    return `Your profile (${profile.name}) holds none of the person's accounts, so you cannot use it here: tell the main agent, which can put it in a profile. `
+  }
+  try {
+    const fresh = (await apps.activeAccounts([slug])).filter((a) => !before.includes(a.id))
+    for (const account of fresh) apps.profiles.setMember(profile.id, { id: account.id, app: account.app, label: account.label }, true)
+    return fresh.length > 0 ? `It is in your profile (${profile.name}) now. ` : ''
+  } catch {
+    return ''
   }
 }

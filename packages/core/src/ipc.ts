@@ -357,6 +357,8 @@ export interface ConnectedAccount {
   label: string
   status: 'active' | 'pending' | 'failed'
   rules: AccountRules
+  /** The app's logo (an https URL from Composio's toolkit list), or '' to show a lettered tile. */
+  logo?: string
 }
 
 /** Which kind of Composio key is stored. Never the key itself. */
@@ -377,6 +379,10 @@ export interface AppChoice {
   slug: string
   name: string
   line: string
+  /** The app's logo (an https URL from Composio), or '' to show a lettered tile. */
+  logo?: string
+  /** Composio's categories for it, for example Productivity. */
+  categories?: string[]
 }
 
 export interface LearnedToolInfo {
@@ -402,7 +408,7 @@ export interface AppsApi {
   status(): Promise<AppsStatus>
   /** Checks the Composio key with Composio and stores it in the secrets module only. Pass '' to remove it. */
   setKey(key: string): Promise<{ ok: boolean; message: string }>
-  /** The popular apps to pick from. */
+  /** Every app Composio offers (with logos), popular ones first; the popular list alone when there is no key. */
   catalog(): Promise<AppChoice[]>
   /** Opens the app's sign-in in the person's own browser and waits in the background until it is connected. */
   connect(app: string): Promise<{ ok: boolean; message: string }>
@@ -445,6 +451,8 @@ export interface AgentProfileInfo {
   color: ProfileColor
   /** The accounts its helpers may use, and nothing else. */
   accounts: ProfileAccount[]
+  /** Ids of the learned apps (sites the agent mapped) its helpers may run. */
+  learned: string[]
   /** Whose browser sign-ins its helpers browse with: '' for its own, or another profile's id. */
   browser: string
   /** General: none of the person's accounts, cannot be renamed or deleted. */
@@ -456,6 +464,8 @@ export interface ProfileDraft {
   color?: ProfileColor
   /** Connected account ids. */
   accounts?: string[]
+  /** Learned app ids. */
+  learned?: string[]
   browser?: string
 }
 

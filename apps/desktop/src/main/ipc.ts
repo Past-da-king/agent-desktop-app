@@ -17,6 +17,8 @@ import {
   type EntityMap,
   type EntityName,
   type EnvironmentReport,
+  type ProfileAccount,
+  type ProfileColor,
   type RowInput,
   type RunState,
   type Settings,
@@ -30,6 +32,7 @@ import { APP_NAME, LICENCES_URL } from './app-info'
 import type { AccountService, SignInArgs } from './account'
 import { POPULAR_APPS } from './apps/catalog'
 import type { AppsService } from './apps/service'
+import { isProfileColor } from './apps/profiles'
 import { isRule } from './apps/store'
 import type { Store } from './db'
 import type { HelperHost } from './runtime/helpers'
@@ -435,7 +438,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     return deps.apps.setKey(key)
   })
 
-  handle(CHANNELS.apps.catalog, async () => POPULAR_APPS)
+  handle(CHANNELS.apps.catalog, async () => (deps.apps === undefined ? POPULAR_APPS : deps.apps.catalog()))
 
   handle(CHANNELS.apps.connect, async (_event, rawApp) => {
     const app = requireString(rawApp, 'app', 64).trim().toLowerCase()
@@ -469,6 +472,67 @@ export function registerIpc(deps: IpcDeps): () => void {
     deps.apps?.setTrusted(requireString(rawId, 'id', 64), rawOn)
   })
 
+  // ---- profiles (profiles.json under userData; see apps/profiles.ts) ----
+
+  const profileDraft = async (raw: unknown, partial: boolean): Promise<{
+    name?: string
+    color?: ProfileColor
+    accounts?: ProfileAccount[]
+    learned?: string[]
+    browser?: string
+  }> => {
+    const draft = requireObject(raw, 'profile') as Record<string, unknown>
+    const out: { name?: string; color?: ProfileColor; accounts?: ProfileAccount[]; learned?: string[]; browser?: string } = {}
+    if (draft['name'] !== undefined || !partial) out.name = requireString(draft['name'], 'name', 200)
+    if (draft['color'] !== undefined) {
+      if (!isProfileColor(draft['color'])) throw new Error('Invalid colour')
+      out.color = draft['color']
+    }
+    if (draft['accounts'] !== undefined) {
+      const ids = requireIdList(draft['accounts'], 'accounts')
+      out.accounts = deps.apps === undefined ? [] : await deps.apps.accountRefs(ids)
+    }
+    if (draft['learned'] !== undefined) {
+      const known = new Set((deps.apps?.learnedApps() ?? []).map((a) => a.id))
+      out.learned = requireIdList(draft['learned'], 'learned').filter((id) => known.has(id))
+    }
+    if (draft['browser'] !== undefined) out.browser = requireString(draft['browser'], 'browser', 64)
+    return out
+  }
+
+  handle(CHANNELS.profiles.list, async () => deps.apps?.profiles.all() ?? [])
+
+  handle(CHANNELS.profiles.create, async (_event, raw) => {
+    if (deps.apps === undefined) return { ok: false, message: 'Not available in this build.' }
+    const draft = await profileDraft(raw, false)
+    const made = deps.apps.profiles.create(draft.name ?? '', draft.accounts ?? [], draft.color, draft.browser ?? '', draft.learned ?? [])
+    return made.ok ? { ok: true, message: made.message, profile: made.value } : { ok: false, message: made.message }
+  })
+
+  handle(CHANNELS.profiles.update, async (_event, rawId, raw) => {
+    if (deps.apps === undefined) return { ok: false, message: 'Not available in this build.' }
+    const id = requireString(rawId, 'id', 64)
+    const outcome = deps.apps.profiles.update(id, await profileDraft(raw, true))
+    return { ok: outcome.ok, message: outcome.message }
+  })
+
+  handle(CHANNELS.profiles.remove, async (_event, rawId) => {
+    deps.apps?.profiles.remove(requireString(rawId, 'id', 64))
+  })
+
+  handle(CHANNELS.profiles.setMember, async (_event, rawProfile, rawAccount, rawMember) => {
+    const profileId = requireString(rawProfile, 'profileId', 64)
+    const accountId = requireString(rawAccount, 'accountId', 200)
+    if (typeof rawMember !== 'boolean') throw new Error('Invalid member')
+    if (deps.apps === undefined) return
+    if (!rawMember) {
+      deps.apps.profiles.setMember(profileId, { id: accountId, app: '', label: '' }, false)
+      return
+    }
+    const [ref] = await deps.apps.accountRefs([accountId])
+    if (ref !== undefined) deps.apps.profiles.setMember(profileId, ref, true)
+  })
+
   // ---- events out ----
 
   const offSettings = settings.onChange((next) => send(EVENTS.settings, next))
@@ -476,6 +540,7 @@ export function registerIpc(deps: IpcDeps): () => void {
   const offProgress = account.onProgress((progress) => send(EVENTS.accountProgress, progress))
   const offData = store.onChange((entity) => send(EVENTS.data, entity))
   const offApps = deps.apps?.onChange(() => send(EVENTS.apps, null)) ?? (() => undefined)
+  const offProfiles = deps.apps?.profiles.onChange(() => send(EVENTS.profiles, null)) ?? (() => undefined)
 
   return () => {
     offSettings()
@@ -483,6 +548,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     offProgress()
     offData()
     offApps()
+    offProfiles()
   }
 }
 
@@ -568,6 +634,11 @@ function requireObject(value: unknown, name: string): Record<string, unknown> {
     throw new Error(`${name} must be an object`)
   }
   return value as Record<string, unknown>
+}
+
+function requireIdList(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || value.length > 500) throw new Error(`${name} must be a list`)
+  return value.map((item) => requireString(item, name, 200))
 }
 
 function requireString(value: unknown, name: string, max: number): string {
