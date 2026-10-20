@@ -462,6 +462,25 @@ export const mockAgent: AgentApi = {
     async decide(itemId, decision: Decision) {
       patchCard(itemId, { decision })
     },
+    async tap(itemId, label, message) {
+      // A button on the agent's card: no bubble from the person, the button remembers it went, and the agent answers.
+      const row = rows.chat_item.find((item) => item.id === itemId)
+      if (row === undefined || row.kind !== 'agent') return
+      const meta = parseMeta(row.meta)
+      const taps = Array.isArray(meta['taps']) ? meta['taps'].filter((t): t is string => typeof t === 'string') : []
+      patchCard(itemId, { taps: taps.includes(message) ? taps : [...taps, message] })
+      running = true
+      runState.running = true
+      emitChat({ type: 'run_started' })
+      clearChatTimers()
+      agentTimer = setTimeout(() => {
+        insertChat({ kind: 'agent', text: `On it: ${label.trim() === '' ? 'your tap' : label.trim()}. I'll tell you when it's done.`, meta: '{}' })
+        running = false
+        runState.running = false
+        agentTimer = null
+        emitChat({ type: 'run_finished' })
+      }, 700)
+    },
     onEvent(callback: (event: ChatEvent) => void): Unsubscribe {
       chatListeners.add(callback)
       return () => {

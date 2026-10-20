@@ -213,7 +213,7 @@ describe('browser tools', () => {
     )
 
     expect(asked).toBe('Nova needs you in the browser: Sign in to the bank')
-    expect(offered).toEqual(['Done, carry on', 'Skip'])
+    expect(offered).toEqual(['Done, carry on', 'Skip', 'No'])
     expect(notifications).toEqual(['Your agent needs a hand'])
     expect(result).toBe('The user says they are done. Read the page to check.')
     expect(browser.driving).toEqual([
