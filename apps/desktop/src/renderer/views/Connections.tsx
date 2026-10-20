@@ -3,8 +3,9 @@ import { useEffect, useState, type ReactNode } from 'react'
 
 import { agent } from '../bridge'
 import { formatAccelerator } from '../lib/hotkey'
-import { machineSummary } from '../lib/system'
+import { machineSummary, scanSummary } from '../lib/system'
 import { useSettings } from '../state/useSettings'
+import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Icon, type IconName } from '../ui/Icon'
@@ -118,7 +119,11 @@ export function Connections(): JSX.Element {
   const scanAgain = async (): Promise<void> => {
     setScanning(true)
     try {
-      setEnvironment(await agent.environment.scan(true))
+      const report = await agent.environment.scan(true)
+      setEnvironment(report)
+      toast(scanSummary(report))
+    } catch (cause: unknown) {
+      toast(cause instanceof Error ? cause.message : 'The scan could not finish.')
     } finally {
       setScanning(false)
     }
@@ -214,6 +219,53 @@ export function Connections(): JSX.Element {
               )}
             </div>
           </section>
+        </div>
+
+        <div className="stack">
+          <section>
+            <SectionHeader
+              eyebrow="MACHINES"
+              line="Hand heavy work to your servers and computers"
+              right={
+                <Button size="sm" comingSoon>
+                  <Icon name="plus" size={16} />
+                  Add machine
+                </Button>
+              }
+            />
+            <div className="list" style={{ padding: 6 }}>
+              <Row
+                icon="monitor"
+                title="This computer"
+                line={`${machine}, ${folderLine}. Runs jobs while the app is open.`}
+                right={<span className="pill ok">Online</span>}
+              />
+              <Row
+                icon="server"
+                title="Another machine"
+                line="Signed in with its own key"
+                right={<span className="pill mute">Coming soon</span>}
+              />
+            </div>
+            <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
+              Your agent only sees the names. Addresses, passwords and keys stay encrypted on this computer.
+            </p>
+          </section>
+
+          <section>
+            <SectionHeader eyebrow="ACCOUNTS" line="Sites your agent has learned to use" />
+            <div className="list" style={{ padding: 6 }}>
+              <Row
+                icon="globe"
+                title="Web accounts"
+                line="Sign in once in the agent's browser and it stays signed in there"
+                right={<span className="pill mute">In the browser</span>}
+              />
+            </div>
+            <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
+              Apps like Gmail and Calendar connect directly in a later version. For now the agent uses them through its browser, with your approval.
+            </p>
+          </section>
 
           <section>
             <SectionHeader eyebrow="BUILT IN" line="On this computer, plus the machines you add" />
@@ -306,54 +358,6 @@ export function Connections(): JSX.Element {
               </Button>
             </div>
           </section>
-        </div>
-
-        <div className="stack">
-          <section>
-            <SectionHeader
-              eyebrow="MACHINES"
-              line="Hand heavy work to your servers and computers"
-              right={
-                <Button size="sm" comingSoon>
-                  <Icon name="plus" size={16} />
-                  Add machine
-                </Button>
-              }
-            />
-            <div className="list" style={{ padding: 6 }}>
-              <Row
-                icon="monitor"
-                title="This computer"
-                line={`${machine}, ${folderLine}. Runs jobs while the app is open.`}
-                right={<span className="pill ok">Online</span>}
-              />
-              <Row
-                icon="server"
-                title="Another machine"
-                line="Signed in with its own key"
-                right={<span className="pill mute">Coming soon</span>}
-              />
-            </div>
-            <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
-              Your agent only sees the names. Addresses, passwords and keys stay encrypted on this computer.
-            </p>
-          </section>
-
-          <section>
-            <SectionHeader eyebrow="ACCOUNTS" line="Sites your agent has learned to use" />
-            <div className="list" style={{ padding: 6 }}>
-              <Row
-                icon="globe"
-                title="Web accounts"
-                line="Sign in once in the agent's browser and it stays signed in there"
-                right={<span className="pill mute">In the browser</span>}
-              />
-            </div>
-            <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
-              Apps like Gmail and Calendar connect directly in a later version. For now the agent uses them through its browser, with your approval.
-            </p>
-          </section>
-
         </div>
       </div>
     </div>

@@ -514,7 +514,13 @@ export function Chat(): JSX.Element {
   }, [scrollToken])
 
   useEffect(() => {
-    if (focusToken > 0) composer.current?.focus()
+    if (focusToken === 0) return
+    const draft = useUi.getState().composerDraft
+    if (draft !== '') {
+      setText(draft)
+      useUi.setState({ composerDraft: '' })
+    }
+    composer.current?.focus()
   }, [focusToken])
 
   useEffect(() => {

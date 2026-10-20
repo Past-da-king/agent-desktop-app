@@ -105,7 +105,6 @@ export function TaskDialog({
             type="date"
             value={due}
             onChange={(event) => setDue(event.target.value)}
-            style={{ paddingRight: 18 }}
           />
         </div>
         <div className="field">
@@ -115,7 +114,6 @@ export function TaskDialog({
             className="input"
             value={status}
             onChange={(event) => setStatus(event.target.value as TaskRow['status'])}
-            style={{ paddingRight: 18 }}
           >
             <option value="todo">To do</option>
             <option value="doing">Doing</option>
@@ -131,7 +129,6 @@ export function TaskDialog({
           className="input"
           value={goalId}
           onChange={(event) => setGoalId(event.target.value)}
-          style={{ paddingRight: 18 }}
         >
           <option value="">No goal</option>
           {goals

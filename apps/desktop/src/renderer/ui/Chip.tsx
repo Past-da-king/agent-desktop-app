@@ -28,9 +28,10 @@ export function Chip({
       disabled={blocked}
       role={role}
       aria-checked={role === 'radio' ? ariaChecked ?? active : undefined}
+      title={typeof children === 'string' ? children : undefined}
     >
       {icon}
-      {children}
+      <span className="chip-t">{children}</span>
     </button>
   )
   if (!comingSoon) return chip
