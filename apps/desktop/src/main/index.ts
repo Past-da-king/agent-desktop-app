@@ -514,6 +514,13 @@ async function startServices(win: BrowserWindow): Promise<void> {
         console.log(`BROWSER PROBE phone eval\n${await browser.evaluate("({ button: document.getElementById('go').textContent, w: innerWidth, ts: window.__ts || 'none', pd: window.__pd || 'none', btn: JSON.stringify(document.getElementById('go').getBoundingClientRect()) })", 10)}`)
         await browser.view({ mode: 'desktop', remember: false })
         console.log('BROWSER PROBE done')
+        const handoffMs = Number(process.env['AGENT_BROWSER_PROBE_HANDOFF_MS'] ?? '')
+        if (Number.isFinite(handoffMs) && handoffMs > 0) {
+          setTimeout(() => {
+            browser.setAgentDriving(false, 'Sign in to the test page, then press Done, carry on.')
+            console.log('BROWSER PROBE handoff')
+          }, handoffMs)
+        }
       })()
     }, 2500)
   }
