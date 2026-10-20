@@ -40,7 +40,8 @@ export function Ai(): JSX.Element {
   // Two ways to power the agent: the person's own Claude plan through Claude Code, or an API key.
   const [way, setWay] = useState<'plan' | 'key'>(settings?.mode === 'api_key' ? 'key' : 'plan')
   const [claude, setClaude] = useState<Found | null | undefined>(undefined)
-  const [others, setOthers] = useState<Found[]>([])
+  const [codex, setCodex] = useState<Found | null | undefined>(undefined)
+  const [cli, setCli] = useState<'claude' | 'codex'>(settings?.cli === 'codex' ? 'codex' : 'claude')
   const [planOk, setPlanOk] = useState(settings?.mode === 'subscription')
   const [planMessage, setPlanMessage] = useState('')
 
@@ -51,9 +52,11 @@ export function Ai(): JSX.Element {
       .then((report) => {
         if (!live) return
         const found = report.aiTools.find((tool) => tool.id === 'claude')
+        const foundCodex = report.aiTools.find((tool) => tool.id === 'codex')
         setClaude(found?.found === true ? found : null)
-        setOthers(report.aiTools.filter((tool) => tool.id !== 'claude' && tool.found))
-        if (found?.found !== true && settings?.mode !== 'subscription') setWay('key')
+        setCodex(foundCodex?.found === true ? foundCodex : null)
+        if (settings?.cli === '' && found?.found !== true && foundCodex?.found === true) setCli('codex')
+        if (found?.found !== true && foundCodex?.found !== true && settings?.mode !== 'subscription') setWay('key')
       })
       .catch(() => {
         if (live) setClaude(null)
@@ -73,13 +76,13 @@ export function Ai(): JSX.Element {
     setBusy(true)
     setPlanMessage('')
     try {
-      await save({ mode: 'subscription', cli: 'claude' })
+      await save({ mode: 'subscription', cli })
       const result = await agent.settings.checkCli()
       setPlanOk(result.ok)
       setPlanMessage(result.message)
       if (result.ok) navigate({ page: 'onboarding', step: 'style' })
     } catch (cause) {
-      setPlanMessage(cause instanceof Error ? cause.message : 'Could not reach Claude Code.')
+      setPlanMessage(cause instanceof Error ? cause.message : 'Could not reach your plan.')
     } finally {
       setBusy(false)
     }
@@ -173,7 +176,7 @@ export function Ai(): JSX.Element {
             Who should do the thinking?
           </h1>
           <p className="muted" style={{ marginTop: 8, fontSize: 15 }}>
-            Use the Claude plan you already pay for, or bring an API key. You are only ever billed by them.
+            Use the Claude or ChatGPT plan you already pay for, or bring an API key.
           </p>
         </div>
 
@@ -182,76 +185,75 @@ export function Ai(): JSX.Element {
           value={way}
           onChange={(value) => setWay(value)}
           options={[
-            { value: 'plan', label: 'Your Claude plan', icon: <Icon name="bolt" size={18} /> },
+            { value: 'plan', label: 'Your AI plan', icon: <Icon name="bolt" size={18} /> },
             { value: 'key', label: 'An API key', icon: <Icon name="key" size={18} /> },
           ]}
         />
 
         {way === 'plan' ? (
-          <div className="ob-plan">
-            {claude === undefined ? (
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="search" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Looking for Claude Code</b>
-                  <span>Checking what is installed on this computer</span>
-                </div>
-              </div>
-            ) : claude === null ? (
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="bolt" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Claude Code is not on this computer</b>
-                  <span>
-                    Install it, sign in once with your Claude account, then come back. Or use an API key instead.
-                  </span>
-                </div>
-                <Button
-                  variant="tonal"
-                  size="sm"
+          <div className="ob-plan" role="radiogroup" aria-label="Your plan">
+            {(
+              [
+                ['claude', 'Claude', 'Your Claude plan (Pro or Max)', claude, 'Sign in once with Claude Code on this computer', 'https://claude.com/claude-code'],
+                ['codex', 'ChatGPT', 'Your ChatGPT plan, through Codex', codex, 'Sign in once with codex login on this computer', 'https://developers.openai.com/codex'],
+              ] as const
+            ).map(([id, title, line, found, missing, url]) => {
+              const on = cli === id
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  className={`rowc plan-opt${on ? ' on' : ''}`}
                   onClick={() => {
-                    void agent.shell.openExternal('https://claude.com/claude-code')
+                    setCli(id)
+                    setPlanOk(false)
+                    setPlanMessage('')
                   }}
                 >
-                  Get Claude Code
-                </Button>
-              </div>
-            ) : (
-              <div className="rowc">
-                <div className="ri ok">
-                  <Icon name="check" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Claude Code{claude.version !== undefined ? ` ${claude.version}` : ''}</b>
-                  <span>Found on this computer. Your agent thinks on your Claude plan, with no API key.</span>
-                </div>
-                <span className="pill ok">Found</span>
-              </div>
-            )}
-            {others.map((tool) => (
-              <div className="rowc" key={tool.id} title="Coming soon">
-                <div className="ri">
-                  <Icon name="bolt" size={22} />
-                </div>
-                <div className="rt">
-                  <b>{tool.label}</b>
-                  <span>Found on this computer. Support is on the way.</span>
-                </div>
-                <span className="pill mute">Coming soon</span>
-              </div>
-            ))}
+                  <div className={`ri${found ? ' ok' : ''}`}>
+                    <Icon name={on ? 'check' : 'bolt'} size={22} />
+                  </div>
+                  <div className="rt">
+                    <b>{title}</b>
+                    <span>
+                      {found === undefined
+                        ? 'Looking on this computer...'
+                        : found === null
+                          ? missing
+                          : `${line}. ${found.label}${found.version !== undefined ? ` ${found.version}` : ''} is on this computer.`}
+                    </span>
+                  </div>
+                  {found === null ? (
+                    <span
+                      className="linkish small"
+                      role="link"
+                      tabIndex={0}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void agent.shell.openExternal(url)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') void agent.shell.openExternal(url)
+                      }}
+                    >
+                      How to sign in
+                    </span>
+                  ) : found ? (
+                    <span className="pill ok">Found</span>
+                  ) : null}
+                </button>
+              )
+            })}
             {planMessage !== '' ? (
               <p className={planOk ? 'ob-note' : 'ob-note warn'} role="status">
                 {planMessage}
               </p>
             ) : (
               <p className="ob-note">
-                Everything still goes through the app: it asks before anything leaves this computer, and it only
-                uses the folders you allow.
+                No API key and no extra bill: it runs on the plan you already pay for. Everything still goes through
+                the app, which asks before anything leaves this computer.
               </p>
             )}
           </div>
@@ -382,10 +384,10 @@ export function Ai(): JSX.Element {
           <Button
             size="lg"
             block
-            disabled={busy || (way === 'plan' && claude === null)}
+            disabled={busy}
             onClick={() => void (way === 'plan' ? usePlan() : cont())}
           >
-            {busy ? (way === 'plan' ? 'Checking Claude Code...' : 'Checking your key...') : 'Continue'}
+            {busy ? (way === 'plan' ? `Checking your ${cli === 'claude' ? 'Claude' : 'ChatGPT'} plan...` : 'Checking your key...') : 'Continue'}
             <Icon name="arrow" size={20} />
           </Button>
           <Button variant="text" onClick={() => void skip()} style={{ alignSelf: 'center' }}>

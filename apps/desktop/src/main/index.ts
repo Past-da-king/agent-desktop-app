@@ -544,7 +544,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     agentName: () => settings.get().agentName,
     environment,
   })
-  cliHost = new CliHost(() => cliTools, join(app.getPath('userData'), 'cli'))
+  cliHost = new CliHost(() => cliTools, join(app.getPath('userData'), 'cli'), app.getAppPath())
   runner = new Runner({
     store,
     settings,
