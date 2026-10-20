@@ -48,8 +48,11 @@ export interface Settings {
   notifications: boolean
   /** Folders the agent may read and write without asking each time. Empty means ask for everything. */
   grantedFolders: string[]
-  /** Shell commands: always ask first, or never run. There is no "always allow". */
-  shell: 'ask' | 'never'
+  /**
+   * Acting on this computer: 'always' runs commands and code and opens files anywhere without asking;
+   * 'ask' asks before every command and before any file outside the granted folders; 'never' runs no commands.
+   */
+  shell: 'always' | 'ask' | 'never'
   /** Voice: true once a Gemini key is in the secrets module. The key itself never appears here. */
   hasVoiceKey: boolean
   /** The Gemini prebuilt voice the call and read-aloud use (see VOICES). */
@@ -86,6 +89,19 @@ export const DEFAULT_SETTINGS: Settings = {
   hasVoiceKey: false,
   voiceName: 'Kore',
   speakReplies: false,
+}
+
+export interface ModelOption {
+  id: string
+  /** What to show; the id when the provider gives no name. */
+  label: string
+  line: string
+}
+
+export interface ModelListResult {
+  ok: boolean
+  models: ModelOption[]
+  message: string
 }
 
 export interface ProviderInfo {
@@ -542,6 +558,11 @@ export interface AgentApi {
     setApiKey(key: string): Promise<void>
     /** Makes one tiny real completion call with the stored key and chosen model. */
     checkKey(): Promise<{ ok: boolean; message: string }>
+    /**
+     * The models the person can use right now, asked live: the provider's list for an API key, or the engine's
+     * own list on a Claude or ChatGPT plan. Never a hardcoded list.
+     */
+    listModels(): Promise<ModelListResult>
     /** Makes one tiny real turn through the installed AI tool (Claude Code) on the person's own plan. */
     checkCli(): Promise<{ ok: boolean; message: string }>
     /** Runs the chosen plan's own sign-in (it opens the browser) and resolves when it is done. */

@@ -196,7 +196,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push(OPENUI_PROMPT)
   }
 
-  const computerLines = thisComputerLines(input.environment ?? null)
+  const computerLines = [...thisComputerLines(input.environment ?? null), accessLine(settings)]
   if (computerLines.length > 0) {
     lines.push('')
     lines.push('THIS COMPUTER')
@@ -257,6 +257,13 @@ function taskLine(task: TaskRow): string {
   const owner = task.owner === 'user' ? ", user's to-do" : ''
   const blocker = task.blocker.trim() === '' ? '' : ` (blocked: ${task.blocker.trim()})`
   return `[${task.status}${owner}] ${task.title}${blocker}`
+}
+
+/** What the person lets the agent do on this computer, so it never claims a setting it does not have. */
+function accessLine(settings: Settings): string {
+  if (settings.shell === 'always') return '- Commands, code and files: the user chose Run without asking. Act without asking first; the app does not show approval cards for these.'
+  if (settings.shell === 'never') return '- Commands and code: turned off by the user (Settings, This computer). Files inside the granted folders still work.'
+  return '- Commands and code: the app asks the user before each one, and before files outside the granted folders. Do not ask in the chat as well.'
 }
 
 /** OS, the shell the tool will use, and what is really installed. Names and versions only. */

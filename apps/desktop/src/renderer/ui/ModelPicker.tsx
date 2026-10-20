@@ -1,61 +1,54 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { PROVIDERS } from '@agent/core'
+import { PROVIDERS, type ModelOption } from '@agent/core'
 
+import { agent } from '../bridge'
 import { useSettings } from '../state/useSettings'
 import { Icon } from './Icon'
+import { ModelList } from './ModelList'
 
-interface Choice {
-  id: string
-  label: string
-  line: string
-}
-
-/** Claude Code takes these aliases and always maps them to the newest model of each family. */
-const CLAUDE: Choice[] = [
-  { id: '', label: 'Default', line: 'What your Claude plan picks' },
-  { id: 'opus', label: 'Opus', line: 'The most capable, for hard work' },
-  { id: 'sonnet', label: 'Sonnet', line: 'Fast and very capable' },
-  { id: 'haiku', label: 'Haiku', line: 'The quickest, for small jobs' },
-  { id: 'fable', label: 'Fable', line: 'For writing and stories' },
-]
-
-function labelFor(id: string, choices: Choice[]): string {
-  return choices.find((choice) => choice.id === id)?.label ?? id
-}
+/** On a plan, an empty model means "what the plan picks". */
+const PLAN_DEFAULT: ModelOption = { id: '', label: 'Default', line: 'What your plan picks' }
 
 /**
- * The model pill in the chat header. On a plan it chooses the plan's model (Claude: Opus, Sonnet, Haiku,
- * Fable; Codex: its default or a typed model id); with an API key it chooses the provider's model.
- * The choice applies from the next message.
+ * The model pill in the chat header. Every choice is asked live each time it opens: the provider's own list
+ * for an API key, the engine's own list on a Claude or ChatGPT plan. Nothing is a built-in list. A model the
+ * list does not show can still be typed into the search. The choice applies from the next message.
  */
 export function ModelPicker(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   const [open, setOpen] = useState(false)
-  const [custom, setCustom] = useState('')
+  const [listed, setListed] = useState<{ models: ModelOption[]; message: string } | null>(null)
   const root = useRef<HTMLDivElement>(null)
 
   const plan = settings?.mode === 'subscription'
   const cli = settings?.cli === 'codex' ? 'codex' : 'claude'
   const current = plan ? (settings?.cliModel ?? '') : (settings?.model ?? '')
   const provider = PROVIDERS.find((item) => item.id === settings?.provider)
-
-  const choices: Choice[] = plan
-    ? cli === 'claude'
-      ? CLAUDE
-      : [{ id: '', label: 'Default', line: 'What your Codex setup picks' }]
-    : provider === undefined
-      ? []
-      : [{ id: provider.defaultModel, label: provider.defaultModel, line: `${provider.label}'s recommended model` }]
+  const source = plan ? (cli === 'claude' ? 'your Claude plan' : 'your ChatGPT plan') : (provider?.label ?? 'the provider')
+  const known = listed?.models.find((m) => m.id === current)
 
   const shown = plan
-    ? cli === 'claude'
-      ? `Claude ${labelFor(current, CLAUDE) === 'Default' ? '' : labelFor(current, CLAUDE)}`.trim()
-      : current === ''
-        ? 'Codex'
-        : `Codex ${current}`
-    : current.trim() || 'No model chosen'
+    ? `${cli === 'claude' ? 'Claude' : 'ChatGPT'}${current === '' ? '' : ` ${known?.label ?? current}`}`
+    : known?.label || current.trim() || 'Choose a model'
+
+  useEffect(() => {
+    if (!open) return
+    let live = true
+    setListed(null)
+    agent.settings
+      .listModels()
+      .then((result) => {
+        if (live) setListed({ models: result.models, message: result.message })
+      })
+      .catch(() => {
+        if (live) setListed({ models: [], message: `Could not ask ${source} for its models.` })
+      })
+    return () => {
+      live = false
+    }
+  }, [open, source])
 
   useEffect(() => {
     if (!open) return
@@ -76,8 +69,9 @@ export function ModelPicker(): JSX.Element {
   const choose = (id: string): void => {
     void save(plan ? { cliModel: id } : { model: id })
     setOpen(false)
-    setCustom('')
   }
+
+  const options = listed === null ? [] : plan && !listed.models.some((m) => m.id === '') ? [PLAN_DEFAULT, ...listed.models] : listed.models
 
   return (
     <div className="model-pick" ref={root}>
@@ -95,45 +89,14 @@ export function ModelPicker(): JSX.Element {
       </button>
       {open ? (
         <div className="model-menu" role="menu" aria-label="Models">
-          <div className="eyebrow mute">{plan ? (cli === 'claude' ? 'ON YOUR CLAUDE PLAN' : 'ON YOUR CHATGPT PLAN') : (provider?.label ?? 'MODEL').toUpperCase()}</div>
-          {choices.map((choice) => (
-            <button
-              key={choice.id || 'default'}
-              type="button"
-              role="menuitemradio"
-              aria-checked={current === choice.id}
-              className={`model-item${current === choice.id ? ' on' : ''}`}
-              onClick={() => choose(choice.id)}
-            >
-              <span className="mi-t">
-                <b>{choice.label}</b>
-                <span>{choice.line}</span>
-              </span>
-              {current === choice.id ? <Icon name="check" size={18} /> : null}
-            </button>
-          ))}
-          {plan && cli === 'claude' ? null : (
-            <form
-              className="model-custom"
-              onSubmit={(event) => {
-                event.preventDefault()
-                if (custom.trim() !== '') choose(custom.trim())
-              }}
-            >
-              <label htmlFor="model-custom">Another model</label>
-              <div className="row">
-                <input
-                  id="model-custom"
-                  className="input"
-                  value={custom}
-                  placeholder={current || 'Model id'}
-                  onChange={(event) => setCustom(event.target.value)}
-                />
-                <button type="submit" className="btn tonal sm" disabled={custom.trim() === ''}>
-                  Use
-                </button>
-              </div>
-            </form>
+          <div className="eyebrow mute">{`ON ${source.toUpperCase()}`}</div>
+          {listed === null ? (
+            <p className="small muted model-wait">Asking {source} for its models</p>
+          ) : (
+            <>
+              {options.length > (plan ? 1 : 0) ? null : <p className="small muted model-wait">{listed.message}</p>}
+              <ModelList models={options} value={current} onPick={choose} autoFocus />
+            </>
           )}
         </div>
       ) : null}

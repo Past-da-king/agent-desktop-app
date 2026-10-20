@@ -48,7 +48,7 @@ const realProbe: EnvironmentFs = {
 }
 
 export interface ShellSettingsView {
-  get(): { shell: 'ask' | 'never' }
+  get(): { shell: 'always' | 'ask' | 'never' }
 }
 
 /** The scan, as the shell tool needs it: what is actually on this computer. */
@@ -275,10 +275,13 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       })
       if ('error' in plan) return plan.error
 
-      const approved = await ctx.approve(
+      // The person chose "Run without asking" for this computer.
+      const approved =
+        deps.settings.get().shell === 'always' ||
+        (await ctx.approve(
         `Run: ${command}`,
         `${cwd === undefined ? '' : `In ${cwd}\n`}Shell: ${plan.label}\nThis runs a real command on this computer. It stops after ${timeoutSec} seconds.`,
-      )
+        ))
       if (!approved) return 'The user did not approve that command, so I did not run it.'
 
       return runCommand({ command, cwd, timeoutSec, ctx, deps, plan })

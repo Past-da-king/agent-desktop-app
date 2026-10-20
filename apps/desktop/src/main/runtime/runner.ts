@@ -607,6 +607,12 @@ export class Runner {
   }
 
   /** The chosen plan's own sign-in, then the same tiny check. */
+  async planModels(): Promise<Array<{ id: string; label: string; line: string }>> {
+    if (this.cli === undefined) return []
+    const current = this.settings.get()
+    return this.cli.models(current.cli === 'codex' ? 'codex' : 'claude')
+  }
+
   async cliLogin(): Promise<{ ok: boolean; message: string }> {
     if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a subscription.' }
     const chosen = this.settings.get().cli

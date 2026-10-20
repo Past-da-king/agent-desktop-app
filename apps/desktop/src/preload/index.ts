@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 
 import type {
+  ModelListResult,
   AccountRules,
   AgentApi,
   AppChoice,
@@ -58,6 +59,7 @@ const api: AgentApi = {
     providers: () => call<ProviderInfo[]>(CHANNELS.settings.providers),
     setApiKey: (key) => call<void>(CHANNELS.settings.setApiKey, key),
     checkKey: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.checkKey),
+    listModels: () => call<ModelListResult>(CHANNELS.settings.listModels),
     checkCli: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.checkCli),
     cliLogin: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.cliLogin),
     reset: () => call<void>(CHANNELS.settings.reset),

@@ -106,6 +106,37 @@ function preferring(choice: string, list: string[]): string[] {
   return choice === '' ? list : [choice, ...list.filter((model) => model !== choice)]
 }
 
+function version(model: string): number {
+  const match = /gemini-(\d+(?:\.\d+)?)/.exec(model)
+  return match === null ? 0 : Number(match[1])
+}
+
+/** Newest first; a stable model before a preview of the same version. */
+function newest(models: string[]): string[] {
+  return [...models].sort((a, b) => version(b) - version(a) || Number(/preview|exp/.test(a)) - Number(/preview|exp/.test(b)) || a.localeCompare(b))
+}
+
+/**
+ * Pick each job's model from what this key actually lists, by what the model does (live audio, speech,
+ * text), newest first. New Gemini models are used the day the key can see them; the fixed lists are only
+ * the fallback when the key lists nothing that fits.
+ */
+export function chooseModels(listed: string[]): ModelChoice {
+  const live = newest(listed.filter((m) => /live|native-audio/.test(m) && !/tts/.test(m)))
+  const tts = newest(listed.filter((m) => /tts/.test(m)))
+  const text = newest(listed.filter((m) => /^gemini-[\d.]+-flash(-lite)?(-preview[\w-]*)?$/.test(m)))
+  // Transcription wants the quick one: a lite model when there is one of the newest version.
+  const top = text[0] === undefined ? 0 : version(text[0])
+  const transcribe = text.find((m) => version(m) === top && /lite/.test(m)) ?? text[0]
+  const has = new Set(listed)
+  const fallback = (list: string[]): string => list.find((m) => has.has(m)) ?? list[0] ?? ''
+  return {
+    live: live[0] ?? fallback(LIVE_MODELS),
+    tts: tts[0] ?? fallback(TTS_MODELS),
+    transcribe: transcribe ?? fallback(TRANSCRIBE_MODELS),
+  }
+}
+
 /** The check: list the models the key can see (one cheap, real call) and pick the best of each list. */
 export async function checkKey(deps: GeminiDeps): Promise<{ ok: boolean; message: string; choice?: ModelChoice }> {
   const key = deps.key()
@@ -128,8 +159,7 @@ export async function checkKey(deps: GeminiDeps): Promise<{ ok: boolean; message
       typeof model.name === 'string' ? [model.name.replace(/^models\//, '')] : [],
     ),
   )
-  const pick = (list: string[]): string => list.find((model) => names.has(model)) ?? list[0] ?? ''
-  const choice: ModelChoice = { live: pick(LIVE_MODELS), tts: pick(TTS_MODELS), transcribe: pick(TRANSCRIBE_MODELS) }
+  const choice = chooseModels([...names])
   return { ok: true, message: `That key works. Calls use ${choice.live}.`, choice }
 }
 

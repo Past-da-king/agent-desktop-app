@@ -10,6 +10,7 @@ export const CHANNELS = {
     providers: 'agent:settings.providers',
     setApiKey: 'agent:settings.setApiKey',
     checkKey: 'agent:settings.checkKey',
+    listModels: 'agent:settings.listModels',
     checkCli: 'agent:settings.checkCli',
     cliLogin: 'agent:settings.cliLogin',
     reset: 'agent:settings.reset',

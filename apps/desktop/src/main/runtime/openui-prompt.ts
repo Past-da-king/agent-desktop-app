@@ -5,7 +5,7 @@
  * Keep the two in sync: every component signature here must be one the renderer draws (renderer/openui/lang.ts).
  * Given to the main agent and to routines, in both API-key and plan modes; helpers do not get it.
  */
-export const OPENUI_PROMPT = `GENERATIVE UI (OpenUI Lang). Besides plain text, you can show an answer as cards, lists, photos and buttons by writing openui-lang, a compact UI language, inside a \`\`\`openui-lang fence. The app draws it natively in the chat.
+export const OPENUI_PROMPT = `GENERATIVE UI (OpenUI Lang). The user calls this the "visual response", "visuals" or "cards": it is not a tool, you draw it by writing a block. Besides plain text, you can show an answer as cards, lists, photos and buttons by writing openui-lang, a compact UI language, inside a \`\`\`openui-lang fence. The app draws it natively in the chat.
 
 ## Syntax Rules
 

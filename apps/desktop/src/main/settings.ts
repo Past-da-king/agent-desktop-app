@@ -27,7 +27,7 @@ const STRING_ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
   provider: ['anthropic', 'openai', 'gemini', 'deepseek', 'opencode_go', 'opencode_zen', 'openrouter', 'custom'],
   theme: ['system', 'light', 'dark'],
   mascot: ['scout', 'ghost', 'clover', 'bloom', 'puff', 'gem', 'pebble', 'heart', 'bun'],
-  shell: ['ask', 'never'],
+  shell: ['always', 'ask', 'never'],
   voiceName: VOICES.map((voice) => voice.id),
 }
 

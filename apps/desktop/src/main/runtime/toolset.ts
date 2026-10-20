@@ -110,6 +110,7 @@ export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
       ...(deps.environment === undefined ? {} : { environment: deps.environment }),
     }), // shell_run
     ...codeTools({
+      settings,
       platform: process.platform,
       ...(deps.environment === undefined ? {} : { environment: deps.environment }),
     }), // run_code

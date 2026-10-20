@@ -12,6 +12,8 @@
  * Every SDK event is mapped onto the same AgentEvents the API-key loop produces.
  */
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 import type { AgentEvent, JsonObject } from '@agent/core'
 
@@ -328,4 +330,57 @@ async function runCodex(turn: CliTurn): Promise<CliResult> {
   if (turn.signal.aborted) return { sessionId, text: lastSaid }
   if (failure !== undefined) return { sessionId, text: lastSaid, error: explainCliFailure('codex', failure) }
   return { sessionId, text: lastSaid }
+}
+
+export interface PlanModel {
+  id: string
+  label: string
+  line: string
+}
+
+/**
+ * The models the person's plan offers right now, asked of the engine itself, never a list kept here.
+ * Claude: Claude Code's own supportedModels(), from a session that sends no message. Codex: the model list
+ * Codex keeps in CODEX_HOME (models_cache.json), refreshed every time Codex runs.
+ */
+export async function planModels(cli: CliId, program: string | null, workDir: string): Promise<PlanModel[]> {
+  if (cli === 'codex') {
+    const home = process.env['CODEX_HOME'] ?? join(homedir(), '.codex')
+    try {
+      const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8')) as {
+        models?: Array<{ slug?: unknown; display_name?: unknown; description?: unknown; visibility?: unknown; priority?: unknown }>
+      }
+      return (cache.models ?? [])
+        .filter((m) => typeof m.slug === 'string' && m.visibility !== 'hide')
+        .sort((a, b) => Number(a.priority ?? 99) - Number(b.priority ?? 99))
+        .map((m) => ({ id: String(m.slug), label: typeof m.display_name === 'string' ? m.display_name : String(m.slug), line: typeof m.description === 'string' ? m.description : '' }))
+    } catch {
+      return []
+    }
+  }
+  const abort = new AbortController()
+  // A prompt that never sends anything: the engine starts, reports what it offers, and is stopped.
+  const idle = (async function* (): AsyncGenerator<never> {
+    await new Promise<void>((resolve) => abort.signal.addEventListener('abort', () => resolve()))
+  })()
+  const { query } = await import('@anthropic-ai/claude-agent-sdk')
+  const session = query({
+    prompt: idle,
+    options: {
+      cwd: workDir,
+      env: engineEnv(),
+      abortController: abort,
+      settingSources: [],
+      ...(program === null ? {} : { pathToClaudeCodeExecutable: program }),
+    },
+  })
+  try {
+    const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 30_000))
+    const models = await Promise.race([session.supportedModels(), timeout])
+    return models.map((m) => ({ id: m.value === 'default' ? '' : m.value, label: m.displayName, line: m.description ?? '' }))
+  } catch {
+    return []
+  } finally {
+    abort.abort()
+  }
 }

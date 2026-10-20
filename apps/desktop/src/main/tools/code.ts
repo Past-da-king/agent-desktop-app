@@ -40,6 +40,8 @@ export interface CodeToolDeps {
   execPath?: string
   /** Tests capture the exact program and arguments without running anything. */
   spawnImpl?: typeof spawn
+  /** The person's choice for this computer: run without asking, ask first, or never. Absent means ask. */
+  settings?: { get(): { shell: 'always' | 'ask' | 'never' } }
 }
 
 export function codeTools(deps: CodeToolDeps = {}): Tool[] {
@@ -101,10 +103,14 @@ function runCodeTool(deps: CodeToolDeps): Tool {
         return 'Python is not installed on this computer (no py, python or python3 found), so I could not run that. I did not try to install anything.'
       }
 
-      const approved = await ctx.approve(
-        `Run ${language} code`,
-        code.length > 4_000 ? `${code.slice(0, 4_000)}\n...(the rest is cut here, but all of it runs)` : code,
-      )
+      const choice = deps.settings?.get().shell ?? 'ask'
+      if (choice === 'never') return 'Running code is turned off on this computer (Settings, This computer). Do the job another way or ask the user to turn it on.'
+      const approved =
+        choice === 'always' ||
+        (await ctx.approve(
+          `Run ${language} code`,
+          code.length > 4_000 ? `${code.slice(0, 4_000)}\n...(the rest is cut here, but all of it runs)` : code,
+        ))
       if (!approved) return 'The user did not approve running that code, so I did not run it.'
 
       return execute({ language, code, program: chosen.program, appRuntime: chosen.appRuntime, deps })

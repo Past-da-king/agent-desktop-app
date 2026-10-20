@@ -362,6 +362,12 @@ export const mockAgent: AgentApi = {
       saveSettings({ hasKey: true })
       return { ok: true, message: 'Key works.' }
     },
+    async listModels() {
+      if (apiKey === '' && !settings.hasKey) return { ok: false, models: [], message: 'Add an API key first.' }
+      await delay(400)
+      const models = ['deepseek-v4.1-flash', 'deepseek-v4.1-pro', 'kimi-k3', 'glm-5.2', 'qwen4-coder', 'minimax-m3'].map((id) => ({ id, label: id, line: '' }))
+      return { ok: true, models, message: `Your key works. ${models.length} models to choose from.` }
+    },
     async cliLogin() {
       await delay(1200)
       return { ok: true, message: 'Signed in.' }
