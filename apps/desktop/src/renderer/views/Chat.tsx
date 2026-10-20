@@ -161,6 +161,29 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
     void chat.answer(item.id, clean).catch(() => setSending(false))
   }
 
+  // browser_handoff asks with these two options. Draw it as a handoff card, not a generic question.
+  const handoff = options.includes('Done, carry on')
+  if (handoff) {
+    return (
+      <div className="appr handoff">
+        <div className="eyebrow">
+          <Icon name="globe" size={14} />
+          YOUR TURN IN THE BROWSER
+        </div>
+        <div className="tt">{item.text}</div>
+        <div className="acts appr-acts">
+          <Button disabled={sending} onClick={() => answer('Done, carry on')}>
+            Done, carry on
+          </Button>
+          <button type="button" className="ans" disabled={sending} onClick={() => answer('Skip')}>
+            Skip
+          </button>
+        </div>
+        <div className="hint">The page is yours while this card is open. Finish the step, then carry on.</div>
+      </div>
+    )
+  }
+
   return (
     <div className="appr">
       <div className="eyebrow">
@@ -722,77 +745,5 @@ export function Chat(): JSX.Element {
         </div>
       ) : null}
     </div>
-  )
-}
-
-export function ChatPanel(): JSX.Element {
-  const settings = useSettings((state) => state.settings)
-  const navigate = useUi((state) => state.navigate)
-  const selectMemory = useUi((state) => state.selectMemory)
-  const memories = useEntity('memory')
-  const used = [...memories].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt).slice(0, 3)
-  const agentName = settings?.agentName.trim() || 'Your agent'
-
-  return (
-    <aside className="panel-w" aria-label="What your agent is doing">
-      <section>
-        <div className="panel-h">
-          <div className="sec" style={{ margin: 0 }}>
-            <span className="eyebrow">AGENT'S BROWSER</span>
-            <span className="sec-line">Live, in its own window</span>
-          </div>
-          <Button variant="tonal" size="sm" comingSoon>
-            Take over
-          </Button>
-        </div>
-        <div className="browser" style={{ marginTop: 12 }}>
-          <div className="br-top">
-            <span className="url">
-              <Icon name="lock" size={14} />
-              Not open yet
-            </span>
-          </div>
-          <div className="web">
-            <div className="web-h">
-              <b>Agent browser</b>
-              <span style={{ color: '#55555e' }}>Waiting</span>
-            </div>
-            <div className="rt">{agentName} opens a real page here when a job needs the web.</div>
-            <div className="fl">
-              <b>Browser</b>
-              <span>Separate session, separate cookies</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div className="sec">
-          <span className="eyebrow">USED FROM MEMORY</span>
-          <span className="sec-line">What I remembered for this</span>
-        </div>
-        {used.length === 0 ? (
-          <div className="panel-empty">
-            <Icon name="memory" size={18} />
-            <span>Pages {agentName} uses in a chat will show here.</span>
-          </div>
-        ) : (
-          <div className="mem-chips">
-            {used.map((memory) => (
-              <Chip
-                key={memory.id}
-                icon={<Icon name={memory.pinned ? 'heart' : 'memory'} size={16} />}
-                onClick={() => {
-                  selectMemory(memory.id)
-                  navigate({ page: 'memory' })
-                }}
-              >
-                {memory.title}
-              </Chip>
-            ))}
-          </div>
-        )}
-      </section>
-    </aside>
   )
 }

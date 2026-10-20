@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 
 import { openCards } from '../lib/cards'
 import { useEntity } from '../state/useData'
+import { usePanel } from '../state/usePanel'
 import { useRoute, useUi } from '../state/useUi'
 import { Icon, type IconName } from '../ui/Icon'
 import { Rail } from './Rail'
@@ -46,12 +47,20 @@ function MobileNav(): JSX.Element {
 
 export function Shell({ children, panel }: { children: ReactNode; panel?: ReactNode }): JSX.Element {
   const collapsed = useUi((state) => state.railCollapsed)
+  const panelWidth = usePanel((state) => state.width)
+  const panelCollapsed = usePanel((state) => state.collapsed)
   const needs = useNeeds()
-  const classes = ['shell', collapsed ? 'col' : '', panel ? 'panel' : ''].filter(Boolean).join(' ')
+  const classes = ['shell', collapsed ? 'col' : '', panel ? (panelCollapsed ? 'panel-collapsed' : 'panel') : '']
+    .filter(Boolean)
+    .join(' ')
+  const style =
+    panel !== undefined
+      ? ({ '--panel-w': `${panelWidth}px` } as CSSProperties)
+      : undefined
 
   return (
     <>
-      <div className={classes}>
+      <div className={classes} style={style}>
         <Rail needs={needs} />
         <main className="sheet" style={panel ? { overflow: 'hidden' } : undefined}>
           {children}

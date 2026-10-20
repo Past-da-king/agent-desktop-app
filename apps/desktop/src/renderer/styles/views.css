@@ -156,6 +156,41 @@
 .mem-chips{display:flex;flex-wrap:wrap;gap:8px}
 .panel-empty{background:var(--s-low);border-radius:var(--r-md);padding:16px;font-size:13px;line-height:1.5;color:var(--on-sv);display:flex;gap:12px;align-items:flex-start}
 
+/* ---------- the live browser panel ---------- */
+.panel-w{position:relative}
+.panel-h-actions{display:flex;align-items:center;gap:2px;flex:none}
+.panel-resize{position:absolute;left:0;top:0;bottom:0;width:9px;cursor:col-resize;z-index:2;outline:none}
+.panel-resize::after{content:"";position:absolute;left:3px;top:50%;width:3px;height:44px;margin-top:-22px;border-radius:999px;background:var(--outline-v);transition:background .15s var(--effects)}
+.panel-resize:hover::after,.panel-resize:focus-visible::after{background:var(--primary)}
+.panel-mini{padding:12px 6px;align-items:center;gap:0;overflow:hidden}
+.panel-mini-open{width:44px;height:52px;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--on-sv);background:var(--s-low);transition:background .2s var(--effects),border-radius .45s var(--spatial)}
+.panel-mini-open:hover{background:var(--s-high);color:var(--on-bg)}
+.panel-mini-open:active{border-radius:12px}
+.panel-mini-chev{display:grid;place-items:center;transform:rotate(180deg)}
+.br-top .ib{width:32px;height:32px;flex:none}
+.br-back svg{transform:rotate(180deg)}
+.br-tabs{display:flex;gap:4px;padding:0 8px 8px;overflow-x:auto;scrollbar-width:none}
+.br-tab{display:flex;align-items:center;flex:none;max-width:180px;border-radius:999px;background:var(--s-high);color:var(--on-sv)}
+.br-tab.on{background:var(--sc);color:var(--on-sc)}
+.br-tab-title{border:0;background:transparent;color:inherit;font:500 12px/1 'Roboto',sans-serif;height:30px;padding:0 4px 0 12px;max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.br-tab-close{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;color:inherit;margin-right:3px;flex:none}
+.br-tab-close:hover{background:var(--s-highest)}
+.br-status{display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid var(--outline-v);background:var(--s-low)}
+.br-status-gap{flex:1}
+.br-status-mute{font-size:12px;color:var(--on-sv)}
+.br-here{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:130px;height:24px;padding:0 10px;border-radius:999px;background:var(--pc);color:var(--on-pc);font:700 11px/1 'Roboto',sans-serif;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.br-here.needs{background:var(--tc);color:var(--on-tc)}
+.br-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+.br-open{height:30px;padding:0 8px;flex:none;font-size:12px;gap:6px}
+.br-view{height:clamp(220px,32vh,340px);background:var(--s-mid);position:relative;overflow:hidden;border-top:1px solid var(--outline-v)}
+.br-view .web{height:100%;overflow:auto}
+.br-live{position:absolute;inset:0;background:#fff}
+.br-empty{height:100%;padding:20px 18px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;background:var(--s-low)}
+.br-empty-icon{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--sc);color:var(--on-sc)}
+.br-empty b{font:500 14px/1.35 'Roboto',sans-serif;max-width:260px}
+.br-empty p{font-size:12px;line-height:1.5;color:var(--on-sv);max-width:260px;margin:0}
+.br-reason{font-size:12px;line-height:1.5;color:var(--on-sv);margin:10px 2px 0}
+
 /* ---------- tasks / memory / routines / connections / prefs ---------- */
 .md{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:24px;align-items:start}
 .detail{background:var(--s-low);border-radius:var(--r-xl);padding:30px 32px;display:flex;flex-direction:column;gap:20px;position:sticky;top:0;min-width:0;overflow-wrap:anywhere}
