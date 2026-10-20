@@ -11,6 +11,15 @@ import { refreshEntity, useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
+import { toast } from '../state/useToast'
+import { CallRow } from '../voice/CallRow'
+import { CallSheet } from '../voice/CallSheet'
+import { DictateButton } from '../voice/DictateButton'
+import { ReadAloud } from '../voice/ReadAloud'
+import { useSpeakReplies } from '../voice/speaker'
+import { useCall } from '../voice/useCall'
+import { VisualCard, visualFromMeta } from '../voice/VisualCard'
+import { VoiceIcon } from '../voice/VoiceIcon'
 import { Button } from '../ui/Button'
 import { IconButton, Kbd, Pill } from '../ui/bits'
 import { Chip } from '../ui/Chip'
@@ -416,16 +425,26 @@ function HelperRow({ helper }: { helper: HelperView }): JSX.Element {
   )
 }
 
-function renderItem(item: ChatItem, items: ChatItem[], onOpenReport: (item: ChatItem) => void): JSX.Element {
+function renderItem(
+  item: ChatItem,
+  items: ChatItem[],
+  onOpenReport: (item: ChatItem) => void,
+  agentName = 'Your agent',
+): JSX.Element {
   switch (item.kind) {
     case 'user':
       return <UserRow item={item} />
-    case 'agent':
+    case 'agent': {
+      const visual = visualFromMeta(parseMeta(item.meta))
       return (
         <div className="a-msg">
-          <Markdown text={item.text} />
+          {visual === null ? <Markdown text={item.text} /> : <VisualCard visual={visual} compact />}
+          <ReadAloud id={item.id} text={item.text} />
         </div>
       )
+    }
+    case 'call':
+      return <CallRow item={item} agentName={agentName} />
     case 'activity':
       return <ActivityRow item={item} />
     case 'question':
@@ -478,6 +497,13 @@ export function Chat(): JSX.Element {
   const cards = openCards(items, true)
   const needsYou = waiting.length > 0 || cards.length > 0
   const agentName = settings?.agentName.trim() || 'Your agent'
+  const startCall = useCall((state) => state.start)
+  useSpeakReplies(settings?.speakReplies === true && settings.hasVoiceKey)
+
+  useEffect(() => {
+    // The browser preview can open straight into a call (?demo=1&call=1), so the call view can be screenshotted.
+    if (agent.platform === 'web' && new URLSearchParams(window.location.search).get('call') === '1') void startCall()
+  }, [startCall])
 
   useEffect(() => {
     let alive = true
@@ -638,7 +664,17 @@ export function Chat(): JSX.Element {
           </span>
         </div>
         <ModelPicker />
-        <IconButton icon="phone" label="Talk" comingSoon size={22} />
+        <button
+          type="button"
+          className="ib talk-btn"
+          aria-label="Talk"
+          title={settings?.hasVoiceKey ? 'Talk' : 'Talk (add a Gemini key in Settings first)'}
+          onClick={() => {
+            void startCall()
+          }}
+        >
+          <VoiceIcon name="handset" size={22} />
+        </button>
       </div>
 
       <div
@@ -677,7 +713,7 @@ export function Chat(): JSX.Element {
           <div className="thread-in">
             {messages.map((item) => (
               <div key={item.id} style={{ display: 'contents' }}>
-                {renderItem(item, items, (row) => setReader(row))}
+                {renderItem(item, items, (row) => setReader(row), agentName)}
               </div>
             ))}
             {thinking ? (
@@ -737,7 +773,17 @@ export function Chat(): JSX.Element {
               }
             }}
           />
-          <IconButton icon="mic" label="Dictate" comingSoon />
+          <DictateButton
+            hasKey={settings?.hasVoiceKey === true}
+            onText={(words) => {
+              setText((current) => (current.trim() === '' ? words : `${current.replace(/\s+$/, '')} ${words}`))
+              composer.current?.focus()
+            }}
+            onProblem={(message, action) => {
+              if (action === undefined) setAttachProblem(message)
+              else toast(message, { actionLabel: action.label, onAction: action.run })
+            }}
+          />
           {running ? (
             <button
               type="button"
@@ -791,6 +837,8 @@ export function Chat(): JSX.Element {
           </div>
         </Dialog>
       ) : null}
+
+      <CallSheet />
 
       {dragging ? (
         <div className="drop" role="status" aria-live="polite">
