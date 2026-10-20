@@ -19,6 +19,7 @@ import { mimeForFile, providerFor, type Attachment, type Settings } from '@agent
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
+import { AgentBrowser } from './browser/browser'
 import { Store } from './db'
 import { Notifier } from './notify'
 import { HotkeyBinder, QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
@@ -52,6 +53,7 @@ let scheduler: Scheduler | null = null
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
 let hotkey: HotkeyBinder | null = null
+let agentBrowser: AgentBrowser | null = null
 let disposeIpc: (() => void) | null = null
 let disposeStore: (() => void) | null = null
 let disposeSettings: (() => void) | null = null
@@ -162,9 +164,23 @@ function startSmokeCheck(win: BrowserWindow): void {
     }
   }
 
+  const browserCheck = async (): Promise<boolean> => {
+    const browser = agentBrowser
+    if (browser === null) return false
+    const ok = await browser.smokeOutline(
+      '<!doctype html><html><head><title>Smoke</title></head><body><h1>Smoke</h1><button>Save</button></body></html>',
+    )
+    if (!ok) {
+      console.error('BROWSER FAILED: the outline helper did not see the data: page')
+      app.exit(1)
+    }
+    if (ok) console.log('BROWSER OK')
+    return ok
+  }
+
   const poll = async (): Promise<void> => {
     while (Date.now() < deadline) {
-      if (await check()) {
+      if ((await check()) && (await browserCheck())) {
         if (smokeTimer) clearTimeout(smokeTimer)
         smokeTimer = null
         console.log('SMOKE OK')
@@ -180,7 +196,7 @@ function startSmokeCheck(win: BrowserWindow): void {
   })
 }
 
-function createWindow(stateFile: string): void {
+function createWindow(stateFile: string): BrowserWindow {
   const saved = readWindowState(stateFile)
   const win = new BrowserWindow({
     width: saved.width,
@@ -228,7 +244,9 @@ function createWindow(stateFile: string): void {
           'It keeps working in the background. Right-click the tray icon to quit.',
         )
       }
+      return
     }
+    agentBrowser?.detach()
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -249,6 +267,10 @@ function createWindow(stateFile: string): void {
 
   if (isSmoke) startSmokeCheck(win)
 
+  return win
+}
+
+function loadWindow(win: BrowserWindow): void {
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) void win.loadURL(devUrl)
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
@@ -256,7 +278,9 @@ function createWindow(stateFile: string): void {
 
 function showMainWindow(): void {
   if (mainWindow === null || mainWindow.isDestroyed()) {
-    createWindow(join(app.getPath('userData'), 'window-state.json'))
+    const next = createWindow(join(app.getPath('userData'), 'window-state.json'))
+    agentBrowser?.attach(next)
+    loadWindow(next)
     return
   }
   if (!mainWindow.isVisible()) mainWindow.show()
@@ -351,7 +375,7 @@ const dialogs: DialogLike = {
   pickFolder: pickOneFolder,
 }
 
-async function startServices(): Promise<void> {
+async function startServices(win: BrowserWindow): Promise<void> {
   const dir = app.getPath('userData')
   mkdirSync(dir, { recursive: true })
 
@@ -382,7 +406,20 @@ async function startServices(): Promise<void> {
     settings.save({ syncUrl: fromEnv })
   }
 
-  const tools = buildToolset({ store, settings, filePicks, pickFiles: pickFilePaths })
+  agentBrowser = new AgentBrowser({
+    window: win,
+    onState: (state) => broadcast(EVENTS.browser, state),
+    openExternal: (url) => shell.openExternal(url),
+  })
+
+  const tools = buildToolset({
+    store,
+    settings,
+    filePicks,
+    pickFiles: pickFilePaths,
+    browser: agentBrowser,
+    agentName: () => settings.get().agentName,
+  })
   runner = new Runner({
     store,
     settings,
@@ -441,6 +478,7 @@ async function startServices(): Promise<void> {
     routines: scheduler,
     ipcMain,
     windows: windowControls(),
+    browser: agentBrowser,
     broadcast,
     shell: {
       openExternal: (url) => shell.openExternal(url),
@@ -466,8 +504,9 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.whenReady().then(async () => {
-    await startServices()
-    createWindow(join(app.getPath('userData'), 'window-state.json'))
+    const win = createWindow(join(app.getPath('userData'), 'window-state.json'))
+    await startServices(win)
+    loadWindow(win)
     powerMonitor.on('resume', () => {
       void scheduler?.resume()
     })
@@ -477,8 +516,7 @@ if (!app.requestSingleInstanceLock()) {
     tray?.refresh()
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) showMainWindow()
-      else showMainWindow()
+      showMainWindow()
     })
   })
 
@@ -501,6 +539,8 @@ if (!app.requestSingleInstanceLock()) {
     globalShortcut.unregisterAll()
     runner?.dispose()
     runner = null
+    agentBrowser?.destroy()
+    agentBrowser = null
     account?.dispose()
     account = null
     store?.close()

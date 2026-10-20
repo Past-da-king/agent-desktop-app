@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import type {
   AgentApi,
   Attachment,
+  BrowserBounds,
+  BrowserState,
   ChatEvent,
   Decision,
   EntityMap,
@@ -80,6 +82,19 @@ const api: AgentApi = {
 
   routines: {
     runNow: (id) => call<void>(CHANNELS.routines.runNow, id),
+  },
+
+  browser: {
+    setBounds: (bounds: BrowserBounds) => call<void>(CHANNELS.browser.setBounds, bounds),
+    state: () => call<BrowserState>(CHANNELS.browser.state),
+    back: () => call<void>(CHANNELS.browser.back),
+    reload: () => call<void>(CHANNELS.browser.reload),
+    selectTab: (id) => call<void>(CHANNELS.browser.selectTab, id),
+    closeTab: (id) => call<void>(CHANNELS.browser.closeTab, id),
+    takeOver: () => call<void>(CHANNELS.browser.takeOver),
+    giveBack: () => call<void>(CHANNELS.browser.giveBack),
+    openInSystem: () => call<void>(CHANNELS.browser.openInSystem),
+    onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
   },
 
   window: {
