@@ -215,10 +215,10 @@ export class AccountService {
 /** Plain words the onboarding screen can show as-is. */
 function signInMessage(error: unknown): string {
   if (error instanceof SyncException) {
-    if (error.status === 409) return 'An account with that email already exists. Sign in instead.'
-    if (error.status === 401) return 'That email and password did not match.'
+    if (error.status === 409) return 'There is already an account with that email. Try signing in.'
+    if (error.status === 401) return 'That email and password do not match.'
     if (error.status === 0) {
-      return 'Could not reach the sync server. Check the address and your connection.'
+      return 'Could not reach the sync server. Check the address, or use this computer only.'
     }
     return error.message || 'Sync sign-in failed.'
   }
