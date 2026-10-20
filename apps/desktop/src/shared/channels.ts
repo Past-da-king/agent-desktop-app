@@ -73,6 +73,16 @@ export const CHANNELS = {
     openExternal: 'agent:shell.openExternal',
     reveal: 'agent:shell.reveal',
   },
+  voice: {
+    setKey: 'agent:voice.setKey',
+    check: 'agent:voice.check',
+    transcribe: 'agent:voice.transcribe',
+    speak: 'agent:voice.speak',
+    callStart: 'agent:voice.callStart',
+    callAudio: 'agent:voice.callAudio',
+    callMute: 'agent:voice.callMute',
+    callEnd: 'agent:voice.callEnd',
+  },
   app: {
     info: 'agent:app.info',
     openLogsFolder: 'agent:app.openLogsFolder',
@@ -91,4 +101,5 @@ export const EVENTS = {
   quickAsk: 'agent:evt:window.quickAsk',
   route: 'agent:evt:window.route',
   hotkey: 'agent:evt:window.hotkey',
+  voiceCall: 'agent:evt:voice.call',
 } as const

@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { hostname as osHostname } from 'node:os'
 import { dirname } from 'node:path'
 
-import { DEFAULT_SETTINGS, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, VOICES, type Settings } from '@agent/core'
 
 export type SettingsChangeListener = (settings: Settings) => void
 
@@ -28,6 +28,7 @@ const STRING_ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
   theme: ['system', 'light', 'dark'],
   mascot: ['scout', 'ghost', 'clover', 'bloom', 'puff', 'gem', 'pebble', 'heart', 'bun'],
   shell: ['ask', 'never'],
+  voiceName: VOICES.map((voice) => voice.id),
 }
 
 export class SettingsStore {

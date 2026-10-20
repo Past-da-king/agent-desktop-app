@@ -61,6 +61,7 @@ export function demoSettings(): Settings {
     provider: 'anthropic',
     model: 'claude-sonnet-5-5',
     hasKey: true,
+    hasVoiceKey: true,
     userName: 'Sam',
     agentName: 'Nova',
     accent: 'iris',
