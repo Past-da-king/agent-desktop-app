@@ -112,7 +112,8 @@ const METHODS: Record<string, string[]> = {
   chat: ['send', 'stop', 'state', 'answer', 'decide'],
   routines: ['runNow'],
   window: ['minimize', 'toggleMaximize', 'close', 'isMaximized'],
-  files: ['pick', 'pickFolder'],
+  files: ['pick', 'pickFolder', 'thumbnail'],
+  system: ['info'],
   shell: ['openExternal', 'reveal'],
 }
 
@@ -245,5 +246,16 @@ describe('registerIpc', () => {
     } finally {
       stop()
     }
+  })
+
+  it('reports this machine and only previews files the person picked', async () => {
+    const info = (await invoke(CHANNELS.system.info)) as { platform: string; arch: string }
+    expect(typeof info.platform).toBe('string')
+    expect(info.arch.length).toBeGreaterThan(0)
+
+    expect(await invoke(CHANNELS.files.thumbnail, '/tmp/not-picked.png')).toBeNull()
+    await invoke(CHANNELS.files.register, ['/tmp/not-picked.png'])
+    expect(await invoke(CHANNELS.files.thumbnail, '/tmp/not-picked.png')).toBeNull()
+    await expect(invoke(CHANNELS.files.register, 'nope')).rejects.toThrow('paths must be a list')
   })
 })

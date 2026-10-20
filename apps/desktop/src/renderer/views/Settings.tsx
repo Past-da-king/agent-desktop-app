@@ -1,13 +1,16 @@
-import { PROVIDERS } from '@agent/core'
-import { useState } from 'react'
+import { PROVIDERS, type HotkeyStatus, type SystemInfo } from '@agent/core'
+import { useEffect, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
+import { folderName } from '../lib/files'
 import { timeAgo } from '../lib/format'
+import { acceleratorFromEvent, formatAccelerator } from '../lib/hotkey'
+import { machineSummary } from '../lib/system'
 import { ACCENTS, applyAccent, isDarkNow } from '../state/theme'
 import { useAccountStatus } from '../state/useAccount'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
-import { Avatar, Pill } from '../ui/bits'
+import { Avatar, IconButton, Pill } from '../ui/bits'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
 import { Icon } from '../ui/Icon'
@@ -57,6 +60,55 @@ function ResetDialog({ onClose }: { onClose: () => void }): JSX.Element {
   )
 }
 
+function HotkeyRecorder({
+  value,
+  platform,
+  onSave,
+}: {
+  value: string
+  platform: string
+  onSave: (accelerator: string) => void
+}): JSX.Element {
+  const [recording, setRecording] = useState(false)
+  const saveRef = useRef(onSave)
+  saveRef.current = onSave
+
+  useEffect(() => {
+    if (!recording) return
+    const onKey = (event: KeyboardEvent): void => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') {
+        setRecording(false)
+        return
+      }
+      const accelerator = acceleratorFromEvent(event, platform)
+      if (accelerator === null) return
+      setRecording(false)
+      saveRef.current(accelerator)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [recording, platform])
+
+  const keys = formatAccelerator(value, platform)
+
+  return (
+    <div className="kbds">
+      {recording ? (
+        <span className="small muted">Press the keys now</span>
+      ) : keys.length > 0 ? (
+        keys.map((key) => <kbd key={key}>{key}</kbd>)
+      ) : (
+        <span className="small muted">No shortcut</span>
+      )}
+      <Button variant="tonal" size="sm" onClick={() => setRecording(true)}>
+        {recording ? 'Listening...' : 'Record'}
+      </Button>
+    </div>
+  )
+}
+
 export function Settings(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
@@ -64,6 +116,26 @@ export function Settings(): JSX.Element {
   const status = useAccountStatus()
   const [resetting, setResetting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [pickingFolder, setPickingFolder] = useState(false)
+  const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus | null>(null)
+  const [system, setSystem] = useState<SystemInfo | null>(null)
+
+  useEffect(() => {
+    let live = true
+    agent.system
+      .info()
+      .then((info) => {
+        if (live) setSystem(info)
+      })
+      .catch(() => {
+        // The machine line is a detail; the rest of Settings works without it.
+      })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  useEffect(() => agent.window.onHotkeyStatus((status) => setHotkeyStatus(status)), [])
 
   const provider = PROVIDERS.find((item) => item.id === settings?.provider)
   const model = settings?.model.trim() || provider?.defaultModel || 'No model chosen'
@@ -92,6 +164,28 @@ export function Settings(): JSX.Element {
       setSyncing(false)
     }
   }
+
+  const addFolder = async (): Promise<void> => {
+    if (pickingFolder) return
+    setPickingFolder(true)
+    try {
+      const folder = await agent.files.pickFolder()
+      if (folder === null) return
+      const current = settings?.grantedFolders ?? []
+      if (!current.includes(folder)) await save({ grantedFolders: [...current, folder] })
+    } catch {
+      // A cancelled or refused picker leaves the list as it was.
+    } finally {
+      setPickingFolder(false)
+    }
+  }
+
+  const removeFolder = (folder: string): void => {
+    const current = settings?.grantedFolders ?? []
+    void save({ grantedFolders: current.filter((item) => item !== folder) })
+  }
+
+  const folders = settings?.grantedFolders ?? []
 
   return (
     <div className="page">
@@ -278,6 +372,16 @@ export function Settings(): JSX.Element {
             <div className="card" style={{ padding: 10 }}>
               <div className="rowc">
                 <div className="ri">
+                  <Icon name="monitor" size={22} />
+                </div>
+                <div className="rt">
+                  <b>{device}</b>
+                  <span>{system ? machineSummary(system) : 'This computer'}</span>
+                </div>
+                <Pill tone="ok">This one</Pill>
+              </div>
+              <div className="rowc">
+                <div className="ri">
                   <Icon name="play" size={22} />
                 </div>
                 <div className="rt">
@@ -290,7 +394,6 @@ export function Settings(): JSX.Element {
                     void save({ launchAtLogin: next })
                   }}
                   label="Start when I sign in"
-                  comingSoon={agent.platform === 'web'}
                 />
               </div>
               <div className="rowc">
@@ -323,7 +426,94 @@ export function Settings(): JSX.Element {
                     void save({ closeToTray: next })
                   }}
                   label="Keep running in the tray"
-                  comingSoon={agent.platform === 'web'}
+                />
+              </div>
+              <div className="rowc" style={{ flexWrap: 'wrap' }}>
+                <div className="ri">
+                  <Icon name="bolt" size={22} />
+                </div>
+                <div className="rt">
+                  <b>Quick Ask shortcut</b>
+                  <span>A small box from anywhere on this computer</span>
+                </div>
+                <HotkeyRecorder
+                  value={settings?.quickAskHotkey ?? 'CommandOrControl+Shift+Space'}
+                  platform={agent.platform}
+                  onSave={(accelerator) => {
+                    void save({ quickAskHotkey: accelerator })
+                  }}
+                />
+              </div>
+              {hotkeyStatus !== null ? (
+                <div className="small muted" style={{ padding: '0 18px 12px 78px' }}>
+                  {hotkeyStatus.message}
+                </div>
+              ) : null}
+              <div className="rowc">
+                <div className="ri">
+                  <Icon name="folder" size={22} />
+                </div>
+                <div className="rt">
+                  <b>Folders I can use</b>
+                  <span>
+                    {folders.length === 0
+                      ? 'None yet. I ask before touching any file.'
+                      : `${folders.length} ${folders.length === 1 ? 'folder' : 'folders'} I can read and write without asking`}
+                  </span>
+                </div>
+                <Button
+                  variant="tonal"
+                  size="sm"
+                  disabled={pickingFolder}
+                  onClick={() => {
+                    void addFolder()
+                  }}
+                >
+                  {pickingFolder ? 'Choosing...' : 'Add folder'}
+                </Button>
+              </div>
+              {folders.map((folder) => (
+                <div className="rowc" key={folder}>
+                  <div className="ri" style={{ background: 'var(--s-high)', color: 'var(--on-sv)' }}>
+                    <Icon name="folder" size={18} />
+                  </div>
+                  <div className="rt">
+                    <b>{folderName(folder)}</b>
+                    <span>{folder}</span>
+                  </div>
+                  <IconButton
+                    icon="trash"
+                    size={18}
+                    label={`Remove ${folder}`}
+                    onClick={() => removeFolder(folder)}
+                  />
+                </div>
+              ))}
+              <div className="rowc">
+                <div className="ri">
+                  <Icon name="shield" size={22} />
+                </div>
+                <div className="rt">
+                  <b>Shell commands</b>
+                  <span>
+                    {settings?.shell === 'never'
+                      ? 'Never run a command on this computer'
+                      : 'Ask me before every command, every time'}
+                  </span>
+                </div>
+                <Pill tone="mute">{settings?.shell === 'never' ? 'Off' : 'Ask first'}</Pill>
+              </div>
+              <div style={{ padding: '0 18px 14px 78px' }}>
+                <Segmented
+                  ariaLabel="Shell commands"
+                  value={settings?.shell === 'never' ? 'never' : 'ask'}
+                  onChange={(value) => {
+                    void save({ shell: value })
+                  }}
+                  options={[
+                    { value: 'ask', label: 'Ask first' },
+                    { value: 'never', label: 'Never' },
+                  ]}
                 />
               </div>
             </div>
