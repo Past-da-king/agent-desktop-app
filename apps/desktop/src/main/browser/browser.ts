@@ -27,6 +27,7 @@ import {
   emulationCommands,
   fitView,
   presetView,
+  shapedView,
   resolveView,
   userAgentFor,
   viewLabel,
@@ -205,7 +206,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       expanded: this.expanded,
       view: {
         mode: this.currentView.mode,
-        label: viewLabel(this.currentView),
+        label: viewLabel(this.effectiveView()),
         width: this.currentView.width,
         height: this.currentView.height,
         scale: Math.round(this.lastFit.scale * 1000) / 1000,
@@ -458,7 +459,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       this.blockedReason = ''
     }
     return formatSnapshot(result, {
-      view: `${viewLabel(this.currentView)}${this.currentView.mode === 'fit' || !this.bounds.visible ? '' : `, shown at ${Math.round(this.lastFit.scale * 100)}% in the panel`}`,
+      view: `${viewLabel(this.effectiveView())}${this.currentView.mode === 'fit' || !this.bounds.visible ? '' : `, shown at ${Math.round(this.lastFit.scale * 100)}% in the panel`}`,
       downloads: this.downloads.slice(-5),
       ...(options.filter === undefined ? {} : { filter: options.filter }),
       ...(options.notes === undefined ? {} : { notes: options.notes }),
@@ -1024,10 +1025,15 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     await this.applyEmulation(tab)
   }
 
+  /** The view as it is drawn right now: a plain desktop view takes the slot's shape. */
+  private effectiveView(): ViewSpec {
+    return shapedView(this.currentView, this.slotRect())
+  }
+
   private async applyEmulation(tab: Tab): Promise<void> {
     const wc = tab.view.webContents
     if (wc.isDestroyed()) return
-    const view = this.currentView
+    const view = this.effectiveView()
     const fit = fitView(this.slotRect(), view)
     if (tab.id === this.activeId || this.tabs.length === 1) this.lastFit = fit
     tab.scale = fit.scale
@@ -1059,9 +1065,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** Only the scale changed (the panel was resized): no new user agent, no reload. */
   private async rescale(tab: Tab, fit: FitResult): Promise<void> {
     if (!tab.ready || this.currentView.mode === 'fit') return
-    if (Math.abs(tab.scale - fit.scale) < 0.0005) return
+    const view = this.effectiveView()
+    // A shaped desktop page changes its size with the slot, not only its scale.
+    const sameSize = tab.applied !== undefined && tab.applied !== null && tab.applied.width === view.width && tab.applied.height === view.height
+    if (Math.abs(tab.scale - fit.scale) < 0.0005 && sameSize) return
     tab.scale = fit.scale
-    const command = emulationCommands(this.currentView, this.engine, fit).find((c) => c.method === 'Emulation.setDeviceMetricsOverride')
+    tab.applied = { ...view }
+    const command = emulationCommands(view, this.engine, fit).find((c) => c.method === 'Emulation.setDeviceMetricsOverride')
     if (command === undefined) return
     await tab.cdp.send(command.method, command.params).catch(() => undefined)
   }
@@ -1397,7 +1407,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private layout(): void {
     const visible = this.bounds.visible && this.bounds.width > 0 && this.bounds.height > 0
     // The page keeps the size it is emulating; the view is that page drawn scaled to fit the slot.
-    const fit = fitView(this.slotRect(), this.currentView)
+    const fit = fitView(this.slotRect(), this.effectiveView())
     this.lastFit = fit
     for (const tab of this.tabs) {
       if (tab.view.webContents.isDestroyed()) continue
