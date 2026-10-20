@@ -9,6 +9,7 @@ import {
   SyncClient,
   SyncEngine,
   SyncException,
+  blockReason,
   type Change,
   type EntityName,
   type SignInResult,
@@ -33,6 +34,11 @@ export interface AccountOptions {
   pollWaitSeconds?: number
   /** Tests that only want an explicit firstSync pass can turn the background loop off. */
   autoStart?: boolean
+  /**
+   * How many rows of a kind the local store holds. The onboarding step uses it as a fallback when
+   * the background loop applied the first pull before the screen asked for its pass.
+   */
+  countRows?: (entity: EntityName) => Promise<number>
   now?: () => number
 }
 
@@ -73,10 +79,11 @@ export class AccountService {
     })
 
     const token = secrets.get('syncToken')
-    const url = settings.get().syncUrl.trim()
+    const current = settings.get()
+    const url = current.syncUrl.trim()
     if (token !== null && token !== '' && url !== '') {
       try {
-        this.client = new SyncClient(url, token, options.fetchImpl, settings.get().allowHttp)
+        this.client = new SyncClient(url, token, options.fetchImpl, current.allowHttp)
         this.engine.markSignedIn(true)
         if (options.autoStart !== false) this.engine.start()
       } catch {
@@ -93,9 +100,14 @@ export class AccountService {
 
     if (!EMAIL_SHAPE.test(email)) return { ok: false, error: 'That email address does not look right.' }
     if (password.length < 6) return { ok: false, error: 'Use a password of at least 6 characters.' }
-    if (serverUrl === '') return { ok: false, error: 'Add the address of your sync server.' }
+    if (serverUrl === '') {
+      return { ok: false, error: 'Add the address of your sync server under Advanced, or use this computer only.' }
+    }
 
     const allowHttp = this.settings.get().allowHttp
+    const policy = blockReason(serverUrl, allowHttp)
+    if (policy !== null) return { ok: false, error: policy }
+
     try {
       const auth =
         args.mode === 'register'
@@ -110,7 +122,8 @@ export class AccountService {
       this.settings.save({ syncUrl: serverUrl, syncEmail: email, signedIn: true })
       this.client = new SyncClient(serverUrl, auth.token, this.options.fetchImpl, allowHttp)
       this.engine.markSignedIn(true)
-      this.engine.start()
+      // During onboarding, firstSync() runs the visible pass and starts the loop afterwards.
+      if (this.options.autoStart !== false && this.settings.get().onboarded) this.engine.start()
       return { ok: true }
     } catch (error) {
       return { ok: false, error: signInMessage(error) }
@@ -138,12 +151,14 @@ export class AccountService {
     try {
       const ok = await this.engine.syncOnce()
       const status = this.status()
-      const progress: SyncProgress = { phase: ok ? 'done' : 'error', counts: { ...counts } }
+      const merged = await this.mergeStoredCounts(counts)
+      const progress: SyncProgress = { phase: ok ? 'done' : 'error', counts: merged }
       if (!ok) progress.message = status.error ?? 'Sync could not finish.'
       this.emitProgress(progress)
       return status
     } finally {
       this.collecting = null
+      if (this.options.autoStart !== false) this.engine.start()
     }
   }
 
@@ -191,6 +206,23 @@ export class AccountService {
     this.emitProgress({ phase: 'pulling', counts: { ...this.collecting } })
   }
 
+  private async mergeStoredCounts(
+    applied: Partial<Record<EntityName, number>>,
+  ): Promise<Partial<Record<EntityName, number>>> {
+    const merged: Partial<Record<EntityName, number>> = { ...applied }
+    if (this.options.countRows === undefined) return merged
+    const entities: EntityName[] = ['memory', 'goal', 'task', 'trigger', 'chat_item']
+    for (const entity of entities) {
+      try {
+        const stored = await this.options.countRows(entity)
+        if (stored > (merged[entity] ?? 0)) merged[entity] = stored
+      } catch {
+        // A count is a nicety; a store that cannot answer must not fail the sync step.
+      }
+    }
+    return merged
+  }
+
   private emitStatus(status: SyncStatus): void {
     for (const listener of this.statusListeners) {
       try {
@@ -215,10 +247,10 @@ export class AccountService {
 /** Plain words the onboarding screen can show as-is. */
 function signInMessage(error: unknown): string {
   if (error instanceof SyncException) {
-    if (error.status === 409) return 'An account with that email already exists. Sign in instead.'
-    if (error.status === 401) return 'That email and password did not match.'
+    if (error.status === 409) return 'There is already an account with that email. Try signing in.'
+    if (error.status === 401) return 'That email and password do not match.'
     if (error.status === 0) {
-      return 'Could not reach the sync server. Check the address and your connection.'
+      return 'Could not reach the sync server. Check the address, or use this computer only.'
     }
     return error.message || 'Sync sign-in failed.'
   }

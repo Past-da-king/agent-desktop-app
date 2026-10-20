@@ -1,6 +1,7 @@
 import type { MascotId } from '@agent/core'
 import { useState } from 'react'
 
+import { clearLocalOnly, clearStep, markWelcome } from '../state/onboarding'
 import { applyAccent, ACCENTS } from '../state/theme'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -35,6 +36,9 @@ export function Style(): JSX.Element {
         mascot,
         onboarded: true,
       })
+      clearStep()
+      clearLocalOnly()
+      markWelcome()
       navigate({ page: 'home' })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not save your choices.')

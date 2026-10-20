@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 
 import { Onboarding } from './onboarding/Onboarding'
 import { useGlobalKeys } from './state/keys'
+import { savedStep } from './state/onboarding'
 import { lastView, parseHash } from './state/route'
 import { useSettings } from './state/useSettings'
 import { useRoute, useUi } from './state/useUi'
@@ -88,7 +89,7 @@ export function App(): JSX.Element {
     const settings = useSettings.getState().settings
     const parsed = parseHash(window.location.hash)
     if (!settings?.onboarded) {
-      const step = parsed?.page === 'onboarding' ? parsed.step : 'signin'
+      const step = parsed?.page === 'onboarding' ? parsed.step : (savedStep() ?? 'signin')
       useUi.getState().navigate({ page: 'onboarding', step })
       return
     }

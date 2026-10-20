@@ -1,54 +1,92 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { agent } from '../bridge'
+import { clearLocalOnly, rememberLocalOnly } from '../state/onboarding'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
 import { Icon } from '../ui/Icon'
 import { Segmented } from '../ui/Segmented'
+import { Switch } from '../ui/Switch'
 import { OnboardingLayout } from './OnboardingLayout'
 
 type Mode = 'in' | 'new'
 
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 export function SignIn(): JSX.Element {
   const settings = useSettings((state) => state.settings)
+  const save = useSettings((state) => state.save)
   const navigate = useUi((state) => state.navigate)
+
   const [mode, setMode] = useState<Mode>('in')
   const [email, setEmail] = useState(settings?.syncEmail ?? '')
   const [password, setPassword] = useState('')
   const [serverUrl, setServerUrl] = useState(settings?.syncUrl ?? '')
+  const [allowHttp, setAllowHttp] = useState(settings?.allowHttp ?? false)
+  const [advanced, setAdvanced] = useState(false)
   const [emailError, setEmailError] = useState('')
+  const [serverError, setServerError] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const serverRef = useRef<HTMLInputElement>(null)
 
   const create = mode === 'new'
+  const signedInAs = settings?.signedIn === true ? (settings.syncEmail ?? '') : ''
+
+  const differentAccount = async (): Promise<void> => {
+    try {
+      await agent.account.signOut()
+    } catch {
+      // There may be nothing to sign out of.
+    }
+    clearLocalOnly()
+    setPassword('')
+    setEmail('')
+    setError('')
+  }
 
   const submit = async (): Promise<void> => {
     const clean = email.trim()
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) {
+    const address = serverUrl.trim()
+    if (!EMAIL_SHAPE.test(clean)) {
       setEmailError('That email address does not look right.')
       return
     }
     if (password.length < 6) {
-      setError(create ? 'Use at least 6 characters.' : 'The password is at least 6 characters.')
+      setError(create ? 'Use a password of at least 6 characters.' : 'That password is too short.')
       return
     }
     setEmailError('')
+    setServerError('')
     setError('')
     setBusy(true)
     try {
+      await save({ syncUrl: address, allowHttp })
       const result = await agent.account.signIn({
-        serverUrl,
+        serverUrl: address,
         email: clean,
         password,
         mode: create ? 'register' : 'login',
       })
       if (!result.ok) {
-        setError(result.error)
+        if (address === '') {
+          setServerError(result.error)
+          setAdvanced(true)
+          setError('Where does your sync server live? Add its address, or use this computer only.')
+          window.setTimeout(() => serverRef.current?.focus(), 50)
+        } else {
+          setError(result.error)
+          if (/server|address|http/i.test(result.error)) {
+            setServerError(result.error)
+            setAdvanced(true)
+          }
+        }
         setBusy(false)
         return
       }
+      clearLocalOnly()
       navigate({ page: 'onboarding', step: 'sync' })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not sign in. Try again.')
@@ -62,7 +100,47 @@ export function SignIn(): JSX.Element {
     } catch {
       // Signing out of nothing is fine.
     }
-    navigate({ page: 'onboarding', step: 'sync' })
+    rememberLocalOnly()
+    navigate({ page: 'onboarding', step: 'ai' })
+  }
+
+  if (signedInAs !== '') {
+    return (
+      <OnboardingLayout step="signin">
+        <div className="ob-col">
+          <div>
+            <div className="eyebrow">WELCOME BACK</div>
+            <h1 className="h1" style={{ marginTop: 8 }}>
+              You are signed in
+            </h1>
+            <p className="muted" style={{ marginTop: 8, fontSize: 15 }}>
+              Signed in as {signedInAs}. Your agent can bring your memory, to-dos and chats over to this computer.
+            </p>
+          </div>
+
+          <div className="card mid">
+            <div className="rowc" style={{ padding: 0 }}>
+              <div className="ri">
+                <Icon name="person" size={22} />
+              </div>
+              <div className="rt">
+                <b>{signedInAs}</b>
+                <span>{settings?.syncUrl || 'Your sync server'}</span>
+              </div>
+              <span className="pill ok">Signed in</span>
+            </div>
+          </div>
+
+          <Button size="lg" block onClick={() => navigate({ page: 'onboarding', step: 'sync' })}>
+            Continue
+            <Icon name="arrow" size={20} />
+          </Button>
+          <Button variant="text" onClick={() => void differentAccount()} style={{ alignSelf: 'center' }}>
+            Use a different account
+          </Button>
+        </div>
+      </OnboardingLayout>
+    )
   }
 
   return (
@@ -168,22 +246,33 @@ export function SignIn(): JSX.Element {
           Use this computer only, no account
         </Button>
 
-        <details className="adv">
+        <details className="adv" open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}>
           <summary>Advanced</summary>
           <Field
             label="Server address"
             type="url"
+            inputRef={serverRef}
             value={serverUrl}
             onChange={(value) => {
               setServerUrl(value)
+              setServerError('')
               setError('')
             }}
             autoComplete="url"
             placeholder="https://sync.example.com"
+            error={serverError}
           />
+          <div className="ob-check">
+            <Switch
+              on={allowHttp}
+              onToggle={setAllowHttp}
+              label="Allow unencrypted HTTP for this server"
+            />
+            <span>Allow unencrypted HTTP for this server</span>
+          </div>
           <p className="ob-note">
             Leave this empty if you are not syncing yet. Nothing is hardcoded, so the app asks where your sync server
-            lives.
+            lives. Use https unless this server is on a network you trust.
           </p>
         </details>
       </form>

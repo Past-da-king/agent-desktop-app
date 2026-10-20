@@ -2,6 +2,7 @@ import type { MemoryKind } from '@agent/core'
 import { create } from 'zustand'
 
 import { hashFor, parseHash, rememberLastView, type AppPage, type Route } from './route'
+import { rememberStep } from './onboarding'
 
 export type OverlayName = 'palette' | 'quick' | null
 export type TaskTab = 'todos' | 'agent'
@@ -55,6 +56,7 @@ export const useUi = create<UiState>((set) => ({
     }
     set({ route })
     if (route.page !== 'onboarding') rememberLastView(route.page)
+    else rememberStep(route.step)
   },
 
   applyHash: (hash) => {
@@ -62,6 +64,7 @@ export const useUi = create<UiState>((set) => ({
     if (!route) return
     set({ route })
     if (route.page !== 'onboarding') rememberLastView(route.page)
+    else rememberStep(route.step)
   },
 
   setOverlay: (overlay) => set({ overlay }),

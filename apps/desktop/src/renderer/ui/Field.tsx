@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import type { Ref } from 'react'
 
 import { Icon } from './Icon'
 
@@ -17,6 +18,8 @@ export interface FieldProps {
   revealable?: boolean
   revealLabel?: string
   onEnter?: () => void
+  /** Lets a screen move the cursor here after the server rejects the value. */
+  inputRef?: Ref<HTMLInputElement>
 }
 
 export function Field({
@@ -33,6 +36,7 @@ export function Field({
   revealable,
   revealLabel,
   onEnter,
+  inputRef,
 }: FieldProps): JSX.Element {
   const id = useId()
   const [shown, setShown] = useState(false)
@@ -43,6 +47,7 @@ export function Field({
       <label htmlFor={id}>{label}</label>
       <div className="wrap">
         <input
+          ref={inputRef}
           id={id}
           className={`input${error ? ' bad' : ''}`}
           type={actualType}

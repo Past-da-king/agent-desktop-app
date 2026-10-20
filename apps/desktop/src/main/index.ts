@@ -197,10 +197,13 @@ function startServices(): void {
   const dir = app.getPath('userData')
   mkdirSync(dir, { recursive: true })
 
-  store = new Store(join(dir, 'agent.db'))
+  const openedStore = new Store(join(dir, 'agent.db'))
+  store = openedStore
   const settings = new SettingsStore(join(dir, 'settings.json'))
   const secrets = new Secrets(join(dir, 'secrets'), safeStorage)
-  account = new AccountService(store, settings, secrets)
+  account = new AccountService(openedStore, settings, secrets, {
+    countRows: async (entity) => (await openedStore.list(entity)).length,
+  })
 
   const fromEnv = process.env['AGENT_SYNC_URL']?.trim() ?? ''
   if (settings.get().syncUrl.trim() === '' && fromEnv !== '') {

@@ -15,6 +15,8 @@
 .ob-hero .big-mascot{display:grid;place-items:center;flex:1;min-height:0;padding:12px 0}
 .ob-hero .big-mascot svg{width:min(300px,34vh);height:auto}
 .ob-main{display:flex;flex-direction:column;min-height:0;overflow:auto;padding:28px 56px 28px}
+.ob-nav{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:8px}
+.ob-nav .dots{margin-bottom:0}
 .dots{display:flex;gap:6px;justify-content:flex-end;margin-bottom:8px}
 .dots i{width:10px;height:10px;border-radius:999px;background:var(--outline-v);transition:width .45s var(--spatial),background .2s}
 .dots i.done{background:var(--primary)}
@@ -53,3 +55,5 @@
 .adv .field{margin-top:14px}
 .ob-note{font-size:12px;line-height:1.5;color:var(--on-sv)}
 .ob-note.warn{color:var(--tert);font-weight:500}
+
+.ob-check{display:flex;align-items:center;gap:10px;font-size:13px;line-height:1.4;color:var(--on-sv)}

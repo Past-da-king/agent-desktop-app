@@ -1,10 +1,11 @@
 import type { ChatItem, TaskRow, TriggerRow } from '@agent/core'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
 import { dueLabel, greeting, nextRun, scheduleLabel, short, todayEyebrow } from '../lib/format'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
+import { takeWelcome } from '../state/onboarding'
 import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -107,6 +108,7 @@ function ApprovalCard({ item }: { item: ChatItem }): JSX.Element {
 export function Home(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const navigate = useUi((state) => state.navigate)
+  const [waving, setWaving] = useState(false)
   const openPalette = useUi((state) => state.openPalette)
   const focusComposer = useUi((state) => state.focusComposer)
   const selectTask = useUi((state) => state.selectTask)
@@ -121,6 +123,13 @@ export function Home(): JSX.Element {
   const goalsLoaded = useEntityLoaded('goal')
   const triggersLoaded = useEntityLoaded('trigger')
   const ready = chatLoaded && tasksLoaded && goalsLoaded && triggersLoaded
+
+  useEffect(() => {
+    if (!takeWelcome()) return
+    setWaving(true)
+    const timer = window.setTimeout(() => setWaving(false), 1400)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   const agentName = settings?.agentName.trim() || 'Your agent'
   const firstName = (settings?.userName.trim() || 'there').split(' ')[0] ?? 'there'
@@ -209,7 +218,9 @@ export function Home(): JSX.Element {
             aria-label="Open the conversation"
           >
             <div className="now-top">
-              <Mascot id={settings?.mascot ?? 'scout'} size={84} busy={needs.length === 0} />
+              <span className={waving ? 'mascot-wave' : undefined} style={{ display: 'inline-flex' }}>
+                <Mascot id={settings?.mascot ?? 'scout'} size={84} busy={needs.length === 0} />
+              </span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="eyebrow">RIGHT NOW</div>
                 <div className="nm">{agentName}</div>

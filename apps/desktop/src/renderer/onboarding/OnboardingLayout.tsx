@@ -1,7 +1,10 @@
 import type { ReactNode } from 'react'
 
 import { ONBOARDING_STEPS, type OnboardingStep } from '../state/route'
+import { isLocalOnly } from '../state/onboarding'
 import { useSettings } from '../state/useSettings'
+import { useUi } from '../state/useUi'
+import { Button } from '../ui/Button'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 
@@ -62,6 +65,14 @@ function Dots({ step }: { step: OnboardingStep }): JSX.Element {
   )
 }
 
+/** Where Back goes from each step. Local-only skips Sync, so AI goes back to the sign-in step. */
+function backTarget(step: OnboardingStep, signedIn: boolean): OnboardingStep | null {
+  if (step === 'signin') return null
+  if (step === 'sync') return 'signin'
+  if (step === 'style') return 'ai'
+  return signedIn || !isLocalOnly() ? 'sync' : 'signin'
+}
+
 export function OnboardingLayout({
   step,
   children,
@@ -69,11 +80,24 @@ export function OnboardingLayout({
   step: OnboardingStep
   children: ReactNode
 }): JSX.Element {
+  const settings = useSettings((state) => state.settings)
+  const navigate = useUi((state) => state.navigate)
+  const back = backTarget(step, settings?.signedIn ?? false)
+
   return (
     <div className="ob">
       <Hero />
       <main className="ob-main">
-        <Dots step={step} />
+        <div className="ob-nav">
+          {back ? (
+            <Button size="sm" variant="text" onClick={() => navigate({ page: 'onboarding', step: back })}>
+              Back
+            </Button>
+          ) : (
+            <span />
+          )}
+          <Dots step={step} />
+        </div>
         {children}
       </main>
     </div>
