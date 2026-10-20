@@ -103,6 +103,7 @@ export function groupAccounts(accounts: ConnectedAccount[]): AppGroup[] {
   for (const account of accounts) {
     const group = groups.get(account.app) ?? { app: account.app, appName: account.appName, logo: '', accounts: [] }
     if (group.logo === '' && (account.logo ?? '') !== '') group.logo = account.logo ?? ''
+    if (group.logo === '') group.logo = logoUrl(account.app)
     group.accounts.push(account)
     groups.set(account.app, group)
   }
@@ -161,4 +162,10 @@ export function searchCatalog<T extends { slug: string; name: string; line: stri
   // Names that start with the query first, so "out" finds Outlook before Shoutout.
   const ranked = q === '' ? hits : [...hits].sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)))
   return { shown: ranked.slice(0, limit), total: hits.length }
+}
+
+/** Composio's logo for an app slug: the same service the main process falls back to, so every screen shows one. */
+export function logoUrl(slug: string): string {
+  const clean = slug.trim().toLowerCase()
+  return /^[a-z0-9_]{2,60}$/.test(clean) ? `https://logos.composio.dev/api/${clean}` : ''
 }
