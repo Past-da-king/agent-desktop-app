@@ -6,6 +6,7 @@ import type { Tool } from '@agent/core'
 
 import { coreTools, type CoreToolDeps } from '../tools/core'
 import { memoryTools } from '../tools/memory'
+import { routineTools } from '../tools/routines'
 import { taskTools } from '../tools/tasks'
 import type { DataStore } from './data'
 
@@ -16,6 +17,7 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
     ...coreTools(deps), // now, ask_user, request_approval, notify_user, web_fetch, report
     ...memoryTools(deps.store), // memory_search, memory_get, memory_save, memory_update
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
+    ...routineTools(deps.store, deps.now), // routine_create, routine_list, routine_delete
   ]
 }
 

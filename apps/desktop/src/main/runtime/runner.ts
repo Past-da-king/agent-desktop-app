@@ -26,6 +26,7 @@ import {
   type Tool,
   type ToolCallBlock,
   type ToolContext,
+  type TriggerRow,
 } from '@agent/core'
 
 import type { DataStore } from './data'
@@ -39,6 +40,16 @@ export interface SecretsView {
   get(name: string): string | null
 }
 
+/** What a routine run hands back to the scheduler. */
+export interface RoutineRunResult {
+  /** The final text of the run, or the reason it could not start. */
+  text: string
+  /** True when the routine posted a question or approval card and stopped there. */
+  waiting: boolean
+}
+
+export const WAITING_FOR_USER = 'Waiting for you'
+
 /** Build the provider for the chosen settings, or null when nothing is set up yet. */
 export type ProviderFactory = (settings: Settings, apiKey: string) => LlmProvider | null
 
@@ -50,6 +61,8 @@ export interface RunnerDeps {
   tools: Tool[]
   /** Shows an OS notification. The runner decides when it is wanted. */
   notify?: (title: string, body: string) => void
+  /** The same, naming the card so a click on the notification can open it. */
+  notifyCard?: (itemId: string, title: string, body: string) => void
   /** Pushes a ChatEvent to the renderer. */
   emit?: (event: ChatEvent) => void
   /** True while the app window has the person's attention. Defaults to true (no notifications in tests). */
@@ -74,6 +87,7 @@ export class Runner {
   private readonly providerFactory: ProviderFactory
   private readonly tools: Tool[]
   private readonly notify: (title: string, body: string) => void
+  private readonly notifyCard: (itemId: string, title: string, body: string) => void
   private readonly emit: (event: ChatEvent) => void
   private readonly isFocused: () => boolean
   private readonly now: () => number
@@ -81,6 +95,9 @@ export class Runner {
 
   private running = false
   private controller: AbortController | null = null
+  private routineRunning = false
+  private routineWaiting = false
+  private routineController: AbortController | null = null
   private readonly steer: string[] = []
   private readonly askWaiters = new Map<string, (answer: string | null) => void>()
   private readonly decisionWaiters = new Map<string, (approved: boolean) => void>()
@@ -96,6 +113,8 @@ export class Runner {
     this.providerFactory = deps.providerFactory
     this.tools = deps.tools
     this.notify = deps.notify ?? (() => undefined)
+    this.notifyCard =
+      deps.notifyCard ?? ((_itemId, title, body) => this.notify(title, body))
     this.emit = deps.emit ?? (() => undefined)
     this.isFocused = deps.isFocused ?? (() => true)
     this.now = deps.now ?? Date.now
@@ -216,6 +235,67 @@ export class Runner {
 
   dispose(): void {
     this.stop()
+    this.routineController?.abort()
+  }
+
+  // ---- routines ---------------------------------------------------------------------------
+
+  /**
+   * Run one routine in the background. It is a separate run from the main conversation: it does not
+   * queue, steer or block what the person types, and it leaves no turn rows behind. If it needs the
+   * person, it posts a question or approval card and ends with "Waiting for you".
+   */
+  async runRoutine(trigger: TriggerRow): Promise<RoutineRunResult> {
+    if (this.routineRunning) return { text: 'Another routine is still running.', waiting: false }
+    this.routineRunning = true
+    this.routineWaiting = false
+    try {
+      return await this.runRoutineTurn(trigger)
+    } finally {
+      this.routineRunning = false
+      this.routineWaiting = false
+      this.routineController = null
+    }
+  }
+
+  private async runRoutineTurn(trigger: TriggerRow): Promise<RoutineRunResult> {
+    const resolved = this.resolveModel()
+    if (!resolved.ok) return { text: resolved.message, waiting: false }
+
+    try {
+      const memories = await this.store.list('memory')
+      const goals = await this.store.list('goal')
+      const tasks = await this.store.list('task')
+      const first = userMsg(trigger.prompt)
+      const history: Msg[] = [first]
+      const system = buildSystemPrompt({
+        settings: resolved.current,
+        now: new Date(this.now()),
+        platform: process.platform,
+        memories,
+        goals,
+        tasks,
+        latestUserText: trigger.prompt,
+        role: 'routine',
+        routineName: trigger.name,
+        ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
+      })
+
+      const controller = new AbortController()
+      this.routineController = controller
+      const context = this.toolContext(controller.signal, 'routine')
+      const loop = new AgentLoop({ provider: resolved.provider, model: resolved.model, tools: this.tools })
+      const text = await loop.run(system, history, context, { signal: controller.signal })
+
+      if (this.routineWaiting) return { text: WAITING_FOR_USER, waiting: true }
+      const summary = text.trim()
+      return {
+        text: summary === '' ? 'The routine finished without a summary.' : summary,
+        waiting: false,
+      }
+    } catch (error) {
+      return { text: friendlyError(error), waiting: false }
+    }
   }
 
   // ---- running a turn ---------------------------------------------------------------------
@@ -275,31 +355,26 @@ export class Runner {
     return error
   }
 
-  private async runTurn(
-    text: string,
-    images: string[],
-    signal: AbortSignal,
-  ): Promise<string | undefined> {
+  private resolveModel():
+    | { ok: true; provider: LlmProvider; model: string; current: Settings }
+    | { ok: false; message: string } {
     const current = this.settings.get()
     const key = (this.secrets.get('apiKey') ?? '').trim()
 
     if (current.mode === 'subscription') {
-      await this.notice('Subscriptions are coming soon. Add an AI key in Settings to start.')
-      return undefined
+      return {
+        ok: false,
+        message: 'Subscriptions are coming soon. Add an AI key in Settings to start.',
+      }
     }
     if (!current.hasKey || key === '') {
-      await this.notice('Add an AI key in Settings to start')
-      return undefined
+      return { ok: false, message: 'Add an AI key in Settings to start' }
     }
     const model =
       current.model.trim() || PROVIDERS.find((provider) => provider.id === current.provider)?.defaultModel || ''
-    if (model === '') {
-      await this.notice('Choose a model in Settings to start.')
-      return undefined
-    }
+    if (model === '') return { ok: false, message: 'Choose a model in Settings to start.' }
     if (current.provider === 'custom' && current.baseUrl.trim() === '') {
-      await this.notice('Add the server address for this provider in Settings.')
-      return undefined
+      return { ok: false, message: 'Add the server address for this provider in Settings.' }
     }
 
     let provider: LlmProvider | null = null
@@ -308,10 +383,21 @@ export class Runner {
     } catch {
       provider = null
     }
-    if (provider === null) {
-      await this.notice('Add an AI key in Settings to start')
+    if (provider === null) return { ok: false, message: 'Add an AI key in Settings to start' }
+    return { ok: true, provider, model, current }
+  }
+
+  private async runTurn(
+    text: string,
+    images: string[],
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    const resolved = this.resolveModel()
+    if (!resolved.ok) {
+      await this.notice(resolved.message)
       return undefined
     }
+    const { provider, model, current } = resolved
 
     const memories = await this.store.list('memory')
     const goals = await this.store.list('goal')
@@ -444,10 +530,11 @@ export class Runner {
 
   // ---- questions and approvals ------------------------------------------------------------
 
-  private toolContext(signal: AbortSignal): ToolContext {
+  private toolContext(signal: AbortSignal, role: 'main' | 'routine' = 'main'): ToolContext {
     return {
-      agentLabel: 'main',
+      agentLabel: role === 'routine' ? 'routine' : 'main',
       activity: async (text, meta) => {
+        if (role === 'routine') return ++this.activitySeq
         const id = ++this.activitySeq
         const row = await this.store.upsert('chat_item', {
           kind: 'activity',
@@ -459,6 +546,7 @@ export class Runner {
         return id
       },
       updateActivity: async (id, text, meta) => {
+        if (role === 'routine') return
         const cid = this.activityIds.get(id)
         if (cid === undefined) return
         await this.store.upsert('chat_item', {
@@ -469,8 +557,10 @@ export class Runner {
         })
         this.emit({ type: 'chat_changed' })
       },
-      ask: (question, options) => this.ask(question, options, signal),
-      approve: (summary, details) => this.approve(summary, details, signal),
+      ask: (question, options) =>
+        role === 'routine' ? this.askInRoutine(question, options) : this.ask(question, options, signal),
+      approve: (summary, details) =>
+        role === 'routine' ? this.approveInRoutine(summary, details) : this.approve(summary, details, signal),
       notify: async (title, body) => this.sendNotification(title, body, false),
       signal,
     }
@@ -504,8 +594,24 @@ export class Runner {
     this.waiting.add(row.id)
     this.emit({ type: 'chat_changed' })
     this.emit({ type: 'needs_you', itemId: row.id })
-    this.sendNotification('Your agent has a question', clip(question, MAX_NOTIFICATION_CHARS), true)
+    this.sendCardNotification(row.id, 'Your agent has a question', clip(question, MAX_NOTIFICATION_CHARS))
     return pending
+  }
+
+  /** Post the card and stop the routine there; nobody is at the desk to answer mid-run. */
+  private async askInRoutine(question: string, options: string[]): Promise<string | null> {
+    const row = await this.store.upsert('chat_item', {
+      kind: 'question',
+      text: question,
+      meta: JSON.stringify({ options, answer: '' }),
+    })
+    this.routineWaiting = true
+    this.waiting.add(row.id)
+    this.emit({ type: 'chat_changed' })
+    this.emit({ type: 'needs_you', itemId: row.id })
+    this.sendCardNotification(row.id, 'Your agent has a question', clip(question, MAX_NOTIFICATION_CHARS))
+    this.routineController?.abort()
+    return null
   }
 
   private async approve(
@@ -540,8 +646,24 @@ export class Runner {
     this.waiting.add(row.id)
     this.emit({ type: 'chat_changed' })
     this.emit({ type: 'needs_you', itemId: row.id })
-    this.sendNotification('Approve?', clip(summary, MAX_NOTIFICATION_CHARS), true)
+    this.sendCardNotification(row.id, 'Approve?', clip(summary, MAX_NOTIFICATION_CHARS))
     return pending
+  }
+
+  /** Post the approval card and stop the routine there; it never decides for the person. */
+  private async approveInRoutine(summary: string, details: string | undefined): Promise<boolean> {
+    const row = await this.store.upsert('chat_item', {
+      kind: 'approval',
+      text: summary,
+      meta: JSON.stringify({ summary, details: details ?? '', decision: '' }),
+    })
+    this.routineWaiting = true
+    this.waiting.add(row.id)
+    this.emit({ type: 'chat_changed' })
+    this.emit({ type: 'needs_you', itemId: row.id })
+    this.sendCardNotification(row.id, 'Approve?', clip(summary, MAX_NOTIFICATION_CHARS))
+    this.routineController?.abort()
+    return false
   }
 
   private sendNotification(title: string, body: string, onlyWhenUnfocused: boolean): void {
@@ -549,6 +671,17 @@ export class Runner {
     if (onlyWhenUnfocused && this.isFocused()) return
     try {
       this.notify(title, body)
+    } catch {
+      // A notification failing must never take a run down with it.
+    }
+  }
+
+  /** A card notification carries its id, so clicking it can open the card. */
+  private sendCardNotification(itemId: string, title: string, body: string): void {
+    if (!this.settings.get().notifications) return
+    if (this.isFocused()) return
+    try {
+      this.notifyCard(itemId, title, body)
     } catch {
       // A notification failing must never take a run down with it.
     }
@@ -607,6 +740,12 @@ export function describeCall(call: ToolCallBlock): string {
       return `Read ${hostOf(stringField(input['url']))}`
     case 'report':
       return title === '' ? 'Wrote a report' : `Wrote a report: ${clip(title, 80)}`
+    case 'routine_create':
+      return title === '' ? 'Created a routine' : `New routine: ${clip(title, 80)}`
+    case 'routine_list':
+      return 'Checked routines'
+    case 'routine_delete':
+      return 'Deleted a routine'
     default:
       return call.name.replace(/_/g, ' ')
   }
