@@ -4,18 +4,29 @@
  */
 import type { Tool } from '@agent/core'
 
+import { unavailableBrowser, type BrowserDriver } from '../browser/types'
+import { browserTools } from '../tools/browser'
 import { coreTools, type CoreToolDeps } from '../tools/core'
 import { memoryTools } from '../tools/memory'
 import { taskTools } from '../tools/tasks'
 import type { DataStore } from './data'
 
-export type ToolsetDeps = CoreToolDeps
+export interface ToolsetDeps extends CoreToolDeps {
+  /** Omitted in tests and before the window exists; the browser tools then say it is not open. */
+  browser?: BrowserDriver
+  agentName?: () => string
+}
 
 export function buildToolset(deps: ToolsetDeps): Tool[] {
+  const name = deps.agentName
   return [
     ...coreTools(deps), // now, ask_user, request_approval, notify_user, web_fetch, report
     ...memoryTools(deps.store), // memory_search, memory_get, memory_save, memory_update
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
+    ...browserTools({
+      browser: deps.browser ?? unavailableBrowser,
+      ...(name === undefined ? {} : { agentName: name }),
+    }), // browser_open through browser_show_user
   ]
 }
 
