@@ -78,6 +78,10 @@ deliverables() {
     10b) need_grep '[Ss]top all helpers' $R "palette entry missing" || rc=1
         need_grep "kind === 'helper'|kind==='helper'|\"helper\"|'helper'" $R "helper cards missing" || rc=1 ;;
     11) need_files apps/desktop/electron-builder.yml || rc=1 ;;
+    12) need_files apps/desktop/src/main/runtime/environment.ts apps/desktop/src/main/runtime/spawn.ts || rc=1
+        need_grep 'PATHEXT' apps/desktop/src/main "scan must honour PATHEXT" || rc=1
+        need_grep 'taskkill' apps/desktop/src/main "Windows process-tree kill missing" || rc=1
+        need_grep 'environment' apps/desktop/src/renderer "UI must show the scan" || rc=1 ;;
   esac
   return $rc
 }
@@ -145,6 +149,8 @@ case "$N" in
   10b) check "tests" tests_with_min 100
        check "screenshots: screens" shoot screens
        check "screenshots: chat" shoot chat ;;
+  12) check "tests" tests_with_min 150
+      check "screenshots: screens" shoot screens ;;
   *) echo "unknown milestone $M"; exit 2 ;;
 esac
 
