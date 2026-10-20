@@ -1,0 +1,8 @@
+node_modules
+dist
+out
+shots
+.gate
+logs
+*.log
+.DS_Store
