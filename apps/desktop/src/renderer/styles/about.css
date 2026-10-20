@@ -1,88 +1,13 @@
-.about-link {
-  justify-self: center;
-  border: 1px solid #797683;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--on-bg);
-  font: 500 13px/1 'Roboto Flex', var(--font);
-  padding: 10px 16px;
-  cursor: pointer;
-}
-
-.about-link:hover {
-  background: #e9e7e2;
-}
-
-.about-backdrop {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(19, 18, 24, 0.42);
-}
-
-.about-card {
-  width: min(420px, 100%);
-  border-radius: 20px;
-  background: var(--bg);
-  color: var(--on-bg);
-  box-shadow: 0 24px 70px rgba(40, 30, 110, 0.2);
-  padding: 24px;
-}
-
-.about-title {
-  margin: 0 0 8px;
-  font: 500 22px/1.2 'Roboto Flex', var(--font);
-}
-
-.about-line {
-  margin: 0 0 6px;
-  font-size: 13px;
-}
-
-.about-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 20px;
-}
-
-.about-button {
-  border: 1px solid #797683;
-  border-radius: 999px;
-  background: transparent;
-  color: inherit;
-  font: 500 13px/1 'Roboto Flex', var(--font);
-  padding: 10px 14px;
-  cursor: pointer;
-}
-
-.about-button:hover {
-  background: #e9e7e2;
-}
-
-.about-button-primary {
-  margin-left: auto;
-  border-color: #4a3fd1;
-  background: #4a3fd1;
-  color: #fbfaff;
-}
-
-.about-button-primary:hover {
-  background: #3a30a8;
-}
-
-@media (prefers-color-scheme: dark) {
-  .about-link:hover,
-  .about-button:hover {
-    background: #292830;
-  }
-
-  .about-button-primary,
-  .about-button-primary:hover {
-    border-color: #c3bbff;
-    background: #c3bbff;
-    color: #241a7a;
-  }
-}
+/* The About dialog. Same vocabulary as every other dialog: tokens only, pill buttons, the overlay depth. */
+.about-link{justify-self:center;border:1.5px solid var(--outline);border-radius:999px;background:transparent;color:var(--on-bg);font:500 13px/1 var(--font);padding:10px 16px;cursor:pointer;transition:background .2s var(--effects)}
+.about-link:hover{background:var(--s-high)}
+.about-backdrop{position:fixed;inset:0;z-index:50;display:grid;place-items:center;padding:24px;background:var(--scrim,color-mix(in srgb,#000 38%,transparent));animation:fade .2s var(--effects)}
+.about-card{width:min(440px,100%);border-radius:var(--r-xl);background:var(--s-low);color:var(--on-bg);box-shadow:var(--elev-3,0 30px 80px rgba(0,0,0,.35));padding:26px 26px 22px;animation:pop .45s var(--spatial)}
+.about-title{margin:0 0 10px;font:500 24px/1.2 var(--font)}
+.about-line{margin:0 0 6px;font-size:13px;line-height:1.5;color:var(--on-sv)}
+.about-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+.about-button{display:inline-flex;align-items:center;height:40px;border:1.5px solid var(--outline);border-radius:999px;background:transparent;color:var(--on-bg);font:500 13px/1 var(--font);padding:0 16px;cursor:pointer;transition:background .2s var(--effects),transform var(--t-slow,.42s) var(--spatial)}
+.about-button:hover{background:var(--s-high)}
+.about-button:active{transform:scale(.97)}
+.about-button-primary{margin-left:auto;border-color:var(--primary);background:var(--primary);color:var(--on-primary)}
+.about-button-primary:hover{background:color-mix(in srgb,var(--primary) 88%,var(--on-primary))}
