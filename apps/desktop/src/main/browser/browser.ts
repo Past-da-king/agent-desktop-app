@@ -434,7 +434,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       this.blockedReason = ''
     }
     return formatSnapshot(result, {
-      view: `${viewLabel(this.currentView)}${this.currentView.mode === 'fit' ? '' : `, shown at ${Math.round(this.lastFit.scale * 100)}% in the panel`}`,
+      view: `${viewLabel(this.currentView)}${this.currentView.mode === 'fit' || !this.bounds.visible ? '' : `, shown at ${Math.round(this.lastFit.scale * 100)}% in the panel`}`,
       downloads: this.downloads.slice(-5),
       ...(options.filter === undefined ? {} : { filter: options.filter }),
       ...(options.notes === undefined ? {} : { notes: options.notes }),
