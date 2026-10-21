@@ -115,6 +115,7 @@ const api: AgentApi = {
     go: (address) => call<void>(CHANNELS.browser.go, address),
     newTab: () => call<void>(CHANNELS.browser.newTab),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
+    attach: (tabId, guestId) => call<boolean>(CHANNELS.browser.attach, tabId, guestId),
   },
 
   helpers: {

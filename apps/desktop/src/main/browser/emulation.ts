@@ -247,8 +247,12 @@ function navigatorPlatform(view: ViewSpec, platform: string): string {
 /**
  * The CDP commands that make the page see `view`, drawn at `scale` into a `layout` sized view.
  * For `fit` the page simply takes the view's own size.
+ *
+ * `followElement`: the page is a <webview> the renderer sizes to the layout size and scales with CSS, so the
+ * metrics override leaves the size to the element (width and height 0) and only sets the device: its pixel
+ * ratio, the mobile flag and the screen. The page then resizes in the same frame as its card.
  */
-export function emulationCommands(view: ViewSpec, engine: EngineInfo, fit: FitResult): CdpCommand[] {
+export function emulationCommands(view: ViewSpec, engine: EngineInfo, fit: FitResult, followElement = false): CdpCommand[] {
   const commands: CdpCommand[] = []
   const custom = view.userAgent !== ''
   commands.push({
@@ -267,11 +271,11 @@ export function emulationCommands(view: ViewSpec, engine: EngineInfo, fit: FitRe
     commands.push({
       method: 'Emulation.setDeviceMetricsOverride',
       params: {
-        width: view.width,
-        height: view.height,
+        width: followElement ? 0 : view.width,
+        height: followElement ? 0 : view.height,
         deviceScaleFactor: view.dpr,
         mobile: view.mobile,
-        scale: round4(fit.scale),
+        scale: followElement ? 1 : round4(fit.scale),
         screenWidth: view.width,
         screenHeight: view.height,
         screenOrientation:

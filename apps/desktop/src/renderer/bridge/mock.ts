@@ -794,6 +794,10 @@ export const mockAgent: AgentApi = {
     async newTab() {
       return undefined
     },
+    async attach() {
+      // The web preview draws the designed demo page; there is no <webview> to attach.
+      return false
+    },
     async setExpanded(on: boolean) {
       mockBrowser.expanded = on
       notifyBrowser()
