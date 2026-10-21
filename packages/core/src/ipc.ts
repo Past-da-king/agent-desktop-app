@@ -51,11 +51,24 @@ export interface AiPick {
   model: string
 }
 
+/** One model the helpers may run on, and what it is good for (the agent picks per job). */
+export interface AiRosterEntry {
+  account: string
+  model: string
+  /** A few words the person wrote: "research, long writing", "quick lookups". '' = none. */
+  goodFor: string
+}
+
 /** Two picks: one for the agent that talks in the chat, one for the helpers it starts. */
 export interface AiPicks {
   main: AiPick
-  /** '' account = the same as `main`. */
+  /** '' account = the same as `main`. Mirrors the roster's first entry when there is a roster. */
   helpers: AiPick
+  /**
+   * The models helpers may run on, first = the default. Empty or absent = just `helpers` (so nothing changes until
+   * someone adds a second model); in a project, empty = the main thread's.
+   */
+  roster?: AiRosterEntry[]
 }
 
 export const NO_PICK: AiPick = { account: '', model: '' }

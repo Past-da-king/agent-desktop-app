@@ -15,9 +15,12 @@ import {
   AgentLoop,
   MAIN_CHAT,
   PROVIDERS,
+  accountById,
+  findRosterEntry,
   msgFromJson,
   msgToJson,
   repair,
+  rosterName,
   userMsg,
   type AgentEvent,
   type ChatEvent,
@@ -32,7 +35,7 @@ import {
 
 import { listWhere, type DataStore } from './data'
 import type { CliHost } from './cli-host'
-import { brainFor, isBrain, pickFor, type Brain, type BrainDeps } from './brains'
+import { brainFor, isBrain, pickFor, rosterFor, type Brain, type BrainDeps } from './brains'
 import { buildSystemPrompt } from './prompt'
 import { finishRun, runStarted } from './run-detail'
 import { redactSecrets } from '../logger'
@@ -244,14 +247,27 @@ export class HelperManager implements HelperHost {
 
   async delegate(tasks: HelperTask[], together = false, origin: HelperOrigin = {}): Promise<string> {
     const chat = origin.chat ?? MAIN_CHAT
-    // Helpers think with the chat's helpers pick (its project's, else the main thread's), taken now.
-    const pick = await pickFor(this.brainDeps(), chat, 'helpers')
-    const brain = brainFor(this.brainDeps(), pick)
-    if (!isBrain(brain)) return brain.message
-    const ready = { model: brain.model }
-
     const clean = tasks.filter((task) => task.brief.trim() !== '').slice(0, MAX_TASKS)
     if (clean.length === 0) return 'No tasks given.'
+
+    // Each job runs on the helper model it names from the chat's list (its project's, else the main thread's),
+    // the first when it names none. A name that is not on the list stops the whole call before anything starts.
+    const settings = this.settings.get()
+    const roster = await rosterFor(this.brainDeps(), chat)
+    const picked: Array<{ pick: AiPick; model: string; name: string }> = []
+    for (const task of clean) {
+      let pick: AiPick
+      if (roster.length === 0) {
+        pick = await pickFor(this.brainDeps(), chat, 'helpers')
+      } else {
+        const found = findRosterEntry(settings, roster, task.model)
+        if ('error' in found) return found.error
+        pick = { account: found.entry.account, model: found.entry.model }
+      }
+      const brain = brainFor(this.brainDeps(), pick)
+      if (!isBrain(brain)) return brain.message
+      picked.push({ pick, model: brain.model, name: rosterName(settings, pick) })
+    }
 
     // Every helper works inside exactly one profile; with none named it gets General. An unknown name
     // stops the whole call before anything starts, so the main agent can fix it and send them again.
@@ -275,15 +291,16 @@ export class HelperManager implements HelperHost {
     for (const [index, task] of clean.entries()) {
       const label = (task.label.trim() || labelFromBrief(task.brief)).slice(0, 40)
       const profile = chosen[index] ?? this.generalProfile()
-      const id = await this.createHelperRow(label, task.brief, ready.model, batch, profile, chat)
+      const use = picked[index]!
+      const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name })
       this.runs.set(id, {
         chat,
-        pick,
+        pick: use.pick,
         id,
         label,
         profileId: profile.id,
         brief: task.brief,
-        model: this.modelFor(ready.model, task.model),
+        model: use.model,
         pushes: 0,
         startedAt: this.now(),
         controller: null,
@@ -297,7 +314,7 @@ export class HelperManager implements HelperHost {
     this.pump()
 
     const list = started
-      .map((entry, index) => `#${entry.id} ${entry.label}${chosen[index] === undefined ? '' : ` (in ${chosen[index]?.name})`}`)
+      .map((entry, index) => `#${entry.id} ${entry.label}${chosen[index] === undefined ? '' : ` (in ${chosen[index]?.name})`}${roster.length > 1 ? ` on ${picked[index]?.name ?? ''}` : ''}`)
       .join(', ')
     return (
       `Started: ${list}. They run in the background and ` +
@@ -332,7 +349,13 @@ export class HelperManager implements HelperHost {
     const meta = parseMeta(row.meta)
     const label = stringField(meta['label']) || 'Helper'
     const chat = stringField(meta['chat']) || MAIN_CHAT
-    const pick = await pickFor(this.brainDeps(), chat, 'helpers')
+    // Back to work on the model it was started on, while that account is still there.
+    const stored = meta['pick']
+    const own =
+      typeof stored === 'object' && stored !== null && typeof (stored as AiPick).account === 'string' && accountById(this.settings.get(), (stored as AiPick).account) !== null
+        ? { account: (stored as AiPick).account, model: typeof (stored as AiPick).model === 'string' ? (stored as AiPick).model : '' }
+        : null
+    const pick = own ?? (await pickFor(this.brainDeps(), chat, 'helpers'))
     const brain = brainFor(this.brainDeps(), pick)
     if (!isBrain(brain)) return brain.message
     const ready = { model: brain.model }

@@ -34,12 +34,15 @@ import {
   type ToolContext,
   type TriggerRow,
   accountById,
+  defaultGoodFor,
+  pickModel,
+  rosterName,
   type ChatBrain,
 } from '@agent/core'
 
 import { listWhere, type DataStore } from './data'
 import type { StepBudget } from './budget'
-import { chatBrainOf, isBrain, mainBrain, pickBrain, type Brain, type BrainDeps, type BrainLocks } from './brains'
+import { chatBrainOf, isBrain, mainBrain, pickBrain, rosterFor, type Brain, type BrainDeps, type BrainLocks } from './brains'
 import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt, type ProjectContext } from './prompt'
@@ -230,6 +233,19 @@ export class Runner {
   }
 
   /** What runtime/brains.ts needs to say which AI a chat thinks with. */
+  /** The helper models a chat may use, by name, with what each is good for (the person's words, else a guess). */
+  private async helperModels(chat: string): Promise<Array<{ name: string; goodFor: string }>> {
+    const settings = this.settings.get()
+    try {
+      return (await rosterFor(this.brainDeps(), chat)).map((entry) => ({
+        name: rosterName(settings, entry),
+        goodFor: entry.goodFor.trim() || defaultGoodFor(pickModel(settings, entry)),
+      }))
+    } catch {
+      return []
+    }
+  }
+
   private brainDeps(): BrainDeps {
     return {
       settings: this.settings,
@@ -899,6 +915,7 @@ export class Runner {
       latestUserText: text,
       role: 'main',
       helperModel: model,
+      helperModels: await this.helperModels(chat),
       liveHelpers: this.helpers?.live() ?? [],
       ...this.profilePrompt(),
       ...(await this.projectPrompt(chat)),
@@ -973,6 +990,7 @@ export class Runner {
       role,
       ...(routineName === undefined ? {} : { routineName }),
       helperModel: cli === 'codex' ? 'Codex' : 'Claude',
+      helperModels: await this.helperModels(chat),
       liveHelpers: this.helpers?.live() ?? [],
       ...this.profilePrompt(),
       ...(role === 'main' ? await this.projectPrompt(chat) : {}),
