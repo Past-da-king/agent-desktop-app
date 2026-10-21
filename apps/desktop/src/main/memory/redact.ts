@@ -57,8 +57,9 @@ export function redactSecrets(input: string): Redaction {
       if (rule.label === 'labelled-secret') {
         const label = String(args[1] ?? '').toLowerCase()
         const separator = String(args[2] ?? '').trim().toLowerCase()
-        const value = String(args[4] ?? '').replace(/[.,:;!?)\]}]+$/, '')
-        if (NOT_A_VALUE.test(value) || !looksLikeSecretValue(value, label, separator)) return match
+        const raw = String(args[4] ?? '')
+        const value = raw.replace(/[.,:;!?)\]}]+$/, '')
+        if (raw.includes(REDACTED) || NOT_A_VALUE.test(value) || !looksLikeSecretValue(value, label, separator)) return match
       }
       hits[rule.label] = (hits[rule.label] ?? 0) + 1
       total += 1
