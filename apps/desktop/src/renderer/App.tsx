@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 
 import { Onboarding } from './onboarding/Onboarding'
 import { useGlobalKeys } from './state/keys'
+import { useHotkeyNotice } from './state/useHotkeyNotice'
 import { lastView, parseHash, type Route } from './state/route'
 import { useSettings } from './state/useSettings'
 import { useRoute, useUi } from './state/useUi'
@@ -75,6 +76,7 @@ function Page(): JSX.Element {
 /** The main window: title bar, shell, overlays and the keyboard shortcuts that belong to it. */
 function Main({ route }: { route: Route }): JSX.Element {
   useGlobalKeys()
+  useHotkeyNotice()
   const onboarding = route.page === 'onboarding'
 
   return (
