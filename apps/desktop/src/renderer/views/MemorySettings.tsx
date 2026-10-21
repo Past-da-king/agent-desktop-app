@@ -3,8 +3,6 @@ import { useState } from 'react'
 
 import { agent } from '../bridge'
 import { MEMORY_TYPES } from '../lib/memory'
-import { useSettings } from '../state/useSettings'
-import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
@@ -205,16 +203,10 @@ export function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element 
   )
 }
 
-/** Settings > Memory: import a bank and when the end-of-day pass runs. */
+/** Settings > Memory: import a bank. End of day runs as a built-in routine, so its time lives on Routines. */
 export function MemorySettings(): JSX.Element {
-  const settings = useSettings((state) => state.settings)
   const [importing, setImporting] = useState(false)
-  const at = settings?.dailyMemoryAt ?? '23:30'
-  const on = at.trim() !== ''
-
-  const save = (value: string): void => {
-    void agent.settings.save({ dailyMemoryAt: value }).catch(() => toast('Could not save that.'))
-  }
+  const navigate = useUi((state) => state.navigate)
 
   return (
     <section>
@@ -238,24 +230,11 @@ export function MemorySettings(): JSX.Element {
           </div>
           <div className="rt">
             <b>End of day</b>
-            <span>
-              {on
-                ? `At ${at}, today's chats become one "Where we are" page and memory is tidied`
-                : 'Off. Run it any time from Memory.'}
-            </span>
+            <span>End of day runs as a routine. Change its time in Routines.</span>
           </div>
-          {on ? (
-            <input
-              type="time"
-              className="input time-input"
-              aria-label="End of day time"
-              value={at}
-              onChange={(event) => {
-                if (/^\d{2}:\d{2}$/.test(event.target.value)) save(event.target.value)
-              }}
-            />
-          ) : null}
-          <Switch on={on} label="End of day memory" onToggle={(next) => save(next ? '23:30' : '')} />
+          <Button variant="tonal" size="sm" onClick={() => navigate({ page: 'routines' })}>
+            Open Routines
+          </Button>
         </div>
       </div>
       {importing ? <ImportDialog onClose={() => setImporting(false)} /> : null}

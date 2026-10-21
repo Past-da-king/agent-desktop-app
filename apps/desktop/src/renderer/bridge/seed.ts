@@ -1,6 +1,7 @@
 import { multiChatDemo } from './chats-demo'
 import {
   DEFAULT_SETTINGS,
+  MEMORY_DAILY_ROUTINE,
   type ChatItem,
   type EntityMap,
   type GoalRow,
@@ -325,6 +326,18 @@ export function demoRows(): SeedResult['rows'] {
       enabled: false,
       lastRunAt: null,
       lastResult: 'Not run yet',
+    },
+    {
+      id: MEMORY_DAILY_ROUTINE,
+      builtin: MEMORY_DAILY_ROUTINE,
+      createdAt: now - 30 * DAY,
+      name: 'End of day',
+      kind: 'daily',
+      spec: '23:30',
+      prompt: 'Today\'s chats become one "Where we are" page, and memory is tidied: duplicates merged, stale notes rewritten or dropped.',
+      enabled: true,
+      lastRunAt: now - 14 * HOUR,
+      lastResult: '"Where we are" updated from 6 chats, 2 pages filed, 1 merged.',
     },
   ]
 

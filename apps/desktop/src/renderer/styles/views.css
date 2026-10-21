@@ -247,6 +247,7 @@
 .rtn .rt{flex:1;min-width:0}
 .rtn .rt b{display:block;font:500 16px/1.3 var(--font);overflow-wrap:anywhere}
 .rtn .rt span{font-size:13px;color:var(--on-sv)}
+.rtn .rt b .pill{display:inline-flex;width:auto;height:20px;padding:0 8px;font-size:11px;margin-left:10px;vertical-align:2px}
 .rtn-actions{display:flex;align-items:center;gap:2px;flex:none}
 .rtn-actions .ib{width:38px;height:38px}
 .sw2{width:52px;height:32px;border-radius:999px;background:var(--s-highest);border:2px solid var(--outline);position:relative;transition:background .25s var(--effects),border-color .25s;flex:none}
