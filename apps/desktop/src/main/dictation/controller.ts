@@ -60,6 +60,8 @@ export interface DictationDeps {
   maxMs?: number
   finalWaitMs?: number
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
+  /** Called as a dictation starts, before anything else moves (the app notes where the cursor is). */
+  began?: () => void
 }
 
 type State = 'idle' | 'starting' | 'listening' | 'finishing' | 'cleaning' | 'typing'
@@ -211,6 +213,7 @@ export class DictationController {
       this.flash('notice', 'Add a Gemini key in Settings, Voice, to dictate.', 5000)
       return
     }
+    this.deps.began?.()
     this.sequence += 1
     const id = this.sequence
     const transcriber = this.deps.transcriber({

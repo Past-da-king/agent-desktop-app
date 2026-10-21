@@ -2,7 +2,7 @@
  * Puts dictation anywhere together for the app: the pill window, the live transcriber with the person's Gemini
  * key, the clean-up model and the paste helper. `index.ts` only creates it and hands it the shortcut manager.
  */
-import { BrowserWindow, ClipboardItem, clipboard } from 'electron'
+import { BrowserWindow, ClipboardItem, app, clipboard } from 'electron'
 
 import type { HotkeyManager } from '../hotkeys'
 import { cleanSwitchAccelerator } from '../hotkeys'
@@ -39,6 +39,15 @@ const nodeSocket: SocketFactory = (url) => {
   return new Ctor(url)
 }
 
+/**
+ * In development only, AGENT_DICTATION_LIVE_URL points the live transcriber at a local stand-in, so the whole
+ * chain (pill, microphone, shortcuts, typing) can be driven without a Gemini key. Ignored in an installed build.
+ */
+function liveUrl(): string {
+  const override = process.env['AGENT_DICTATION_LIVE_URL']
+  return !app.isPackaged && override !== undefined && /^wss?:\/\/127\.0\.0\.1:\d+\//.test(override) ? override : LIVE_URL
+}
+
 export function createDictation(deps: DictationSetupDeps): DictationSetup {
   const pill = new PillWindow(deps.pill)
   const keys = keySenderFor(process.platform)
@@ -48,11 +57,21 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     return value === null || value.trim() === '' ? null : value.trim()
   }
 
+  // One of the app's own windows that had the cursor when the dictation started (the quick chat box, the composer).
+  let ownTarget: BrowserWindow | null = null
+  const focusedOwn = (): BrowserWindow | null => {
+    const focused = BrowserWindow.getFocusedWindow()
+    return focused !== null && !focused.isDestroyed() && !pill.isPill(focused.webContents.id) ? focused : null
+  }
+
   const controller = new DictationController({
+    began: () => {
+      ownTarget = focusedOwn()
+    },
     hasKey: () => key() !== null,
     transcriber: (handlers) =>
       new LiveTranscriber({
-        url: LIVE_URL,
+        url: liveUrl(),
         key: key() ?? '',
         model: TRANSCRIBE_LIVE_MODELS[0] ?? 'gemini-3.5-transcribe-live',
         socket: nodeSocket,
@@ -64,9 +83,11 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     cleanUp: (text) => cleanUp({ key }, text),
     type: async (text) => {
       // Into one of the app's own windows (the quick chat box, the composer): no clipboard needed.
-      const focused = BrowserWindow.getFocusedWindow()
-      if (focused !== null && !focused.isDestroyed() && !pill.isPill(focused.webContents.id)) {
-        await focused.webContents.insertText(text)
+      const target = ownTarget !== null && !ownTarget.isDestroyed() && ownTarget.isVisible() ? ownTarget : focusedOwn()
+      ownTarget = null
+      if (target !== null) {
+        if (!target.isFocused()) target.focus()
+        await target.webContents.insertText(text)
         return 'inserted'
       }
       const started = Date.now()
