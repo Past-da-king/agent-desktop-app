@@ -16,6 +16,15 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 - D4 Crash resume and failover through synced `turn` lease rows. (s8)
 - D5 Networking pluggable; LAN/direct first, tsnet sidecar optional. (s10)
 
+## SCOPE CORRECTION (Ayanda, 01:45), acknowledged 02:05, overrides everything above where they differ
+1. Both apps stay standalone and work exactly as today. Linking is an optional extra (scan, or skip and nothing changes). No regressions.
+2. Phone base = 0.13.0 (`~/phone-aos/app-thin`, targetSdk 28). No merging of the older server copies beyond backing up their uncommitted work.
+3. Minimal changes. Desktop: only pair a phone/server by QR and serve them (minimal Settings > Devices). Phone: only "scan to link", then use that brain and its data in its existing native screens. D2 (WebView of the desktop UI) is DROPPED; A's /app/ web build and phone-width web UI are dropped.
+4. Phone shows no project list/page. Only new visible thing: a delegated project agent shows like a helper with the project's icon and its live status line.
+5. Origin awareness stays as plumbing (links/files to origin device, local images in chat).
+6. Server: full freedom. One-command deploy, own headless browser, runs code and tools itself, relays blocked traffic through a linked device (PC or phone). Failover stays user-ranked. Assigned to C (relay after runtime + deploy).
+- Contract: lease rows are entity `turn_lease` ('turn' is taken by transcript rows); B owns adding device, device_command, turn_lease to EntityName; A writes device rows via store.upsert.
+
 ## Workstreams (each a project chat; branch off `devices`)
 | # | Work | Branch / worktree | Status |
 |---|---|---|---|

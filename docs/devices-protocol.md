@@ -171,14 +171,17 @@ reach C. Replication is initiated by whichever side can reach the other, so a no
 
 ## 9. Phone (screen) app
 
-- Remote mode: "Link to my computer": scan the QR (or type address + short code), pair, store pass + brain list
-  in Android Keystore-encrypted prefs. No AI keys stored in Remote mode.
-- The chat, memory, tasks, routines and projects screens are the node's own web UI at `/app/` in a WebView, with
-  TLS pinned (`onReceivedSslError` accepts only the pinned fingerprint) and the pass as a cookie. The native shell
-  owns: scanning, brain choice and failover (reloads the WebView on the next brain, shows which brain answers),
-  device commands (open_url via Intent, send_file into Downloads, notify as Android notifications), and sending its
-  DeviceFacts (`hello`) through a small JS bridge.
-- Local mode (its own key / subscription on the phone) keeps working as before.
+Revised 01:45 (owner's correction): both apps stay standalone; linking is optional; minimal changes.
+- The phone app works exactly as before on its own (own keys, own data). Linking adds only "scan to link to a
+  desktop or server" (QR, or address + short code). Store pass + brain list in Keystore-encrypted prefs. While
+  linked, no AI keys are used or stored for it on the phone.
+- While linked, the phone's EXISTING native screens show the brain's data and chat sends go to the brain over
+  `/v1/rpc`. No WebView of the desktop UI, no new screens, no project list. Unlinking returns to local data untouched.
+- The only new visible thing: a delegated project agent shows like a helper, with that project's icon and its live
+  status line; plus a small "linked to <brain>" indicator and "No agents available" when every brain fails.
+- The native layer handles brain choice and failover, device commands (open_url via Intent, send_file into
+  Downloads, notify) and `hello` with DeviceFacts. Local images in chat load from `/v1/file` with the pass.
+- The `/app/` web UI route is optional and not part of v1.
 
 ## 10. Overlay network (optional, pluggable)
 
