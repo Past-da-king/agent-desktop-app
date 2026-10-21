@@ -43,6 +43,10 @@ export interface Settings {
   signedIn: boolean
   deviceName: string
   quickAskHotkey: string
+  /** Dictation anywhere: press to start, press again to stop; the words are typed where the cursor is. */
+  dictateHotkey: string
+  /** The same, then the words are cleaned up (fillers, false starts, punctuation) before they are typed. */
+  dictateCleanHotkey: string
   launchAtLogin: boolean
   closeToTray: boolean
   notifications: boolean
@@ -80,7 +84,9 @@ export const DEFAULT_SETTINGS: Settings = {
   syncEmail: null,
   signedIn: false,
   deviceName: '',
-  quickAskHotkey: 'CommandOrControl+Shift+Space',
+  quickAskHotkey: 'CommandOrControl+Alt+Left',
+  dictateHotkey: 'Alt+Space',
+  dictateCleanHotkey: 'CommandOrControl+Alt+C',
   launchAtLogin: false,
   closeToTray: true,
   notifications: true,
@@ -252,7 +258,31 @@ export interface HotkeyStatus {
   accelerator: string
   ok: boolean
   message: string
+  /** Which shortcut this is about. Absent on older builds, where it was always Quick Ask. */
+  action?: HotkeyAction
 }
+
+/** The app's global shortcuts. */
+export type HotkeyAction = 'quickAsk' | 'dictate' | 'dictateClean'
+
+/** Where a dictation is, for the small pill near the bottom of the screen. */
+export type DictationPhase = 'starting' | 'listening' | 'finishing' | 'cleaning' | 'done' | 'notice' | 'error' | 'hidden'
+
+export interface DictationView {
+  phase: DictationPhase
+  /** Clean-up mode: the words are tidied before they are typed. */
+  clean: boolean
+  /** The words so far: settled text, then the part still being heard. */
+  text: string
+  interim: string
+  /** A plain line for done, notice and error ("Typed", "Add a Gemini key in Settings"). */
+  message: string
+  /** The shortcut that switches to clean-up while listening, as the person presses it ("Alt+C"), or ''. */
+  switchKeys: string
+}
+
+/** What the main process asks of the pill window's microphone. */
+export type DictationCommand = { type: 'start'; session: number } | { type: 'stop'; session: number }
 
 /** What the app knows about this machine. `platform` is 'web' in the browser mock. */
 export interface SystemInfo {
@@ -756,6 +786,26 @@ export interface AgentApi {
 
   /** Dictation, the live voice call and read-aloud. */
   voice: VoiceApi
+
+  /** The global shortcuts (Quick Ask and dictation anywhere). */
+  hotkeys: {
+    /** Each shortcut and whether it is live, or what is in its way. */
+    status(): Promise<HotkeyStatus[]>
+    /** Lets the Settings recorder hear a key that is already a global shortcut. Resumed on false. */
+    pause(paused: boolean): Promise<void>
+  }
+
+  /** Dictation anywhere: used by the small pill window that holds the microphone. */
+  dictation: {
+    /** One chunk of 16 kHz mono PCM16 from the pill's microphone. Fire and forget. */
+    audio(session: number, pcm: Uint8Array): void
+    /** The pill's microphone started, or could not (the message says why). */
+    micState(session: number, ok: boolean, message: string): Promise<void>
+    /** The pill was clicked: stop now and type what was heard. */
+    stop(): Promise<void>
+    onCommand(cb: (command: DictationCommand) => void): Unsubscribe
+    onView(cb: (view: DictationView) => void): Unsubscribe
+  }
 
   /** Identity and housekeeping for the About dialog. */
   app: {

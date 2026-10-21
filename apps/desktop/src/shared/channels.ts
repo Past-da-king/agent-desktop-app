@@ -110,6 +110,15 @@ export const CHANNELS = {
     callMute: 'agent:voice.callMute',
     callEnd: 'agent:voice.callEnd',
   },
+  hotkeys: {
+    status: 'agent:hotkeys.status',
+    pause: 'agent:hotkeys.pause',
+  },
+  dictation: {
+    audio: 'agent:dictation.audio',
+    micState: 'agent:dictation.micState',
+    stop: 'agent:dictation.stop',
+  },
   app: {
     info: 'agent:app.info',
     openLogsFolder: 'agent:app.openLogsFolder',
@@ -131,4 +140,6 @@ export const EVENTS = {
   apps: 'agent:evt:apps.changed',
   voiceCall: 'agent:evt:voice.call',
   profiles: 'agent:evt:profiles.changed',
+  dictationCommand: 'agent:evt:dictation.command',
+  dictationView: 'agent:evt:dictation.view',
 } as const

@@ -11,6 +11,8 @@ import { dirname } from 'node:path'
 
 import { DEFAULT_SETTINGS, VOICES, type Settings } from '@agent/core'
 
+import { upgradeHotkeys } from './hotkeys'
+
 export type SettingsChangeListener = (settings: Settings) => void
 
 export interface SettingsStoreOptions {
@@ -40,7 +42,7 @@ export class SettingsStore {
   constructor(file: string, options: SettingsStoreOptions = {}) {
     this.file = file
     this.hostname = options.hostname ?? osHostname
-    const raw = readObject(file)
+    const raw = upgradeHotkeys(readObject(file))
     const merged = mergeSettings(raw)
     if (merged.deviceName.trim() === '') merged.deviceName = this.hostname() || 'This computer'
     this.state = merged
