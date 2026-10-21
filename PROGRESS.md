@@ -19,11 +19,11 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 ## Workstreams (each a project chat; branch off `devices`)
 | # | Work | Branch / worktree | Status |
 |---|---|---|---|
-| A | Desktop node: server, TLS, pairing, RPC, /app web build + remote bridge, Settings > Devices UI | devices-node / ~/agent-desktop-wt/devices-node | starting |
-| B | Replication, bundle + secrets, origin awareness, device commands, turn leases, crash resume | devices-sync / ~/agent-desktop-wt/devices-sync | starting |
-| C | Headless node (plain Node 24) + deploy on server as a service | devices-headless / ~/agent-desktop-wt/devices-headless | starting |
-| D | Phone: merge 0.13.0 into server repo, Remote mode | server ~/phone-aos | starting |
-| E | agent-net tsnet sidecar | later | not started |
+| A | Desktop node: server, TLS, pairing, RPC, /app web build + remote bridge, Settings > Devices UI | devices-node / ~/agent-desktop-wt/devices-node | chat pca89bc68131914ac8, running |
+| B | Replication, bundle + secrets, origin awareness, device commands, turn leases, crash resume | devices-sync / ~/agent-desktop-wt/devices-sync | chat pc06e6196729724dbf, running |
+| C | Headless node (plain Node 24) + deploy on server as a service | devices-headless / ~/agent-desktop-wt/devices-headless | chat pc79d2a9989e324333, running |
+| D | Phone: merge 0.13.0 into server repo, Remote mode | server ~/phone-aos | chat pc2f0194f996a947e0, running |
+| E | agent-net tsnet sidecar | later | held: Windows had 1.6 GB free at 01:55 |
 
 ## Shared machine rules
 - Locks: full vitest `flock /tmp/agent-vitest.lock`, Electron build `flock /tmp/agent-electron.lock`. Gradle only on the server.
@@ -32,3 +32,10 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 ## Log
 - 01:45 worktree + protocol written.
+- 01:55 seam types (apps/desktop/src/main/devices/types.ts) + common brief committed (3df8a89). Chats A-D started; each keeps PROGRESS-<letter>.md in its worktree (D: in the server phone repo).
+
+## Next for the lead
+1. Watch RAM (Windows and WSL), answer helpers.
+2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
+3. Live test: test desktop (win-unpacked, own userData) + server headless node + scripted phone client: chat, bundle after scan, project turn, local image, open_url to origin, failover x2, crash resume.
+4. Installer + APK + START-HERE.md into C:\Users\you\Downloads\agent\. Start E when RAM allows.
