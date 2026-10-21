@@ -220,6 +220,12 @@ const PATHS = {
       <path d="M16 9.5l5 5M21 9.5l-5 5" />
     </>
   ),
+  pin: (
+    <>
+      <path d="M9 3.5h6l-1 5.5 3.5 3.5v1.5h-11V12.5L10 9z" />
+      <path d="M12 14v6.5" />
+    </>
+  ),
   copy: (
     <>
       <rect x="8.5" y="8.5" width="11" height="11" rx="2" />

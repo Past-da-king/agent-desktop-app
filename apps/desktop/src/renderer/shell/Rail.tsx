@@ -7,8 +7,8 @@ import { chatOf } from '../lib/chats'
 import { short } from '../lib/format'
 import { railProjects } from '../lib/projects'
 import { startChatTracking, useAnyRunning, useChats } from '../state/useChats'
-import { HIDDEN_PROJECTS } from '../views/Project'
 import { ProjectDialog } from '../views/ProjectDialog'
+import { AllProjects } from './AllProjects'
 import { ProjectTile } from '../ui/ProjectTile'
 import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
@@ -45,7 +45,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
     return counts
   }, [items])
   const shown = railProjects(projects)
-  const hiddenCount = projects.length - shown.length
+  const [allOpen, setAllOpen] = useState(false)
   // A project needs you when one of its chats waits on a card; it is working when one of its chats runs.
   const statusOf = (chats: string[]): 'waiting' | 'working' | null =>
     chats.some((chat) => (cardsByChat.get(chat) ?? 0) > 0 || (runs[chat]?.waiting.length ?? 0) > 0)
@@ -132,9 +132,9 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
 
       <div className="eyebrow mute grp chats-h">
         <span>PROJECTS</span>
-        {hiddenCount > 0 ? (
-          <button type="button" className="pj-hidden-link" onClick={() => navigate({ page: 'project', id: HIDDEN_PROJECTS })}>
-            {hiddenCount} hidden
+        {projects.length > 0 ? (
+          <button type="button" className="pj-hidden-link" onClick={() => setAllOpen(true)}>
+            All {projects.length}
           </button>
         ) : null}
       </div>
@@ -157,13 +157,29 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
             </button>
           )
         })}
-        <button type="button" className="pj-app add" title="New project" aria-label="New project" onClick={() => setCreating(true)}>
+        {/* With no projects yet the + makes one; after that it opens all of them (with New project inside). */}
+        <button
+          type="button"
+          className="pj-app add"
+          title={projects.length === 0 ? 'New project' : 'All projects'}
+          aria-label={projects.length === 0 ? 'New project' : `All projects, ${projects.length}`}
+          onClick={() => (projects.length === 0 ? setCreating(true) : setAllOpen(true))}
+        >
           <span className="pj-tile pj-add" aria-hidden="true">
             <Icon name="plus" size={22} />
+            {projects.length > shown.length ? <span className="pj-more">+{projects.length - shown.length}</span> : null}
           </span>
-          <span className="pj-app-name">New</span>
+          <span className="pj-app-name">{projects.length === 0 ? 'New' : 'All'}</span>
         </button>
       </div>
+      {allOpen ? (
+        <AllProjects
+          projects={projects}
+          statusOf={(project) => statusOf(project.chats)}
+          onNew={() => setCreating(true)}
+          onClose={() => setAllOpen(false)}
+        />
+      ) : null}
       {creating ? (
         <ProjectDialog
           onClose={(made) => {
