@@ -5,7 +5,9 @@ import { agent } from '../bridge'
 import { dividerNote, noteLine } from '../lib/chat-memory'
 import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
+import { parseMeta } from '../lib/meta'
 import { Icon } from '../ui/Icon'
+import { Markdown } from '../ui/Markdown'
 
 /**
  * A New chat divider, with a small quiet note under it while the chat before it is saved into memory: it opens the
@@ -13,6 +15,11 @@ import { Icon } from '../ui/Icon'
  */
 export function ChatDivider({ item }: { item: ChatItem }): JSX.Element {
   const note = dividerNote(item)
+  const meta = parseMeta(item.meta)
+  // The main thread's New chat: the conversation carried on with a summary of itself (memory/service.ts).
+  const compress = typeof meta['compress'] === 'string' ? meta['compress'] : ''
+  const carry = typeof meta['carry'] === 'string' ? meta['carry'] : ''
+  const [showCarry, setShowCarry] = useState(false)
   const showMemories = useUi((state) => state.showMemories)
   const [retrying, setRetrying] = useState(false)
 
@@ -27,8 +34,25 @@ export function ChatDivider({ item }: { item: ChatItem }): JSX.Element {
   return (
     <div className="chat-divider">
       <div className="divider" role="separator">
-        <span>{item.text || 'New chat'}</span>
+        <span>{compress === '' ? item.text || 'New chat' : 'Fresh start'}</span>
       </div>
+      {compress === '' ? null : compress === 'pending' ? (
+        <div className="mem-note quiet" aria-live="polite">
+          <Icon name="doc" size={14} />
+          <span>Summing up the conversation so far...</span>
+        </div>
+      ) : (
+        <button type="button" className="mem-note" aria-expanded={showCarry} onClick={() => setShowCarry(!showCarry)} disabled={carry === ''}>
+          <Icon name="doc" size={14} />
+          <span>{carry === '' ? 'Carried on with the last few messages' : 'Carried on with a summary of the conversation'}</span>
+          {carry === '' ? null : <Icon name={showCarry ? 'chevd' : 'chev'} size={14} />}
+        </button>
+      )}
+      {showCarry && carry !== '' ? (
+        <div className="carry">
+          <Markdown text={carry} />
+        </div>
+      ) : null}
       {note === null ? null : note.status === 'done' && note.saved.length > 0 ? (
         <button type="button" className="mem-note" onClick={() => showMemories(note.saved)}>
           <Icon name="memory" size={14} />

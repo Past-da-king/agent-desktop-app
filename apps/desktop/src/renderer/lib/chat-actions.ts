@@ -1,7 +1,10 @@
+import { MAIN_CHAT, type ChatItem, type ProjectRow } from '@agent/core'
+
 import { agent } from '../bridge'
 import { useChats } from '../state/useChats'
 import { useUi } from '../state/useUi'
 import { chatOf } from './chats'
+import { newProjectChatId, projectOfChat } from './projects'
 import { isDivider } from './thread'
 import { toast } from '../state/useToast'
 
@@ -15,33 +18,64 @@ export function newChatId(): string {
 }
 
 /**
- * Start a fresh chat. The one you were in keeps going if it was working, keeps its context and stays in the rail;
- * nothing is deleted. Its conversation so far is filed into memory in the background (main/memory/service.ts),
- * and the new chat opens with a divider that says so. A chat with nothing in it yet is reused.
+ * New chat. In the main thread it is not a new chat: the conversation is compressed into a summary in the
+ * background and the agent carries on fresh with it (main/memory/service.ts compressChat), and the old stretch is
+ * filed into memory. In a project chat it opens a new chat in that project (startProjectChat).
  */
 export async function startNewChat(): Promise<void> {
   const ui = useUi.getState()
-  const chats = useChats.getState()
-  const previous = chats.open
-  ui.navigate({ page: 'chat' })
-  let used = true
+  const previous = useChats.getState().open
+  let projects: ProjectRow[] = []
   try {
-    const rows = await agent.data.list('chat_item')
-    used = rows.some((row) => chatOf(row) === previous && row.kind !== 'branch' && !isDivider(row))
+    projects = await agent.data.list('project')
   } catch {
-    used = true
+    projects = []
   }
-  if (used) {
-    const next = newChatId()
-    chats.openChat(next)
-    try {
-      await agent.memory.newChat({ chat: next, from: previous })
-    } catch {
-      // An older main process without memory: the new chat simply starts empty.
-    }
+  const project = projectOfChat(projects, previous)
+  if (project !== null) {
+    await startProjectChat(project)
+    return
+  }
+  openChat(MAIN_CHAT)
+  try {
+    await agent.memory.newChat({ chat: MAIN_CHAT, from: MAIN_CHAT })
+  } catch {
+    // An older main process without memory: the thread simply carries on.
   }
   ui.focusComposer()
   ui.scrollChat()
+}
+
+/**
+ * A new chat in a project: its own agent with its own context. The project chat the person was in keeps going;
+ * what it said so far is filed into memory in the background. A project chat with nothing in it yet is reused.
+ */
+export async function startProjectChat(project: ProjectRow): Promise<void> {
+  const ui = useUi.getState()
+  const previous = useChats.getState().open
+  let rows: ChatItem[] = []
+  try {
+    rows = await agent.data.list('chat_item')
+  } catch {
+    rows = []
+  }
+  const empty = project.chats.find((chat) => !rows.some((row) => chatOf(row) === chat && row.kind !== 'branch' && !isDivider(row)))
+  if (empty !== undefined) {
+    openChat(empty)
+    ui.focusComposer()
+    return
+  }
+  const next = newProjectChatId()
+  await agent.data.upsert('project', { id: project.id, chats: [...project.chats, next] })
+  openChat(next)
+  if (project.chats.includes(previous)) {
+    try {
+      await agent.memory.newChat({ chat: next, from: previous })
+    } catch {
+      // Filing is a bonus; the new chat simply starts empty.
+    }
+  }
+  ui.focusComposer()
 }
 
 /** Open a chat from the rail. */
