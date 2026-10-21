@@ -804,7 +804,7 @@ export class Runner {
     const messages: Msg[] = []
     for (const row of rows) {
       if (row.thread !== 'main') continue
-      if (row.createdAt < since) continue
+      if (since > 0 && row.createdAt <= since) continue
       try {
         messages.push(msgFromJson(JSON.parse(row.json) as unknown))
       } catch {

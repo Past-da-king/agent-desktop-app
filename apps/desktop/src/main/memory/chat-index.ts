@@ -184,11 +184,14 @@ export class ChatIndex {
       }
       const chatRows = this.db
         .prepare(
-          `SELECT c.chat_id AS chat, bm25(chat_fts, 3.0, 2.0) AS rank FROM chat_fts JOIN chat c ON c.rid = chat_fts.rowid
-           WHERE chat_fts MATCH ? ORDER BY rank LIMIT 100`,
+          `SELECT c.chat_id AS chat, bm25(chat_fts, 3.0, 2.0) AS rank, snippet(chat_fts, 1, '[', ']', '...', 14) AS snip
+           FROM chat_fts JOIN chat c ON c.rid = chat_fts.rowid WHERE chat_fts MATCH ? ORDER BY rank LIMIT 100`,
         )
         .all(match)
-      for (const row of chatRows) bump(str(row['chat']), -num(row['rank']) * 2, null)
+      for (const row of chatRows) {
+        const snip = str(row['snip'])
+        bump(str(row['chat']), -num(row['rank']) * 2, snip.includes('[') ? `Summary: ${snip}` : null)
+      }
     } else {
       for (const row of this.db.prepare('SELECT chat_id, who, text FROM msg').all()) {
         const text = str(row['text']).toLowerCase()
