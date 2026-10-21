@@ -59,10 +59,10 @@ export function registerMemoryIpc(deps: MemoryIpcDeps): void {
   ipcMain.handle(MEMORY_CHANNELS.runImport, async (_event, path, includeAll) => {
     try {
       const result = await runImport(deps.store, await readPicked(path), includeAll === true)
-      deps.log?.('Memory imported', { added: result.added, updated: result.updated, unchanged: result.unchanged, redacted: result.redacted, ms: result.ms })
+      deps.log?.('Memory imported', { added: result.added, updated: result.updated, unchanged: result.unchanged, deletedHere: result.deletedHere, redacted: result.redacted, ms: result.ms })
       return result
     } catch (error) {
-      return { ...failedPreview(error), added: 0, updated: 0, unchanged: 0, redacted: 0, ms: 0 }
+      return { ...failedPreview(error), added: 0, updated: 0, unchanged: 0, deletedHere: 0, redacted: 0, ms: 0 }
     }
   })
 

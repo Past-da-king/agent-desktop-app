@@ -165,7 +165,11 @@ export class CliHost {
     return planModels(cli, this.engine(cli), dir)
   }
 
+  /** Bumped by forget, so a turn that was running when its thread was forgotten does not save its session back. */
+  private readonly forgotten = new Map<string, number>()
+
   forget(thread = 'main'): void {
+    this.forgotten.set(thread, (this.forgotten.get(thread) ?? 0) + 1)
     const sessions = this.sessions()
     // Sessions are kept per engine as "<cli>:<thread>" (plus "#rev"), so forget the thread on every engine.
     for (const key of Object.keys(sessions)) {
@@ -189,6 +193,7 @@ export class CliHost {
       onResult: request.onResult,
     })
     const continues = request.thread !== 'routine'
+    const generation = this.forgotten.get(request.thread) ?? 0
     const dir = join(this.workDir, request.cli, request.thread.replace(/[^a-z0-9-]/gi, '_'))
     try {
       const key = `${request.cli}:${request.thread}`
@@ -216,7 +221,7 @@ export class CliHost {
       mkdirSync(dir, { recursive: true })
       let result = await run(stored)
       if (result.error === 'SESSION_LOST') result = await run(null)
-      if (continues && result.sessionId !== null) {
+      if (continues && result.sessionId !== null && (this.forgotten.get(request.thread) ?? 0) === generation) {
         this.saveSessions({ ...this.sessions(), [key]: result.sessionId, [`${key}#rev`]: String(PROMPT_REVISION) })
       }
       return result.error === undefined ? { text: result.text } : { text: result.text, error: result.error }
