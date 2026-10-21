@@ -810,7 +810,8 @@ export function Chat(): JSX.Element {
   const shown = useMemo(() => visibleThread(all, showEarlier), [all, showEarlier])
   const messages = shown.rows
   const segments = useMemo(() => segmentsOf(messages), [messages])
-  const title = openChat === MAIN_CHAT ? threadTitle(items) : chatTitleOf(items)
+  // The same name the rail shows for it.
+  const title = chatTitleOf(items)
   const cards = openCards(items, true)
   const chatIds = useMemo(() => new Set(items.map((item) => item.id)), [items])
   const waiting = allWaiting.filter((item) => chatIds.has(item.id))
