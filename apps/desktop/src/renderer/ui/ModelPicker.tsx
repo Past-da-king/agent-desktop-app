@@ -1,54 +1,33 @@
+import { MAIN_CHAT, type AiPicks, type ChatBrain, type ProjectRow } from '@agent/core'
 import { useEffect, useRef, useState } from 'react'
 
-import { PROVIDERS, type ModelOption } from '@agent/core'
-
 import { agent } from '../bridge'
+import { pickLine, withPick } from '../lib/ai'
 import { useSettings } from '../state/useSettings'
+import { AiPickRows } from './AiPickRows'
 import { Icon } from './Icon'
-import { ModelList } from './ModelList'
-
-/** On a plan, an empty model means "what the plan picks". */
-const PLAN_DEFAULT: ModelOption = { id: '', label: 'Default', line: 'What your plan picks' }
 
 /**
- * The model pill in the chat header. Every choice is asked live each time it opens: the provider's own list
- * for an API key, the engine's own list on a Claude or ChatGPT plan. Nothing is a built-in list. A model the
- * list does not show can still be typed into the search. The choice applies from the next message.
+ * The AI pill in the chat header: what this chat's agent and its helpers think with. In the main thread it changes
+ * the main thread's picks; in a project chat, that project's. A change within the same family applies on the next
+ * message; a change of family (a plan to a key, Claude to Codex) applies when the chat starts afresh, and the row
+ * says so.
  */
-export function ModelPicker(): JSX.Element {
+export function ModelPicker({ chat = MAIN_CHAT, project = null }: { chat?: string; project?: ProjectRow | null }): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   const [open, setOpen] = useState(false)
-  const [listed, setListed] = useState<{ models: ModelOption[]; message: string } | null>(null)
+  const [brain, setBrain] = useState<ChatBrain | null>(null)
   const root = useRef<HTMLDivElement>(null)
 
-  const plan = settings?.mode === 'subscription'
-  const cli = settings?.cli === 'codex' ? 'codex' : 'claude'
-  const current = plan ? (settings?.cliModel ?? '') : (settings?.model ?? '')
-  const provider = PROVIDERS.find((item) => item.id === settings?.provider)
-  const source = plan ? (cli === 'claude' ? 'your Claude plan' : 'your ChatGPT plan') : (provider?.label ?? 'the provider')
-  const known = listed?.models.find((m) => m.id === current)
+  const refresh = (): void => {
+    void agent.settings.accounts
+      .chatBrain(chat)
+      .then(setBrain)
+      .catch(() => setBrain(null))
+  }
 
-  const shown = plan
-    ? `${cli === 'claude' ? 'Claude' : 'ChatGPT'}${current === '' ? '' : ` ${known?.label ?? current}`}`
-    : known?.label || current.trim() || 'Choose a model'
-
-  useEffect(() => {
-    if (!open) return
-    let live = true
-    setListed(null)
-    agent.settings
-      .listModels()
-      .then((result) => {
-        if (live) setListed({ models: result.models, message: result.message })
-      })
-      .catch(() => {
-        if (live) setListed({ models: [], message: `Could not ask ${source} for its models.` })
-      })
-    return () => {
-      live = false
-    }
-  }, [open, source])
+  useEffect(refresh, [chat, settings, project])
 
   useEffect(() => {
     if (!open) return
@@ -66,40 +45,52 @@ export function ModelPicker(): JSX.Element {
     }
   }, [open])
 
-  const choose = (id: string): void => {
-    void save(plan ? { cliModel: id } : { model: id })
-    setOpen(false)
-  }
+  if (settings === null) return <span />
+  const picks: AiPicks = project === null ? settings.ai : (project.ai ?? { main: { account: '', model: '' }, helpers: { account: '', model: '' } })
+  const shown = brain === null ? 'Choose an AI' : pickLine(settings, brain.main.using) || 'Choose an AI'
+  const deferred = brain?.main.deferred === true
 
-  const options = listed === null ? [] : plan && !listed.models.some((m) => m.id === '') ? [PLAN_DEFAULT, ...listed.models] : listed.models
+  const change = (next: AiPicks): void => {
+    if (project === null) void save({ ai: next })
+    else void agent.data.upsert('project', { id: project.id, ai: next })
+  }
 
   return (
     <div className="model-pick" ref={root}>
-      <button
-        type="button"
-        className="model"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title="Choose the model"
-        onClick={() => setOpen((value) => !value)}
-      >
+      <button type="button" className="model" aria-haspopup="menu" aria-expanded={open} title="Choose what this chat thinks with" onClick={() => setOpen((value) => !value)}>
         <Icon name="bolt" size={16} />
         <span>{shown}</span>
+        {deferred ? <span className="model-wait-dot" aria-label="A change waits for your next new chat" /> : null}
         <Icon name="chevd" size={16} />
       </button>
       {open ? (
-        <div className="model-menu" role="menu" aria-label="Models">
-          <div className="eyebrow mute">{`ON ${source.toUpperCase()}`}</div>
-          {listed === null ? (
-            <p className="small muted model-wait">Asking {source} for its models</p>
-          ) : (
-            <>
-              {options.length > (plan ? 1 : 0) ? null : <p className="small muted model-wait">{listed.message}</p>}
-              <ModelList models={options} value={current} onPick={choose} autoFocus />
-            </>
-          )}
+        <div className="model-menu ai-menu" role="menu" aria-label="What this chat thinks with">
+          <div className="eyebrow mute">{project === null ? 'MAIN THREAD' : project.name.toUpperCase()}</div>
+          <AiPickRows
+            settings={settings}
+            picks={picks}
+            {...(project === null ? {} : { inherit: settings.ai })}
+            notes={{
+              main: deferred ? `Switches when you start a new chat. Until then: ${pickLine(settings, brain?.main.using ?? { account: '', model: '' })}.` : '',
+            }}
+            onChange={(next) => {
+              change(next)
+              // A project's change lands in the store; read the chat's brain again once it has.
+              window.setTimeout(refresh, 150)
+            }}
+          />
+          <p className="small muted ai-menu-note">
+            {project === null ? 'Projects can pick their own.' : 'Same as the main thread follows what Settings says.'}
+          </p>
         </div>
       ) : null}
     </div>
   )
 }
+
+/** Unused helper kept for callers that only need a pick line. */
+export function pickSummary(settings: Parameters<typeof pickLine>[0], picks: AiPicks): string {
+  return pickLine(settings, picks.main)
+}
+
+export { withPick }

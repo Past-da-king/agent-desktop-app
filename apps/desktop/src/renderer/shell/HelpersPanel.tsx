@@ -10,8 +10,11 @@ import { chatOf } from '../lib/chats'
 import { projectOfChat } from '../lib/projects'
 import { useSettings } from '../state/useSettings'
 import { Icon, type IconName } from '../ui/Icon'
+import { Markdown } from '../ui/Markdown'
 import { Mascot } from '../ui/Mascot'
 import { ProjectTile } from '../ui/ProjectTile'
+import { runFromMeta } from '../../shared/run-record'
+import { RunStep } from '../views/RunStep'
 
 function stateLabel(helper: HelperView): { label: string; tone: string; icon: IconName } {
   if (helper.state === 'working') return helper.queued ? { label: 'Queued', tone: 'mute', icon: 'clock' } : { label: 'Working', tone: 'pri', icon: 'globe' }
@@ -24,7 +27,7 @@ function stateLabel(helper: HelperView): { label: string; tone: string; icon: Ic
  * Whose helper it is, as its picture: the agent's own for the main chat's helpers, the project's icon for a
  * project's helpers. A hidden project shows nothing of itself, so its helpers get the plain helper icon.
  */
-function HelperAvatar({ row, helper, size = 32 }: { row: ChatItem | undefined; helper: HelperView; size?: number }): JSX.Element {
+export function HelperAvatar({ row, helper, size = 32 }: { row: ChatItem | undefined; helper: HelperView; size?: number }): JSX.Element {
   const projects = useEntity('project')
   const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
   const s = stateLabel(helper)
@@ -64,10 +67,10 @@ function useStop(): { stopping: string | null; stop: (id: string) => void } {
  * The helpers working right now, under the agent's browser in the side panel. A helper is here only while it
  * runs and goes as soon as it stops. A click opens it full size (HelperStage).
  */
-export function HelpersPanel(): JSX.Element | null {
+/** The helpers working right now, oldest first, each with its chat row. */
+export function useWorkingHelpers(): Array<HelperView & { row: ChatItem }> {
   const items = useEntity('chat_item')
-  const openHelper = usePanel((store) => store.openHelper)
-  const helpers = useMemo(
+  return useMemo(
     () =>
       items
         .filter((item) => isHelper(item))
@@ -76,6 +79,11 @@ export function HelpersPanel(): JSX.Element | null {
         .sort((a, b) => Number(a.queued) - Number(b.queued) || a.startedAt - b.startedAt),
     [items],
   )
+}
+
+export function HelpersPanel(): JSX.Element | null {
+  const openHelper = usePanel((store) => store.openHelper)
+  const helpers = useWorkingHelpers()
   if (helpers.length === 0) return null
 
   return (
@@ -163,7 +171,9 @@ export function HelperStage(): JSX.Element | null {
         <div className="hp-stage-col">
           <section>
             <div className="eyebrow mute">THE JOB</div>
-            <p className="hp-brief">{helper.brief}</p>
+            <div className="hp-brief a-prose">
+              <Markdown text={helper.brief} />
+            </div>
           </section>
           {current !== undefined ? (
             <div className="hp-now">
@@ -178,7 +188,17 @@ export function HelperStage(): JSX.Element | null {
             ) : (
               <ol className="hp-steps">
                 {helper.activity.map((step) => {
-                  const status = metaText(parseMeta(step.meta), 'status') || 'done'
+                  const meta = parseMeta(step.meta)
+                  const status = metaText(meta, 'status') || 'done'
+                  // A step with a record (a command, a browser call, a file) opens to what it was given and what came back.
+                  const run = runFromMeta(meta)
+                  if (run !== null) {
+                    return (
+                      <li key={step.id} className="hp-step run">
+                        <RunStep run={run} status={status} summary={stepText(step)} />
+                      </li>
+                    )
+                  }
                   const icon: IconName = status === 'error' ? 'x' : status === 'running' ? 'globe' : 'check'
                   return (
                     <li key={step.id} className={`hp-step ${status}`}>

@@ -14,6 +14,16 @@ export const CHANNELS = {
     checkCli: 'agent:settings.checkCli',
     cliLogin: 'agent:settings.cliLogin',
     reset: 'agent:settings.reset',
+    accounts: {
+      add: 'agent:accounts.add',
+      update: 'agent:accounts.update',
+      remove: 'agent:accounts.remove',
+      setKey: 'agent:accounts.setKey',
+      check: 'agent:accounts.check',
+      listModels: 'agent:accounts.listModels',
+      signIn: 'agent:accounts.signIn',
+      chatBrain: 'agent:accounts.chatBrain',
+    },
   },
   account: {
     signIn: 'agent:account.signIn',

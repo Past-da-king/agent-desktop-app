@@ -33,13 +33,17 @@ import {
   type ToolCallBlock,
   type ToolContext,
   type TriggerRow,
+  accountById,
+  type ChatBrain,
 } from '@agent/core'
 
 import { listWhere, type DataStore } from './data'
 import type { StepBudget } from './budget'
+import { chatBrainOf, isBrain, mainBrain, pickBrain, type Brain, type BrainDeps, type BrainLocks } from './brains'
 import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt, type ProjectContext } from './prompt'
+import type { CliId } from './cli-agent'
 import { quietTapNote } from './openui-prompt'
 import { prepareMessage, type PreparedMessage } from './attachment-text'
 import { branchChat, chatOf, chatTag, handoffText, threadFor } from './chat-lines'
@@ -99,6 +103,8 @@ export interface RunnerDeps {
   helpers?: HelperHost
   /** The main agent's action-step budget, shared by the tools built in toolset.ts. */
   budget?: StepBudget
+  /** What each chat last ran on, so a change of engine waits for its next new chat (runtime/brains.ts). */
+  locks?: BrainLocks
   /** What is on this computer, from the cached scan. */
   environment?: () => EnvironmentReport | null
   /** Runs turns through an installed AI tool on the person's own plan (Claude Code). */
@@ -183,6 +189,7 @@ export class Runner {
   private readonly allowFiles: (paths: string[]) => void
   private readonly classifierOverride: Classifier | null | undefined
   private readonly joinPickupMs: number
+  private readonly locks: BrainLocks | undefined
 
   private readonly lines = new Map<string, ChatLine>()
   private routineRunning = false
@@ -219,6 +226,24 @@ export class Runner {
     this.allowFiles = deps.allowFiles ?? (() => undefined)
     this.classifierOverride = deps.classifier
     this.joinPickupMs = deps.joinPickupMs ?? JOIN_PICKUP_MS
+    this.locks = deps.locks
+  }
+
+  /** What runtime/brains.ts needs to say which AI a chat thinks with. */
+  private brainDeps(): BrainDeps {
+    return {
+      settings: this.settings,
+      secrets: this.secrets,
+      providerFactory: this.providerFactory,
+      hasCli: this.cli !== undefined,
+      store: this.store,
+      ...(this.locks === undefined ? {} : { locks: this.locks }),
+    }
+  }
+
+  /** What a chat thinks with, for the picker in its header. */
+  chatBrain(chat: string = MAIN_CHAT): Promise<ChatBrain> {
+    return chatBrainOf(this.brainDeps(), chat)
   }
 
   private line(chat: string = MAIN_CHAT): ChatLine {
@@ -611,9 +636,10 @@ export class Runner {
   }
 
   private async runRoutineTurn(trigger: TriggerRow): Promise<RoutineRunResult> {
-    if (this.settings.get().mode === 'subscription') return this.runCliRoutine(trigger)
-    const resolved = this.resolveModel()
-    if (!resolved.ok) return { text: resolved.message, waiting: false }
+    const brain = mainBrain(this.brainDeps())
+    if (!isBrain(brain)) return { text: brain.message, waiting: false }
+    if (brain.kind === 'plan') return this.runCliRoutine(trigger, brain)
+    const resolved = { provider: brain.provider, model: brain.model, current: this.settings.get() }
 
     try {
       const memories = await this.store.list('memory')
@@ -788,54 +814,32 @@ export class Runner {
     return carry
   }
 
+  /** The main thread's AI as a provider call (the memory pass, the classifier), or why there is none. */
   private resolveModel():
     | { ok: true; provider: LlmProvider; model: string; current: Settings }
     | { ok: false; message: string } {
-    const current = this.settings.get()
-    const key = (this.secrets.get('apiKey') ?? '').trim()
-
-    if (current.mode === 'subscription') {
-      return {
-        ok: false,
-        message: 'Subscriptions are coming soon. Add an AI key in Settings to start.',
-      }
-    }
-    if (!current.hasKey || key === '') {
-      return { ok: false, message: 'Add an AI key in Settings to start' }
-    }
-    const model =
-      current.model.trim() || PROVIDERS.find((provider) => provider.id === current.provider)?.defaultModel || ''
-    if (model === '') return { ok: false, message: 'Choose a model in Settings to start.' }
-    if (current.provider === 'custom' && current.baseUrl.trim() === '') {
-      return { ok: false, message: 'Add the server address for this provider in Settings.' }
-    }
-
-    let provider: LlmProvider | null = null
-    try {
-      provider = this.providerFactory(current, key)
-    } catch {
-      provider = null
-    }
-    if (provider === null) return { ok: false, message: 'Add an AI key in Settings to start' }
-    return { ok: true, provider, model, current }
+    const brain = mainBrain(this.brainDeps())
+    if (!isBrain(brain)) return { ok: false, message: brain.message }
+    if (brain.kind === 'plan') return { ok: false, message: 'The main agent runs on a plan; this needs an API key account.' }
+    return { ok: true, provider: brain.provider, model: brain.model, current: this.settings.get() }
   }
 
   /** The same/different call for a message sent while busy: one short, tool-free request. Null when none can run. */
   private classifier(): Classifier | null {
     if (this.classifierOverride !== undefined) return this.classifierOverride
-    const current = this.settings.get()
-    if (current.mode === 'subscription') {
+    const brain = mainBrain(this.brainDeps())
+    if (isBrain(brain) && brain.kind === 'plan') {
       const cli = this.cli
       if (cli === undefined) return null
       return async (question, signal) => {
         const result = await cli.turn({
-          cli: current.cli === '' ? 'claude' : current.cli,
+          cli: brain.cli,
           thread: 'routine',
           tools: [],
           system: CLASSIFIER_SYSTEM,
           prompt: classifierPrompt(question),
           // The quickest model on a Claude plan; Codex uses the plan's default.
-          ...(current.cli === 'codex' ? {} : { model: 'haiku' }),
+          ...(brain.cli === 'codex' ? {} : { model: 'haiku' }),
           context: this.toolContext(signal, 'routine'),
           signal,
           onEvent: async () => undefined,
@@ -867,14 +871,15 @@ export class Runner {
     images: string[],
     signal: AbortSignal,
   ): Promise<string | undefined> {
-    if (this.settings.get().mode === 'subscription') return this.runCliTurn(line, text, images, signal)
     const chat = line.chat
-    const resolved = this.resolveModel()
-    if (!resolved.ok) {
-      await this.notice(resolved.message, chat)
+    const brain = await pickBrain(this.brainDeps(), chat)
+    if (!isBrain(brain)) {
+      await this.notice(brain.message, chat)
       return undefined
     }
-    const { provider, model, current } = resolved
+    if (brain.kind === 'plan') return this.runCliTurn(line, text, images, signal, brain)
+    const { provider, model } = brain
+    const current = this.settings.get()
 
     const memories = await this.store.list('memory')
     const goals = await this.store.list('goal')
@@ -955,7 +960,7 @@ export class Runner {
     }
   }
 
-  private async cliSystem(text: string, role: 'main' | 'routine', routineName?: string, chat: string = MAIN_CHAT): Promise<string> {
+  private async cliSystem(text: string, role: 'main' | 'routine', routineName: string | undefined, chat: string, cli: CliId): Promise<string> {
     const current = this.settings.get()
     return buildSystemPrompt({
       settings: current,
@@ -967,7 +972,7 @@ export class Runner {
       latestUserText: text,
       role,
       ...(routineName === undefined ? {} : { routineName }),
-      helperModel: current.cli === 'codex' ? 'Codex' : 'Claude',
+      helperModel: cli === 'codex' ? 'Codex' : 'Claude',
       liveHelpers: this.helpers?.live() ?? [],
       ...this.profilePrompt(),
       ...(role === 'main' ? await this.projectPrompt(chat) : {}),
@@ -977,13 +982,12 @@ export class Runner {
     })
   }
 
-  private async runCliTurn(line: ChatLine, text: string, images: string[], signal: AbortSignal): Promise<string | undefined> {
+  private async runCliTurn(line: ChatLine, text: string, images: string[], signal: AbortSignal, brain: Brain & { kind: 'plan' }): Promise<string | undefined> {
     const chat = line.chat
     if (this.cli === undefined) {
-      await this.notice('This build cannot run on a subscription. Add an AI key in Settings to start.', chat)
+      await this.notice('This build cannot run on a plan. Add an API key account in Settings to start.', chat)
       return undefined
     }
-    const current = this.settings.get()
     // The turn has its own controller: Stop ends the whole run, a joined message only pauses this turn.
     const turn = new AbortController()
     const onStop = (): void => turn.abort()
@@ -994,13 +998,13 @@ export class Runner {
     let result: { text: string; error?: string }
     try {
       result = await this.cli.turn({
-        cli: current.cli === '' ? 'claude' : current.cli,
+        cli: brain.cli,
         thread: threadFor(chat),
         tools: this.tools,
-        system: await this.cliSystem(text, 'main', undefined, chat),
+        system: await this.cliSystem(text, 'main', undefined, chat, brain.cli),
         prompt: text,
         images,
-        ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
+        ...(brain.model === '' ? {} : { model: brain.model }),
         context: this.toolContext(turn.signal, 'main', chat),
         signal: turn.signal,
         onEvent: (event) => this.render(event, chat),
@@ -1025,18 +1029,17 @@ export class Runner {
     return undefined
   }
 
-  private async runCliRoutine(trigger: TriggerRow): Promise<RoutineRunResult> {
-    if (this.cli === undefined) return { text: 'This build cannot run routines on a subscription.', waiting: false }
-    const current = this.settings.get()
+  private async runCliRoutine(trigger: TriggerRow, brain: Brain & { kind: 'plan' }): Promise<RoutineRunResult> {
+    if (this.cli === undefined) return { text: 'This build cannot run routines on a plan.', waiting: false }
     const controller = new AbortController()
     this.routineController = controller
     const result = await this.cli.turn({
-      cli: current.cli === '' ? 'claude' : current.cli,
+      cli: brain.cli,
       thread: 'routine',
       tools: this.tools,
-      system: await this.cliSystem(trigger.prompt, 'routine', trigger.name),
+      system: await this.cliSystem(trigger.prompt, 'routine', trigger.name, MAIN_CHAT, brain.cli),
       prompt: trigger.prompt,
-      ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
+      ...(brain.model === '' ? {} : { model: brain.model }),
       context: this.toolContext(controller.signal, 'routine'),
       signal: controller.signal,
       onEvent: async () => undefined,
@@ -1054,21 +1057,22 @@ export class Runner {
    * chat into memory and for the end-of-day pass. Throws with a plain message when it cannot answer.
    */
   async oneShot(system: string, prompt: string, signal?: AbortSignal): Promise<string> {
-    const current = this.settings.get()
-    if (current.mode === 'subscription') {
-      if (this.cli === undefined) throw new Error('This build cannot run on a subscription.')
+    const brain = mainBrain(this.brainDeps())
+    if (!isBrain(brain)) throw new Error(brain.message)
+    if (brain.kind === 'plan') {
+      if (this.cli === undefined) throw new Error('This build cannot run on a plan.')
       const controller = new AbortController()
       const abort = (): void => controller.abort()
       signal?.addEventListener('abort', abort)
       const timer = setTimeout(abort, 300_000)
       try {
         const result = await this.cli.turn({
-          cli: current.cli === '' ? 'claude' : current.cli,
+          cli: brain.cli,
           thread: 'routine',
           tools: [],
           system,
           prompt,
-          ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
+          ...(brain.model === '' ? {} : { model: brain.model }),
           context: this.toolContext(controller.signal, 'routine'),
           signal: controller.signal,
           onEvent: async () => undefined,
@@ -1083,10 +1087,8 @@ export class Runner {
         signal?.removeEventListener('abort', abort)
       }
     }
-    const resolved = this.resolveModel()
-    if (!resolved.ok) throw new Error(resolved.message)
     try {
-      const completion = await resolved.provider.complete(system, [userMsg(prompt)], [], resolved.model, 8192)
+      const completion = await brain.provider.complete(system, [userMsg(prompt)], [], brain.model, 8192)
       return msgText(completion.message)
     } catch (error) {
       throw new Error(friendlyError(error))
@@ -1094,25 +1096,29 @@ export class Runner {
   }
 
   /** The chosen plan's own sign-in, then the same tiny check. */
-  async planModels(): Promise<Array<{ id: string; label: string; line: string }>> {
-    if (this.cli === undefined) return []
-    const current = this.settings.get()
-    return this.cli.models(current.cli === 'codex' ? 'codex' : 'claude')
+  /** The engine an account runs on: the account's own plan, else the old single choice. */
+  private cliOf(accountId?: string): CliId {
+    const account = accountId === undefined ? null : accountById(this.settings.get(), accountId)
+    if (account !== null && account.kind !== 'api') return account.kind
+    return this.settings.get().cli === 'codex' ? 'codex' : 'claude'
   }
 
-  async cliLogin(): Promise<{ ok: boolean; message: string }> {
-    if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a subscription.' }
-    const chosen = this.settings.get().cli
-    const signedIn = await this.cli.login(chosen === '' ? 'claude' : chosen, (url) => this.openUrl(url))
+  async planModels(accountId?: string): Promise<Array<{ id: string; label: string; line: string }>> {
+    if (this.cli === undefined) return []
+    return this.cli.models(this.cliOf(accountId))
+  }
+
+  async cliLogin(accountId?: string): Promise<{ ok: boolean; message: string }> {
+    if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a plan.' }
+    const signedIn = await this.cli.login(this.cliOf(accountId), (url) => this.openUrl(url))
     if (!signedIn.ok) return signedIn
-    return this.checkCli()
+    return this.checkCli(accountId)
   }
 
   /** One tiny real turn, so onboarding and Settings can say whether the person's plan works here. */
-  async checkCli(): Promise<{ ok: boolean; message: string }> {
-    if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a subscription.' }
-    const chosen = this.settings.get().cli
-    const cli = chosen === '' ? 'claude' : chosen
+  async checkCli(accountId?: string): Promise<{ ok: boolean; message: string }> {
+    if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a plan.' }
+    const cli = this.cliOf(accountId)
     const name = cli === 'claude' ? 'Claude' : 'Codex'
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 90_000)

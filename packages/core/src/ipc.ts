@@ -19,8 +19,50 @@ export type ProviderId = 'anthropic' | 'openai' | 'gemini' | 'deepseek' | 'openc
 export type ThemePref = 'system' | 'light' | 'dark'
 export type MascotId = 'scout' | 'ghost' | 'clover' | 'bloom' | 'puff' | 'gem' | 'pebble' | 'heart' | 'bun'
 
+/** How an AI account is reached: the person's Claude plan, their ChatGPT plan through Codex, or an API key. */
+export type AiAccountKind = 'claude' | 'codex' | 'api'
+
+/**
+ * One way the agent can think: a plan the person already pays for, or a provider with their API key. The main
+ * agent uses one; each project may use another. The key itself lives in the secrets module (`apiKey-<id>`).
+ */
+export interface AiAccount {
+  id: string
+  /** What the person calls it: "Claude plan", "OpenCode Go", "Work OpenAI". */
+  label: string
+  kind: AiAccountKind
+  /** With kind 'api': which provider. */
+  provider?: ProviderId
+  /** With provider 'custom': the server address. */
+  baseUrl?: string
+  /** The model to use; '' on a plan means what the plan picks. */
+  model: string
+  /** With kind 'api': a key is stored for it. */
+  hasKey: boolean
+  allowHttp?: boolean
+}
+
+/** The id of the account the old single-choice settings were turned into. */
+export const LEGACY_ACCOUNT = 'default'
+
+/** One choice of what thinks: an account, and a model on it ('' = the account's own default model). */
+export interface AiPick {
+  account: string
+  model: string
+}
+
+/** Two picks: one for the agent that talks in the chat, one for the helpers it starts. */
+export interface AiPicks {
+  main: AiPick
+  /** '' account = the same as `main`. */
+  helpers: AiPick
+}
+
+export const NO_PICK: AiPick = { account: '', model: '' }
+
 /** Everything non-secret. The API key and the sync token never appear here (only `hasKey` / `signedIn`). */
 export interface Settings {
+  /** Kept for older code and onboarding; mirrors the main account (see `accounts`). */
   mode: PowerMode
   /** With mode 'subscription': the installed AI tool that does the thinking on the person's own plan. */
   cli: 'claude' | 'codex' | ''
@@ -65,6 +107,10 @@ export interface Settings {
   speakReplies: boolean
   /** When the end-of-day memory pass runs, "HH:mm" local time; '' turns it off. */
   dailyMemoryAt: string
+  /** Every AI account the person set up. Empty on an install that only ever used the old single choice. */
+  accounts: AiAccount[]
+  /** What the main thread thinks with: its agent, and its helpers. Routines and the memory pass use `main`. */
+  ai: AiPicks
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -98,6 +144,8 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceName: 'Kore',
   speakReplies: false,
   dailyMemoryAt: '23:30',
+  accounts: [],
+  ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
 }
 
 export interface ModelOption {
@@ -111,6 +159,48 @@ export interface ModelListResult {
   ok: boolean
   models: ModelOption[]
   message: string
+}
+
+/** A new or changed account, from the window. */
+export interface AiAccountDraft {
+  label?: string
+  kind?: AiAccountKind
+  provider?: ProviderId
+  baseUrl?: string
+  model?: string
+  allowHttp?: boolean
+}
+
+/** One slot of a chat as it runs: what it is set to, and what it actually runs on. */
+export interface ChatBrainSlot {
+  /** The pick the chat's project (or the main thread) is set to, resolved to an account id and model. */
+  wanted: AiPick
+  /** What the chat runs on until its next new chat (the same, unless a switch of family is waiting). */
+  using: AiPick
+  /** True when `wanted` only takes effect on the chat's next new chat. */
+  deferred: boolean
+}
+
+/** What a chat thinks with right now, for the picker in its header. */
+export interface ChatBrain {
+  main: ChatBrainSlot
+  helpers: ChatBrainSlot
+}
+
+export interface AccountsApi {
+  add(draft: AiAccountDraft): Promise<AiAccount>
+  update(id: string, patch: AiAccountDraft): Promise<AiAccount>
+  remove(id: string): Promise<void>
+  /** Stores the key for one account in the secrets module only. '' clears it. */
+  setKey(id: string, key: string): Promise<void>
+  /** One tiny real request on that account. */
+  check(id: string): Promise<{ ok: boolean; message: string }>
+  /** The models that account can use, asked live. */
+  listModels(id: string): Promise<ModelListResult>
+  /** Runs the plan's own sign-in for a plan account. */
+  signIn(id: string): Promise<{ ok: boolean; message: string }>
+  /** What a chat is thinking with (MAIN_CHAT or a project chat id). */
+  chatBrain(chat: string): Promise<ChatBrain>
 }
 
 export interface ProviderInfo {
@@ -261,6 +351,8 @@ export interface ProjectRow extends RowBase {
   hidden: boolean
   /** Its chat ids, oldest first. */
   chats: string[]
+  /** What its chats think with: the agent in each chat, and the helpers it starts. '' = the main thread's choice. */
+  ai?: AiPicks
 }
 
 /** Where old chats from the days of several chats at once live, so nothing is lost. */
@@ -840,6 +932,8 @@ export interface AgentApi {
     listModels(): Promise<ModelListResult>
     /** Makes one tiny real turn through the installed AI tool (Claude Code) on the person's own plan. */
     checkCli(): Promise<{ ok: boolean; message: string }>
+    /** The AI accounts: add one, change it, take it out, give it a key, check it, list its models. */
+    accounts: AccountsApi
     /** Runs the chosen plan's own sign-in (it opens the browser) and resolves when it is done. */
     cliLogin(): Promise<{ ok: boolean; message: string }>
     /** Wipes local data and settings (not the account on the server). Used by "Start again". */
