@@ -51,7 +51,14 @@ export class MemoryService {
    * turns after the newest divider only). If it had substance it is filed into memory in the background.
    */
   async newChat(target?: { chat: string; from: string }): Promise<{ dividerId: string | null; saving: boolean }> {
-    if (target !== undefined && target.chat !== target.from) return this.newSeparateChat(target.chat, target.from)
+    if (target !== undefined) {
+      // Opening "a new chat" that is the chat already open writes nothing: a divider inside a running chat would cut
+      // its context mid-run.
+      if (target.chat === target.from) return { dividerId: null, saving: false }
+      return this.newSeparateChat(target.chat, target.from)
+    }
+    // Below: the single-stream New chat (a divider in the first chat). The app no longer calls it (memory/ipc.ts
+    // always names a fresh chat); it stays for rows written before chats had ids.
     const items = await this.deps.store.list('chat_item')
     const latest = items.filter((item) => item.kind !== 'branch').sort((a, b) => b.createdAt - a.createdAt)[0]
     if (latest !== undefined && isDividerRow(latest)) return { dividerId: latest.id, saving: false }
