@@ -1,4 +1,4 @@
-import type { MemoryKind, TaskRow, TriggerRow } from '@agent/core'
+import { describeEventFilter, type MemoryKind, type TaskRow, type TriggerRow } from '@agent/core'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -83,6 +83,8 @@ export function timeAgo(ms: number | null): string {
 /** The next moment a routine should run, or null when it is off. */
 export function nextRun(trigger: Pick<TriggerRow, 'kind' | 'spec' | 'enabled' | 'lastRunAt'>): number | null {
   if (!trigger.enabled) return null
+  // An event routine runs when its worker sends something, not at a time.
+  if (trigger.kind === 'event') return null
   if (trigger.kind === 'interval') {
     const minutes = Number(trigger.spec)
     if (!Number.isFinite(minutes)) return null
@@ -99,7 +101,8 @@ export function nextRun(trigger: Pick<TriggerRow, 'kind' | 'spec' | 'enabled' | 
   return next.getTime()
 }
 
-export function scheduleLabel(trigger: Pick<TriggerRow, 'kind' | 'spec'>): string {
+export function scheduleLabel(trigger: Pick<TriggerRow, 'kind' | 'spec'>, workerName?: (id: string) => string | undefined): string {
+  if (trigger.kind === 'event') return describeEventFilter(trigger.spec, workerName)
   if (trigger.kind === 'daily') return `Every day at ${trigger.spec}`
   if (trigger.kind === 'interval') {
     const minutes = Number(trigger.spec)

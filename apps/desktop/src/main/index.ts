@@ -68,6 +68,12 @@ import { dailyRoutineSlot, ensureDailyRoutine, recordDailyRun, resultLine } from
 import { MEMORY_EVENTS } from '../shared/memory-channels'
 import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
+import { EventRouter } from './workers/router'
+import { registerWorkersIpc } from './workers/ipc'
+import { killLeftover, killTree, spawnWorker } from './workers/spawn'
+import { WorkerStore } from './workers/store'
+import { Supervisor } from './workers/supervisor'
+import { WORKER_EVENTS } from '../shared/workers-channels'
 
 const isSmoke = process.argv.includes('--smoke')
 const smokeTimeoutMs = 30_000
@@ -137,6 +143,19 @@ let chatIndex: ChatIndex | null = null
 let voice: VoiceService | null = null
 let cliHost: CliHost | null = null
 let scheduler: Scheduler | null = null
+let workerStore: WorkerStore | null = null
+let supervisor: Supervisor | null = null
+let eventRouter: EventRouter | null = null
+let workersChangedTimer: NodeJS.Timeout | null = null
+
+/** The Workers page reads again; a burst of events tells it once. */
+function workersChanged(): void {
+  if (workersChangedTimer !== null) return
+  workersChangedTimer = setTimeout(() => {
+    workersChangedTimer = null
+    broadcast(WORKER_EVENTS.changed, null)
+  }, 300)
+}
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
 let hotkeys: HotkeyManager | null = null
@@ -636,6 +655,35 @@ async function startServices(win: BrowserWindow): Promise<void> {
       allowHttp: current.allowHttp,
     })
   const budget = new StepBudget()
+  // Background workers (docs/workers-and-triggers.md): agent-written scripts the app keeps running. Their events
+  // go to the router, which hands them to the desk of each event routine; it is created once the helpers exist.
+  const workers = new WorkerStore(join(dir, 'workers'))
+  workerStore = workers
+  const workerNotice = async (text: string): Promise<void> => {
+    try {
+      await store?.upsert('chat_item', { kind: 'notice', text, meta: JSON.stringify({ workers: true }) })
+      broadcast(EVENTS.chat, { type: 'chat_changed' })
+    } catch {
+      // The Workers page and the notification still show it.
+    }
+  }
+  supervisor = new Supervisor({
+    store: workers,
+    spawn: spawnWorker,
+    secrets,
+    killTree,
+    killLeftover,
+    onEvent: (event) => {
+      void eventRouter?.offer(event)
+    },
+    onFailing: (worker) => {
+      logger.warn('Worker failing', { id: worker.id })
+      showNotification(`${worker.name} keeps failing`, `${worker.lastError || 'It stopped too often.'} Open Routines, Workers to restart it.`)
+      void workerNotice(`Worker "${worker.name}" keeps failing and was stopped: ${worker.lastError || 'it exited too often'}. Restart it on the Routines page, Workers.`)
+    },
+    onChange: workersChanged,
+  })
+  const workerTools = { store: workers, supervisor }
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
   cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
   const helpers = new HelperManager({
@@ -652,6 +700,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       environment,
       apps,
       learned,
+      workers: workerTools,
     }),
     deliver: async (note, chat) => {
       if (runner !== null) await runner.deliver(note, chat)
@@ -678,6 +727,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     apps,
     learned,
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
+    workers: workerTools,
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
     projects: {
       post: async (chat, text, via) => {
@@ -698,6 +748,23 @@ async function startServices(win: BrowserWindow): Promise<void> {
         const square = picture.crop({ x: Math.floor((width - side) / 2), y: Math.floor((height - side) / 2), width: side, height: side })
         return square.resize({ width: ICON_IMAGE_PX, height: ICON_IMAGE_PX, quality: 'best' }).toDataURL()
       },
+    },
+  })
+  eventRouter = new EventRouter({
+    store,
+    workers,
+    desk: helpers,
+    onChange: workersChanged,
+    workerName: (id) => {
+      try {
+        return workers.manifest(id)?.name ?? id
+      } catch {
+        return id
+      }
+    },
+    onFailed: (trigger, why) => {
+      showNotification(`Routine could not run: ${trigger.name}`, why.slice(0, 200))
+      void workerNotice(`Routine "${trigger.name}" could not hand its events to its desk: ${why.slice(0, 300)}. Its events are kept as failed; Run now on the Routines page tries them again.`)
     },
   })
   runner = new Runner({
@@ -740,6 +807,13 @@ async function startServices(win: BrowserWindow): Promise<void> {
       await runner.restore()
     } catch {
       // Startup repair is best effort: the app must still open if a row cannot be rewritten.
+    }
+    // Helpers left working are now marked interrupted, so desks can start: anything that arrived meanwhile,
+    // or was cut short when the app closed, goes to its routine now.
+    try {
+      await eventRouter?.start()
+    } catch (error) {
+      logger.warn('Event router did not start', { message: error instanceof Error ? error.message : String(error) })
     }
   }
   if (isSmoke) await repairs()
@@ -807,8 +881,15 @@ async function startServices(win: BrowserWindow): Promise<void> {
       if (trigger.builtin !== MEMORY_DAILY_ROUTINE || memory === null) throw new Error('That routine cannot run here.')
       return { text: resultLine(await memory.runNow()), waiting: false }
     },
+    runEvent: async (trigger) => {
+      if (eventRouter === null) throw new Error('Event routines are not ready yet.')
+      return eventRouter.runNow(trigger)
+    },
   })
   scheduler.start()
+  // Workers come back on every start; each one catches up from its cursor on what it missed while closed.
+  supervisor.start()
+  registerWorkersIpc(ipcMain, { store: workers, supervisor, openPath: (path) => shell.openPath(path) })
 
   const paths = quickAskPaths(__dirname)
   quickAsk = new QuickAskWindow({
@@ -956,6 +1037,7 @@ if (!app.requestSingleInstanceLock()) {
     loadWindow(win)
     powerMonitor.on('resume', () => {
       void scheduler?.resume()
+      supervisor?.resume()
       retryHotkeys()
     })
     powerMonitor.on('unlock-screen', retryHotkeys)
@@ -979,6 +1061,13 @@ if (!app.requestSingleInstanceLock()) {
     disposeStore = null
     scheduler?.stop()
     scheduler = null
+    eventRouter?.stop()
+    eventRouter = null
+    // Every worker is told to stop and its process tree ended; its stop time is saved so it catches up next start.
+    supervisor?.stopAll()
+    supervisor = null
+    workerStore?.close()
+    workerStore = null
     memory?.stop()
     memory = null
     chatIndex?.close()

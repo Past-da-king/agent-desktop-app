@@ -1,0 +1,42 @@
+/* Workers on the Routines page (views/Workers.tsx). */
+.wk-list{display:flex;flex-direction:column;gap:14px}
+.wk{background:var(--s-low);border-radius:var(--r-lg);padding:18px 22px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.wk.failing{box-shadow:inset 0 0 0 1px var(--err)}
+.wk-head{display:flex;align-items:center;gap:14px;min-width:0}
+.wk-dot{width:12px;height:12px;border-radius:50%;flex:none;background:var(--outline)}
+.wk-dot.running{background:var(--ok);box-shadow:0 0 0 4px var(--okc)}
+.wk-dot.starting,.wk-dot.backoff,.wk-dot.waiting{background:var(--tert)}
+.wk-dot.failing{background:var(--err)}
+.wk-title{flex:1;min-width:0}
+.wk-title b{display:block;font:500 16px/1.3 var(--font);overflow-wrap:anywhere}
+.wk-title span{display:block;font-size:13px;color:var(--on-sv)}
+.wk-about{margin:0;font-size:14px;color:var(--on-sv);overflow-wrap:anywhere}
+.wk-facts{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:13px;color:var(--on-sv)}
+.wk-facts b{color:var(--on-bg);font-weight:500}
+.wk-error{display:flex;gap:8px;align-items:flex-start;font-size:13px;background:var(--s-mid);border-radius:var(--r-sm);padding:10px 12px;overflow-wrap:anywhere}
+.wk-error.bad{background:var(--ec);color:var(--on-ec)}
+.wk-secret{display:flex;flex-wrap:wrap;align-items:center;gap:10px;background:var(--tc);color:var(--on-tc);border-radius:var(--r-sm);padding:10px 12px}
+.wk-secret label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500}
+.wk-secret .input{flex:1 1 220px;min-width:0;height:38px}
+.wk-tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wk-tabs .chip{height:30px;font-size:12px;padding:0 12px}
+.wk-tabs .chip.on{background:var(--sc);color:var(--on-sc);border-color:transparent}
+.wk-meta{margin-left:auto;font-size:12px;color:var(--outline)}
+.wk-rows{list-style:none;margin:0;padding:10px 12px;background:var(--s-lowest);border-radius:var(--r-sm);max-height:320px;overflow:auto;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.wk-rows li{display:flex;gap:10px;align-items:baseline;min-width:0}
+.wk-when{flex:none;width:96px;color:var(--outline);font-variant-numeric:tabular-nums}
+.wk-what{min-width:0;overflow-wrap:anywhere}
+.wk-what em{color:var(--outline);font-style:normal}
+.wk-status{flex:none;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:999px;background:var(--s-mid)}
+.wk-status.routed{background:var(--okc);color:var(--ok)}
+.wk-status.failed{background:var(--ec);color:var(--on-ec)}
+.wk-status.new{background:var(--tc);color:var(--on-tc)}
+.wk-log li.warn .wk-what{color:var(--tert)}
+.wk-log li.error .wk-what{color:var(--err)}
+@media (max-width:640px){
+  .wk{padding:16px}
+  .wk-head{flex-wrap:wrap}
+  .wk-head .rtn-actions{margin-left:auto}
+  .wk-when{width:64px}
+  .wk-meta{margin-left:0;width:100%}
+}
