@@ -380,3 +380,49 @@
   .br-open-label{display:none}
 }
 .br-stage-mock .web{min-height:100%}
+
+/* New chat divider: the quiet note while the last chat is saved into memory (views/ChatDivider.tsx). */
+.chat-divider{display:flex;flex-direction:column;align-items:center;gap:6px}
+.chat-divider .divider{align-self:stretch}
+.mem-note{display:inline-flex;align-items:center;gap:8px;min-height:30px;padding:4px 12px;border-radius:999px;font:500 12px/1.3 var(--font);color:var(--on-sv);background:var(--s-mid);border:0;max-width:100%;text-align:left}
+.mem-note>svg{flex:none}
+button.mem-note{cursor:pointer;color:var(--on-pc);background:var(--pc)}
+button.mem-note:hover{background:color-mix(in srgb,var(--pc) 88%,var(--on-pc))}
+.mem-note.fail{color:var(--on-ec);background:var(--ec)}
+.mem-note-act{font:600 12px/1 var(--font);color:inherit;background:transparent;border:0;padding:6px 4px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.mem-note-act[disabled]{cursor:not-allowed;opacity:.8}
+
+/* Memory: the end-of-day card and its report (views/MemoryUpkeep.tsx), sections per kind (views/Memory.tsx). */
+.upkeep-card{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 16px;margin-bottom:14px}
+.upkeep-head{display:flex;align-items:center;gap:12px;flex:1 1 220px;min-width:0}
+.upkeep-line{margin-top:3px;line-height:1.45;font-size:13px}
+.upkeep-actions{display:flex;gap:8px;flex-wrap:wrap}
+.upkeep-dialog{width:min(640px,calc(100% - 32px))}
+.upkeep-list{display:flex;flex-direction:column;gap:4px}
+.upkeep-row{display:flex;align-items:center;gap:12px;padding:8px 6px;border-radius:var(--r-sm)}
+.upkeep-row:hover{background:var(--s-mid)}
+.upkeep-row.undone .upkeep-t b{text-decoration:line-through}
+.upkeep-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.upkeep-t b{font:500 14px/1.3 var(--font);overflow-wrap:anywhere}
+.upkeep-t span{font-size:12px;color:var(--on-sv);line-height:1.4}
+.mem-more{display:flex;justify-content:center;margin:4px 0 8px}
+.mem-only{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-radius:var(--r-md);background:var(--pc);color:var(--on-pc);margin-bottom:14px;font-size:13px}
+.mem-only b{font-weight:600}
+.mem-only .btn{margin-left:auto}
+.chip .chip-n{font-weight:600;opacity:.85}
+
+/* Settings > Memory and the import dialog (views/MemorySettings.tsx). */
+.time-input{width:120px;height:40px;padding:0 12px;font-size:14px;color-scheme:light dark;flex:none}
+.import-dialog{width:min(600px,calc(100% - 32px))}
+.import-pick{display:flex;align-items:center;gap:14px;width:100%;padding:16px 18px;border-radius:var(--r-md);border:1.5px dashed var(--outline);background:var(--s-lowest);color:var(--on-bg);text-align:left;cursor:pointer}
+.import-pick:hover{background:var(--s-mid)}
+.import-pick[disabled]{cursor:progress}
+.import-pick-t{display:flex;flex-direction:column;gap:2px}
+.import-pick-t b{font:500 15px/1.3 var(--font)}
+.import-pick-t span{font-size:13px;color:var(--on-sv)}
+.import-sum{display:flex;flex-direction:column;gap:12px}
+.import-file{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--on-bg)}
+.import-kinds{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.import-kind{display:flex;align-items:baseline;gap:8px;padding:12px 14px;border-radius:var(--r-sm);background:var(--s-mid);font-size:13px;color:var(--on-sv)}
+.import-n{font:600 20px/1 var(--font);color:var(--on-bg)}
+.import-toggle{padding:4px 0}
