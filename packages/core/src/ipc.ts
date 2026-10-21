@@ -137,7 +137,17 @@ export interface TurnRow extends RowBase {
   json: string
 }
 
-export type MemoryKind = 'fact' | 'preference' | 'person' | 'decision' | 'how-to' | 'event' | 'skill'
+export type MemoryKind =
+  | 'fact'
+  | 'preference'
+  | 'person'
+  | 'decision'
+  | 'how-to'
+  | 'event'
+  | 'skill'
+  // Added for long-term memory (New Chat filing and the bank import).
+  | 'organisation'
+  | 'project'
 
 export interface MemoryRow extends RowBase {
   title: string
@@ -757,6 +767,9 @@ export interface AgentApi {
   /** Dictation, the live voice call and read-aloud. */
   voice: VoiceApi
 
+  /** New Chat filing, past chats and the memory import. */
+  memory: MemoryApi
+
   /** Identity and housekeeping for the About dialog. */
   app: {
     info(): Promise<AppInfo>
@@ -769,4 +782,67 @@ declare global {
   interface Window {
     agent: AgentApi
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Long-term memory across chats: New Chat files the finished chat into memory in the background, past chats stay
+// searchable, and an existing memory bank can be imported from a JSON export.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** What a closing divider carries about filing the chat before it. Lives in the divider's `meta.memory`. */
+export interface ChatMemoryNote {
+  /** The id of the chat that was filed (the id of its first row, or of the divider that started it). */
+  chat: string
+  status: 'saving' | 'done' | 'failed'
+  /** Memory ids written or updated, newest first. */
+  saved?: string[]
+  added?: number
+  updated?: number
+  error?: string
+}
+
+/** A past chat found by search. */
+export interface PastChatHit {
+  chatId: string
+  title: string
+  /** When the chat started (ms). */
+  at: number
+  summary: string
+  snippets: string[]
+}
+
+/** The importer's view of one file before anything is written. */
+export interface MemoryImportPreview {
+  ok: boolean
+  message: string
+  /** Name of the bank the file says it came from. */
+  source: string
+  total: number
+  /** Entries that would be written, per app kind. */
+  byKind: Partial<Record<MemoryKind, number>>
+  /** Left out by default: retired entries and short-lived kinds (state, event). */
+  skippedRetired: number
+  skippedTransient: number
+  invalid: number
+}
+
+export interface MemoryImportResult extends MemoryImportPreview {
+  added: number
+  updated: number
+  unchanged: number
+  redacted: number
+  ms: number
+}
+
+export interface MemoryApi {
+  /** Starts a fresh chat at once. The old one is filed into memory in the background. */
+  newChat(): Promise<{ dividerId: string | null; saving: boolean }>
+  /** Files a chat again after a failure (the divider that closed it). */
+  retrySave(dividerId: string): Promise<void>
+  /** Opens the OS picker for a memory export (.json). Null when the person cancelled. */
+  pickImport(): Promise<{ path: string; name: string } | null>
+  previewImport(path: string, includeAll: boolean): Promise<MemoryImportPreview>
+  runImport(path: string, includeAll: boolean): Promise<MemoryImportResult>
+  /** Full text search over past chats and their summaries. */
+  searchChats(query: string, limit?: number): Promise<PastChatHit[]>
 }
