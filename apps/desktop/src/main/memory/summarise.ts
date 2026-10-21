@@ -12,6 +12,7 @@ import { namedPages, rank, terms } from '../runtime/recall'
 export { namedPages }
 import { clip } from './chats'
 import { mostlySecret, redactSecrets } from './redact'
+import { replyObject } from './reply-json'
 
 /** One model call: system text and prompt in, the reply text out. Throws with a plain message when it fails. */
 export type Complete = (system: string, prompt: string, signal?: AbortSignal) => Promise<string>
@@ -91,17 +92,8 @@ export function candidatesFor(chat: string, memories: MemoryRow[], limit = 16): 
 
 /** Reads the model's reply. Tolerates a code fence or a sentence around the JSON. */
 export function parseDigest(reply: string): ChatDigest {
-  const start = reply.indexOf('{')
-  const end = reply.lastIndexOf('}')
-  if (start < 0 || end <= start) throw new Error('The model did not reply with a summary.')
-  let value: unknown
-  try {
-    value = JSON.parse(reply.slice(start, end + 1))
-  } catch {
-    throw new Error('The model replied with something that was not a summary.')
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('The model did not reply with a summary.')
-  const object = value as Record<string, unknown>
+  const object = replyObject(reply)
+  if (object === null) throw new Error(reply.includes('{') ? 'The model replied with something that was not a summary.' : 'The model did not reply with a summary.')
   const list = Array.isArray(object['memories']) ? object['memories'] : Array.isArray(object['entries']) ? object['entries'] : []
   const entries: DraftEntry[] = []
   for (const raw of list) {

@@ -7,6 +7,7 @@
  *    and noise (transient notes, things no longer true) is dropped. Every change is logged with the page as it was,
  *    so any change can be undone.
  */
+import { replyObject } from './reply-json'
 import { randomUUID } from 'node:crypto'
 
 import type { ChatItem, GoalRow, MemoryRow, TaskRow } from '@agent/core'
@@ -181,18 +182,11 @@ export async function compileDay(deps: DailyDeps, window: { day: string; from: n
 }
 
 export function parseWhere(reply: string): { body: string; entries: ReturnType<typeof parseDigest>['entries'] } {
-  const start = reply.indexOf('{')
-  const end = reply.lastIndexOf('}')
-  if (start >= 0 && end > start) {
-    try {
-      const value = JSON.parse(reply.slice(start, end + 1)) as Record<string, unknown>
-      const body = typeof value['where'] === 'string' ? value['where'] : ''
-      return { body, entries: parseDigest(reply).entries }
-    } catch {
-      // Fall through: a plain markdown reply is still a page.
-    }
-  }
-  return { body: reply.trim(), entries: [] }
+  const value = replyObject(reply)
+  // A plain markdown reply is still a page.
+  if (value === null) return { body: reply.trim(), entries: [] }
+  const body = typeof value['where'] === 'string' ? value['where'] : ''
+  return { body, entries: parseDigest(reply).entries }
 }
 
 /** Near-duplicate groups: same kind and the same subject by title. The newest page of each group comes first. */
@@ -291,11 +285,9 @@ export async function reviewRecent(deps: DailyDeps, since: number, whereBody: st
 }
 
 export function parseSweep(reply: string): Array<{ id: string; action: 'drop' | 'rewrite'; body: string; reason: string }> {
-  const start = reply.indexOf('{')
-  const end = reply.lastIndexOf('}')
-  if (start < 0 || end <= start) return []
+  const value = replyObject(reply)
+  if (value === null) return []
   try {
-    const value = JSON.parse(reply.slice(start, end + 1)) as Record<string, unknown>
     const list = Array.isArray(value['changes']) ? value['changes'] : []
     return list.flatMap((raw) => {
       if (typeof raw !== 'object' || raw === null) return []
