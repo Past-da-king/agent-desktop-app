@@ -24,6 +24,7 @@ import type { BrowserWindow, DownloadItem, Session, WebContents, WebPreferences 
 import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
 
 import { Cdp, KEY_NAMES } from './cdp'
+import { PRESENCE_SCRIPT } from './presence'
 import { watchDevtools } from './devtools'
 import {
   chromeVersionOf,
@@ -1202,6 +1203,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     tab.ready = tab.cdp.ensure()
     // The tab's developer tools record its network and console from here, before its first real page.
     if (tab.ready) watchDevtools(wc)
+    // Every page from here on sees a whole Chrome window (presence.ts), before its own scripts run.
+    if (tab.ready) await tab.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PRESENCE_SCRIPT }).catch(() => undefined)
     await this.applyEmulation(tab)
   }
 
