@@ -358,7 +358,8 @@ describe('What the agent is taught', () => {
     const signatures = new Set([...p.matchAll(/^([A-Z][A-Za-z]+)\(/gm)].map((m) => m[1] ?? ''))
     expect(signatures.size).toBeGreaterThanOrEqual(20)
     expect([...signatures].filter((s) => !(s in LIBRARY))).toEqual([])
-    expect([...signatures].some((s) => s.endsWith('Chart'))).toBe(false)
+    // Charts are taught since 21 Oct 2026 (the desktop draws them; every example is checked in openui-prompt.test.ts).
+    expect([...signatures].filter((s) => s.endsWith('Chart')).sort()).toEqual(['BarChart', 'LineChart', 'PieChart'])
   })
 
   it('teaches products for shopping, without invented numbers', () => {
