@@ -1,10 +1,11 @@
-import type { TaskRow } from '@agent/core'
+import { MAIN_CHAT, type TaskRow } from '@agent/core'
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 
 import { agent, chat } from '../bridge'
-import { startNewChat } from '../lib/chat-actions'
+import { openChat, startNewChat } from '../lib/chat-actions'
 import { isDarkNow } from '../state/theme'
+import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { Dialog } from '../ui/Dialog'
@@ -57,6 +58,7 @@ export function Palette(): JSX.Element | null {
   const overlay = useUi((state) => state.overlay)
   const close = useUi((state) => state.closeOverlay)
   const navigate = useUi((state) => state.navigate)
+  const projects = useEntity('project')
   const focusComposer = useUi((state) => state.focusComposer)
   const openQuick = useUi((state) => state.openQuick)
   const settings = useSettings((state) => state.settings)
@@ -116,12 +118,19 @@ export function Palette(): JSX.Element | null {
 
   const jump: Action[] = [
     { id: 'jump-home', label: 'Home', icon: 'home', run: closeAnd(() => navigate({ page: 'home' })) },
-    { id: 'jump-chat', label: 'Chat', icon: 'chat', run: closeAnd(() => navigate({ page: 'chat' })) },
+    { id: 'jump-chat', label: 'Chat', icon: 'chat', run: closeAnd(() => openChat(MAIN_CHAT)) },
     { id: 'jump-tasks', label: 'Tasks', icon: 'tasks', run: closeAnd(() => navigate({ page: 'tasks' })) },
     { id: 'jump-memory', label: 'Memory', icon: 'memory', run: closeAnd(() => navigate({ page: 'memory' })) },
     { id: 'jump-routines', label: 'Routines', icon: 'clock', run: closeAnd(() => navigate({ page: 'routines' })) },
     { id: 'jump-connections', label: 'Connections', icon: 'apps', run: closeAnd(() => navigate({ page: 'connections' })) },
     { id: 'jump-settings', label: 'Settings', icon: 'sliders', run: closeAnd(() => navigate({ page: 'settings' })) },
+    // Every project, hidden ones too: search is how a hidden project is found again.
+    ...projects.map((project): Action => ({
+      id: `jump-project-${project.id}`,
+      label: project.hidden ? `${project.name} (hidden project)` : `${project.name} (project)`,
+      icon: 'folder',
+      run: closeAnd(() => navigate({ page: 'project', id: project.id })),
+    })),
   ]
   const doItems: Action[] = [
     {

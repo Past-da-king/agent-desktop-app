@@ -37,7 +37,7 @@ interface StoredRow {
 
 export type StoreChangeListener = (entity: EntityName) => void
 
-const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger']
+const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project']
 
 /** Versions kept per memory page; the oldest go first. */
 const MAX_VERSIONS = 300
@@ -486,5 +486,7 @@ function defaultsFor(entity: EntityName): Record<string, unknown> {
         lastRunAt: null,
         lastResult: '',
       }
+    case 'project':
+      return { name: '', description: '', icon: { glyph: 'folder', color: 'iris' }, path: '', profile: '', hidden: false, chats: [] }
   }
 }

@@ -11,19 +11,23 @@ import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
-import { Icon, hasIcon } from '../ui/Icon'
+import { Icon } from '../ui/Icon'
+import { ProjectTile } from '../ui/ProjectTile'
 
 /** Cards shown before "Show all": the rest of the panel stays in reach. */
 const SHOWN = 3
 
 /** Where a waiting card came from: the project's tile and name, or the main agent's. */
 function SourceTag({ source }: { source: ChatSource }): JSX.Element {
-  const glyph = source.icon?.glyph ?? ''
   return (
     <span className="ny-src">
-      <span className="ny-src-ic" style={source.icon !== null ? { background: source.icon.color } : undefined} aria-hidden="true">
-        {source.icon === null ? <Icon name="chat" size={13} /> : hasIcon(glyph) ? <Icon name={glyph} size={13} /> : glyph}
-      </span>
+      {source.icon === null ? (
+        <span className="ny-src-ic" aria-hidden="true">
+          <Icon name="chat" size={13} />
+        </span>
+      ) : (
+        <ProjectTile icon={source.icon} size={20} />
+      )}
       <span className="ny-src-name">{source.name}</span>
     </span>
   )
@@ -91,12 +95,13 @@ export function WaitingCard({ item, source, onOpen }: { item: ChatItem; source: 
 export function NeedsYou(): JSX.Element | null {
   const waiting = useWaiting()
   const items = useEntity('chat_item')
+  const projects = useEntity('project')
   const agentName = useSettings((store) => store.settings?.agentName.trim()) || 'Your agent'
   const openChat = useChats((store) => store.openChat)
   const navigate = useUi((store) => store.navigate)
   const focusComposer = useUi((store) => store.focusComposer)
   const [all, setAll] = useState(false)
-  const cards = useMemo(() => waiting.map((item) => ({ item, source: sourceOfChat(chatOf(item), items, [], agentName) })), [waiting, items, agentName])
+  const cards = useMemo(() => waiting.map((item) => ({ item, source: sourceOfChat(chatOf(item), items, projects, agentName) })), [waiting, items, projects, agentName])
   if (cards.length === 0) return null
 
   return (

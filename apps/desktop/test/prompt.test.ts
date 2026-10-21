@@ -95,7 +95,7 @@ describe('buildSystemPrompt', () => {
         memory({ title: 'Bakery', body: 'The one on the corner.', topics: 'food' }),
       ],
     })
-    expect(text).toContain('POSSIBLY RELEVANT MEMORIES')
+    expect(text).toContain('BACKGROUND MEMORIES')
     expect(text).toContain('Lives in Durban')
   })
 

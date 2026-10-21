@@ -137,6 +137,8 @@ function memorySave(store: DataStore): Tool {
       const title = text(input['title']).trim()
       if (title === '') return 'A memory page needs a title.'
       const rows = await store.list('memory')
+      // Saved from a project chat: a new page is that project's memory.
+      const project = ctx.chat === undefined ? undefined : (await store.list('project')).find((p) => p.chats.includes(ctx.chat ?? ''))?.id
       const existing = rows.find((row) => row.title.trim().toLowerCase() === title.toLowerCase())
       const body = text(input['body'])
       const topics = text(input['topics']) || text(input['tags'])
@@ -166,6 +168,7 @@ function memorySave(store: DataStore): Tool {
         pinned: truthy(input['pinned']),
         ...(aliases === '' ? {} : { aliases: aliasList(aliases).join(', ') }),
         source: 'agent',
+        ...(project === undefined ? {} : { project }),
       })
       return writeReceipt(store, saved.id, title, null, 'Saved page')
     }),

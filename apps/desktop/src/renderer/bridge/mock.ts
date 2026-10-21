@@ -11,6 +11,7 @@ import type {
   LearnedAppInfo,
   BrowserBounds,
   BrowserPerson,
+  ProjectRow,
   BrowserState,
   BrowserViewMode,
   ChatEvent,
@@ -648,6 +649,7 @@ export const mockAgent: AgentApi = {
         goal: [],
         task: [],
         trigger: [],
+        project: [],
       }
       settings = { ...DEFAULT_SETTINGS, deviceName: 'This computer' }
       apiKey = ''
@@ -804,6 +806,21 @@ export const mockAgent: AgentApi = {
         return
       }
       insertChat({ kind: 'user', text: value, meta: JSON.stringify({ attachments: files, ...tag }) })
+      // The preview's take on project_create: the agent found the folder and asks on a card (tools/projects.ts).
+      if (/\b(create|make|start) (a |the )?project\b/i.test(value)) {
+        insertChat({ kind: 'agent', text: 'Found the folder on your Desktop. Here is the project; tap Create when it looks right.', meta: JSON.stringify(tag) })
+        insertChat({
+          kind: 'question',
+          text: 'Make the project Guavas relaunch?',
+          meta: JSON.stringify({
+            ...tag,
+            options: ['Create', 'Change'],
+            answer: '',
+            card: { kind: 'project', name: 'Guavas relaunch', description: 'The new guavas.co.uk: copy, lender pages and the launch on 14 November.', path: 'C:\\Users\\You\\Desktop\\projects\\guavas-site', folderNew: false, profile: 'Work', icon: { glyph: 'globe', color: 'teal' } },
+          }),
+        })
+        return
+      }
       mockRun(target, 800)
     },
     async stop(chat) {
@@ -866,6 +883,20 @@ export const mockAgent: AgentApi = {
     },
     async answer(itemId, answer) {
       patchCard(itemId, { answer })
+      // Create on a project card makes the project, as project_create does.
+      const card = parseMeta(rows.chat_item.find((item) => item.id === itemId)?.meta ?? '{}')['card'] as Record<string, unknown> | undefined
+      if (answer === 'Create' && card?.['kind'] === 'project') {
+        const made = upsertRow('project', {
+          name: String(card['name']),
+          description: String(card['description'] ?? ''),
+          icon: card['icon'] as ProjectRow['icon'],
+          path: String(card['path'] ?? ''),
+          profile: 'p_work',
+          hidden: false,
+          chats: [],
+        })
+        insertChat({ kind: 'agent', text: `Made ${made.name}. It is in the rail.`, meta: '{}' })
+      }
     },
     async decide(itemId, decision: Decision) {
       patchCard(itemId, { decision })
@@ -1374,9 +1405,19 @@ export const mockAgent: AgentApi = {
         return { dividerId: latest.id, saving: false }
       }
       const hasChat = list.some((item) => item.kind === 'user')
-      const meta: Record<string, unknown> = { divider: true, at: Date.now(), ...tag }
+      // The main thread's New chat carries on with a summary of itself (memory/service.ts compressChat).
+      const inPlace = target === undefined || target.chat === target.from
+      const meta: Record<string, unknown> = { divider: true, at: Date.now(), ...tag, ...(inPlace && hasChat ? { compress: 'pending' } : {}) }
       if (hasChat) meta['memory'] = { chat: 'mock-chat', status: 'saving' }
       const divider = insertChat({ kind: 'notice', text: 'New chat', meta: JSON.stringify(meta) })
+      if (inPlace && hasChat) {
+        setTimeout(() => {
+          patchCard(divider.id, {
+            compress: 'done',
+            carry: '**Working on**\n- Durban trip on Fri 30 Oct: flights and a guesthouse.\n\n**Decided**\n- SkyHop 06:05 at R 899, the best value.\n\n**Asked last**\n- Hold the 06:05 and check a window seat back.',
+          })
+        }, 700)
+      }
       if (hasChat) {
         setTimeout(() => {
           const saved = rows.memory.filter((row) => !row.pinned).slice(0, 3).map((row) => row.id)
