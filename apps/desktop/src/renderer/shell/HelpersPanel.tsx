@@ -101,7 +101,10 @@ export function HelpersPanel(): JSX.Element | null {
               <button type="button" className="hp-card" onClick={() => openHelper(helper.id)} aria-label={`Open ${helper.label} full size`}>
                 <HelperAvatar row={helper.row} helper={helper} />
                 <span className="hp-t">
-                  <b>{helper.label}</b>
+                  <b>
+                    {helper.label}
+                    {helper.model !== '' ? <span className="hp-model" title={`Runs on ${helper.model}`}>{helper.model}</span> : null}
+                  </b>
                   <span>{last !== undefined ? stepText(last) : 'Starting'}</span>
                 </span>
                 <span className={`pill ${s.tone}`}>{s.label}</span>
@@ -156,6 +159,7 @@ export function HelperStage(): JSX.Element | null {
       <div className="hp-stage-bar">
         <HelperAvatar row={row} helper={helper} />
         <b>{helper.label}</b>
+        {helper.model !== '' ? <span className="hp-model">{helper.model}</span> : null}
         <span className={`pill ${s.tone}`}>{s.label}</span>
         <span className="hp-stage-gap" />
         {helper.state === 'working' ? (
