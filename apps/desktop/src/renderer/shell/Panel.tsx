@@ -219,6 +219,17 @@ function BrowserChrome({
             void agent.browser.openInSystem()
           }}
         />
+        {full ? (
+          <IconButton
+            icon="code"
+            label="Developer tools"
+            size={18}
+            disabled={!hasPage}
+            onClick={() => {
+              void agent.browser.devtools()
+            }}
+          />
+        ) : null}
         {full ? null : (
           <IconButton
             icon="max"

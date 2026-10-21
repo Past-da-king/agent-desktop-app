@@ -9,4 +9,4 @@ logs
 .DS_Store
 logs-driver.out
 shots-*
-.night
+.night/
