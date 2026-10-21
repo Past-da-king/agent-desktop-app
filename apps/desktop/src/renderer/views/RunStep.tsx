@@ -110,7 +110,7 @@ function inputTitle(run: RunRecord): string {
 }
 
 function outputTitle(run: RunRecord): string {
-  if (run.kind !== 'file') return 'Output'
+  if (run.kind !== 'file') return run.merged === true ? 'Output and errors' : 'Output'
   switch (run.label) {
     case 'Read':
       return 'What it read'
