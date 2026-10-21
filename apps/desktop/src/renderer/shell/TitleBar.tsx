@@ -3,6 +3,7 @@ import { isDarkNow } from '../state/theme'
 import { useAccountStatus } from '../state/useAccount'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
+import { usePanel } from '../state/usePanel'
 import { timeAgo } from '../lib/format'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
@@ -21,8 +22,8 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
   const save = useSettings((state) => state.save)
   const status = useAccountStatus()
   const openPalette = useUi((state) => state.openPalette)
-  const railCollapsed = useUi((state) => state.railCollapsed)
-  const toggleRail = useUi((state) => state.toggleRail)
+  const panelCollapsed = usePanel((state) => state.collapsed)
+  const togglePanel = usePanel((state) => state.toggle)
 
   const agentName = settings?.agentName.trim() || 'your agent'
   const dark = isDarkNow()
@@ -60,10 +61,10 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
             </div>
             <button
               type="button"
-              className="tb-btn hide-m"
-              aria-label={railCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              aria-pressed={railCollapsed}
-              onClick={toggleRail}
+              className="tb-btn hide-m tb-panel"
+              aria-label={panelCollapsed ? 'Open the side panel' : 'Collapse the side panel'}
+              aria-pressed={panelCollapsed}
+              onClick={togglePanel}
             >
               <Icon name="panel" size={20} />
             </button>

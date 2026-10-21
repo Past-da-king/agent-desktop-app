@@ -91,3 +91,24 @@ button.wait-line:hover{filter:brightness(.97)}
 .ny-card.ny-flash{animation:ny-flash 1.2s var(--effects)}
 @keyframes ny-flash{0%,60%{box-shadow:0 0 0 3px var(--primary)}100%{box-shadow:0 0 0 0 transparent}}
 @media (prefers-reduced-motion:reduce){.ny-card.ny-flash{animation:none;box-shadow:0 0 0 3px var(--primary)}}
+
+/* The left rail folds from its own corner; the collapsed side panel keeps faces and counts. */
+.me-row{display:flex;align-items:flex-start;gap:4px}
+.me-row .me{flex:1;min-width:0}
+.rail-fold{width:28px;height:28px;margin-top:8px;border-radius:50%;display:grid;place-items:center;color:var(--outline);flex:none}
+.rail-fold:hover{background:var(--s-high);color:var(--on-bg)}
+.rail-fold .ico{transform:rotate(180deg);transition:transform .3s var(--spatial)}
+.col .me-row{flex-direction:column;align-items:center;gap:2px}
+.col .rail-fold{margin-top:0}
+.col .rail-fold .ico{transform:none}
+.mini-strip{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:12px;width:100%}
+.mini-needs{min-width:26px;height:26px;padding:0 7px;border-radius:999px;background:var(--tc);color:var(--on-tc);font:600 12px/1 var(--font);display:grid;place-items:center}
+.mini-helper{position:relative;width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:none}
+.mini-helper:hover{background:var(--s-high)}
+.mini-helper .hp-av,.mini-helper .pj-tile,.mini-helper .hp-ic{width:30px;height:30px}
+.mini-globe{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--s-high);color:var(--on-sv)}
+.mini-dot{position:absolute;right:3px;bottom:3px;width:10px;height:10px;border-radius:50%;background:var(--primary);border:2px solid var(--bg);animation:mini-pulse 1.6s ease-in-out infinite}
+.mini-dot.needs{background:var(--tert);animation:none}
+@keyframes mini-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.7);opacity:.6}}
+@media (prefers-reduced-motion:reduce){.mini-dot{animation:none}}
+.hp-step.run{padding:0;display:block}
