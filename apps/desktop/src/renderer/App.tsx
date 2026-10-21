@@ -21,6 +21,7 @@ import { QuickWindow } from './shell/QuickWindow'
 import { DictationPill } from './dictation/DictationPill'
 import { Shell } from './shell/Shell'
 import { TitleBar } from './shell/TitleBar'
+import { TipLayer } from './ui/TipLayer'
 import { Toasts } from './ui/Toasts'
 
 function Page(): JSX.Element {
@@ -97,6 +98,7 @@ function Main({ route }: { route: Route }): JSX.Element {
         <QuickAsk />
       </div>
       <Toasts />
+      <TipLayer />
     </div>
   )
 }

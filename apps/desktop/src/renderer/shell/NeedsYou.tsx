@@ -12,6 +12,7 @@ import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { Icon } from '../ui/Icon'
+import { Mascot } from '../ui/Mascot'
 import { ProjectTile } from '../ui/ProjectTile'
 
 /** Cards shown before "Show all": the rest of the panel stays in reach. */
@@ -19,11 +20,12 @@ const SHOWN = 3
 
 /** Where a waiting card came from: the project's tile and name, or the main agent's. */
 function SourceTag({ source }: { source: ChatSource }): JSX.Element {
+  const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
   return (
     <span className="ny-src">
       {source.icon === null ? (
-        <span className="ny-src-ic" aria-hidden="true">
-          <Icon name="chat" size={13} />
+        <span className="ny-src-ic mascot" aria-hidden="true">
+          <Mascot id={mascot} size={20} />
         </span>
       ) : (
         <ProjectTile icon={source.icon} size={20} />
