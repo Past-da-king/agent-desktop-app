@@ -1,5 +1,5 @@
 import type { BrowserState, BrowserViewMode } from '@agent/core'
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 
 import { agent, chat } from '../bridge'
 import { skyHopDemo } from '../bridge/seed'
@@ -16,6 +16,8 @@ import { Icon, type IconName } from '../ui/Icon'
 import { BrowserHost } from './BrowserHost'
 import { HelperStage, HelpersPanel } from './HelpersPanel'
 import { ReportStage } from './ReportStage'
+import { BrowserPeople, personOfTab, usePeople } from './BrowserPeople'
+import { toneStyle } from '../lib/profiles'
 import { setStageBox } from '../lib/browser-stage'
 
 const VIEW_CHOICES: Array<{ mode: Exclude<BrowserViewMode, 'fit'>; label: string; icon: IconName }> = [
@@ -140,6 +142,7 @@ function BrowserChrome({
   const active = state?.agentActive !== false
   const needsUser = state?.needsUser === true
   const muted = state?.muted === true
+  const people = usePeople(state, 0)
 
   return (
     <div className="browser br-live-browser">
@@ -209,6 +212,7 @@ function BrowserChrome({
             }}
           />
         </form>
+        <BrowserPeople state={state} compact={!full} />
         <IconButton
           icon="ext"
           label="Open in my browser"
@@ -248,8 +252,12 @@ function BrowserChrome({
         <div className="br-tabs" role="tablist" aria-label="Browser tabs">
           {tabs.map((tab) => {
             const label = tab.title.trim() || displayUrl(tab.url) || 'Untitled'
+            const person = personOfTab(people, tab.partition)
             return (
               <span key={tab.id} className={`br-tab${tab.active ? ' on' : ''}`}>
+                {person !== undefined ? (
+                  <span className="pf br-tab-who" style={toneStyle(person.color) as CSSProperties} title={`${person.name}'s sign-ins`} aria-label={`${person.name}'s sign-ins`} />
+                ) : null}
                 <button
                   type="button"
                   role="tab"

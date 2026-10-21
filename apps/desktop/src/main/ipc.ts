@@ -35,6 +35,7 @@ import type { AccountService, SignInArgs } from './account'
 import { POPULAR_APPS } from './apps/catalog'
 import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
+import { listPeople, type PeopleSource } from './browser/people'
 import { isRule } from './apps/store'
 import type { Store } from './db'
 import { guardRoutineWrite } from './memory/routine'
@@ -116,6 +117,11 @@ export interface BrowserControl {
   attachGuest?(tabId: string, guestId: number, senderId: number | null): boolean
   openDevTools?(): void
   setMuted?(on: boolean): void
+  personPartition?(): string
+  usePersonPartition?(partition: string): void
+  signOutPartition?(partition: string): Promise<void>
+  /** Google accounts signed in to a partition (Google's own ListAccounts), [] when none. */
+  googleAccounts?(partition: string): Promise<string[]>
 }
 
 export interface IpcDeps {
@@ -404,6 +410,25 @@ export function registerIpc(deps: IpcDeps): () => void {
   handle(CHANNELS.browser.setMuted, async (_event, rawOn) => {
     if (typeof rawOn !== 'boolean') throw new Error('muted must be true or false')
     deps.browser?.setMuted?.(rawOn)
+  })
+  const people = (): PeopleSource => ({
+    profiles: () => deps.apps?.profiles.all() ?? [],
+    personPartition: () => deps.browser?.personPartition?.() ?? '',
+    googleAccounts: async (partition) => (await deps.browser?.googleAccounts?.(partition)) ?? [],
+  })
+  const knownPerson = async (rawId: unknown): Promise<string> => {
+    const id = requireString(rawId, 'profile', 64)
+    const listed = await listPeople({ ...people(), googleAccounts: async () => [] })
+    const person = listed.find((p) => p.id === id)
+    if (person === undefined) throw new Error('No such browser profile')
+    return person.partition
+  }
+  handle(CHANNELS.browser.people, async () => listPeople(people()))
+  handle(CHANNELS.browser.usePerson, async (_event, rawId) => {
+    deps.browser?.usePersonPartition?.(await knownPerson(rawId))
+  })
+  handle(CHANNELS.browser.signOut, async (_event, rawId) => {
+    await deps.browser?.signOutPartition?.(await knownPerson(rawId))
   })
   handle(CHANNELS.browser.setExpanded, async (_event, rawOn) => {
     if (typeof rawOn !== 'boolean') throw new Error('expanded must be true or false')

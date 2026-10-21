@@ -38,6 +38,8 @@ interface SiteFile {
   sites: Record<string, SiteProfile>
   /** The person turned the browser's sound off. */
   muted?: boolean
+  /** The browser profile (partition) the person's own tabs open in. */
+  person?: string
 }
 
 const MAX_SITES = 300
@@ -84,6 +86,15 @@ export class SiteStore {
   setMuted(on: boolean): void {
     if (on) this.data.muted = true
     else delete this.data.muted
+    this.save()
+  }
+
+  person(): string | null {
+    return this.data.person ?? null
+  }
+
+  setPerson(partition: string): void {
+    this.data.person = partition
     this.save()
   }
 
@@ -187,7 +198,7 @@ export class SiteStore {
           if (profile !== null) sites[site] = profile
         }
       }
-      this.data = { version: 1, defaultView: defaultView ?? presetView('desktop'), sites, ...(raw['muted'] === true ? { muted: true } : {}) }
+      this.data = { version: 1, defaultView: defaultView ?? presetView('desktop'), sites, ...(raw['muted'] === true ? { muted: true } : {}), ...(typeof raw['person'] === 'string' && raw['person'].startsWith('persist:') ? { person: raw['person'] } : {}) }
     } catch {
       // No file yet, or a damaged one: start fresh rather than refuse to browse.
     }

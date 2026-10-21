@@ -10,6 +10,7 @@ import type {
   ConnectedAccount,
   LearnedAppInfo,
   BrowserBounds,
+  BrowserPerson,
   BrowserState,
   BrowserViewMode,
   ChatEvent,
@@ -898,6 +899,23 @@ export const mockAgent: AgentApi = {
       return false
     },
     async devtools() {
+      return undefined
+    },
+    async people(): Promise<BrowserPerson[]> {
+      const own = profiles.filter((p) => !p.general && p.browser === '')
+      const signedIn: Record<string, string[]> = { mine: seededApps ? ['sam@example.com'] : [], p_work: seededApps ? ['ana@example.com'] : [] }
+      const list: BrowserPerson[] = [
+        { id: 'mine', name: 'Mine', color: 'graphite', kind: 'mine', partition: 'persist:agent-browser-mine', google: [], current: false, usedBy: profiles.filter((p) => p.browser === 'mine').map((p) => p.name) },
+        { id: 'general', name: 'Agents', color: 'graphite', kind: 'shared', partition: 'persist:agent-browser', google: [], current: false, usedBy: ['The main agent', 'Routines'] },
+        ...own.map((p) => ({ id: p.id, name: p.name, color: p.color, kind: 'profile' as const, partition: `persist:agent-browser-${p.id}`, google: [], current: false, usedBy: [p.name] })),
+      ]
+      return list.map((person) => ({ ...person, google: signedIn[person.id] ?? [], current: person.partition === (mockBrowser.personPartition ?? 'persist:agent-browser-mine') }))
+    },
+    async usePerson(id: string) {
+      mockBrowser.personPartition = id === 'general' ? 'persist:agent-browser' : `persist:agent-browser-${id}`
+      notifyBrowser()
+    },
+    async signOut() {
       return undefined
     },
     async setMuted(on: boolean) {

@@ -61,6 +61,7 @@ export function profileLines(profiles: AgentProfileInfo[], learnedNames: Record<
     if (p.learned.length > 0) parts.push(`learned apps: ${p.learned.map((id) => learnedNames[id] ?? id).join(', ')}`)
     const lender = p.browser === '' ? null : profiles.find((q) => q.id === p.browser)
     if (lender) parts.push(`browser sign-ins: ${lender.name}'s`)
+    if (p.browser === 'mine') parts.push("browser sign-ins: the user's own (lent)")
     out.push(`- ${p.name}: ${parts.join('; ')}`)
   }
   const generalName = general?.name ?? 'General'
@@ -70,6 +71,7 @@ export function profileLines(profiles: AgentProfileInfo[], learnedNames: Record<
   )
   out.push('- If no profile fits the job, make one with profile_create (a clear name, the apps it needs) before delegating. The user sees it in Connections in its own colour.')
   out.push('- You yourself may use any account in any profile; helpers may not.')
+  out.push("- The user's own browser profile (Mine) is theirs: no agent browses with their sign-ins unless they lent them to a profile above. When a site needs an account that is not signed in where you browse, hand the page over with browser_handoff so the user signs in there; never ask them for a password.")
   return out
 }
 

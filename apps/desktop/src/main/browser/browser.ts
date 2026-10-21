@@ -24,6 +24,7 @@ import type { BrowserWindow, DownloadItem, Session, WebContents, WebPreferences 
 import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
 
 import { Cdp, KEY_NAMES } from './cdp'
+import { emailsIn } from './people'
 import { PRESENCE_SCRIPT } from './presence'
 import { watchDevtools } from './devtools'
 import {
@@ -123,6 +124,8 @@ interface Tab {
 export interface AgentBrowserOptions {
   window: BrowserWindow
   partition?: string
+  /** Where the person's own tabs open until they pick another browser profile. Defaults to `partition`. */
+  personPartition?: string
   maxTabs?: number
   onState?: (state: BrowserState) => void
   openExternal?: (url: string) => Promise<void>
@@ -134,7 +137,10 @@ export interface AgentBrowserOptions {
 export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private window: BrowserWindow | null
   private readonly partition: string
-  /** The partition the agent works in now (profiles.ts partitionFor). Tabs of others stay open, untouched. */
+  /**
+   * The person's own sign-ins: the tabs they open go here (their browser profile, like Chrome's). Agents never
+   * browse in it unless a profile borrows it; an agent with no profile keeps `partition`.
+   */
   private current: string
   private readonly maxTabs: number
   private readonly onState: (state: BrowserState) => void
@@ -196,6 +202,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     mkdirSync(this.screenshotsDir, { recursive: true })
 
     this.sites = new SiteStore(options.sitesFile ?? null)
+    this.current = this.sites.person() ?? options.personPartition ?? this.partition
     this.currentView = this.sites.defaultView()
     let engineUa = ''
     try {
@@ -255,6 +262,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       handoffReason: this.handoffReason,
       expanded: this.expanded,
       muted: this.sites.muted(),
+      personPartition: this.current,
       audible: this.tabs.some((tab) => safeAudible(tab.wc)),
       view: {
         mode: this.currentView.mode,
@@ -324,9 +332,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   selectTab(id: string): void {
     const picked = this.tabs.find((tab) => tab.id === id)
     if (picked === undefined) return
+    // Picking a tab never moves an agent into its sign-ins: each agent keeps its own profile.
     this.activeId = id
-    // The person picked a tab: the agent's next step works in that tab's sign-ins too.
-    this.current = picked.partition
     this.layout()
     this.emit()
   }
@@ -1440,11 +1447,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private readonly ownerTabs = new Map<string, string>()
   /** Which profile's sign-ins each agent browses with, so one helper switching profile never moves another. */
   private readonly ownerPartitions = new Map<string, string>()
+  /** Google accounts last read per partition (googleAccounts). */
+  private readonly googleSeen = new Map<string, { at: number; emails: string[] }>()
 
   /** The partition the agent acting right now browses in. */
   private partitionNow(): string {
     const owner = currentOwner()
-    return owner === undefined ? this.current : (this.ownerPartitions.get(owner) ?? this.current)
+    return owner === undefined ? this.current : (this.ownerPartitions.get(owner) ?? this.partition)
   }
 
   private activeTab(): Tab | null {
@@ -1462,6 +1471,63 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** The tab in front of the person, whichever partition it is in. */
   private shownTab(): Tab | null {
     return this.tabs.find((tab) => tab.id === this.activeId) ?? this.tabs[0] ?? null
+  }
+
+  /** The person's browser profile: the partition the tabs they open use. */
+  personPartition(): string {
+    return this.current
+  }
+
+  /** The person switches browser profile, as in Chrome: their next tab opens with its sign-ins. Remembered. */
+  usePersonPartition(partition: string): void {
+    const next = partition.trim() === '' ? this.partition : partition
+    this.sites.setPerson(next)
+    if (next === this.current) return
+    this.current = next
+    this.emit()
+  }
+
+  /**
+   * Which Google accounts a profile is signed in to, from Google's own ListAccounts (what Chrome's account menu
+   * reads). A profile with no Google sign-in cookie is not asked at all. Cached briefly per profile.
+   */
+  async googleAccounts(partition: string): Promise<string[]> {
+    const cached = this.googleSeen.get(partition)
+    if (cached !== undefined && Date.now() - cached.at < 30_000) return cached.emails
+    const session = electronSession.fromPartition(partition)
+    let emails: string[] = []
+    try {
+      const signedIn = await session.cookies.get({ domain: 'google.com', name: 'SID' })
+      if (signedIn.length > 0) {
+        const answer = await session.fetch('https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard', {
+          method: 'POST',
+          credentials: 'include',
+          signal: AbortSignal.timeout(5_000),
+        })
+        if (answer.ok) emails = emailsIn(await answer.text()).slice(0, 10)
+      }
+    } catch {
+      // Offline or Google changed its answer: the menu shows the profile without accounts.
+    }
+    this.googleSeen.set(partition, { at: Date.now(), emails })
+    return emails
+  }
+
+  /** Signs a browser profile out of everything: its cookies, storage and caches go, and its open tabs reload. */
+  async signOutPartition(partition: string): Promise<void> {
+    const session = electronSession.fromPartition(partition)
+    await session.clearStorageData().catch(() => undefined)
+    await session.clearCache().catch(() => undefined)
+    this.googleSeen.delete(partition)
+    for (const tab of this.tabs) {
+      if (tab.partition !== partition) continue
+      try {
+        tab.wc.reload()
+      } catch {
+        // A tab closing as this runs has nothing to reload.
+      }
+    }
+    this.emit()
   }
 
   /** Profiles: the agent browses in this partition from now on (see BrowserDriver.usePartition). */

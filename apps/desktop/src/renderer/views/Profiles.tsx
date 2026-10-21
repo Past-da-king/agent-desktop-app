@@ -324,11 +324,15 @@ export function ProfileDialog({
 
       <div className="pf-part">
         <span className="eyebrow">BROWSER SIGN-INS</span>
-        <p>Which sign-ins its helpers browse with. Its own keeps them apart from your other profiles.</p>
+        <p>Which sign-ins its helpers browse with. Its own keeps them apart from your other profiles. Yours are only used when you pick them here.</p>
         <div className="pf-chips" role="radiogroup" aria-label="Browser sign-ins">
           <button type="button" role="radio" aria-checked={browser === ''} className={`chip${browser === '' ? ' on' : ''}`} onClick={() => setBrowser('')}>
             <Icon name="globe" size={16} />
             <span className="chip-t">Its own</span>
+          </button>
+          <button type="button" role="radio" aria-checked={browser === 'mine'} className={`chip${browser === 'mine' ? ' on' : ''}`} onClick={() => setBrowser('mine')}>
+            <Icon name="person" size={16} />
+            <span className="chip-t">Same as mine (lend yours)</span>
           </button>
           {others.map((p) => (
             <button

@@ -42,7 +42,7 @@ import { Runner } from './runtime/runner'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
-import { ProfileStore } from './apps/profiles'
+import { MINE_PARTITION, ProfileStore } from './apps/profiles'
 import { ConnectedAppsFile, LearnedStore } from './apps/store'
 import { CliHost } from './runtime/cli-host'
 import { Secrets } from './secrets'
@@ -550,6 +550,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     onState: (state) => broadcast(EVENTS.browser, state),
     openExternal: (url) => shell.openExternal(url),
     sitesFile: join(app.getPath('userData'), 'browser-sites.json'),
+    // The person's own tabs keep their own sign-ins, apart from every agent's (apps/profiles.ts MINE_PARTITION).
+    personPartition: MINE_PARTITION,
   })
   // The real-Electron browser proof opens a local test page here; never set in normal use.
   const probeUrl = process.env['AGENT_BROWSER_PROBE_URL']?.trim() ?? ''
