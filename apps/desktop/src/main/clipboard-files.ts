@@ -15,9 +15,55 @@ import { fileURLToPath } from 'node:url'
 
 import { mimeForFile, type Attachment } from '@agent/core'
 
+/** Electron 44's clipboard: read() gives items whose types include raw OS formats. */
+export interface ClipboardItemLike {
+  types: string[]
+  getType(type: string): Promise<unknown>
+}
+
 export interface ClipboardLike {
-  readBuffer(format: string): Buffer
-  read(format: string): string
+  read(): Promise<ClipboardItemLike[]>
+}
+
+const RAW = /^electron application\/osclipboard;format="(.*)"$/
+
+/** The format a clipboard type names: the OS format inside Electron's raw wrapper, or the MIME type itself. */
+export function formatName(type: string): string {
+  return RAW.exec(type)?.[1] ?? type
+}
+
+async function bytesOf(value: unknown): Promise<Buffer> {
+  if (typeof value === 'string') return Buffer.from(value, 'utf8')
+  if (value instanceof Uint8Array) return Buffer.from(value)
+  if (value !== null && typeof value === 'object' && 'arrayBuffer' in value && typeof value.arrayBuffer === 'function') {
+    const data: unknown = await (value as { arrayBuffer(): Promise<ArrayBuffer> }).arrayBuffer()
+    return data instanceof ArrayBuffer ? Buffer.from(data) : Buffer.alloc(0)
+  }
+  return Buffer.alloc(0)
+}
+
+/** Every format on the clipboard that may name files, by format name, as bytes. */
+export async function fileFormats(clipboard: ClipboardLike): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>()
+  let items: ClipboardItemLike[] = []
+  try {
+    items = await clipboard.read()
+  } catch {
+    return out
+  }
+  for (const item of items) {
+    for (const type of item.types) {
+      const name = formatName(type)
+      if (!/hdrop|filename|uri-list|gnome-copied-files|file-url|NSFilenamesPboardType|^15$/i.test(name)) continue
+      if (out.has(name)) continue
+      try {
+        out.set(name, await bytesOf(await item.getType(type)))
+      } catch {
+        // A format that vanished between listing and reading: skip it.
+      }
+    }
+  }
+  return out
 }
 
 /**
@@ -73,22 +119,6 @@ export function parsePlistPaths(xml: string): string[] {
   )
 }
 
-function safeBuffer(clipboard: ClipboardLike, format: string): Buffer {
-  try {
-    return clipboard.readBuffer(format)
-  } catch {
-    return Buffer.alloc(0)
-  }
-}
-
-function safeRead(clipboard: ClipboardLike, format: string): string {
-  try {
-    return clipboard.read(format)
-  } catch {
-    return ''
-  }
-}
-
 /** Windows: every path PowerShell sees in the clipboard's file drop list. */
 export function powerShellFileList(timeoutMs = 6000): Promise<string[]> {
   return new Promise((resolve) => {
@@ -118,6 +148,11 @@ export function powerShellFileList(timeoutMs = 6000): Promise<string[]> {
   })
 }
 
+function pick(formats: Map<string, Buffer>, pattern: RegExp): Buffer | null {
+  for (const [name, bytes] of formats) if (pattern.test(name)) return bytes
+  return null
+}
+
 /** Absolute paths of the files on the clipboard, in order, without repeats. */
 export async function clipboardFilePaths(
   clipboard: ClipboardLike,
@@ -125,23 +160,27 @@ export async function clipboardFilePaths(
   listAll: () => Promise<string[]> = powerShellFileList,
 ): Promise<string[]> {
   const unique = (paths: string[]): string[] => [...new Set(paths)]
+  const formats = await fileFormats(clipboard)
+  const uris = pick(formats, /uri-list|gnome-copied-files|file-url/i)
   if (platform === 'win32') {
-    const hdrop = parseDropFiles(safeBuffer(clipboard, 'CF_HDROP'))
-    if (hdrop.length > 0) return unique(hdrop)
-    const first = parseDropFiles(safeBuffer(clipboard, 'FileNameW'))
-    if (first.length === 0) return []
-    // FileNameW only ever names the first file; ask for the whole list now we know files are there.
+    const hdrop = pick(formats, /hdrop|^15$/i)
+    const fromDrop = hdrop === null ? [] : parseDropFiles(hdrop)
+    if (fromDrop.length > 0) return unique(fromDrop)
+    const fromUris = uris === null ? [] : parseFileUris(uris.toString('utf8'))
+    if (fromUris.length > 0) return unique(fromUris)
+    const nameW = pick(formats, /^FileNameW$/i) ?? pick(formats, /^FileName$/i)
+    const first = nameW === null ? [] : parseDropFiles(nameW)
+    // FileNameW only ever names the first file (and Electron may not list CF_HDROP at all): ask Windows for
+    // the whole drop list. This is the last resort, so it only runs when the paste brought nothing else.
     const all = await listAll()
     return unique(all.length > 0 ? all : first)
   }
   if (platform === 'darwin') {
-    const plist = parsePlistPaths(safeRead(clipboard, 'NSFilenamesPboardType'))
-    if (plist.length > 0) return unique(plist)
-    return unique(parseFileUris(safeRead(clipboard, 'public.file-url')))
+    const plist = pick(formats, /NSFilenamesPboardType/i)
+    const fromPlist = plist === null ? [] : parsePlistPaths(plist.toString('utf8'))
+    if (fromPlist.length > 0) return unique(fromPlist)
   }
-  const gnome = parseFileUris(safeBuffer(clipboard, 'x-special/gnome-copied-files').toString('utf8'))
-  if (gnome.length > 0) return unique(gnome)
-  return unique(parseFileUris(safeRead(clipboard, 'text/uri-list')))
+  return unique(uris === null ? [] : parseFileUris(uris.toString('utf8')))
 }
 
 /** The clipboard's files as attachments: only ones that exist, with their size. */

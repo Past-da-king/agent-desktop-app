@@ -6,6 +6,7 @@ import {
   PROVIDERS,
   ProviderException,
   isEntityName,
+  MAX_ATTACHMENT_BYTES,
   mimeForFile,
   providerFor,
   type AppInfo,
@@ -13,6 +14,7 @@ import {
   type BrowserBounds,
   type BrowserState,
   type BrowserViewMode,
+  type ChatRunInfo,
   type Decision,
   type EntityMap,
   type EntityName,
@@ -70,9 +72,13 @@ export type Broadcast = (channel: string, payload?: unknown) => void
 
 /** The chat side the renderer can reach. Runner implements this; tests can pass a small fake. */
 export interface ChatRunner {
-  send(text: string, attachments?: Attachment[]): Promise<void>
-  stop(): void
-  state(): RunState
+  send(text: string, attachments?: Attachment[], chat?: string): Promise<void>
+  stop(chat?: string): void
+  state(chat?: string): RunState
+  /** Several chats at once: every chat with something going on. */
+  states?(): ChatRunInfo[]
+  /** A new chat with the history up to this message. */
+  branch?(itemId: string): Promise<string>
   answer(itemId: string, answer: string): Promise<void>
   decide(itemId: string, decision: Decision): Promise<void>
   /** A button tap on an agent card, heard by the agent quietly. */
@@ -131,6 +137,14 @@ export interface IpcDeps {
   openLicences?: () => void | Promise<void>
   /** Connected apps and learned apps. Without it, Connections shows no key and no learned apps. */
   apps?: AppsService
+  /** Pasted things without a file (screenshots, long text) and files copied in the file manager. */
+  pasted?: PastedFiles
+}
+
+/** Saves pasted bytes as an attachment, and reads the files on the system clipboard. */
+export interface PastedFiles {
+  save(name: string, mime: string, bytes: Uint8Array): Promise<Attachment>
+  clipboardFiles(): Promise<Attachment[]>
 }
 
 const NOT_IMPLEMENTED = 'not implemented yet'
@@ -264,17 +278,32 @@ export function registerIpc(deps: IpcDeps): () => void {
 
   // ---- chat ----
 
-  handle(CHANNELS.chat.send, async (_event, rawText, rawAttachments) => {
+  handle(CHANNELS.chat.send, async (_event, rawText, rawAttachments, rawChat) => {
     const text = requireString(rawText, 'message', MAX_MESSAGE)
     const attachments = requireAttachments(rawAttachments)
-    await chat.send(text, attachments)
+    const target = optionalChat(rawChat)
+    if (target === undefined) await chat.send(text, attachments)
+    else await chat.send(text, attachments, target)
   })
 
-  handle(CHANNELS.chat.stop, async () => {
-    chat.stop()
+  handle(CHANNELS.chat.stop, async (_event, rawChat) => {
+    const target = optionalChat(rawChat)
+    if (target === undefined) chat.stop()
+    else chat.stop(target)
   })
 
-  handle(CHANNELS.chat.state, async () => chat.state())
+  handle(CHANNELS.chat.state, async (_event, rawChat) => {
+    const target = optionalChat(rawChat)
+    return target === undefined ? chat.state() : chat.state(target)
+  })
+
+  handle(CHANNELS.chat.states, async () => chat.states?.() ?? [])
+
+  handle(CHANNELS.chat.branch, async (_event, rawId) => {
+    const id = requireString(rawId, 'message id', MAX_STRING)
+    if (chat.branch === undefined) return notImplemented()
+    return chat.branch(id)
+  })
 
   handle(CHANNELS.chat.answer, async (_event, rawId, rawAnswer) => {
     const id = requireString(rawId, 'card id', MAX_STRING)
@@ -407,6 +436,24 @@ export function registerIpc(deps: IpcDeps): () => void {
     } catch {
       return null
     }
+  })
+
+  handle(CHANNELS.files.savePasted, async (_event, rawName, rawMime, rawBytes) => {
+    if (deps.pasted === undefined) return notImplemented()
+    const name = requireString(rawName, 'file name', MAX_STRING)
+    const mime = requireString(rawMime, 'file type', MAX_STRING)
+    if (!(rawBytes instanceof Uint8Array)) throw new Error('pasted bytes must be binary')
+    if (rawBytes.byteLength > MAX_ATTACHMENT_BYTES) throw new Error('pasted file is too big')
+    const saved = await deps.pasted.save(name, mime, rawBytes)
+    previewPaths.add(saved.path)
+    return saved
+  })
+
+  handle(CHANNELS.files.clipboardFiles, async () => {
+    if (deps.pasted === undefined) return []
+    const files = (await deps.pasted.clipboardFiles()).slice(0, MAX_ATTACHMENTS)
+    for (const file of files) previewPaths.add(file.path)
+    return files
   })
 
   handle(CHANNELS.files.pickFolder, async () => {
@@ -684,6 +731,14 @@ function requireObject(value: unknown, name: string): Record<string, unknown> {
 function requireIdList(value: unknown, name: string): string[] {
   if (!Array.isArray(value) || value.length > 500) throw new Error(`${name} must be a list`)
   return value.map((item) => requireString(item, name, 200))
+}
+
+/** A chat id from the renderer, or undefined for the first chat. Plain ids only: they name session folders. */
+function optionalChat(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const id = requireString(value, 'chat id', 64)
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('chat id must be plain letters and digits')
+  return id
 }
 
 function requireString(value: unknown, name: string, max: number): string {
