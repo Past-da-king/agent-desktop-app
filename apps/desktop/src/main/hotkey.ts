@@ -7,13 +7,21 @@
  */
 import { join } from 'node:path'
 
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, nativeTheme, screen } from 'electron'
 
 import { EVENTS } from '../shared/channels'
 
 export const QUICK_ASK_WIDTH = 640
 export const QUICK_ASK_HEIGHT = 180
 export const QUICK_ASK_ROUTE = '#/quick-window'
+
+/** Where the quick chat box opens: centred across the screen the mouse is on, a little above the middle. */
+export function quickAskPosition(workArea: { x: number; y: number; width: number; height: number }): { x: number; y: number } {
+  return {
+    x: Math.round(workArea.x + (workArea.width - QUICK_ASK_WIDTH) / 2),
+    y: Math.round(workArea.y + Math.max(0, workArea.height * 0.3 - QUICK_ASK_HEIGHT / 2)),
+  }
+}
 
 /** The slice of Electron's `globalShortcut` the binder needs. */
 export interface ShortcutRegistry {
@@ -124,6 +132,7 @@ export class QuickAskWindow {
   show(): void {
     const existing = this.window
     if (existing !== null && !existing.isDestroyed()) {
+      this.place(existing)
       existing.show()
       existing.focus()
       existing.webContents.send(EVENTS.quickAsk)
@@ -142,7 +151,7 @@ export class QuickAskWindow {
       alwaysOnTop: true,
       skipTaskbar: true,
       show: false,
-      backgroundColor: '#FAF8F4',
+      backgroundColor: nativeTheme.shouldUseDarkColors ? '#131218' : '#FAF8F4',
       webPreferences: {
         preload: this.options.preloadPath,
         contextIsolation: true,
@@ -154,7 +163,7 @@ export class QuickAskWindow {
 
     this.window = window
     window.setAlwaysOnTop(true, 'floating')
-    window.center()
+    this.place(window)
 
     window.once('ready-to-show', () => {
       window.show()
@@ -173,6 +182,17 @@ export class QuickAskWindow {
       void window.loadURL(`${this.options.devUrl}${QUICK_ASK_ROUTE}`)
     } else {
       void window.loadFile(this.options.rendererFile, { hash: '/quick-window' })
+    }
+  }
+
+  /** Over whatever is in front, on the screen the person is looking at (the one with the mouse). */
+  private place(window: BrowserWindow): void {
+    try {
+      const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+      const { x, y } = quickAskPosition(display.workArea)
+      window.setBounds({ x, y, width: QUICK_ASK_WIDTH, height: QUICK_ASK_HEIGHT })
+    } catch {
+      window.center()
     }
   }
 

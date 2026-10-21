@@ -2,7 +2,7 @@ import type { HotkeyAction, HotkeyStatus, Settings } from '@agent/core'
 import { useEffect, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
-import { acceleratorFromEvent, formatAccelerator } from '../lib/hotkey'
+import { acceleratorFromEvent, cleanSwitchKeys, formatAccelerator } from '../lib/hotkey'
 import { useSettings } from '../state/useSettings'
 import { Button } from '../ui/Button'
 import { Icon } from '../ui/Icon'
@@ -15,13 +15,6 @@ interface Row {
   icon: 'bolt' | 'mic' | 'edit'
   title: string
   line: (settings: Settings | null, platform: string) => string
-}
-
-/** The dictation shortcut's own modifiers with C: Alt+Space gives Alt+C. Mirrors cleanSwitchAccelerator in main. */
-export function cleanSwitchKeys(dictate: string, platform: string): string {
-  const parts = dictate.split('+').map((part) => part.trim()).filter((part) => part !== '')
-  if (parts.length < 2 || (parts.at(-1) ?? '').toUpperCase() === 'C') return ''
-  return formatAccelerator([...parts.slice(0, -1), 'C'].join('+'), platform).join('+')
 }
 
 const ROWS: Row[] = [
