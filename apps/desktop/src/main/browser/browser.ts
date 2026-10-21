@@ -178,7 +178,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private expanded = false
 
   constructor(options: AgentBrowserOptions) {
-    this.window = options.window
+    // Set by attach() below, which also guards the window's <webview>s.
+    this.window = null
     this.partition = options.partition ?? PARTITION
     this.current = this.partition
     this.maxTabs = Math.max(1, options.maxTabs ?? MAX_TABS)
@@ -408,6 +409,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const host = win.webContents
     const onWillAttach = (event: Electron.Event, prefs: WebPreferences, params: Record<string, string>): void => {
       const wanted = (partition: string): boolean => [...this.pending.values()].some((waiting) => waiting.partition === partition)
+      if (process.env['AGENT_EMBED_DEBUG'] === '1') console.log('EMBED will-attach', JSON.stringify(params), JSON.stringify(prefs))
       if (!guardWebview(prefs, params, wanted)) event.preventDefault()
     }
     host.on('will-attach-webview', onWillAttach)
@@ -435,10 +437,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   attachGuest(tabId: string, guestId: number, senderId: number | null): boolean {
     const waiting = this.pending.get(tabId)
     const win = this.window
+    if (process.env['AGENT_EMBED_DEBUG'] === '1') console.log('EMBED attachGuest', tabId, guestId, senderId, waiting !== undefined, win?.webContents.id)
     if (waiting === undefined || win === null || win.isDestroyed()) return false
     if (senderId !== null && senderId !== win.webContents.id) return false
     if (this.tabs.some((tab) => !tab.wc.isDestroyed() && tab.wc.id === guestId)) return false
     const guest = allWebContents.fromId(guestId)
+    if (process.env['AGENT_EMBED_DEBUG'] === '1') console.log('EMBED guest', guest?.getType(), guest?.hostWebContents?.id, guest?.session === electronSession.fromPartition(waiting.partition))
     if (guest === undefined || !isEmbeddedGuest(guest, win.webContents.id, electronSession.fromPartition(waiting.partition))) return false
     waiting.resolve(guest)
     return true
