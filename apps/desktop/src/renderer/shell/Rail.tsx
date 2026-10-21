@@ -95,10 +95,17 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
             className={`nav${active ? ' on' : ''}`}
             onClick={() => (item.page === 'chat' ? openChat(MAIN_CHAT) : navigate({ page: item.page }))}
             aria-current={active ? 'page' : undefined}
-            title={item.label}
+            title={item.page === 'chat' ? agentName : item.label}
           >
-            <Icon name={item.icon} size={22} />
-            <span className="lbl">{item.label}</span>
+            {/* The main chat is your agent: its name and its own picture. */}
+            {item.page === 'chat' ? (
+              <span className="nav-av" aria-hidden="true">
+                <Mascot id={settings?.mascot ?? 'scout'} size={24} />
+              </span>
+            ) : (
+              <Icon name={item.icon} size={22} />
+            )}
+            <span className="lbl">{item.page === 'chat' ? agentName : item.label}</span>
             {item.page === 'chat' && needs > 0 ? (
               <>
                 <span className="badge inline">{needs}</span>
