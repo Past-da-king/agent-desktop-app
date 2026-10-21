@@ -114,6 +114,7 @@ const api: AgentApi = {
     frame: () => call<string | null>(CHANNELS.browser.frame),
     go: (address) => call<void>(CHANNELS.browser.go, address),
     newTab: () => call<void>(CHANNELS.browser.newTab),
+    devtools: () => call<void>(CHANNELS.browser.devtools),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
   },
 
