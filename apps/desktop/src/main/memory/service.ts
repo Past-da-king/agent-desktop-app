@@ -18,8 +18,8 @@ export interface MemoryServiceDeps {
   complete: Complete
   index: ChatIndex
   upkeep: UpkeepFile
-  /** Forgets the main conversation on the person's plan, so the next turn starts a fresh session. */
-  forgetSession?: () => void
+  /** Forgets a chat's conversation on the person's plan (its turn thread), so the next turn starts a fresh session. */
+  forgetSession?: (thread: string) => void
   /** Tells the window the chat rows changed. */
   emitChat?: () => void
   /** Tells the window the upkeep report changed. */
@@ -54,9 +54,8 @@ export class MemoryService {
    */
   async newChat(target?: { chat: string; from: string }): Promise<{ dividerId: string | null; saving: boolean }> {
     if (target !== undefined) {
-      // Opening "a new chat" that is the chat already open writes nothing: a divider inside a running chat would cut
-      // its context mid-run.
-      if (target.chat === target.from) return { dividerId: null, saving: false }
+      // The main thread (and any chat started fresh in place) keeps going in the same chat with a summary of itself.
+      if (target.chat === target.from) return this.compressChat(target.chat)
       return this.newSeparateChat(target.chat, target.from)
     }
     // Below: the single-stream New chat (a divider in the first chat). The app no longer calls it (memory/ipc.ts
@@ -72,7 +71,7 @@ export class MemoryService {
     if (saving && closing !== undefined) meta['memory'] = { chat: closing.id, status: 'saving' } satisfies ChatMemoryNote
     const divider = await this.deps.store.upsert('chat_item', { kind: 'notice', text: 'New chat', meta: JSON.stringify(meta) })
     try {
-      this.deps.forgetSession?.()
+      this.deps.forgetSession?.('main')
     } catch {
       // Losing the session id only means the next turn starts a fresh conversation, which is what we want.
     }
@@ -102,6 +101,63 @@ export class MemoryService {
     this.deps.emitChat?.()
     if (saving) this.enqueue(divider.id)
     return { dividerId: divider.id, saving }
+  }
+
+  /**
+   * New chat in the main thread: not a new chat and not a cut. The conversation so far is compressed into a short
+   * summary in the background and the agent carries on fresh with that summary in context (runner withContextNotes
+   * reads it off this divider). What it said is also filed into memory, as with any chat.
+   */
+  private async compressChat(chat: string): Promise<{ dividerId: string | null; saving: boolean }> {
+    const items = await this.deps.store.list('chat_item')
+    const own = items.filter((item) => chatOf(item) === chat && item.kind !== 'branch')
+    const latest = own.sort((a, b) => b.createdAt - a.createdAt)[0]
+    if (latest === undefined || isDividerRow(latest)) return { dividerId: latest?.id ?? null, saving: false }
+    const closing = chatSegments(items)
+      .filter((segment) => segment.chat === chat)
+      .at(-1)
+    const filed = closing !== undefined && items.some((item) => isDividerRow(item) && memoryNote(item)?.chat === closing.id)
+    const saving = closing !== undefined && !filed && hasSubstance(closing)
+    const spoken = closing !== undefined && closing.items.some((item) => (item.kind === 'user' || item.kind === 'agent') && item.text.trim() !== '')
+    const meta: Record<string, unknown> = { divider: true, at: this.now(), ...(chat === 'main' ? {} : { chat }), ...(spoken ? { compress: 'pending' } : {}) }
+    if (saving && closing !== undefined) meta['memory'] = { chat: closing.id, status: 'saving' } satisfies ChatMemoryNote
+    const divider = await this.deps.store.upsert('chat_item', { kind: 'notice', text: 'New chat', meta: JSON.stringify(meta) })
+    try {
+      this.deps.forgetSession?.(chat === 'main' ? 'main' : `chat:${chat}`)
+    } catch {
+      // Losing the session id only means the next turn starts a fresh conversation, which is what we want.
+    }
+    this.deps.emitChat?.()
+    if (spoken && closing !== undefined) this.compressQueue(divider.id, closing.id)
+    if (saving) this.enqueue(divider.id)
+    return { dividerId: divider.id, saving }
+  }
+
+  /** Compressing runs ahead of filing: the person may type again at once and the agent needs the gist. */
+  private compressQueue(dividerId: string, segmentId: string): void {
+    void this.compress(dividerId, segmentId).catch(() => undefined)
+  }
+
+  private async compress(dividerId: string, segmentId: string): Promise<void> {
+    const items = await this.deps.store.list('chat_item')
+    const segment = chatSegments(items).find((item) => item.id === segmentId)
+    let carry = ''
+    let status: 'done' | 'failed' = 'failed'
+    if (segment !== undefined) {
+      // A stretch that began with a summary of its own carries that one forward too.
+      const before = segment.startDivider === null ? '' : String(parseMeta(segment.startDivider.meta)['carry'] ?? '')
+      try {
+        carry = (await this.deps.complete(COMPRESS_SYSTEM, compressPrompt(before, transcript(segment, 40_000)))).trim().slice(0, 4_000)
+        status = carry === '' ? 'failed' : 'done'
+      } catch (error) {
+        this.deps.log?.('Chat could not be compressed', { error: plainError(error) })
+      }
+    }
+    const divider = await this.deps.store.get('chat_item', dividerId)
+    if (divider === null) return
+    const meta = { ...parseMeta(divider.meta), compress: status, ...(carry === '' ? {} : { carry }) }
+    await this.deps.store.upsert('chat_item', { id: divider.id, kind: divider.kind, text: divider.text, meta: JSON.stringify(meta) })
+    this.deps.emitChat?.()
   }
 
   /** Files a chat again after it failed. */
@@ -272,6 +328,18 @@ export class MemoryService {
     this.dailyRunning = run
     return run
   }
+}
+
+/** The brief for compressing a conversation the agent carries on from (main thread New chat). */
+export const COMPRESS_SYSTEM = [
+  "You compress a conversation between the user and their personal agent so the agent can carry on without the full transcript.",
+  'Write at most 250 words of plain markdown bullets under these headings, leaving out a heading with nothing under it:',
+  '**Working on** (the current task or tasks), **Decided** (with the reason), **In progress** (who or what is doing it, where it stands), **Asked last** (the newest request and whether it is answered).',
+  'Facts only: exact names, dates, amounts and places. No secrets, passwords or codes. No preamble.',
+].join('\n')
+
+export function compressPrompt(before: string, chat: string): string {
+  return `${before.trim() === '' ? '' : `SUMMARY OF EARLIER PARTS:\n${before.trim()}\n\n`}THE CONVERSATION:\n${chat}`
 }
 
 function plainError(error: unknown): string {

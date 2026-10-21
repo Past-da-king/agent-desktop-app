@@ -44,9 +44,14 @@ export function newChatId(): string {
   return `c${randomUUID().replace(/-/g, '').slice(0, 16)}`
 }
 
+/** A fresh project chat id: "pc", so chats from the days before projects ("c") can be told apart. */
+export function newProjectChatId(): string {
+  return `pc${randomUUID().replace(/-/g, '').slice(0, 16)}`
+}
+
 /** Chat ids must be plain: they become folder names for plan sessions. */
 export function isChatId(value: string): boolean {
-  return value === MAIN_CHAT || /^c[a-z0-9]{6,40}$/i.test(value)
+  return value === MAIN_CHAT || /^p?c[a-z0-9]{6,40}$/i.test(value)
 }
 
 function short(text: string, limit: number): string {

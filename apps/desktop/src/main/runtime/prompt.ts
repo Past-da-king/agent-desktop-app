@@ -45,6 +45,44 @@ export interface PromptInput {
   profile?: AgentProfileInfo | null
   /** Learned app id -> name, so a profile's learned apps read by name. */
   learnedNames?: Record<string, string>
+  /** The project this chat belongs to (MAIN role in a project chat). Absent in the main thread. */
+  project?: ProjectContext | null
+  /** The user's projects by name, so the main thread knows where work can go. */
+  projectNames?: string[]
+}
+
+/** What the agent is told about the project a chat belongs to. */
+export interface ProjectContext {
+  id: string
+  name: string
+  description: string
+  /** Its folder on this computer, '' for none. */
+  path: string
+  /** The name of the profile its helpers use. */
+  profile: string
+}
+
+/** The rule that keeps every reply on what the person is doing now (Ayanda, 21 Oct 2026). */
+export const FOCUS_LINE =
+  '- STAY ON WHAT THE USER IS DOING NOW. Answer the message in front of you. Do not bring up older topics, past memories, other projects or open tasks unless the user asks, or it directly blocks or changes what they are doing now (a clash, something due today, an approval only they can give). The memories below are background for you, not things to mention.'
+
+/** The main agent's own part when a project chat runs. */
+export function projectLines(project: ProjectContext): string[] {
+  const out = ['THIS PROJECT', `You are working in the project "${project.name}".${project.description.trim() === '' ? '' : ` ${project.description.trim()}`}`]
+  if (project.path.trim() !== '') out.push(`- Its folder is ${project.path.trim()}. Work there by default: files, commands and code for this project live in it.`)
+  out.push(`- Its profile is ${project.profile}: helpers you start here work in it (their accounts and logins) unless the job truly needs another.`)
+  out.push('- Stay inside this project. Save what you learn about it with memory_save; it is kept as this project\'s memory.')
+  out.push('- Something for the main agent, another project or the user\'s main thread: message_main.')
+  return out
+}
+
+/** How the main thread hands work to projects (Ayanda, 21 Oct 2026). */
+export function projectsMainLines(names: string[]): string[] {
+  return [
+    `PROJECTS: ${names.length === 0 ? 'none yet' : names.join(', ')}. Each has its own chats (agents), its own memory, a folder and a profile.`,
+    '- Work that belongs to a project goes there: project_chat_start opens a chat in it with your brief and runs it; project_chat_send sends a message into one of its chats; projects_list shows every project, its chats and what each is doing.',
+    '- A message starting "[From project" is a project chat writing to you. Act on it, pass it on, or tell the user, in one short line.',
+  ]
 }
 
 function accountLine(profile: AgentProfileInfo): string {
@@ -108,10 +146,17 @@ export function buildSystemPrompt(input: PromptInput): string {
   const pinned = memories.filter((memory) => memory.pinned)
   const pinnedIds = new Set(pinned.map((memory) => memory.id))
   // People, organisations and projects the message names come first, then the best word matches.
+  const project = input.project ?? null
+  // In a project chat its own memories come first; recall is keyed on the project's name too.
+  const projectRecalled =
+    project === null
+      ? []
+      : recallFor(`${project.name} ${latestUserText}`, memories.filter((memory) => !pinnedIds.has(memory.id) && memory.project === project.id), MEMORY_LIMIT)
+  const shownIds = new Set(projectRecalled.map((memory) => memory.id))
   const recalled = recallFor(
-    latestUserText,
-    memories.filter((memory) => !pinnedIds.has(memory.id)),
-    MEMORY_LIMIT,
+    project === null ? latestUserText : `${project.name} ${latestUserText}`,
+    memories.filter((memory) => !pinnedIds.has(memory.id) && !shownIds.has(memory.id)),
+    Math.max(2, MEMORY_LIMIT - projectRecalled.length),
   )
   const goals = input.goals.filter((goal) => goal.status === 'open')
   const tasks = input.tasks.filter((task) => task.status !== 'done')
@@ -147,6 +192,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push('- Routines: suggest them (a morning brief, watching a price, chasing a reply); when the user agrees, create them with routine_create.')
     lines.push("- Before anything goes out in the user's name, costs money, or deletes something: request_approval with the exact content. Never skip this.")
     lines.push('- Anything long (research, a comparison, a plan): put it in a REPORT with the report tool and say only the one-line takeaway in the chat.')
+    if (input.role !== 'routine') lines.push(FOCUS_LINE)
     lines.push('')
   } else if (main) {
     lines.push('YOUR JOB')
@@ -164,6 +210,9 @@ export function buildSystemPrompt(input: PromptInput): string {
     )
     lines.push(
       '- Split independent work across helpers so it runs at once (one per site, person or option).',
+    )
+    lines.push(
+      '- BIG ASKS ("start this project", "handle this for Guavas"): stay at the level of ideas. Break it into a few parts, delegate each part to a helper in the profile whose accounts and logins fit the work (a Guavas profile for Guavas work; make one with profile_create if none fits), and say in one line what you set going. When results come in, report where everything is at in one short status (done, in progress, blocked and why), never a wall.',
     )
     lines.push(
       '- After delegating, tell the user in one short line what you set going, then end your turn. Never wait for helpers. The user can keep talking to you while they work, and anything new they ask for goes to another helper.',
@@ -195,6 +244,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push(
       "- The user uses you as their to-do list. Things THEY must do or asked to be reminded of go on their list (task_add with owner user). The work you hand out lives under goals (goal_create) with a task per step; tick them off as helper results come in, and when you are stuck mark the step blocked and say what would unblock it.",
     )
+    if (input.role !== 'routine') lines.push(FOCUS_LINE)
     lines.push(
       '- Routines: you come up with the ideas (a morning brief, watching a price, chasing a reply) and suggest them. When the user agrees, a helper creates it with routine_create. routine_list shows what exists.',
     )
@@ -257,6 +307,16 @@ export function buildSystemPrompt(input: PromptInput): string {
   }
 
   if (input.role === undefined || input.role === 'main') {
+    if (project !== null) {
+      lines.push(...projectLines(project))
+      lines.push('')
+    } else if (input.projectNames !== undefined) {
+      lines.push(...projectsMainLines(input.projectNames))
+      lines.push('')
+    }
+  }
+
+  if (input.role === undefined || input.role === 'main') {
     lines.push(...ASSUME_YOU_KNOW)
     lines.push('')
   }
@@ -299,9 +359,15 @@ export function buildSystemPrompt(input: PromptInput): string {
     pinned.forEach((memory) => lines.push(`- ${formatMemory(memory)}`))
   }
 
+  if (projectRecalled.length > 0 && project !== null) {
+    lines.push('')
+    lines.push(`${project.name.toUpperCase()} PROJECT MEMORY (this project's own notes and decisions)`)
+    projectRecalled.forEach((memory) => lines.push(`- ${formatMemoryBrief(memory)}`))
+  }
+
   if (recalled.length > 0) {
     lines.push('')
-    lines.push('POSSIBLY RELEVANT MEMORIES')
+    lines.push('BACKGROUND MEMORIES (use one only when it bears on the current request; never recite them or raise them unprompted)')
     recalled.forEach((memory) => lines.push(`- ${formatMemoryBrief(memory)}`))
   }
 

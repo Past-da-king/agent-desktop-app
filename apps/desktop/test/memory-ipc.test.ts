@@ -71,11 +71,14 @@ describe('memory IPC', () => {
   })
 
   it('starts a new chat, searches chats and runs the daily pass', async () => {
-    expect(await invoke(MEMORY_CHANNELS.newChat)).toMatchObject({ saving: false })
-    // Every New chat from the window opens a fresh chat: no divider ever lands inside an existing (maybe running) chat.
-    const divider = (await store.list('chat_item')).find((row) => row.kind === 'notice')
-    expect(JSON.parse(divider?.meta ?? '{}')['chat']).toMatch(/^c[a-z0-9]{6,}$/i)
+    // The main thread with nothing in it: nothing to start fresh from, so nothing is written.
+    expect(await invoke(MEMORY_CHANNELS.newChat)).toEqual({ dividerId: null, saving: false })
     expect(await invoke(MEMORY_CHANNELS.newChat, { chat: 'main', from: 'main' })).toEqual({ dividerId: null, saving: false })
+    expect(await store.list('chat_item')).toHaveLength(0)
+    // A project's New chat opens a chat of its own, with a divider that files the one it left.
+    expect(await invoke(MEMORY_CHANNELS.newChat, { chat: 'pcabcdef123456', from: 'main' })).toMatchObject({ saving: false })
+    const divider = (await store.list('chat_item')).find((row) => row.kind === 'notice')
+    expect(JSON.parse(divider?.meta ?? '{}')['chat']).toBe('pcabcdef123456')
     await expect(invoke(MEMORY_CHANNELS.newChat, { chat: '../x', from: 'main' })).rejects.toThrow('plain letters')
     expect(await invoke(MEMORY_CHANNELS.searchChats, 'anything', 3)).toEqual([])
     const report = (await invoke(MEMORY_CHANNELS.runDaily)) as { ok: boolean }
