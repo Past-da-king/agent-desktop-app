@@ -36,7 +36,7 @@ import type {
   Unsubscribe,
   VoiceResult,
 } from '@agent/core'
-import type { MemoryImportPreview, MemoryImportResult, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
+import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
 import { CHANNELS, EVENTS } from '../shared/channels'
 import { MEMORY_CHANNELS, MEMORY_EVENTS } from '../shared/memory-channels'
@@ -256,6 +256,12 @@ const api: AgentApi = {
     history: (memoryId) => call<MemoryVersion[]>(MEMORY_HISTORY_CHANNELS.history, memoryId),
     restoreVersion: (memoryId, n) => call<boolean>(MEMORY_HISTORY_CHANNELS.restoreVersion, memoryId, n),
     onUpkeep: (callback) => on<UpkeepReport | null>(MEMORY_EVENTS.upkeep, callback),
+    previewTidy: (path, includeAll) => call<MemoryTidyPlan>(MEMORY_CHANNELS.previewTidy, path, includeAll),
+    startTidy: (path, includeAll) => call<MemoryTidyProgress>(MEMORY_CHANNELS.startTidy, path, includeAll),
+    stopTidy: () => call<MemoryTidyProgress>(MEMORY_CHANNELS.stopTidy),
+    tidyState: () => call<MemoryTidyProgress | null>(MEMORY_CHANNELS.tidyState),
+    undoTidy: () => call<{ removed: number; restored: number }>(MEMORY_CHANNELS.undoTidy),
+    onTidy: (callback) => on<MemoryTidyProgress>(MEMORY_EVENTS.tidy, callback),
   },
 }
 

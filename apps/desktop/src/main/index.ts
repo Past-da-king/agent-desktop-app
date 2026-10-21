@@ -55,6 +55,7 @@ import { ChatIndex } from './memory/chat-index'
 import { EMPTY_VOCABULARY, vocabularyFrom } from './memory/vocabulary'
 import { registerMemoryHistoryIpc } from './memory/history-ipc'
 import { registerMemoryIpc } from './memory/ipc'
+import { MemoryTidy, TidyFile } from './memory/tidy'
 import { MemoryService } from './memory/service'
 import { UpkeepFile } from './memory/upkeep-log'
 import { dailyRoutineSlot, ensureDailyRoutine, recordDailyRun, resultLine } from './memory/routine'
@@ -711,12 +712,25 @@ async function startServices(win: BrowserWindow): Promise<void> {
     onDaily: (report) => recordDailyRun(memoryStore, report),
     log: (message, detail) => logger.info(message, detail),
   })
+  // Tidying a memory bank with the agent (Settings > Memory > Import), on the same model as chat filing.
+  const memoryTidy = new MemoryTidy({
+    store: memoryStore,
+    complete: (system, prompt, signal) => {
+      if (runner === null) return Promise.reject(new Error('The agent is not running.'))
+      return runner.oneShot(system, prompt, signal)
+    },
+    upkeep,
+    file: new TidyFile(join(dir, 'memory-tidy.json')),
+    emit: (progress) => broadcast(MEMORY_EVENTS.tidy, progress),
+    log: (message, detail) => logger.info(message, detail),
+  })
   registerMemoryIpc({
     ipcMain,
     service: memory,
     store: memoryStore,
     pickFile: pickImportFile,
     log: (message, detail) => logger.info(message, detail),
+    tidy: memoryTidy,
   })
   registerMemoryHistoryIpc(ipcMain, memoryStore)
   void memory.restore().catch(() => undefined)
