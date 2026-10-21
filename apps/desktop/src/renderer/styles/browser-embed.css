@@ -32,3 +32,5 @@
 /* Over a page an agent drives: a click takes it over; the wheel falls through to the panel. */
 .br-host .br-catch{position:absolute;inset:0;z-index:5;pointer-events:auto;cursor:pointer;background:transparent}
 .br-host .br-catch[hidden]{display:none}
+/* A page the window could not host, shown full size as a still picture until it can be. */
+.br-stage-view .br-stage-still{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#fff}

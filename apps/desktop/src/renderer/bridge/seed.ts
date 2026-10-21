@@ -532,6 +532,7 @@ export function demoRows(): SeedResult['rows'] {
         status: 'done',
         summary: 'Opened Ocean Breeze, 2 rooms free',
         helper: 'c8',
+        run: { kind: 'tool', label: 'browser open', input: 'https://oceanbreeze.example/rooms', stdout: 'Ocean Breeze: 2 rooms free from R 1,150 a night, two minutes from the beach.', stderr: '', ms: 1840, state: 'ok' },
         by: 'Guesthouse check',
       }),
     },

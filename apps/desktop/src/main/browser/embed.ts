@@ -13,7 +13,12 @@
 import type { WebPreferences } from 'electron'
 
 /** How long a new tab waits for the renderer's <webview> before it opens offscreen instead. */
-export const EMBED_WAIT_MS = 3_000
+/**
+ * How long a new tab waits for the window to host its page before it opens offscreen instead. The window can be
+ * busy for a while (a long list arriving, a helper's steps landing); an offscreen page is only ever a still picture,
+ * so waiting beats giving up.
+ */
+export const EMBED_WAIT_MS = 20_000
 
 /**
  * Applies the browser's rules to a <webview> about to attach (Electron's will-attach-webview). Returns false

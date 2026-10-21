@@ -30,6 +30,8 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const route = useRoute()
   const navigate = useUi((state) => state.navigate)
+  const railCollapsed = useUi((state) => state.railCollapsed)
+  const toggleRail = useUi((state) => state.toggleRail)
   const items = useEntity('chat_item')
   const goals = useEntity('goal')
   const projects = useEntity('project')
@@ -61,18 +63,30 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
 
   return (
     <nav className="rail" aria-label="Main">
-      <button
-        type="button"
-        className="me"
-        onClick={() => navigate({ page: 'home' })}
-        aria-label={`${agentName}, your agent`}
-      >
-        <Mascot id={settings?.mascot ?? 'scout'} size={48} busy={needs === 0} needsYou={needs > 0} />
-        <div className="who">
-          <div className="nm">{agentName}</div>
-          <div className={`st${needs > 0 ? ' warn' : ''}`}>{short(statusText, 44)}</div>
-        </div>
-      </button>
+      <div className="me-row">
+        <button
+          type="button"
+          className="me"
+          onClick={() => navigate({ page: 'home' })}
+          aria-label={`${agentName}, your agent`}
+        >
+          <Mascot id={settings?.mascot ?? 'scout'} size={48} busy={needs === 0} needsYou={needs > 0} />
+          <div className="who">
+            <div className="nm">{agentName}</div>
+            <div className={`st${needs > 0 ? ' warn' : ''}`}>{short(statusText, 44)}</div>
+          </div>
+        </button>
+        <button
+          type="button"
+          className="rail-fold hide-m"
+          aria-label={railCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}
+          aria-pressed={railCollapsed}
+          title={railCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}
+          onClick={toggleRail}
+        >
+          <Icon name="chev" size={16} />
+        </button>
+      </div>
 
       <button
         type="button"
