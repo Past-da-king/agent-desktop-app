@@ -853,6 +853,8 @@ export function Chat(): JSX.Element {
   const thread = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const stuck = useRef(true)
+  /** Something new arrived below while the person was reading further up. */
+  const [below, setBelow] = useState(false)
   const dragDepth = useRef(0)
 
   const [showEarlier, setShowEarlier] = useState(false)
@@ -898,17 +900,29 @@ export function Chat(): JSX.Element {
     setShowEarlier(false)
   }, [openChat, scrollToken])
 
+  // Opening a chat starts at its newest message.
   useEffect(() => {
-    markSeen(openChat)
     stuck.current = true
+    setBelow(false)
     const el = thread.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [openChat, items.length, markSeen])
+  }, [openChat])
 
   useEffect(() => {
+    markSeen(openChat)
+  }, [openChat, items.length, markSeen])
+
+  // New rows (a helper's step, a reply) follow the newest message only while the person is at the bottom. Reading
+  // further up, they stay where they are and a button says there is something new below.
+  const newest = items.length === 0 ? '' : `${items.length}:${items[items.length - 1]?.id ?? ''}`
+  useEffect(() => {
     const el = thread.current
-    if (el && stuck.current) el.scrollTop = el.scrollHeight
+    if (el === null) return
+    if (stuck.current) el.scrollTop = el.scrollHeight
   }, [items, running, loaded])
+  useEffect(() => {
+    if (!stuck.current && newest !== '') setBelow(true)
+  }, [newest])
 
   useEffect(() => {
     if (scrollToken === 0) return
@@ -1139,6 +1153,7 @@ export function Chat(): JSX.Element {
           const el = thread.current
           if (!el) return
           stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 56
+          if (stuck.current) setBelow(false)
         }}
       >
         {!loaded ? (
@@ -1194,6 +1209,21 @@ export function Chat(): JSX.Element {
       </div>
 
       <div className="compose">
+        {below ? (
+          <button
+            type="button"
+            className="new-below"
+            onClick={() => {
+              const el = thread.current
+              if (el) el.scrollTop = el.scrollHeight
+              stuck.current = true
+              setBelow(false)
+            }}
+          >
+            <Icon name="chevd" size={16} />
+            New below
+          </button>
+        ) : null}
         {attachProblem !== '' ? (
           <div className="banner warn attach-warn" role="alert">
             {attachProblem}

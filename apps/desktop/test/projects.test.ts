@@ -3,6 +3,8 @@
  * between them, helpers in the project's profile, the main thread's New chat carrying on with a summary, and old
  * chats kept under "Earlier chats". On the real Runner, HelperManager and Store with a local fake AI server.
  */
+import { memoryTools } from '../src/main/tools/memory'
+import { testContext, toolNamed } from './support'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -261,6 +263,31 @@ describe('the prompt', () => {
     expect(text).toContain('ACME FINANCE PROJECT MEMORY')
     expect(text.indexOf('Acme calls over R 10,000')).toBeLessThan(text.indexOf('BACKGROUND MEMORIES'))
     expect(text).toContain(FOCUS_LINE)
+  })
+
+  it('a project chat and its helpers are told to keep the project memory, decisions updated never deleted', () => {
+    const project = { id: 'p1', name: 'Acme finance', description: 'Getting Acme paid.', path: 'C:\\Work\\Acme', profile: 'Work' }
+    const main = buildSystemPrompt({ ...base, memories: [], latestUserText: 'go', role: 'main', project })
+    expect(main).toContain("PROJECT MEMORY: what you save here is Acme finance's own memory")
+    expect(main).toContain('"About Acme finance" page')
+    expect(main).toContain('Never delete a decision')
+    const helper = buildSystemPrompt({ ...base, memories: [], latestUserText: 'check invoices', role: 'helper', helper: { label: 'Invoices', brief: 'check invoices' }, project })
+    expect(helper).toContain('You are working for the project "Acme finance". Its folder is C:\\Work\\Acme.')
+    expect(helper).toContain('PROJECT MEMORY')
+    const plain = buildSystemPrompt({ ...base, memories: [], latestUserText: 'hi', role: 'main' })
+    expect(plain).not.toContain('PROJECT MEMORY:')
+  })
+
+  it('an agent cannot delete project memory: it is closed and kept', async () => {
+    const db = new Store(':memory:')
+    const tools = memoryTools(db)
+    const page = await db.upsert('memory', { title: 'Use Astro', body: 'Decided 21 Oct.', kind: 'decision', topics: '', pinned: false, source: 'agent', project: 'p1' })
+    const out = await toolNamed(tools, 'memory_update').run({ id: page.id, delete: true, reason: 'old' }, testContext())
+    expect(out).toContain('never deleted')
+    expect((await db.get('memory', page.id))?.status).toBe('closed')
+    const loose = await db.upsert('memory', { title: 'Scratch', body: 'x', kind: 'fact', topics: '', pinned: false, source: 'agent' })
+    expect(await toolNamed(tools, 'memory_update').run({ id: loose.id, delete: true }, testContext())).toContain('Deleted')
+    db.close()
   })
 
   it('in the main thread: the projects there are and how to hand work to them', () => {

@@ -74,3 +74,8 @@
 .wait-line i{display:grid;place-items:center;flex:none}
 .wait-line>span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wait-where{display:flex;align-items:center;gap:2px;flex:none;font-weight:500}
+
+/* Something new arrived below while the person reads further up: one tap takes them to it. */
+.compose{position:relative}
+.new-below{position:absolute;top:-46px;left:50%;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:6px;height:36px;padding:0 14px 0 10px;border-radius:999px;background:var(--pc);color:var(--on-pc);font:500 13px/1 var(--font);box-shadow:0 4px 14px rgba(0,0,0,.14)}
+.new-below:hover{filter:brightness(.97)}
