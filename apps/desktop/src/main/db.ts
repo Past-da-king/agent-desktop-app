@@ -50,7 +50,7 @@ const MAX_SINGLE_CHANGES = 40
  */
 const CHAT_SQL = "CASE WHEN json_valid(json_extract(payload, '$.meta')) THEN json_extract(json_extract(payload, '$.meta'), '$.chat') END"
 
-const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project']
+const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device']
 
 /** Versions kept per memory page; the oldest go first. */
 const MAX_VERSIONS = 300
@@ -572,5 +572,7 @@ function defaultsFor(entity: EntityName): Record<string, unknown> {
       }
     case 'project':
       return { name: '', description: '', icon: { glyph: 'folder', color: 'iris' }, path: '', profile: '', hidden: false, chats: [] }
+    case 'device':
+      return { name: '', kind: 'desktop', platform: 'linux', roles: [], priority: 0, urls: [], fp: '', facts: {}, pairedAt: 0, lastSeen: 0, revoked: false }
   }
 }
