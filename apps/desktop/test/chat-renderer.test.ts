@@ -106,3 +106,34 @@ describe('demo chat data', () => {
     ).toBe(true)
   })
 })
+
+describe('the thread window', () => {
+  it('draws only the newest rows, keeps cards still waiting, and counts what is above', async () => {
+    const { windowThread } = await import('../src/renderer/lib/chat-memory')
+    const rows = Array.from({ length: 120 }, (_, i) => row(`r${i}`, i % 2 ? 'agent' : 'user', i + 1))
+    rows[3] = row('q', 'question', 4, { options: ['Yes'], answer: '' })
+    const { rows: drawn, above } = windowThread(rows, 80)
+    expect(drawn).toHaveLength(81)
+    expect(drawn[0]?.id).toBe('q')
+    expect(drawn[1]?.id).toBe('r40')
+    expect(above).toBe(39)
+    // Everything fits: nothing hidden.
+    expect(windowThread(rows.slice(0, 50), 80)).toEqual({ rows: rows.slice(0, 50), above: 0 })
+    expect(windowThread(rows, Number.POSITIVE_INFINITY).above).toBe(0)
+  })
+})
+
+describe('the boot hint', () => {
+  it('remembers the look for the next start and survives junk', async () => {
+    const { readBootHint, writeBootHint } = await import('../src/renderer/lib/boot-hint')
+    const box = new Map<string, string>()
+    const storage = { getItem: (k: string) => box.get(k) ?? null, setItem: (k: string, v: string) => void box.set(k, v) }
+    expect(readBootHint(storage)).toBeNull()
+    writeBootHint({ mascot: 'bloom', agentName: 'Hina', accent: 'violet', theme: 'dark' }, storage)
+    expect(readBootHint(storage)).toEqual({ mascot: 'bloom', agentName: 'Hina', accent: 'violet', theme: 'dark' })
+    box.set('agent.boot', '{not json')
+    expect(readBootHint(storage)).toBeNull()
+    box.set('agent.boot', JSON.stringify({ mascot: 'scout', agentName: 'Nova', theme: 'odd' }))
+    expect(readBootHint(storage)).toEqual({ mascot: 'scout', agentName: 'Nova', accent: 'iris', theme: 'system' })
+  })
+})

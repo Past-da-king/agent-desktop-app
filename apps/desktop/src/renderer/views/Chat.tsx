@@ -1,6 +1,6 @@
 import { VoiceNote } from '../voice/VoiceNote'
-import { PROFILE_COLORS, attachmentKind, attachmentProblem, fileSizeLabel, type Attachment, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
+import { PROFILE_COLORS, fileSizeLabel, type Attachment, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
+import { Suspense, createContext, lazy, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
@@ -22,13 +22,11 @@ import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { toast } from '../state/useToast'
 import { CallRow } from '../voice/CallRow'
-import { CallSheet } from '../voice/CallSheet'
-import { DictateButton } from '../voice/DictateButton'
 import { useCall } from '../voice/useCall'
 import { VisualCard, visualFromMeta } from '../voice/VisualCard'
 import { VoiceIcon } from '../voice/VoiceIcon'
 import { Button } from '../ui/Button'
-import { IconButton, Kbd, Pill } from '../ui/bits'
+import { IconButton, Pill } from '../ui/bits'
 import { Chip } from '../ui/Chip'
 import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
@@ -47,7 +45,11 @@ import { Skeleton } from '../ui/Skeleton'
 import { runFromMeta, snippetOf } from '../../shared/run-record'
 import { RunStep } from './RunStep'
 import { ChatDivider, EarlierChats } from './ChatDivider'
-import { visibleThread } from '../lib/chat-memory'
+import { THREAD_STEP, THREAD_WINDOW, visibleThread, windowThread } from '../lib/chat-memory'
+import { Composer, type ComposerHandle } from './Composer'
+import { useThumbnail } from './AttachmentChip'
+
+const CallSheet = lazy(() => import('../voice/CallSheet').then((m) => ({ default: m.CallSheet })))
 
 const TOOL_ICONS: Record<string, IconName> = {
   memory_search: 'memory',
@@ -89,67 +91,6 @@ function toolIcon(tool: string): IconName {
 
 function toolLabel(tool: string): string {
   return TOOL_LABELS[tool] ?? 'Tool'
-}
-
-function useThumbnail(file: Attachment): string | null {
-  const [src, setSrc] = useState<string | null>(null)
-  const image = isImageFile(file)
-
-  useEffect(() => {
-    if (!image) {
-      setSrc(null)
-      return
-    }
-    let live = true
-    agent.files
-      .thumbnail(file.path)
-      .then((url) => {
-        if (live) setSrc(url)
-      })
-      .catch(() => {
-        // A thumbnail is a nicety: a file that cannot be read still attaches by path.
-      })
-    return () => {
-      live = false
-    }
-  }, [file.path, image])
-
-  return src
-}
-
-/** What kind of file a chip shows, in a word. */
-function kindWord(file: Attachment): string {
-  const kind = attachmentKind(file.name, file.mime)
-  if (file.mime === 'inode/directory') return 'Folder'
-  if (kind === 'image') return 'Picture'
-  if (kind === 'text') return 'Text'
-  if (kind === 'document') return (file.name.split('.').pop() ?? 'Document').toUpperCase()
-  const ext = file.name.includes('.') ? (file.name.split('.').pop() ?? '') : ''
-  return ext === '' ? 'File' : ext.toUpperCase()
-}
-
-/** A file waiting to be sent: picture or file icon, name, size and kind, and a button that takes it off. */
-function AttachmentChip({ file, onRemove }: { file: Attachment; onRemove: () => void }): JSX.Element {
-  const src = useThumbnail(file)
-  const size = file.size === undefined ? '' : fileSizeLabel(file.size)
-  return (
-    <div className="att-chip" title={file.path}>
-      {src !== null ? (
-        <img className="att-thumb" src={src} alt="" />
-      ) : (
-        <span className="att-icon" aria-hidden="true">
-          <Icon name={file.mime === 'inode/directory' ? 'folder' : 'file'} size={20} />
-        </span>
-      )}
-      <span className="att-text">
-        <span className="att-name">{file.name}</span>
-        <span className="att-meta">{[kindWord(file), size].filter((part) => part !== '').join(', ')}</span>
-      </span>
-      <button type="button" className="att-x" onClick={onRemove} aria-label={`Remove ${file.name}`} title="Remove">
-        <Icon name="x" size={16} />
-      </button>
-    </div>
-  )
 }
 
 function MessageAttachment({ file }: { file: Attachment }): JSX.Element {
@@ -237,7 +178,7 @@ function StepRow({ item }: { item: ChatItem }): JSX.Element {
   return item.kind === 'approval' ? <ApprovalLine item={item} /> : <ActivityRow item={item} />
 }
 
-function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.Element {
+const ToolSteps = memo(function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.Element {
   const [open, setOpen] = useState(false)
   const statuses = items.map((item) => (item.kind === 'approval' ? 'done' : metaText(parseMeta(item.meta), 'status') || 'done'))
   const running = live && statuses.includes('running')
@@ -287,7 +228,7 @@ function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.E
       ) : null}
     </div>
   )
-}
+}, (a, b) => a.live === b.live && a.items.length === b.items.length && a.items.every((row, i) => sameItem(row, b.items[i] as ChatItem)))
 
 /** True while the side panel shows its list of what needs the person (it is on screen and not taken by a report or helper). */
 function useSidebarWaiting(): boolean {
@@ -753,12 +694,22 @@ function HelperRow({ helper }: { helper: HelperView }): JSX.Element {
   )
 }
 
-function renderItem(
-  item: ChatItem,
-  items: ChatItem[],
-  onOpenReport: (item: ChatItem) => void,
-  agentName = 'Your agent',
-): JSX.Element {
+/** One row of the thread. Memoised: a new row elsewhere in the chat leaves this one alone. */
+const Row = memo(function Row({
+  item,
+  agentName,
+  onOpenReport,
+  helper,
+  asked,
+}: {
+  item: ChatItem
+  agentName: string
+  onOpenReport: (item: ChatItem) => void
+  /** For a helper row: its live view, worked out by the thread. */
+  helper?: HelperView | undefined
+  /** For a side run: the message that asked for it. */
+  asked: string
+}): JSX.Element {
   switch (item.kind) {
     case 'user':
       return <UserRow item={item} />
@@ -787,11 +738,9 @@ function renderItem(
     case 'approval':
       return <Waiting item={item} full={<ApprovalRow item={item} />} />
     case 'helper':
-      if (isSideRun(item)) {
-        const ask = metaText(parseMeta(item.meta), 'ask')
-        return <SideRunRow helper={helperView(item, items)} asked={items.find((row) => row.id === ask)?.text ?? ''} />
-      }
-      return <HelperRow helper={helperView(item, items)} />
+      if (helper === undefined) return <div className="from">{item.text}</div>
+      if (isSideRun(item)) return <SideRunRow helper={helper} asked={asked} />
+      return <HelperRow helper={helper} />
     case 'report':
       return <ReportRow item={item} onOpen={onOpenReport} />
     case 'notice':
@@ -805,72 +754,62 @@ function renderItem(
     default:
       return <div className="from">{item.text}</div>
   }
+}, sameRow)
+
+/** Rows arrive as fresh objects from the main process: the same row is one whose content did not change. */
+function sameItem(a: ChatItem, b: ChatItem): boolean {
+  return a === b || (a.id === b.id && a.text === b.text && a.meta === b.meta && a.kind === b.kind && a.createdAt === b.createdAt)
 }
 
-/** Pasted text longer than this goes along as a text file instead of filling the composer (and the message limit). */
-const LONG_PASTE_CHARS = 12_000
-
-/** Where a pasted or dropped File object without a path on disk ends up: saved by the main process first. */
-async function saveFileObject(file: File): Promise<Attachment> {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  const type = file.type === '' ? 'application/octet-stream' : file.type
-  const name = file.name !== '' && file.name !== 'image.png' ? file.name : `Pasted ${type.startsWith('image/') ? 'image' : 'file'} ${new Date().toTimeString().slice(0, 8).replace(/:/g, '.')}${type === 'image/png' ? '.png' : ''}`
-  return agent.files.savePasted(name, type, bytes)
+function sameRow(a: { item: ChatItem; agentName: string; onOpenReport: unknown; helper?: HelperView | undefined; asked: string }, b: typeof a): boolean {
+  return sameItem(a.item, b.item) && a.agentName === b.agentName && a.onOpenReport === b.onOpenReport && a.asked === b.asked && sameHelper(a.helper, b.helper)
 }
 
-/**
- * Turn File objects (from a paste or a drop) into attachments: a file with a real path attaches by path, one
- * without (a screenshot, an image copied from a page) is saved first. Too-big files are named in `problems`.
- */
-async function filesToAttachments(files: File[]): Promise<{ allowed: Attachment[]; problems: string[] }> {
-  const allowed: Attachment[] = []
-  const problems: string[] = []
-  for (const file of files) {
-    const problem = attachmentProblem(file.name || 'That file', file.size)
-    if (problem !== null) {
-      problems.push(problem)
-      continue
-    }
-    const path = agent.files.pathsFor([file])[0] ?? ''
-    if (path !== '') {
-      allowed.push({ path, name: file.name, mime: file.type === '' ? 'application/octet-stream' : file.type, size: file.size })
-      continue
-    }
-    try {
-      allowed.push(await saveFileObject(file))
-    } catch (error) {
-      problems.push(error instanceof Error && error.message !== '' ? error.message : `${file.name || 'That file'} could not be attached.`)
-    }
+function sameHelper(a: HelperView | undefined, b: HelperView | undefined): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  return a.id === b.id && a.state === b.state && a.summary === b.summary && a.result === b.result && a.queued === b.queued && a.activity.length === b.activity.length && a.activity.every((row, i) => sameItem(row, b.activity[i] as ChatItem))
+}
+
+/** Above the window: more of this stretch, then the earlier stretches of this chat. */
+function EarlierRows({ above, earlier, onMore, onEarlier }: { above: number; earlier: number; onMore: () => void; onEarlier: () => void }): JSX.Element | null {
+  if (above > 0) {
+    return (
+      <div className="earlier-chats">
+        <button type="button" className="chip" onClick={onMore}>
+          <Icon name="chevd" size={16} />
+          Show earlier ({above} more)
+        </button>
+      </div>
+    )
   }
-  return { allowed, problems }
+  return <EarlierChats count={earlier} onShow={onEarlier} />
 }
 
 export function Chat(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const allItems = useEntity('chat_item')
   const loaded = useEntityLoaded('chat_item')
-  const focusToken = useUi((state) => state.composerFocus)
   const scrollToken = useUi((state) => state.chatScroll)
   const openChat = useChats((state) => state.open)
   const markSeen = useChats((state) => state.markSeen)
   const allWaiting = useWaiting()
-  const [text, setText] = useState('')
-  const [attachments, setAttachments] = useState<Attachment[]>([])
-  const [attachProblem, setAttachProblem] = useState('')
   const [dragging, setDragging] = useState(false)
-  const [reading, setReading] = useState(false)
   const running = useChatRunning(openChat)
   const [reader, setReader] = useState<ChatItem | null>(null)
   const openReport = usePanel((store) => store.openReport)
   const narrow = useNarrow()
   const thread = useRef<HTMLDivElement>(null)
-  const composer = useRef<HTMLTextAreaElement>(null)
+  const composer = useRef<ComposerHandle>(null)
   const stuck = useRef(true)
   /** Something new arrived below while the person was reading further up. */
   const [below, setBelow] = useState(false)
   const dragDepth = useRef(0)
 
   const [showEarlier, setShowEarlier] = useState(false)
+  // Only the newest rows are drawn; Show earlier widens the window in steps, keeping the place on screen.
+  const [drawn, setDrawn] = useState(THREAD_WINDOW)
+  const keepPlace = useRef<number | null>(null)
   // Only this chat's rows: every other chat keeps running on its own and shows in the rail.
   const items = useMemo(() => itemsOfChat(allItems, openChat), [allItems, openChat])
   const all = useMemo(
@@ -878,8 +817,15 @@ export function Chat(): JSX.Element {
     [items],
   )
   // New chat clears the screen: older stretches of this chat stay in the history, one tap away (views/ChatDivider.tsx).
-  const shown = useMemo(() => visibleThread(all, showEarlier), [all, showEarlier])
+  const stretch = useMemo(() => visibleThread(all, showEarlier), [all, showEarlier])
+  const shown = useMemo(() => windowThread(stretch.rows, drawn), [stretch.rows, drawn])
   const messages = shown.rows
+  // Helper rows need the whole chat (their steps and results live in other rows); worked out once per change.
+  const helperViews = useMemo(() => {
+    const views = new Map<string, HelperView>()
+    for (const item of items) if (item.kind === 'helper') views.set(item.id, helperView(item, items))
+    return views
+  }, [items])
   const segments = useMemo(() => segmentsOf(messages), [messages])
   // The same name the rail shows for it.
   const title = chatTitleOf(items)
@@ -905,6 +851,7 @@ export function Chat(): JSX.Element {
   // Opening a chat (or reading the one on screen) marks it read, and starts at its newest message.
   useEffect(() => {
     setShowEarlier(false)
+    setDrawn(THREAD_WINDOW)
   }, [openChat, scrollToken])
 
   // Opening a chat starts at its newest message.
@@ -942,117 +889,19 @@ export function Chat(): JSX.Element {
     return () => window.clearTimeout(timer)
   }, [scrollToken])
 
-  useEffect(() => {
-    if (focusToken === 0) return
-    const draft = useUi.getState().composerDraft
-    if (draft !== '') {
-      setText(draft)
-      useUi.setState({ composerDraft: '' })
-    }
-    composer.current?.focus()
-  }, [focusToken])
-
-  useEffect(() => {
-    const area = composer.current
-    if (!area) return
-    area.style.height = '48px'
-    area.style.height = `${Math.min(area.scrollHeight, 140)}px`
-  }, [text])
-
-  const send = (): void => {
-    const value = text.trim()
-    if (value === '' && attachments.length === 0) return
+  // Just before a message goes: follow it to the bottom.
+  const onSend = useCallback((): void => {
     stuck.current = true
-    setText('')
-    setAttachments([])
-    setAttachProblem('')
-    void chat.send(value, attachments, openChat)
-  }
+  }, [])
 
-  const accept = (incoming: Attachment[]): void => {
-    if (incoming.length === 0) return
-    setAttachments((current) => {
-      const known = new Set(current.map((item) => item.path))
-      return [...current, ...incoming.filter((item) => !known.has(item.path))]
-    })
-  }
-
-  const pickFiles = async (): Promise<void> => {
-    try {
-      const picked = await agent.files.pick()
-      const problems: string[] = []
-      const allowed: Attachment[] = []
-      for (const file of picked) {
-        const problem = file.size === undefined ? null : attachmentProblem(file.name, file.size)
-        if (problem !== null) problems.push(problem)
-        else allowed.push(file)
-      }
-      accept(allowed)
-      setAttachProblem(problems[0] ?? '')
-    } catch (error) {
-      setAttachProblem(error instanceof Error ? error.message : 'Could not open the file picker.')
-    }
-  }
-
-  /** Files from a paste or a drop: attach them, and say plainly if one could not be. */
-  const takeFiles = async (files: File[]): Promise<void> => {
-    setReading(true)
-    try {
-      const { allowed, problems } = await filesToAttachments(files)
-      accept(allowed)
-      setAttachProblem(problems[0] ?? '')
-    } finally {
-      setReading(false)
-    }
-  }
-
-  /**
-   * Ctrl+V. Files (copied in Explorer, or a screenshot) become chips; plain text pastes as text, unless it is
-   * very long, then it goes along as a text file. When the paste brings neither (some Explorer copies reach
-   * the window with no File objects), the main process reads the files off the system clipboard.
-   */
-  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
-    const data = event.clipboardData
-    const files = Array.from(data.files)
-    const plain = data.getData('text/plain')
-    const html = data.getData('text/html')
-    const onlyPictures = files.length > 0 && files.every((file) => file.type.startsWith('image/'))
-    // A copied spreadsheet range or web text also carries a picture of itself: the words are what was meant.
-    if (plain.trim() !== '' && (files.length === 0 || onlyPictures)) {
-      if (plain.length <= LONG_PASTE_CHARS) return
-      event.preventDefault()
-      const bytes = new TextEncoder().encode(plain)
-      setReading(true)
-      void agent.files
-        .savePasted('Pasted text.txt', 'text/plain', bytes)
-        .then((saved) => {
-          accept([saved])
-          setAttachProblem('')
-        })
-        .catch(() => setAttachProblem('That text is too long to paste. Save it as a file and attach it.'))
-        .finally(() => setReading(false))
-      return
-    }
-    if (files.length > 0) {
-      event.preventDefault()
-      void takeFiles(files)
-      return
-    }
-    if (plain.trim() === '' && html.trim() === '') {
-      event.preventDefault()
-      setReading(true)
-      void agent.files
-        .clipboardFiles()
-        .then((found) => {
-          const allowed = found.filter((file) => file.size === undefined || attachmentProblem(file.name, file.size) === null)
-          const tooBig = found.find((file) => file.size !== undefined && attachmentProblem(file.name, file.size) !== null)
-          accept(allowed)
-          setAttachProblem(tooBig !== undefined && tooBig.size !== undefined ? (attachmentProblem(tooBig.name, tooBig.size) ?? '') : '')
-        })
-        .catch(() => setAttachProblem('Nothing on the clipboard could be attached.'))
-        .finally(() => setReading(false))
-    }
-  }
+  // A stretch widened with Show earlier keeps what was on screen where it was.
+  useLayoutEffect(() => {
+    const el = thread.current
+    const saved = keepPlace.current
+    if (el === null || saved === null) return
+    keepPlace.current = null
+    el.scrollTop = el.scrollHeight - saved
+  }, [drawn, showEarlier])
 
   const report = reader === null ? null : reportText(reader)
   // A window made too narrow for the side panel moves an open report into the dialog.
@@ -1065,10 +914,13 @@ export function Chat(): JSX.Element {
     if (row !== undefined) setReader(row)
   }, [narrow, panelReport, allItems, closeReport])
   // Beside the chat in the side panel; a window too narrow for the panel reads it in a dialog instead.
-  const openReader = (row: ChatItem): void => {
-    if (narrow) setReader(row)
-    else openReport(row.id)
-  }
+  const openReader = useCallback(
+    (row: ChatItem): void => {
+      if (narrow) setReader(row)
+      else openReport(row.id)
+    },
+    [narrow, openReport],
+  )
   // While a card is waiting the run is suspended on the person, not thinking.
   const thinking = running && !needsYou
 
@@ -1101,7 +953,7 @@ export function Chat(): JSX.Element {
     setDragging(false)
     const dropped = Array.from(event.dataTransfer.files)
     if (dropped.length === 0) return
-    void takeFiles(dropped)
+    composer.current?.takeFiles(dropped)
   }
 
   return (
@@ -1189,14 +1041,31 @@ export function Chat(): JSX.Element {
         ) : (
           <Branchable.Provider value={project !== null}>
           <div className="thread-in">
-            <EarlierChats count={shown.earlier} onShow={() => setShowEarlier(true)} />
+            <EarlierRows
+              above={shown.above}
+              earlier={stretch.earlier}
+              onMore={() => {
+                keepPlace.current = thread.current === null ? null : thread.current.scrollHeight - thread.current.scrollTop
+                setDrawn((now) => now + THREAD_STEP)
+              }}
+              onEarlier={() => {
+                keepPlace.current = thread.current === null ? null : thread.current.scrollHeight - thread.current.scrollTop
+                setShowEarlier(true)
+                setDrawn(Number.POSITIVE_INFINITY)
+              }}
+            />
             {segments.map((segment, index) =>
               segment.kind === 'tools' ? (
                 <ToolSteps key={segment.id} items={segment.items} live={running && index === segments.length - 1} />
               ) : (
-                <div key={segment.item.id} style={{ display: 'contents' }}>
-                  {renderItem(segment.item, items, openReader, agentName)}
-                </div>
+                <Row
+                  key={segment.item.id}
+                  item={segment.item}
+                  agentName={agentName}
+                  onOpenReport={openReader}
+                  helper={helperViews.get(segment.item.id)}
+                  asked={segment.item.kind === 'helper' ? (items.find((row) => row.id === metaText(parseMeta(segment.item.meta), 'ask'))?.text ?? '') : ''}
+                />
               ),
             )}
             {thinking ? (
@@ -1231,105 +1100,7 @@ export function Chat(): JSX.Element {
             New below
           </button>
         ) : null}
-        {attachProblem !== '' ? (
-          <div className="banner warn attach-warn" role="alert">
-            {attachProblem}
-          </div>
-        ) : null}
-        {attachments.length > 0 || reading ? (
-          <div className="attach-row" aria-label="Files to send">
-            {attachments.map((file) => (
-              <AttachmentChip
-                key={file.path}
-                file={file}
-                onRemove={() => {
-                  setAttachments((current) => current.filter((item) => item.path !== file.path))
-                }}
-              />
-            ))}
-            {reading ? (
-              <div className="att-chip reading" role="status">
-                <span className="att-icon" aria-hidden="true">
-                  <Icon name="clip" size={20} />
-                </span>
-                <span className="att-text">
-                  <span className="att-name">Adding files</span>
-                </span>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="compose-in">
-          <IconButton
-            icon="clip"
-            label="Attach a file"
-            onClick={() => {
-              void pickFiles()
-            }}
-          />
-          <IconButton icon="shot" label="Grab a screenshot" comingSoon className="hide-m" />
-          <textarea
-            ref={composer}
-            rows={1}
-            placeholder={running ? 'Add to this, or ask for something else' : 'Ask anything'}
-            aria-label="Message"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onPaste={onPaste}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                send()
-              }
-            }}
-          />
-          <DictateButton
-            hasKey={settings?.hasVoiceKey === true}
-            onText={(words) => {
-              setText((current) => (current.trim() === '' ? words : `${current.replace(/\s+$/, '')} ${words}`))
-              composer.current?.focus()
-            }}
-            onProblem={(message, action) => {
-              if (action === undefined) setAttachProblem(message)
-              else toast(message, { actionLabel: action.label, onAction: action.run })
-            }}
-          />
-          {running && text.trim() === '' && attachments.length === 0 ? (
-            <button
-              type="button"
-              className="send"
-              aria-label="Stop"
-              title="Stop this chat's work"
-              onClick={() => {
-                void chat.stop(openChat)
-              }}
-            >
-              <Icon name="stop" size={22} />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="send"
-              onClick={send}
-              aria-label={running ? 'Send while it works' : 'Send'}
-              title={running ? 'Send. About this job, it joins in; something else, it runs alongside.' : 'Send'}
-              disabled={text.trim() === '' && attachments.length === 0}
-            >
-              <Icon name="arrow" size={22} />
-            </button>
-          )}
-        </div>
-        <div className="cfoot">
-          <span>
-            <Kbd>Enter</Kbd> send
-          </span>
-          <span>
-            <Kbd>Shift</Kbd> <Kbd>Enter</Kbd> new line
-          </span>
-          <span>
-            <Kbd>Ctrl</Kbd> <Kbd>V</Kbd> paste files or pictures
-          </span>
-        </div>
+        <Composer ref={composer} chatId={openChat} onSend={onSend} />
       </div>
 
       {report !== null && reader !== null ? (
@@ -1351,7 +1122,9 @@ export function Chat(): JSX.Element {
         </Dialog>
       ) : null}
 
-      <CallSheet />
+      <Suspense fallback={null}>
+        <CallSheet />
+      </Suspense>
 
       {dragging ? (
         <div className="drop" role="status" aria-live="polite">

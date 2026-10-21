@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
 import { agent } from './bridge'
-import '@fontsource-variable/roboto-flex/full.css'
+import './styles/fonts.css'
 import './styles/index.css'
 
 // In the real app the window itself is the frame: no desk, no inner window. The browser preview keeps the frame.

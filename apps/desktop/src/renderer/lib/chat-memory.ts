@@ -54,3 +54,19 @@ export function visibleThread(messages: ChatItem[], showEarlier: boolean): { row
   return { rows: [...open, ...messages.slice(start)], earlier: before.length - open.length }
 }
 
+
+/** How many rows of the newest stretch the thread draws at first; the rest are a tap away, in steps. */
+export const THREAD_WINDOW = 80
+export const THREAD_STEP = 200
+
+/**
+ * The thread draws only its newest rows, so a long conversation scrolls and updates at the same speed as a
+ * short one. Rows above the window are hidden (`above`), never dropped; a card still waiting on the person is
+ * kept whatever its place.
+ */
+export function windowThread(rows: ChatItem[], limit: number): { rows: ChatItem[]; above: number } {
+  if (rows.length <= limit) return { rows, above: 0 }
+  const start = rows.length - limit
+  const kept = rows.slice(0, start).filter(stillOpen)
+  return { rows: [...kept, ...rows.slice(start)], above: start - kept.length }
+}
