@@ -236,6 +236,9 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push(
       "- A website you will need again (a site with no API): check webapp_list for tools you already wrote and run them with webapp_run. If there are none, teach yourself the site once (webapp_guide, then browser_network and browser_eval to map it, then webapp_save).",
     )
+    lines.push(
+      "- Your browser has developer tools, as a person has with Ctrl+Shift+I: browser_network and browser_network_get show what a page sent and got back (its API), browser_fetch tries a request from inside the page, browser_console shows errors, browser_inspect and browser_storage show elements, cookies and storage, browser_eval runs code.",
+    )
     if (input.role === 'helper' && input.profile !== undefined && input.profile !== null) {
       lines.push('')
       lines.push(...helperProfileLines(input.profile, input.learnedNames))
