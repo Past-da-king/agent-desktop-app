@@ -204,6 +204,13 @@ function memoryUpdate(store: DataStore): Tool {
       const page = rows.find((row) => row.id === id)
       if (page === undefined) return `No memory #${id}.`
 
+      // A project's memory is never deleted by an agent: it is closed, and every version stays in its history.
+      if (truthy(input['delete']) && page.project !== undefined && page.project !== '') {
+        if (page.status === 'closed') return `#${page.id} '${page.title}' is project memory and already closed; it is kept, not deleted.`
+        const before = versionNow(store, page.id)
+        await store.upsert('memory', { id: page.id, status: 'closed', closedAt: Date.now() })
+        return writeReceipt(store, page.id, page.title, before, "Project memory is never deleted, so it was closed instead (kept, searchable, out of the reminders)")
+      }
       if (truthy(input['delete'])) {
         await store.remove('memory', page.id)
         return `Deleted #${page.id} '${page.title}'${versionNow(store, page.id) === null ? '' : ' (its history is kept)'}`

@@ -1013,11 +1013,14 @@ export class HelperManager implements HelperHost {
   }
 
   private async buildHelperPrompt(run: HelperRun): Promise<string> {
-    const [memories, goals, tasks] = await Promise.all([
+    const [memories, goals, tasks, projects] = await Promise.all([
       this.store.list('memory'),
       this.store.list('goal'),
       this.store.list('task'),
+      run.chat === MAIN_CHAT ? Promise.resolve([]) : this.store.list('project').catch(() => []),
     ])
+    // Started from a project chat: it works for that project, reads its memory first and keeps it.
+    const project = projects.find((each) => each.chats.includes(run.chat))
     return buildSystemPrompt({
       settings: this.settings.get(),
       now: new Date(this.now()),
@@ -1029,6 +1032,9 @@ export class HelperManager implements HelperHost {
       role: 'helper',
       helper: { label: run.label, brief: run.brief },
       profile: this.profiles?.find(run.profileId) ?? this.generalProfile(),
+      ...(project === undefined
+        ? {}
+        : { project: { id: project.id, name: project.name, description: project.description, path: project.path, profile: this.profiles?.find(project.profile)?.name ?? 'General' } }),
       learnedNames: this.learnedNames(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })

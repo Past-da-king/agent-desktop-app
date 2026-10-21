@@ -71,9 +71,25 @@ export function projectLines(project: ProjectContext): string[] {
   const out = ['THIS PROJECT', `You are working in the project "${project.name}".${project.description.trim() === '' ? '' : ` ${project.description.trim()}`}`]
   if (project.path.trim() !== '') out.push(`- Its folder is ${project.path.trim()}. Work there by default: files, commands and code for this project live in it.`)
   out.push(`- Its profile is ${project.profile}: helpers you start here work in it (their accounts and logins) unless the job truly needs another.`)
-  out.push('- Stay inside this project. Save what you learn about it with memory_save; it is kept as this project\'s memory.')
+  out.push('- Stay inside this project.')
+  out.push(...projectMemoryLines(project.name))
   out.push('- Something for the main agent, another project or the user\'s main thread: message_main.')
   return out
+}
+
+/**
+ * Keeping the project's own memory (Ayanda, 21 Oct 2026): it is what every agent in the project reads first, so it
+ * holds the whole picture and every decision, kept up to date as the work goes, never deleted, its changes traceable.
+ */
+export function projectMemoryLines(name: string): string[] {
+  return [
+    `PROJECT MEMORY: what you save here is ${name}'s own memory, kept apart from everything else. Keep it complete and current; it is how this project's agents and helpers know where things stand.`,
+    `- An "About ${name}" page (kind project): what it is, what it is trying to achieve and for whom, how it is built, where it stands now, what is open. If it is missing, write it first. Update it whenever any of that changes.`,
+    '- One page per decision (kind decision): what was decided, why, and the date. A decision that changes is the SAME page updated with memory_update (new decision, and the reason it changed); the earlier version stays in its history. Never delete a decision; close it (status closed) when it no longer applies.',
+    '- Also save what you find out (facts, how-tos with exact steps and places, the people and organisations involved). Several focused pages are better than one long one; they all belong to this project.',
+    '- Save as you go: when something new was decided, learned or done in your turn, update the project memory BEFORE you reply. Give every write a reason. Do not save chit-chat or progress that is only true today.',
+    '- "What changed?" or "how did we get here?": read the page\'s history with memory_history and say what changed, when and why.',
+  ]
 }
 
 /** How the main thread hands work to projects (Ayanda, 21 Oct 2026). */
@@ -313,6 +329,12 @@ export function buildSystemPrompt(input: PromptInput): string {
     if (input.role === 'helper' && input.profile !== undefined && input.profile !== null) {
       lines.push('')
       lines.push(...helperProfileLines(input.profile, input.learnedNames))
+    }
+    // A helper working for a project keeps that project's memory too.
+    if (input.role === 'helper' && project !== null) {
+      lines.push('')
+      lines.push(`You are working for the project "${project.name}".${project.path.trim() === '' ? '' : ` Its folder is ${project.path.trim()}.`}`)
+      lines.push(...projectMemoryLines(project.name))
     }
   }
 
