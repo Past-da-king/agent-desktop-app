@@ -30,6 +30,8 @@ import type {
   SystemInfo,
   Unsubscribe,
   MemoryImportPreview,
+  MemoryTidyPlan,
+  MemoryTidyProgress,
   UpkeepChange,
   UpkeepReport,
 } from '@agent/core'
@@ -1366,6 +1368,79 @@ export const mockAgent: AgentApi = {
         upkeepListeners.delete(callback)
       }
     },
+    async previewTidy(_path, includeAll) {
+      return mockTidyPlan(includeAll)
+    },
+    async startTidy(_path, includeAll) {
+      const plan = mockTidyPlan(includeAll)
+      const resume = mockTidy !== null && !mockTidy.finished && mockTidy.steps === plan.steps
+      mockTidy = {
+        running: true,
+        finished: false,
+        source: plan.source,
+        project: TIDY_PROJECTS[0] ?? '',
+        projectIndex: 1,
+        projects: plan.projects,
+        steps: plan.steps,
+        done: resume && mockTidy !== null ? mockTidy.done : 0,
+        failed: 0,
+        added: resume && mockTidy !== null ? mockTidy.added : 0,
+        updated: resume && mockTidy !== null ? mockTidy.updated : 0,
+        errors: [],
+        startedAt: Date.now(),
+        finishedAt: null,
+        canUndo: true,
+        message: 'Getting ready.',
+      }
+      if (mockTidyTimer !== null) clearInterval(mockTidyTimer)
+      mockTidyTimer = setInterval(() => {
+        if (mockTidy === null) return
+        const done = Math.min(mockTidy.steps, mockTidy.done + 6)
+        const index = Math.min(TIDY_PROJECTS.length - 1, Math.floor((done / mockTidy.steps) * TIDY_PROJECTS.length))
+        const project = TIDY_PROJECTS[index] ?? ''
+        const failed = done >= 60 ? 1 : 0
+        mockTidy = {
+          ...mockTidy,
+          done,
+          failed,
+          added: Math.round(done * 2.1),
+          updated: Math.round(done * 1.3),
+          project,
+          projectIndex: index + 1,
+          errors: failed > 0 ? [{ project: 'crm-1', error: 'The model took too long to answer.' }] : [],
+          message: `Reading ${project}, part 1 of 2.`,
+        }
+        if (done >= mockTidy.steps) {
+          stopMockTidy('Done, but 1 step failed. Start again to retry it.')
+          mockTidy = { ...mockTidy, finished: true, finishedAt: Date.now() }
+        }
+        emitTidy()
+      }, 300)
+      emitTidy()
+      return { ...mockTidy }
+    },
+    async stopTidy() {
+      stopMockTidy('Stopped. Start again to carry on where it stopped.')
+      emitTidy()
+      if (mockTidy === null) throw new Error('Nothing is being tidied.')
+      return { ...mockTidy }
+    },
+    async tidyState() {
+      return mockTidy === null ? null : { ...mockTidy }
+    },
+    async undoTidy() {
+      stopMockTidy('')
+      const removed = mockTidy?.added ?? 0
+      const restored = mockTidy?.updated ?? 0
+      mockTidy = null
+      return { removed, restored }
+    },
+    onTidy(callback) {
+      tidyListeners.add(callback)
+      return () => {
+        tidyListeners.delete(callback)
+      }
+    },
   },
 
   app: {
@@ -1394,6 +1469,30 @@ function delay(ms: number): Promise<void> {
 
 let mockUpkeep: UpkeepReport | null = null
 const upkeepListeners = new Set<(report: UpkeepReport | null) => void>()
+
+// Tidying a bank with the agent, simulated: the real export's numbers, a few steps a tick so the states show.
+const TIDY_PROJECTS = ['aos', 'crm-1', 'creek', 'growos', 'applications', 'guavas-ls', 'impetix', 'studycvns', 'rmblr', 'guavas-website', 'initech-erp']
+let mockTidy: MemoryTidyProgress | null = null
+let mockTidyTimer: ReturnType<typeof setInterval> | null = null
+const tidyListeners = new Set<(progress: MemoryTidyProgress) => void>()
+
+function mockTidyPlan(includeAll: boolean): MemoryTidyPlan {
+  return includeAll
+    ? { ok: true, message: '4,562 notes in 27 projects, read in 236 steps.', source: 'A.O.S Memory Bank', notes: 4562, projects: 27, steps: 236, chars: 9_695_241, olderState: 0, retired: 0 }
+    : { ok: true, message: '1,717 notes in 25 projects, read in 110 steps.', source: 'A.O.S Memory Bank', notes: 1717, projects: 25, steps: 110, chars: 4_104_229, olderState: 754, retired: 2091 }
+}
+
+function emitTidy(): void {
+  if (mockTidy === null) return
+  const snapshot = { ...mockTidy, errors: [...mockTidy.errors] }
+  for (const listener of tidyListeners) listener(snapshot)
+}
+
+function stopMockTidy(message: string): void {
+  if (mockTidyTimer !== null) clearInterval(mockTidyTimer)
+  mockTidyTimer = null
+  if (mockTidy !== null) mockTidy = { ...mockTidy, running: false, message }
+}
 
 function mockImportPreview(includeAll: boolean): MemoryImportPreview {
   const byKind: MemoryImportPreview['byKind'] = includeAll

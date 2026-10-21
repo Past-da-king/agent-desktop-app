@@ -242,6 +242,9 @@ export function foldExtras(entry: TidyEntry): DraftEntry {
 export interface TidyState {
   key: string
   source: string
+  /** The plan's size, so progress reads right after a restart too. */
+  steps: number
+  projects: number
   includeAll: boolean
   done: Record<string, { added: string[]; updated: string[] }>
   failed: Record<string, string>
@@ -313,7 +316,7 @@ export class MemoryTidy {
     const state: TidyState =
       saved !== null && saved.key === plan.key && !saved.undone
         ? { ...saved, failed: {}, finishedAt: null }
-        : { key: plan.key, source: plan.plan.source, includeAll, done: {}, failed: {}, errors: [], projectPages: {}, before: {}, startedAt: this.now(), finishedAt: null, undone: false }
+        : { key: plan.key, source: plan.plan.source, steps: plan.steps.length, projects: plan.projects.length, includeAll, done: {}, failed: {}, errors: [], projectPages: {}, before: {}, startedAt: this.now(), finishedAt: null, undone: false }
     this.deps.file.write(state)
     this.live = { plan, step: null }
     const controller = new AbortController()
@@ -357,16 +360,16 @@ export class MemoryTidy {
     const projectIndex = step === null || plan === null ? 0 : plan.projects.indexOf(step.project) + 1
     const running = this.running !== null
     const finished = state?.finishedAt !== null && state?.finishedAt !== undefined
-    const total = plan === null ? Object.keys(state?.done ?? {}).length : steps.length
+    const total = plan === null ? (state?.steps ?? 0) : steps.length
     return {
       running,
       finished,
       source: state?.source ?? '',
       project: project === GENERAL && step !== null ? 'general notes' : project,
       projectIndex,
-      projects: plan?.projects.length ?? 0,
+      projects: plan?.projects.length ?? state?.projects ?? 0,
       steps: total,
-      done: plan === null ? total : done,
+      done: plan === null ? Object.keys(state?.done ?? {}).length : done,
       failed,
       added,
       updated,
@@ -386,6 +389,11 @@ export class MemoryTidy {
             ? ''
             : 'Stopped. Start again to carry on where it stopped.',
     }
+  }
+
+  /** Progress for the window, or null when no tidy import was ever started here. */
+  state(): MemoryTidyProgress | null {
+    return this.running === null && this.deps.file.read() === null ? null : this.progress()
   }
 
   /** Every page the import added goes, every page it changed is put back. Only the person's own later edits survive. */
