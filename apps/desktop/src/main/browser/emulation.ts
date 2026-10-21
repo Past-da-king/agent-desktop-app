@@ -259,7 +259,8 @@ export function emulationCommands(view: ViewSpec, engine: EngineInfo, fit: FitRe
     method: 'Emulation.setUserAgentOverride',
     params: {
       userAgent: userAgentFor(view, engine),
-      acceptLanguage: 'en-US,en;q=0.9',
+      // A plain list: Chromium adds the q-values itself (passing them doubled them, "en;q=0.9;q=0.9").
+      acceptLanguage: 'en-US,en',
       platform: navigatorPlatform(view, engine.platform),
       // A hand-written user agent cannot be parsed back into hints; sending none is closer to the truth.
       ...(custom ? {} : { userAgentMetadata: userAgentMetadata(view, engine) }),

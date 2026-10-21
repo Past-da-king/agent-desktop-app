@@ -1514,6 +1514,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       loadError: null,
       siteCss: [],
     }
+    tab.cdp.guest = view === null
     this.tabs.push(tab)
     this.wireTab(tab)
     if (view !== null) this.sizeOffscreen(tab)
@@ -1636,7 +1637,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     session.setPermissionCheckHandler(() => false)
     // No Electron or app token in the user agent: sites treat those as an embedded shell.
     try {
-      session.setUserAgent(userAgentFor(presetView('desktop'), this.engine), 'en-US,en;q=0.9')
+      session.setUserAgent(userAgentFor(presetView('desktop'), this.engine), 'en-US,en')
     } catch {
       // A session that refuses a user agent keeps its own.
     }
