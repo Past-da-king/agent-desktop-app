@@ -1,0 +1,22 @@
+/* ---------- the agent's live pages, drawn inside the browser card (shell/BrowserHost.tsx) ---------- */
+
+/* In the card: clipped by the card's own overflow and rounded corners, scrolled with the panel by the compositor. */
+.br-host{position:absolute;inset:0;z-index:0;visibility:visible;pointer-events:none}
+.br-host.live{pointer-events:auto}
+/* Full size: laid over the full-size view's page area (left, top and size are set from it each frame). */
+.br-host.full{position:fixed;inset:auto;z-index:26}
+/* Backstage: still on screen so the page keeps painting for the agent, but behind the window's opaque background. */
+.br-host.backstage{position:fixed;inset:auto;z-index:-1;pointer-events:none}
+
+/* Each tab's page at its own layout size, scaled to the box. White is the web's own default page colour. */
+.br-host .br-page{position:absolute;left:0;top:0;transform-origin:0 0;background:#fff;z-index:1}
+.br-host .br-page.on{z-index:4}
+.br-host .br-page webview{width:100%;height:100%}
+/* Tabs behind the one in front stay painted (so the agent can still see them) under this curtain. */
+.br-host .br-curtain{position:absolute;inset:0;z-index:2;background:var(--s-mid);display:none}
+.br-host.has-pages .br-curtain{display:block}
+.br-host .br-shade{position:absolute;left:0;top:0;z-index:3;border-radius:6px;background:var(--s-lowest);box-shadow:var(--shadow)}
+.br-host .br-shade[hidden]{display:none}
+
+/* The panel off screen: laid out exactly as before (so the page keeps its size), invisible and inert. */
+.shell .panel-w.panel-parked{display:flex;position:absolute;left:0;top:0;width:var(--panel-w,380px);height:100%;visibility:hidden;pointer-events:none;overflow:hidden}
