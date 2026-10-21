@@ -142,7 +142,7 @@ export function HotkeySettings(): JSX.Element {
         const stale = status !== undefined && status.accelerator !== value
         return (
           <div key={row.action}>
-            <div className="rowc" style={{ flexWrap: 'wrap' }}>
+            <div className="rowc">
               <div className="ri">
                 <Icon name={row.icon} size={22} />
               </div>
@@ -150,6 +150,8 @@ export function HotkeySettings(): JSX.Element {
                 <b>{row.title}</b>
                 <span>{row.line(settings, agent.platform)}</span>
               </div>
+            </div>
+            <div style={{ padding: '0 18px 8px 78px' }}>
               <Recorder
                 value={value}
                 platform={agent.platform}
