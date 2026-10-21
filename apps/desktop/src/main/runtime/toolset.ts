@@ -92,6 +92,7 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   // Reserved for M7: routines are the main agent's to propose; a helper carries them out.
   'routine_create',
   'routine_list',
+  'routine_update',
   'routine_delete',
   'profile_create',
 ])
@@ -131,7 +132,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...memoryTools(deps.store), // memory_search, memory_get, memory_save, memory_update
     ...(deps.searchChats === undefined ? [] : chatTools({ store: deps.store, search: deps.searchChats })), // chats_search, chat_read
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
-    ...routineTools(deps.store, deps.now), // routine_create, routine_list, routine_delete
+    ...routineTools(deps.store, deps.now), // routine_create, routine_list, routine_update, routine_delete
     ...fileTools({
       settings,
       ...(deps.filePicks === undefined ? {} : { picks: deps.filePicks }),

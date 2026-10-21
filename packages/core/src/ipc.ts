@@ -197,7 +197,12 @@ export interface TriggerRow extends RowBase {
   enabled: boolean
   lastRunAt: number | null
   lastResult: string
+  /** Set on a routine the app itself runs (not a prompt for the agent): only its time and on/off can change. */
+  builtin?: string
 }
+
+/** The built-in End of day routine: the memory pass that writes "Where we are" and tidies memory. */
+export const MEMORY_DAILY_ROUTINE = 'memory-daily'
 
 export interface EntityMap {
   chat_item: ChatItem

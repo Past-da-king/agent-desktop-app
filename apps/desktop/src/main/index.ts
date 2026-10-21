@@ -18,7 +18,7 @@ import {
 
 import type { AppPlatform } from '@agent/core'
 
-import { mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
+import { MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
@@ -55,6 +55,7 @@ import { ChatIndex } from './memory/chat-index'
 import { registerMemoryIpc } from './memory/ipc'
 import { MemoryService } from './memory/service'
 import { UpkeepFile } from './memory/upkeep-log'
+import { dailyRoutineSlot, ensureDailyRoutine, recordDailyRun, resultLine } from './memory/routine'
 import { MEMORY_EVENTS } from '../shared/memory-channels'
 import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
@@ -680,10 +681,17 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // end-of-day pass writes "Where we are" and cleans up (main/memory).
   chatIndex = new ChatIndex(join(dir, 'chat-search.db'))
   const memoryStore = store
+  const upkeep = new UpkeepFile(join(dir, 'memory-upkeep.json'))
+  // End of day lives on the Routines page as a built-in routine; the old Memory setting only seeds it once.
+  try {
+    await ensureDailyRoutine(memoryStore, { dailyAt: settings.get().dailyMemoryAt, lastReport: upkeep.read().report })
+  } catch {
+    // Without the row the pass simply does not run on its own; the app must still open.
+  }
   memory = new MemoryService({
     store: memoryStore,
     index: chatIndex,
-    upkeep: new UpkeepFile(join(dir, 'memory-upkeep.json')),
+    upkeep,
     complete: (system, prompt, signal) => {
       if (runner === null) return Promise.reject(new Error('The agent is not running.'))
       return runner.oneShot(system, prompt, signal)
@@ -691,7 +699,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     forgetSession: () => cliHost?.forget('main'),
     emitChat: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
     emitUpkeep: (report) => broadcast(MEMORY_EVENTS.upkeep, report),
-    dailyAt: () => settings.get().dailyMemoryAt,
+    dailyAt: () => dailyRoutineSlot(memoryStore),
+    onDaily: (report) => recordDailyRun(memoryStore, report),
     log: (message, detail) => logger.info(message, detail),
   })
   registerMemoryIpc({
@@ -708,6 +717,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
     store,
     runner,
     notifyRoutine: (triggerId, name, result) => notifier.routineResult(triggerId, name, result),
+    runBuiltin: async (trigger) => {
+      if (trigger.builtin !== MEMORY_DAILY_ROUTINE || memory === null) throw new Error('That routine cannot run here.')
+      return { text: resultLine(await memory.runNow()), waiting: false }
+    },
   })
   scheduler.start()
 
