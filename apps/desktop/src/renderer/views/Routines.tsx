@@ -11,6 +11,7 @@ import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Field } from '../ui/Field'
+import { Pill } from '../ui/bits'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 import { SectionHeader } from '../ui/SectionHeader'
@@ -68,6 +69,11 @@ function localDateTime(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+/** A routine the app runs itself (End of day): only its time and on/off change, and it cannot be deleted. */
+function isBuiltin(trigger: TriggerRow): boolean {
+  return typeof trigger.builtin === 'string' && trigger.builtin !== ''
+}
+
 function nextLabel(trigger: TriggerRow): string {
   const next = nextRun(trigger)
   if (next === null) return 'Off'
@@ -110,7 +116,24 @@ function RoutineDialog({
     }
   }
 
+  const builtin = trigger !== null && typeof trigger.builtin === 'string' && trigger.builtin !== ''
+
   const save = async (): Promise<void> => {
+    if (builtin && trigger !== null) {
+      if (!/^\d{1,2}:\d{2}$/.test(spec.trim())) {
+        setError('Choose the time it should run.')
+        return
+      }
+      setBusy(true)
+      try {
+        await agent.data.upsert('trigger', { id: trigger.id, spec: spec.trim() })
+        onClose()
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'Could not save that time.')
+        setBusy(false)
+      }
+      return
+    }
     if (name.trim() === '') {
       setError('Give the routine a name first.')
       return
@@ -158,31 +181,37 @@ function RoutineDialog({
       labelledBy="routine-dialog-title"
     >
       <div>
-        <span className="eyebrow">{trigger ? 'EDIT ROUTINE' : 'NEW ROUTINE'}</span>
+        <span className="eyebrow">{builtin ? 'BUILT-IN ROUTINE' : trigger ? 'EDIT ROUTINE' : 'NEW ROUTINE'}</span>
         <h2 className="h2" id="routine-dialog-title" style={{ marginTop: 6 }}>
-          {trigger ? 'Change this routine' : 'A job on a schedule'}
+          {builtin ? `When ${trigger?.name ?? 'it'} runs` : trigger ? 'Change this routine' : 'A job on a schedule'}
         </h2>
       </div>
-      <Field
-        label="Name"
-        value={name}
-        onChange={(value) => {
-          setName(value)
-          setError('')
-        }}
-        placeholder="Morning brief"
-        error={error}
-      />
-      <Segmented
-        ariaLabel="How often"
-        value={kind}
-        onChange={changeKind}
-        options={[
-          { value: 'daily', label: 'Every day' },
-          { value: 'interval', label: 'Every few minutes' },
-          { value: 'at', label: 'One time' },
-        ]}
-      />
+      {builtin ? (
+        <p className="lead">{trigger?.prompt}</p>
+      ) : (
+        <>
+          <Field
+            label="Name"
+            value={name}
+            onChange={(value) => {
+              setName(value)
+              setError('')
+            }}
+            placeholder="Morning brief"
+            error={error}
+          />
+          <Segmented
+            ariaLabel="How often"
+            value={kind}
+            onChange={changeKind}
+            options={[
+              { value: 'daily', label: 'Every day' },
+              { value: 'interval', label: 'Every few minutes' },
+              { value: 'at', label: 'One time' },
+            ]}
+          />
+        </>
+      )}
       <div className="field">
         <label htmlFor="routine-spec">
           {kind === 'daily' ? 'Time' : kind === 'interval' ? 'Minutes between runs' : 'When'}
@@ -205,17 +234,20 @@ function RoutineDialog({
           }}
           style={{ paddingRight: 18 }}
         />
+        {builtin && error !== '' ? <span className="small" role="alert">{error}</span> : null}
       </div>
-      <div className="field">
-        <label htmlFor="routine-prompt">What should it do?</label>
-        <textarea
-          id="routine-prompt"
-          className="textarea"
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Tell the agent what to look at and what to report back."
-        />
-      </div>
+      {builtin ? null : (
+        <div className="field">
+          <label htmlFor="routine-prompt">What should it do?</label>
+          <textarea
+            id="routine-prompt"
+            className="textarea"
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="Tell the agent what to look at and what to report back."
+          />
+        </div>
+      )}
       <div className="dialog-actions">
         <Button variant="text" onClick={onClose}>
           Cancel
@@ -226,7 +258,7 @@ function RoutineDialog({
           }}
           disabled={busy}
         >
-          {busy ? 'Saving...' : trigger ? 'Save changes' : 'Create routine'}
+          {busy ? 'Saving...' : builtin ? 'Save time' : trigger ? 'Save changes' : 'Create routine'}
         </Button>
       </div>
     </Dialog>
@@ -343,10 +375,13 @@ export function Routines(): JSX.Element {
               {sorted.map((trigger) => (
                 <div className="rtn" key={trigger.id}>
                   <span className="mi2">
-                    <Icon name="clock" size={22} />
+                    <Icon name={isBuiltin(trigger) ? 'sync' : 'clock'} size={22} />
                   </span>
                   <div className="rt">
-                    <b>{trigger.name}</b>
+                    <b>
+                      {trigger.name}
+                      {isBuiltin(trigger) ? <Pill tone="mute">Built in</Pill> : null}
+                    </b>
                     <span className="rt-when">{scheduleLabel(trigger)}</span>
                     <span className="rt-last">{lastLabel(trigger)}</span>
                   </div>
@@ -366,21 +401,23 @@ export function Routines(): JSX.Element {
                     <button
                       type="button"
                       className="ib"
-                      aria-label={`Edit ${trigger.name}`}
-                      title="Edit"
+                      aria-label={isBuiltin(trigger) ? `Change when ${trigger.name} runs` : `Edit ${trigger.name}`}
+                      title={isBuiltin(trigger) ? 'Change time' : 'Edit'}
                       onClick={() => setDialog({ trigger, template: null })}
                     >
                       <Icon name="edit" size={18} />
                     </button>
-                    <button
-                      type="button"
-                      className="ib"
-                      aria-label={`Delete ${trigger.name}`}
-                      title="Delete"
-                      onClick={() => remove(trigger)}
-                    >
-                      <Icon name="trash" size={18} />
-                    </button>
+                    {isBuiltin(trigger) ? null : (
+                      <button
+                        type="button"
+                        className="ib"
+                        aria-label={`Delete ${trigger.name}`}
+                        title="Delete"
+                        onClick={() => remove(trigger)}
+                      >
+                        <Icon name="trash" size={18} />
+                      </button>
+                    )}
                     <Switch
                       on={trigger.enabled}
                       onToggle={() => toggle(trigger)}

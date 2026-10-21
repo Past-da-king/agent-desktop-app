@@ -26,6 +26,11 @@ export interface SchedulerDeps {
   intervalMs?: number
   /** The notification side; the scheduler decides when a result is worth showing. */
   notifyRoutine?: RoutineResultNotice
+  /**
+   * Runs a built-in routine (TriggerRow.builtin) on "Run now". Its timing belongs to its owner (End of day: the
+   * memory service, which also catches up a missed day), so the tick never runs it.
+   */
+  runBuiltin?: (trigger: TriggerRow) => Promise<RoutineRunResult>
 }
 
 export const SCHEDULER_INTERVAL_MS = 30_000
@@ -38,6 +43,7 @@ export class Scheduler {
   private readonly now: () => number
   private readonly intervalMs: number
   private readonly notifyRoutine: RoutineResultNotice
+  private readonly runBuiltin: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
 
   private timer: ReturnType<typeof setInterval> | null = null
   private chain: Promise<void> = Promise.resolve()
@@ -50,6 +56,7 @@ export class Scheduler {
     this.now = deps.now ?? Date.now
     this.intervalMs = deps.intervalMs ?? SCHEDULER_INTERVAL_MS
     this.notifyRoutine = deps.notifyRoutine ?? (() => undefined)
+    this.runBuiltin = deps.runBuiltin ?? null
   }
 
   /** Look for due routines now, then again every interval. Safe to call more than once. */
@@ -99,7 +106,7 @@ export class Scheduler {
     const triggers = await this.store.list('trigger')
     for (const trigger of triggers) {
       if (this.stopped) return
-      if (!trigger.enabled || !isDue(trigger, now)) continue
+      if (isBuiltin(trigger) || !trigger.enabled || !isDue(trigger, now)) continue
       try {
         await this.runExclusive(() => this.execute(trigger, false))
       } catch {
@@ -116,7 +123,12 @@ export class Scheduler {
 
     let outcome: RoutineRunResult
     try {
-      outcome = await this.runner.runRoutine(fresh)
+      if (isBuiltin(fresh)) {
+        if (this.runBuiltin === null) throw new Error('That routine can only run from its own page.')
+        outcome = await this.runBuiltin(fresh)
+      } else {
+        outcome = await this.runner.runRoutine(fresh)
+      }
     } catch (error) {
       outcome = {
         text: error instanceof Error ? error.message || 'The routine could not run.' : 'The routine could not run.',
@@ -146,6 +158,11 @@ export class Scheduler {
     this.chain = next.catch(() => undefined)
     return next
   }
+}
+
+/** A routine the app runs itself; its owner decides when. */
+function isBuiltin(trigger: TriggerRow): boolean {
+  return typeof trigger.builtin === 'string' && trigger.builtin !== ''
 }
 
 /**

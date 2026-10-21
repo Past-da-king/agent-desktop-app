@@ -24,8 +24,10 @@ export interface MemoryServiceDeps {
   emitChat?: () => void
   /** Tells the window the upkeep report changed. */
   emitUpkeep?: (report: UpkeepReport | null) => void
-  /** "HH:mm" for the daily pass, or '' to turn it off. */
-  dailyAt?: () => string
+  /** "HH:mm" for the daily pass, or '' to turn it off (the End of day routine's time and on/off). */
+  dailyAt?: () => string | Promise<string>
+  /** Called after every daily pass, whatever started it, so the End of day routine shows its last run. */
+  onDaily?: (report: UpkeepReport) => void | Promise<void>
   now?: () => number
   log?: (message: string, detail?: Record<string, string | number>) => void
 }
@@ -213,7 +215,8 @@ export class MemoryService {
   }
 
   async tick(): Promise<UpkeepReport | null> {
-    const slot = this.deps.dailyAt?.() ?? DEFAULT_DAILY_AT
+    if (this.dailyRunning !== null) return null
+    const slot = (await this.deps.dailyAt?.()) ?? DEFAULT_DAILY_AT
     if (slot.trim() === '' || this.dailyRunning !== null) return null
     const state = this.deps.upkeep.read()
     const items = await this.deps.store.list('chat_item')
@@ -247,7 +250,9 @@ export class MemoryService {
       .then((report) => {
         this.deps.log?.('Daily memory pass', { trigger, changes: report.changes.length, ok: report.ok ? 1 : 0 })
         this.deps.emitUpkeep?.(report)
-        return report
+        return Promise.resolve(this.deps.onDaily?.(report))
+          .catch(() => undefined)
+          .then(() => report)
       })
       .finally(() => {
         this.dailyRunning = null
