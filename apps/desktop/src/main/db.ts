@@ -99,6 +99,13 @@ export class Store implements SyncStore {
     return { id: row.cid, ...row.payload } as EntityMap[E]
   }
 
+  /** Ids of rows deleted on this device or by a sync (tombstones), so an importer can leave them deleted. */
+  deletedIds(entity: EntityName): Set<string> {
+    this.assertEntity(entity)
+    const rows = this.db.prepare('SELECT cid FROM rows WHERE entity = ? AND deleted = 1').all(entity)
+    return new Set(rows.map((row) => stringField(row['cid'])))
+  }
+
   // ---- writing ----
 
   async upsert<E extends EntityName>(entity: E, input: RowInput<E>): Promise<EntityMap[E]> {

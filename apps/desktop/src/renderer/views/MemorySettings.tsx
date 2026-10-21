@@ -131,6 +131,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element 
           {step.at === 'done' ? (
             <p className="small muted">
               {n(step.result.added)} new, {n(step.result.updated)} updated, {n(step.result.unchanged)} already here
+              {step.result.deletedHere > 0 ? `, ${n(step.result.deletedHere)} you deleted here left alone` : ''}
               {step.result.redacted > 0 ? `, ${n(step.result.redacted)} secrets taken out` : ''}. Importing the same file again
               changes nothing.
             </p>

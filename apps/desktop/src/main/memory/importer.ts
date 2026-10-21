@@ -30,6 +30,8 @@ export interface ImportEntry {
 /** A store that can write many rows as one change. The real Store has it; tests may pass one without. */
 export interface BatchingStore extends DataStore {
   batch?<T>(work: () => Promise<T>): Promise<T>
+  /** Ids of rows deleted on this device (tombstones). The real Store has it. */
+  deletedIds?(entity: 'memory'): Set<string>
 }
 
 const TRANSIENT = new Set(['state', 'event'])
@@ -154,10 +156,16 @@ export async function runImport(store: BatchingStore, raw: string, includeAll: b
   const started = now()
   const parsed = parseExport(raw)
   const { preview, rows } = planImport(parsed, includeAll)
-  const result: MemoryImportResult = { ...preview, added: 0, updated: 0, unchanged: 0, redacted: 0, ms: 0 }
+  const result: MemoryImportResult = { ...preview, added: 0, updated: 0, unchanged: 0, deletedHere: 0, redacted: 0, ms: 0 }
   const work = async (): Promise<void> => {
     const existing = new Map((await store.list('memory')).map((row) => [row.id, row]))
+    const deleted = store.deletedIds?.('memory') ?? new Set<string>()
     for (const { row, redacted } of rows) {
+      // A page the person deleted here stays deleted: re-importing never brings it back.
+      if (deleted.has(row.id)) {
+        result.deletedHere += 1
+        continue
+      }
       result.redacted += redacted
       const have = existing.get(row.id)
       if (have !== undefined && have.title === row.title && have.body === row.body && have.kind === row.kind && have.topics === row.topics) {
@@ -173,7 +181,9 @@ export async function runImport(store: BatchingStore, raw: string, includeAll: b
   if (store.batch !== undefined) await store.batch(work)
   else await work()
   result.ms = now() - started
-  result.message = `${result.added.toLocaleString('en')} added, ${result.updated.toLocaleString('en')} updated, ${result.unchanged.toLocaleString('en')} already here.`
+  result.message = `${result.added.toLocaleString('en')} added, ${result.updated.toLocaleString('en')} updated, ${result.unchanged.toLocaleString('en')} already here${
+    result.deletedHere > 0 ? `, ${result.deletedHere.toLocaleString('en')} deleted here, left alone` : ''
+  }.`
   return result
 }
 
