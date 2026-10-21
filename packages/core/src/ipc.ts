@@ -43,6 +43,10 @@ export interface Settings {
   signedIn: boolean
   deviceName: string
   quickAskHotkey: string
+  /** Dictation anywhere: press to start, press again to stop; the words are typed where the cursor is. */
+  dictateHotkey: string
+  /** The same, then the words are cleaned up (fillers, false starts, punctuation) before they are typed. */
+  dictateCleanHotkey: string
   launchAtLogin: boolean
   closeToTray: boolean
   notifications: boolean
@@ -59,6 +63,8 @@ export interface Settings {
   voiceName: string
   /** Speak each finished agent reply aloud with Gemini TTS. */
   speakReplies: boolean
+  /** When the end-of-day memory pass runs, "HH:mm" local time; '' turns it off. */
+  dailyMemoryAt: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -80,7 +86,9 @@ export const DEFAULT_SETTINGS: Settings = {
   syncEmail: null,
   signedIn: false,
   deviceName: '',
-  quickAskHotkey: 'CommandOrControl+Shift+Space',
+  quickAskHotkey: 'CommandOrControl+Alt+Left',
+  dictateHotkey: 'Alt+Space',
+  dictateCleanHotkey: 'CommandOrControl+Alt+C',
   launchAtLogin: false,
   closeToTray: true,
   notifications: true,
@@ -89,6 +97,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hasVoiceKey: false,
   voiceName: 'Kore',
   speakReplies: false,
+  dailyMemoryAt: '23:30',
 }
 
 export interface ModelOption {
@@ -135,9 +144,21 @@ export interface ChatItem extends RowBase {
 export interface TurnRow extends RowBase {
   thread: string
   json: string
+  /** The New chat divider time the run that wrote it started under (0 = before any divider). Older rows have none. */
+  epoch?: number
 }
 
-export type MemoryKind = 'fact' | 'preference' | 'person' | 'decision' | 'how-to' | 'event' | 'skill'
+export type MemoryKind =
+  | 'fact'
+  | 'preference'
+  | 'person'
+  | 'decision'
+  | 'how-to'
+  | 'event'
+  | 'skill'
+  // Added for long-term memory (New Chat filing and the bank import).
+  | 'organisation'
+  | 'project'
 
 export interface MemoryRow extends RowBase {
   title: string
@@ -252,7 +273,31 @@ export interface HotkeyStatus {
   accelerator: string
   ok: boolean
   message: string
+  /** Which shortcut this is about. Absent on older builds, where it was always Quick Ask. */
+  action?: HotkeyAction
 }
+
+/** The app's global shortcuts. */
+export type HotkeyAction = 'quickAsk' | 'dictate' | 'dictateClean'
+
+/** Where a dictation is, for the small pill near the bottom of the screen. */
+export type DictationPhase = 'starting' | 'listening' | 'finishing' | 'cleaning' | 'done' | 'notice' | 'error' | 'hidden'
+
+export interface DictationView {
+  phase: DictationPhase
+  /** Clean-up mode: the words are tidied before they are typed. */
+  clean: boolean
+  /** The words so far: settled text, then the part still being heard. */
+  text: string
+  interim: string
+  /** A plain line for done, notice and error ("Typed", "Add a Gemini key in Settings"). */
+  message: string
+  /** The shortcut that switches to clean-up while listening, as the person presses it ("Alt+C"), or ''. */
+  switchKeys: string
+}
+
+/** What the main process asks of the pill window's microphone. */
+export type DictationCommand = { type: 'start'; session: number } | { type: 'stop'; session: number }
 
 /** What the app knows about this machine. `platform` is 'web' in the browser mock. */
 export interface SystemInfo {
@@ -776,6 +821,30 @@ export interface AgentApi {
   /** Dictation, the live voice call and read-aloud. */
   voice: VoiceApi
 
+  /** The global shortcuts (Quick Ask and dictation anywhere). */
+  hotkeys: {
+    /** Each shortcut and whether it is live, or what is in its way. */
+    status(): Promise<HotkeyStatus[]>
+    /** Lets the Settings recorder hear a key that is already a global shortcut. Resumed on false. */
+    pause(paused: boolean): Promise<void>
+  }
+
+  /** Dictation anywhere: used by the small pill window that holds the microphone. */
+  dictation: {
+    /** One chunk of 16 kHz mono PCM16 from the pill's microphone. Fire and forget. */
+    audio(session: number, pcm: Uint8Array): void
+    /** The pill's microphone started, or could not (the message says why). */
+    micState(session: number, ok: boolean, message: string): Promise<void>
+    /** The pill was clicked: stop now and type what was heard. */
+    stop(): Promise<void>
+    /** The pill's page is listening for commands (it loaded, or reloaded). */
+    ready(): Promise<void>
+    onCommand(cb: (command: DictationCommand) => void): Unsubscribe
+    onView(cb: (view: DictationView) => void): Unsubscribe
+  }
+  /** New Chat filing, past chats and the memory import. */
+  memory: MemoryApi
+
   /** Identity and housekeeping for the About dialog. */
   app: {
     info(): Promise<AppInfo>
@@ -788,4 +857,111 @@ declare global {
   interface Window {
     agent: AgentApi
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Long-term memory across chats: New Chat files the finished chat into memory in the background, past chats stay
+// searchable, and an existing memory bank can be imported from a JSON export.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** What a closing divider carries about filing the chat before it. Lives in the divider's `meta.memory`. */
+export interface ChatMemoryNote {
+  /** The id of the chat that was filed (the id of its first row, or of the divider that started it). */
+  chat: string
+  status: 'saving' | 'done' | 'failed'
+  /** Memory ids written or updated, newest first. */
+  saved?: string[]
+  added?: number
+  updated?: number
+  error?: string
+}
+
+/** A past chat found by search. */
+export interface PastChatHit {
+  chatId: string
+  title: string
+  /** When the chat started (ms). */
+  at: number
+  summary: string
+  snippets: string[]
+}
+
+/** The importer's view of one file before anything is written. */
+export interface MemoryImportPreview {
+  ok: boolean
+  message: string
+  /** Name of the bank the file says it came from. */
+  source: string
+  total: number
+  /** Entries that would be written, per app kind. */
+  byKind: Partial<Record<MemoryKind, number>>
+  /** Left out by default: retired entries and short-lived kinds (state, event). */
+  skippedRetired: number
+  skippedTransient: number
+  invalid: number
+}
+
+export interface MemoryImportResult extends MemoryImportPreview {
+  added: number
+  updated: number
+  unchanged: number
+  /** Entries whose page the person deleted here: left alone, never brought back. */
+  deletedHere: number
+  redacted: number
+  ms: number
+}
+
+/** One change the end-of-day pass made to memory, with the page as it was so it can be undone. */
+export interface UpkeepChange {
+  id: string
+  at: number
+  action: 'where' | 'filed' | 'merged' | 'rewritten' | 'dropped'
+  memoryId: string
+  title: string
+  reason: string
+  /** The page before the change; null when the change created it. */
+  before: MemoryRow | null
+  undone?: boolean
+}
+
+/** What the end-of-day pass did, for the Memory view. */
+export interface UpkeepReport {
+  at: number
+  trigger: 'schedule' | 'manual' | 'catch-up'
+  ok: boolean
+  message: string
+  /** The day the "Where we are" page covers (YYYY-MM-DD), when one was written. */
+  day: string
+  chats: number
+  filed: number
+  merged: number
+  rewritten: number
+  dropped: number
+  changes: UpkeepChange[]
+}
+
+export interface UpkeepSummary {
+  report: UpkeepReport | null
+  lastRunAt: number
+  /** Earlier "Where we are" pages, oldest first. */
+  history: Array<{ day: string; body: string }>
+}
+
+export interface MemoryApi {
+  /** Starts a fresh chat at once. The old one is filed into memory in the background. */
+  newChat(): Promise<{ dividerId: string | null; saving: boolean }>
+  /** Files a chat again after a failure (the divider that closed it). */
+  retrySave(dividerId: string): Promise<void>
+  /** Opens the OS picker for a memory export (.json). Null when the person cancelled. */
+  pickImport(): Promise<{ path: string; name: string } | null>
+  previewImport(path: string, includeAll: boolean): Promise<MemoryImportPreview>
+  runImport(path: string, includeAll: boolean): Promise<MemoryImportResult>
+  /** Full text search over past chats and their summaries. */
+  searchChats(query: string, limit?: number): Promise<PastChatHit[]>
+  /** The end-of-day pass now: "Where we are" from today's chats, then the clean-up sweep. */
+  runDaily(): Promise<UpkeepReport>
+  upkeep(): Promise<UpkeepSummary>
+  /** Puts one logged change back. */
+  undoChange(changeId: string): Promise<boolean>
+  onUpkeep(cb: (report: UpkeepReport | null) => void): Unsubscribe
 }

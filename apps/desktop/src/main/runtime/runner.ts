@@ -10,6 +10,7 @@ import {
   PROVIDERS,
   ProviderException,
   msgFromJson,
+  msgText,
   msgToJson,
   repair,
   trimFit,
@@ -37,6 +38,9 @@ import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
 import { quietTapNote } from './openui-prompt'
+import { describeRun, runFinished, runStarted } from './run-detail'
+import { redactSecrets } from '../logger'
+import { latestDividerAt } from '../memory/chats'
 
 export interface SettingsView {
   get(): Settings
@@ -93,6 +97,8 @@ export interface RunnerDeps {
 interface ActivityRow {
   id: string
   text: string
+  /** When the call started, for how long a run took. */
+  started?: number
 }
 
 const MAX_RESULT_CHARS = 160
@@ -129,6 +135,8 @@ export class Runner {
   private readonly activities = new Map<string, ActivityRow>()
   private readonly activityIds = new Map<number, string>()
   private activitySeq = 0
+  /** The divider epoch the current main run started under; its turns stay in that chat's context. */
+  private runEpoch = 0
 
   constructor(deps: RunnerDeps) {
     this.store = deps.store
@@ -408,6 +416,8 @@ export class Runner {
     user: { text: string; meta: string } | null,
   ): Promise<void> {
     this.running = true
+    // The run belongs to the chat it started in, even if New chat is pressed while it works.
+    this.runEpoch = latestDividerAt(await this.store.list('chat_item'))
     // A message the person sent starts a fresh action budget. A helper's result does not.
     if (user !== null) this.budget?.reset()
     const controller = new AbortController()
@@ -640,6 +650,50 @@ export class Runner {
     return { text: summary === '' ? 'The routine finished without a summary.' : summary, waiting: false }
   }
 
+  /**
+   * One plain model call with no tools, on whatever the person runs (their API key or their plan). Used to file a
+   * chat into memory and for the end-of-day pass. Throws with a plain message when it cannot answer.
+   */
+  async oneShot(system: string, prompt: string, signal?: AbortSignal): Promise<string> {
+    const current = this.settings.get()
+    if (current.mode === 'subscription') {
+      if (this.cli === undefined) throw new Error('This build cannot run on a subscription.')
+      const controller = new AbortController()
+      const abort = (): void => controller.abort()
+      signal?.addEventListener('abort', abort)
+      const timer = setTimeout(abort, 300_000)
+      try {
+        const result = await this.cli.turn({
+          cli: current.cli === '' ? 'claude' : current.cli,
+          thread: 'routine',
+          tools: [],
+          system,
+          prompt,
+          ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
+          context: this.toolContext(controller.signal, 'routine'),
+          signal: controller.signal,
+          onEvent: async () => undefined,
+          onCall: async () => undefined,
+          onResult: async () => undefined,
+        })
+        if (controller.signal.aborted) throw new Error('The model took too long to answer.')
+        if (result.error !== undefined) throw new Error(result.error)
+        return result.text
+      } finally {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
+      }
+    }
+    const resolved = this.resolveModel()
+    if (!resolved.ok) throw new Error(resolved.message)
+    try {
+      const completion = await resolved.provider.complete(system, [userMsg(prompt)], [], resolved.model, 4096)
+      return msgText(completion.message)
+    } catch (error) {
+      throw new Error(friendlyError(error))
+    }
+  }
+
   /** The chosen plan's own sign-in, then the same tiny check. */
   async planModels(): Promise<Array<{ id: string; label: string; line: string }>> {
     if (this.cli === undefined) return []
@@ -706,20 +760,25 @@ export class Runner {
 
   private async startActivity(call: ToolCallBlock): Promise<void> {
     const summary = describeCall(call)
+    // What it is running, so the row shows the command while it works.
+    const run = runStarted(call)
     const row = await this.store.upsert('chat_item', {
       kind: 'activity',
       text: summary,
-      meta: JSON.stringify({ tool: call.name, status: 'running', summary }),
+      meta: JSON.stringify({ tool: call.name, status: 'running', summary, ...(run === null ? {} : { run }) }),
     })
-    this.activities.set(call.id, { id: row.id, text: summary })
+    this.activities.set(call.id, { id: row.id, text: summary, started: Date.now() })
     this.emit({ type: 'chat_changed' })
   }
 
   private async finishActivity(call: ToolCallBlock, result: string, isError: boolean): Promise<void> {
     const activity = this.activities.get(call.id)
     this.activities.delete(call.id)
-    const summary = isError ? clip(result.split('\n')[0] ?? result, MAX_RESULT_CHARS) : describeCall(call)
+    // An error line can quote the command or its output, so it is redacted like the run record.
+    const summary = isError ? clip(redactSecrets(result.split('\n')[0] ?? result), MAX_RESULT_CHARS) : describeCall(call)
     const meta: JsonObject = { tool: call.name, status: isError ? 'error' : 'done', summary }
+    const run = runFinished(call, result, isError, activity?.started ?? Date.now())
+    if (run !== null) meta['run'] = run as unknown as JsonObject
     const text = isError ? `${activity?.text ?? describeCall(call)} failed` : activity?.text ?? summary
 
     if (activity !== undefined) {
@@ -747,14 +806,21 @@ export class Runner {
 
   private async appendTurn(message: Msg): Promise<void> {
     if (this.controller?.signal.aborted === true) return
-    await this.store.upsert('turn', { thread: 'main', json: JSON.stringify(msgToJson(message)) })
+    await this.store.upsert('turn', { thread: 'main', json: JSON.stringify(msgToJson(message)), epoch: this.runEpoch })
   }
 
   private async loadHistory(): Promise<Msg[]> {
     const rows = await this.store.list('turn')
+    // New Chat takes everything before the newest divider out of context. Nothing is deleted: the agent can still
+    // find it with chats_search. A turn belongs to the chat its run started in (its epoch), so a run still going
+    // when New chat was pressed stays in the old chat; rows from before epochs existed go by their time.
+    const since = this.runEpoch
     const messages: Msg[] = []
     for (const row of rows) {
       if (row.thread !== 'main') continue
+      if (typeof row.epoch === 'number') {
+        if (row.epoch !== since) continue
+      } else if (since > 0 && row.createdAt <= since) continue
       try {
         messages.push(msgFromJson(JSON.parse(row.json) as unknown))
       } catch {
@@ -953,6 +1019,9 @@ export function friendlyError(error: unknown): string {
 
 /** What the activity row says while a tool runs. Kept in one switch so every row reads the same. */
 export function describeCall(call: ToolCallBlock): string {
+  // Commands, code and files: what was run, with any secret in it redacted.
+  const run = describeRun(call)
+  if (run !== null) return run
   const input = call.input
   const title = stringField(input['title']) || stringField(input['summary'])
   switch (call.name) {
@@ -968,6 +1037,12 @@ export function describeCall(call: ToolCallBlock): string {
       return title === '' ? 'Updated memory' : `Remembered: ${clip(title, 80)}`
     case 'memory_update':
       return 'Updated memory'
+    case 'chats_search': {
+      const query = stringField(input['query'])
+      return query === '' ? 'Searched earlier chats' : `Searched earlier chats for "${clip(query, 80)}"`
+    }
+    case 'chat_read':
+      return 'Read an earlier chat'
     case 'task_add':
       return title === '' ? 'Added a task' : `Added a task: ${clip(title, 80)}`
     case 'task_list':

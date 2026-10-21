@@ -16,6 +16,7 @@ import { BrowserStage, ChatPanel } from './shell/Panel'
 import { Palette } from './shell/Palette'
 import { QuickAsk } from './shell/QuickAsk'
 import { QuickWindow } from './shell/QuickWindow'
+import { DictationPill } from './dictation/DictationPill'
 import { Shell } from './shell/Shell'
 import { TitleBar } from './shell/TitleBar'
 import { Toasts } from './ui/Toasts'
@@ -109,7 +110,7 @@ export function App(): JSX.Element {
     if (!ready) return
     const settings = useSettings.getState().settings
     const parsed = parseHash(window.location.hash)
-    if (parsed?.page === 'quick-window') {
+    if (parsed?.page === 'quick-window' || parsed?.page === 'dictation') {
       useUi.getState().applyHash(window.location.hash)
       return
     }
@@ -125,7 +126,12 @@ export function App(): JSX.Element {
     useUi.getState().navigate({ page: lastView() })
   }, [ready])
 
-  if (route.page === 'quick-window') {
+  // The small windows know what they are from their address, before settings have loaded.
+  const own = parseHash(window.location.hash)?.page
+  if (route.page === 'dictation' || own === 'dictation') {
+    return <DictationPill />
+  }
+  if (route.page === 'quick-window' || own === 'quick-window') {
     return <QuickWindow />
   }
 

@@ -45,6 +45,8 @@ export class Store implements SyncStore {
   private readonly now: () => number
   private readonly listeners = new Set<StoreChangeListener>()
   private closed = false
+  /** While a batch runs, changes are collected here and announced once at the end. */
+  private batching: Set<EntityName> | null = null
 
   constructor(file: string, clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
@@ -95,6 +97,13 @@ export class Store implements SyncStore {
     const row = this.readRow(entity, id)
     if (row === null || row.deleted) return null
     return { id: row.cid, ...row.payload } as EntityMap[E]
+  }
+
+  /** Ids of rows deleted on this device or by a sync (tombstones), so an importer can leave them deleted. */
+  deletedIds(entity: EntityName): Set<string> {
+    this.assertEntity(entity)
+    const rows = this.db.prepare('SELECT cid FROM rows WHERE entity = ? AND deleted = 1').all(entity)
+    return new Set(rows.map((row) => stringField(row['cid'])))
   }
 
   // ---- writing ----
@@ -149,6 +158,28 @@ export class Store implements SyncStore {
     this.db.exec('DELETE FROM rows')
     this.db.prepare("DELETE FROM kv WHERE k IN ('push_mark', 'cursor')").run()
     for (const entity of ENTITY_NAMES) this.emit(entity)
+  }
+
+  /**
+   * Many writes as one: a single transaction, and one change event per entity at the end (an import of
+   * thousands of rows must not make the window reload thousands of times).
+   */
+  async batch<T>(work: () => Promise<T>): Promise<T> {
+    if (this.batching !== null) return work()
+    const touched = new Set<EntityName>()
+    this.batching = touched
+    this.db.exec('BEGIN')
+    try {
+      const result = await work()
+      this.db.exec('COMMIT')
+      return result
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    } finally {
+      this.batching = null
+      for (const entity of touched) this.emit(entity)
+    }
   }
 
   close(): void {
@@ -247,6 +278,10 @@ export class Store implements SyncStore {
   }
 
   private emit(entity: EntityName): void {
+    if (this.batching !== null) {
+      this.batching.add(entity)
+      return
+    }
     for (const listener of this.listeners) {
       try {
         listener(entity)
