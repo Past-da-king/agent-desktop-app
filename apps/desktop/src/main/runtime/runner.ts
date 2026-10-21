@@ -38,6 +38,7 @@ import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
 import { quietTapNote } from './openui-prompt'
 import { describeRun, runFinished, runStarted } from './run-detail'
+import { redactSecrets } from '../logger'
 
 export interface SettingsView {
   get(): Settings
@@ -723,7 +724,8 @@ export class Runner {
   private async finishActivity(call: ToolCallBlock, result: string, isError: boolean): Promise<void> {
     const activity = this.activities.get(call.id)
     this.activities.delete(call.id)
-    const summary = isError ? clip(result.split('\n')[0] ?? result, MAX_RESULT_CHARS) : describeCall(call)
+    // An error line can quote the command or its output, so it is redacted like the run record.
+    const summary = isError ? clip(redactSecrets(result.split('\n')[0] ?? result), MAX_RESULT_CHARS) : describeCall(call)
     const meta: JsonObject = { tool: call.name, status: isError ? 'error' : 'done', summary }
     const run = runFinished(call, result, isError, activity?.started ?? Date.now())
     if (run !== null) meta['run'] = run as unknown as JsonObject
