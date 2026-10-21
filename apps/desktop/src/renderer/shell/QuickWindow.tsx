@@ -115,7 +115,7 @@ export function QuickWindow(): JSX.Element {
           placeholder={`Message ${agentName}`}
           aria-label={`Message ${agentName}`}
           autoComplete="off"
-          spellCheck
+          spellCheck={false}
         />
         <button type="button" className="send" onClick={send} aria-label="Send" disabled={text.trim() === ''}>
           <Icon name="arrow" size={22} />
