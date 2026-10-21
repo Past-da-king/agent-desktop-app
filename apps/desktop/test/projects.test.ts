@@ -3,6 +3,10 @@
  * between them, helpers in the project's profile, the main thread's New chat carrying on with a summary, and old
  * chats kept under "Earlier chats". On the real Runner, HelperManager and Store with a local fake AI server.
  */
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, providerFor, type ChatItem, type JsonObject, type MemoryRow, type Settings } from '@agent/core'
@@ -20,6 +24,8 @@ import { FOCUS_LINE, buildSystemPrompt } from '../src/main/runtime/prompt'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset, buildWorkerToolset } from '../src/main/runtime/toolset'
 import { sourceOfChat } from '../src/renderer/lib/source'
+import { projectAskProgram } from '../src/renderer/openui/ask'
+import { renderSource } from '../src/renderer/openui/lang'
 import { singleEmoji } from '../src/renderer/lib/projects'
 import { hashFor, parseHash } from '../src/renderer/state/route'
 import { secretsView, settingsView } from './support'
@@ -148,6 +154,43 @@ describe('the main agent and project chats', () => {
   })
 })
 
+describe('making a project from the chat', () => {
+  it('shows a card with the project, and Create makes it with the folder the agent found', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'guavas-'))
+    fake = await startFakeAi((body): FakeReply => {
+      const last = lastText(body)
+      if (last.includes('MAKE IT')) return { toolCalls: [{ name: 'project_create', input: { name: 'Guavas relaunch', path: folder, description: 'The new guavas.co.uk.', icon: 'globe', color: 'teal' } }] }
+      if (last.includes('MAKE A SECOND')) return { toolCalls: [{ name: 'project_create', input: { name: 'Second', path: folder } }] }
+      if (last.includes('MAKE A MISSING')) return { toolCalls: [{ name: 'project_create', input: { name: 'Missing', path: join(folder, 'nope') } }] }
+      return { text: 'ok' }
+    })
+    const { runner, db } = make()
+
+    const sending = runner.send('MAKE IT in my folder')
+    const card = await waitFor(async () => (await db.list('chat_item')).find((row) => row.kind === 'question'), 5_000)
+    expect(meta(card)['card']).toMatchObject({ kind: 'project', name: 'Guavas relaunch', path: folder, folderNew: false, profile: 'General', icon: { glyph: 'globe', color: 'teal' } })
+    expect(meta(card)['options']).toEqual(['Create', 'Change'])
+    expect(await db.list('project')).toHaveLength(0)
+    await runner.answer(card?.id ?? '', 'Create')
+    await sending
+    const projects = await db.list('project')
+    expect(projects).toHaveLength(1)
+    expect(projects[0]).toMatchObject({ name: 'Guavas relaunch', path: folder, description: 'The new guavas.co.uk.', hidden: false, chats: [] })
+
+    // No makes nothing; a folder that is not there is sent back to be found first, with no card.
+    const second = runner.send('MAKE A SECOND one')
+    const ask = await waitFor(async () => (await db.list('chat_item')).find((row) => row.kind === 'question' && meta(row)['answer'] === ''), 5_000)
+    await runner.answer(ask?.id ?? '', 'No')
+    await second
+    await runner.send('MAKE A MISSING one')
+    expect(await db.list('project')).toHaveLength(1)
+    expect((await db.list('chat_item')).filter((row) => row.kind === 'question')).toHaveLength(2)
+    const missing = fake.requests.find((request) => lastText(request.body).includes('There is no folder at'))
+    expect(missing).toBeDefined()
+    await waitFor(() => !runner.state(MAIN_CHAT).running, 8_000)
+  }, 15_000)
+})
+
 describe('New chat in the main thread', () => {
   it('carries on with a summary of the conversation, handed over once, and still files it', async () => {
     fake = await startFakeAi(() => ({ text: 'Answered.' }))
@@ -234,6 +277,15 @@ describe('in the window', () => {
   it('says where a chat lives, for the approvals panel', () => {
     expect(sourceOfChat('pcx0000001', [], [project])).toEqual({ kind: 'project', name: 'Acme', icon: project.icon, projectId: 'p1' })
     expect(sourceOfChat(MAIN_CHAT, [], [project])).toMatchObject({ kind: 'main', projectId: null, icon: null })
+  })
+
+  it('draws the project card as OpenUI: the project, its folder and profile, then Create, Change and No', () => {
+    const source = projectAskProgram({ name: 'Guavas', description: 'The site.', path: 'C:\\Sites\\guavas', folderNew: false, profile: 'Work' }, ['Create', 'Change'])
+    const root = renderSource(source).root
+    expect(root?.type).toBe('Card')
+    expect(source).toContain('C:\\\\Sites\\\\guavas')
+    expect(source.match(/Button\(/g)).toHaveLength(3)
+    expect(source).toContain('"No"')
   })
 
   it('routes to a project page and takes one emoji as an icon', () => {

@@ -11,6 +11,7 @@ import type {
   LearnedAppInfo,
   BrowserBounds,
   BrowserPerson,
+  ProjectRow,
   BrowserState,
   BrowserViewMode,
   ChatEvent,
@@ -742,6 +743,21 @@ export const mockAgent: AgentApi = {
         return
       }
       insertChat({ kind: 'user', text: value, meta: JSON.stringify({ attachments: files, ...tag }) })
+      // The preview's take on project_create: the agent found the folder and asks on a card (tools/projects.ts).
+      if (/\b(create|make|start) (a |the )?project\b/i.test(value)) {
+        insertChat({ kind: 'agent', text: 'Found the folder on your Desktop. Here is the project; tap Create when it looks right.', meta: JSON.stringify(tag) })
+        insertChat({
+          kind: 'question',
+          text: 'Make the project Guavas relaunch?',
+          meta: JSON.stringify({
+            ...tag,
+            options: ['Create', 'Change'],
+            answer: '',
+            card: { kind: 'project', name: 'Guavas relaunch', description: 'The new guavas.co.uk: copy, lender pages and the launch on 14 November.', path: 'C:\\Users\\You\\Desktop\\projects\\guavas-site', folderNew: false, profile: 'Work', icon: { glyph: 'globe', color: 'teal' } },
+          }),
+        })
+        return
+      }
       mockRun(target, 800)
     },
     async stop(chat) {
@@ -804,6 +820,20 @@ export const mockAgent: AgentApi = {
     },
     async answer(itemId, answer) {
       patchCard(itemId, { answer })
+      // Create on a project card makes the project, as project_create does.
+      const card = parseMeta(rows.chat_item.find((item) => item.id === itemId)?.meta ?? '{}')['card'] as Record<string, unknown> | undefined
+      if (answer === 'Create' && card?.['kind'] === 'project') {
+        const made = upsertRow('project', {
+          name: String(card['name']),
+          description: String(card['description'] ?? ''),
+          icon: card['icon'] as ProjectRow['icon'],
+          path: String(card['path'] ?? ''),
+          profile: 'p_work',
+          hidden: false,
+          chats: [],
+        })
+        insertChat({ kind: 'agent', text: `Made ${made.name}. It is in the rail.`, meta: '{}' })
+      }
     },
     async decide(itemId, decision: Decision) {
       patchCard(itemId, { decision })

@@ -98,7 +98,9 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   'routine_update',
   'routine_delete',
   'profile_create',
-  'projects_list',
+  'project_list',
+  'project_create',
+  'project_update',
   'project_chat_start',
   'project_chat_send',
   'message_main',
@@ -175,7 +177,7 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
     tools.push(...helperTools(deps.helpers)) // delegate, helper_steer, helper_push, helpers_status, helper_stop
     tools.push(...profileTools(deps.apps, deps.learned)) // profile_create
   }
-  if (deps.projects !== undefined) tools.push(...projectTools({ store: deps.store, ...deps.projects })) // projects_list, project_chat_start, project_chat_send, message_main
+  if (deps.projects !== undefined) tools.push(...projectTools({ store: deps.store, ...deps.projects })) // project_list, project_create, project_update, project_chat_start, project_chat_send, message_main
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
   const budget = deps.mainBudget

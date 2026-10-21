@@ -80,7 +80,8 @@ export function projectLines(project: ProjectContext): string[] {
 export function projectsMainLines(names: string[]): string[] {
   return [
     `PROJECTS: ${names.length === 0 ? 'none yet' : names.join(', ')}. Each has its own chats (agents), its own memory, a folder and a profile.`,
-    '- Work that belongs to a project goes there: project_chat_start opens a chat in it with your brief and runs it; project_chat_send sends a message into one of its chats; projects_list shows every project, its chats and what each is doing.',
+    '- Work that belongs to a project goes there: project_chat_start opens a chat in it with your brief and runs it; project_chat_send sends a message into one of its chats; project_list shows every project, its chats and what each is doing.',
+    '- "Create a project in this folder, call it X, it is for Y": find the folder on this computer yourself with your file tools (a fuzzy "my Desktop projects folder" too), then project_create with its full path, a fitting icon and the profile whose accounts fit. The user confirms on a card before it exists. project_update renames it, moves its folder, changes its profile, icon or description, or hides it.',
     '- A message starting "[From project" is a project chat writing to you. Act on it, pass it on, or tell the user, in one short line.',
   ]
 }

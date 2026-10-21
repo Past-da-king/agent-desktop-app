@@ -1,5 +1,5 @@
 import { VoiceNote } from '../voice/VoiceNote'
-import { attachmentKind, attachmentProblem, fileSizeLabel, type Attachment, type ChatEvent, type ChatItem } from '@agent/core'
+import { PROFILE_COLORS, attachmentKind, attachmentProblem, fileSizeLabel, type Attachment, type ChatEvent, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
@@ -34,7 +34,8 @@ import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
-import { AgentMessage, AskCard } from '../openui/AgentMessage'
+import { AgentMessage, AskCard, ProjectAskCard } from '../openui/AgentMessage'
+import type { ProjectAsk } from '../openui/ask'
 import { ReportBody } from '../openui/ReportBody'
 import { useNarrow } from '../shell/Panel'
 import { usePanel } from '../state/usePanel'
@@ -287,6 +288,26 @@ function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.E
   )
 }
 
+/** The project a question card asks to make, when it is one (main/tools/projects.ts project_create). */
+function projectAskOf(meta: Record<string, unknown>): { ask: ProjectAsk; icon: ProjectIcon } | null {
+  const card = meta['card']
+  if (typeof card !== 'object' || card === null || Array.isArray(card)) return null
+  const c = card as Record<string, unknown>
+  if (c['kind'] !== 'project' || typeof c['name'] !== 'string') return null
+  const icon = typeof c['icon'] === 'object' && c['icon'] !== null ? (c['icon'] as Record<string, unknown>) : {}
+  const color = typeof icon['color'] === 'string' && (PROFILE_COLORS as readonly string[]).includes(icon['color']) ? (icon['color'] as ProfileColor) : 'iris'
+  return {
+    ask: {
+      name: c['name'],
+      description: typeof c['description'] === 'string' ? c['description'] : '',
+      path: typeof c['path'] === 'string' ? c['path'] : '',
+      folderNew: c['folderNew'] === true,
+      profile: typeof c['profile'] === 'string' ? c['profile'] : 'General',
+    },
+    icon: { glyph: typeof icon['glyph'] === 'string' ? icon['glyph'] : 'folder', color },
+  }
+}
+
 function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   const meta = parseMeta(item.meta)
   const options = metaStrings(meta, 'options')
@@ -342,10 +363,16 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
     )
   }
 
+  // A project the agent wants to make (project_create): the card shows it, and Create makes it.
+  const project = projectAskOf(meta)
   return (
     <div className="appr ask">
-      {/* An OpenUI ask card as on the phone: one button per answer, and always a No. */}
-      <AskCard question={item.text} options={options.length > 0 ? options : ['Yes']} disabled={sending} onPick={answer} />
+      {project !== null ? (
+        <ProjectAskCard project={project.ask} icon={<ProjectTile icon={project.icon} size={48} />} options={options} disabled={sending} onPick={answer} />
+      ) : (
+        /* An OpenUI ask card as on the phone: one button per answer, and always a No. */
+        <AskCard question={item.text} options={options.length > 0 ? options : ['Yes']} disabled={sending} onPick={answer} />
+      )}
       <form
         className="free"
         onSubmit={(event) => {
