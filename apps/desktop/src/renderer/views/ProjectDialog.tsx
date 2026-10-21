@@ -172,7 +172,7 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
         <div className="pj-folder">
           <span className={`pj-folder-path${path === '' ? ' none' : ''}`} title={path}>
             <Icon name="folder" size={16} />
-            {path === '' ? 'No folder yet' : path}
+            <span className="pj-folder-text">{path === '' ? 'No folder yet' : path.length > 48 ? `…${path.slice(-46)}` : path}</span>
           </span>
           <Button
             variant="tonal"
