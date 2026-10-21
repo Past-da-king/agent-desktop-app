@@ -4,7 +4,8 @@
  * In the chat it is one line: what kind, a monospace snippet of the exact command (cut with an ellipsis), how it
  * ended and how long it took. Clicking the line opens it in place: the exact command as the agent wrote it, the
  * folder, the exit code and time, then everything it printed with stderr marked, long output folded to its first
- * and last lines behind "Show all", and a copy button for the command and for each output.
+ * and last lines behind "Show all", and a copy button for the command and for each output. Any other tool call
+ * (browser, memory, helpers) opens the same way to what it was given and what came back.
  */
 import { useEffect, useId, useRef, useState } from 'react'
 
@@ -101,15 +102,21 @@ function Output({ title, text, tone, what }: { title: string; text: string; tone
   )
 }
 
-const ICONS: Record<RunRecord['kind'], IconName> = { shell: 'term', code: 'code', file: 'doc' }
+const ICONS: Record<RunRecord['kind'], IconName> = { shell: 'term', code: 'code', file: 'doc', tool: 'code' }
+
+function iconOf(run: RunRecord): IconName {
+  return run.kind === 'tool' && run.label.startsWith('browser') ? 'globe' : ICONS[run.kind]
+}
 
 function inputTitle(run: RunRecord): string {
   if (run.kind === 'shell') return 'Command'
+  if (run.kind === 'tool') return 'What it was given'
   if (run.kind === 'code') return run.label === 'python' ? 'Python program' : run.label === 'javascript' ? 'JavaScript program' : 'Program'
   return run.label === 'Find' || run.label === 'List' ? 'Folder' : 'File'
 }
 
 function outputTitle(run: RunRecord): string {
+  if (run.kind === 'tool') return 'What came back'
   if (run.kind !== 'file') return run.merged === true ? 'Output and errors' : 'Output'
   switch (run.label) {
     case 'Read':
@@ -143,7 +150,7 @@ export function RunDetail({ run, id }: { run: RunRecord; id: string }): JSX.Elem
       <div className="run-sec">
         <div className="run-sec-h">
           <span className="eyebrow mute">{inputTitle(run)}</span>
-          <CopyButton text={run.input} what={run.kind === 'file' ? 'path' : run.kind === 'code' ? 'program' : 'command'} />
+          <CopyButton text={run.input} what={run.kind === 'file' ? 'path' : run.kind === 'code' ? 'program' : run.kind === 'tool' ? 'input' : 'command'} />
         </div>
         <pre className="run-pre cmd">{run.input === '' ? ' ' : run.input}</pre>
         <div className="run-facts">
@@ -166,7 +173,7 @@ export function RunDetail({ run, id }: { run: RunRecord; id: string }): JSX.Elem
       {run.state === 'running' || run.state === 'declined' ? null : (
         <>
           <Output title={outputTitle(run)} text={run.stdout} what="output" />
-          {run.stderr !== '' ? <Output title={run.kind === 'file' ? 'Problem' : 'Errors (stderr)'} text={run.stderr} tone="err" what="errors" /> : null}
+          {run.stderr !== '' ? <Output title={run.kind === 'file' || run.kind === 'tool' ? 'Problem' : 'Errors (stderr)'} text={run.stderr} tone="err" what="errors" /> : null}
         </>
       )}
       {run.trimmed ? (
@@ -177,12 +184,24 @@ export function RunDetail({ run, id }: { run: RunRecord; id: string }): JSX.Elem
 }
 
 /** The chat line for one run, opening to its full record. */
-export function RunStep({ run: raw, status, by }: { run: RunRecord; status: string; by?: string }): JSX.Element {
+export function RunStep({
+  run: raw,
+  status,
+  by,
+  summary,
+}: {
+  run: RunRecord
+  status: string
+  by?: string
+  /** The row's own words ("Searched memory for VAT"); a tool call shows them when they say more than its name. */
+  summary?: string
+}): JSX.Element {
   const [open, setOpen] = useState(false)
   const bodyId = useId()
   const run = settled(raw, status)
   const running = run.state === 'running'
-  const snippet = snippetOf(run.input) || '(empty)'
+  const said = run.kind === 'tool' && summary !== undefined && summary.trim().toLowerCase() !== run.label.toLowerCase() ? summary.trim() : ''
+  const snippet = said !== '' ? snippetOf(said) : snippetOf(run.input) || (run.kind === 'tool' ? 'no input' : '(empty)')
   const time = running ? '' : formatMs(run.ms)
   const tone = run.state === 'ok' ? 'ok' : run.state === 'failed' ? 'bad' : running ? 'live' : run.state === 'timeout' ? 'warn' : 'mute'
   return (
@@ -197,11 +216,11 @@ export function RunStep({ run: raw, status, by }: { run: RunRecord; status: stri
       >
         <i className={`run-ic ${tone}`}>
           <span className={running ? 'spin' : ''}>
-            <Icon name={running ? 'sync' : ICONS[run.kind]} size={16} />
+            <Icon name={running ? 'sync' : iconOf(run)} size={16} />
           </span>
         </i>
         <span className="tool-tag">{runTag(run)}</span>
-        <code className="run-snip">{snippet}</code>
+        <code className={`run-snip${said !== '' ? ' said' : ''}`}>{snippet}</code>
         <span className={`run-st ${tone}`}>{statusText(run)}</span>
         {time !== '' ? <span className="run-ms">{time}</span> : null}
         <span className="run-chev">

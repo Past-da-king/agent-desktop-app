@@ -6,7 +6,8 @@
  * Pure TypeScript, shared by the main process and the renderer, so it is unit tested directly.
  */
 
-export type RunKind = 'shell' | 'code' | 'file'
+/** shell, code and file runs; `tool` is any other tool call (browser, memory, helpers): its input and what came back. */
+export type RunKind = 'shell' | 'code' | 'file' | 'tool'
 
 /** running while it works; ok and failed by exit code; the rest say why it never finished. */
 export type RunState = 'running' | 'ok' | 'failed' | 'timeout' | 'stopped' | 'declined'
@@ -41,8 +42,10 @@ export interface RunRecord {
 
 /** The most the record keeps of any one stream: the first and last halves of this, the middle cut. */
 export const RUN_STREAM_CAP = 24_000
+/** Other tool calls are many and chatty (page snapshots), so each keeps less. */
+export const TOOL_STREAM_CAP = 8_000
 
-const KINDS = new Set<RunKind>(['shell', 'code', 'file'])
+const KINDS = new Set<RunKind>(['shell', 'code', 'file', 'tool'])
 const STATES = new Set<RunState>(['running', 'ok', 'failed', 'timeout', 'stopped', 'declined'])
 
 /** The run on an activity row's meta, or null when the row has none (older rows, other tools). */
@@ -133,6 +136,7 @@ export function statusText(run: RunRecord): string {
 export function runTag(run: RunRecord): string {
   if (run.kind === 'shell') return 'Shell'
   if (run.kind === 'code') return 'Code'
+  if (run.kind === 'tool') return run.label === '' ? 'Tool' : run.label
   return run.label === '' ? 'File' : run.label
 }
 

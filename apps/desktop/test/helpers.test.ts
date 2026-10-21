@@ -216,6 +216,42 @@ describe('HelperManager', () => {
     expect(helperTurns.length).toBeGreaterThanOrEqual(2)
   })
 
+  it("keeps each helper tool call's input and result on its step, so the row opens like the main agent's", async () => {
+    const evalTool: Tool = {
+      spec: {
+        name: 'page_eval',
+        description: 'Runs a script in the page.',
+        schema: { type: 'object', properties: { js: { type: 'string' } } },
+      },
+      run: async () => 'Example Domain',
+    }
+    fake = await startFakeAi((body) => {
+      if (isHelperRequest(body)) {
+        return hasToolResult(body) ? { text: 'The title is Example Domain.' } : { toolCalls: [{ name: 'page_eval', input: { js: 'document.title' } }] }
+      }
+      const last = lastMessage(body)
+      if (last?.['role'] === 'tool') return { text: 'Checking.' }
+      if (JSON.stringify(last ?? {}).includes('[Helper #')) return { text: 'It is Example Domain.' }
+      return { toolCalls: [{ name: 'delegate', input: { tasks: [{ label: 'Title', brief: 'Read the page title.' }] } }] }
+    })
+    const { runner, store: db } = makeRunner({ extraWorkerTools: [evalTool] })
+
+    await runner.send('What is the page title?')
+
+    const step = await waitFor(async () => {
+      const items = await db.list('chat_item')
+      return items.find((row) => row.kind === 'activity' && meta(row)['tool'] === 'page_eval' && meta(row)['status'] === 'done')
+    })
+    expect(meta(step)['helper']).toBeTruthy()
+    expect(meta(step)['run']).toMatchObject({
+      kind: 'tool',
+      label: 'page eval',
+      input: 'document.title',
+      stdout: 'Example Domain',
+      state: 'ok',
+    })
+  })
+
   it('runs two helpers at the same time', async () => {
     let arrived = 0
     let open: (() => void) | null = null

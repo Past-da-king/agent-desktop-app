@@ -170,7 +170,7 @@ function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
   const summary = metaText(meta, 'summary') || item.text
   // A command, program or file step shows what it actually ran, and opens to the full record.
   const run = runFromMeta(meta)
-  if (run !== null) return <RunStep run={run} status={status} by={metaText(meta, 'by') || undefined} />
+  if (run !== null) return <RunStep run={run} status={status} by={metaText(meta, 'by') || undefined} summary={summary} />
   const icon: IconName = status === 'error' ? 'x' : status === 'running' ? toolIcon(tool) : 'check'
   return (
     <div className={`tool ${status}`} title={tool === '' ? undefined : tool}>
@@ -249,7 +249,7 @@ function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.E
   ].filter((part) => part !== '')
   // The folded line still shows a snippet of what was run: a failed run first, else the last command or program.
   const runs = items.map((item) => runFromMeta(parseMeta(item.meta))).filter((run) => run !== null).reverse()
-  const lastRun = runs.find((run) => run.state === 'failed') ?? runs.find((run) => run.kind !== 'file') ?? runs[0] ?? null
+  const lastRun = runs.find((run) => run.state === 'failed') ?? runs.find((run) => run.kind === 'shell' || run.kind === 'code') ?? runs[0] ?? null
   const current = [...items].reverse().find((_, index) => statuses[items.length - 1 - index] === 'running') ?? items[items.length - 1]
   if (running && current !== undefined) {
     return (
