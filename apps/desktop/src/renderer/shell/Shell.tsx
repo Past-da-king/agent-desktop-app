@@ -5,6 +5,7 @@ import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { useRoute, useUi } from '../state/useUi'
 import { Icon, type IconName } from '../ui/Icon'
+import { ChatPanel } from './Panel'
 import { Rail } from './Rail'
 
 export function useNeeds(): number {
@@ -53,10 +54,8 @@ export function Shell({ children, panel }: { children: ReactNode; panel?: ReactN
   const classes = ['shell', collapsed ? 'col' : '', panel ? (panelCollapsed ? 'panel-collapsed' : 'panel') : '']
     .filter(Boolean)
     .join(' ')
-  const style =
-    panel !== undefined
-      ? ({ '--panel-w': `${panelWidth}px` } as CSSProperties)
-      : undefined
+  // Always set: the parked browser card keeps the panel's width, so its pages keep their size off the chat page.
+  const style = { '--panel-w': `${panelWidth}px` } as CSSProperties
 
   return (
     <>
@@ -65,7 +64,9 @@ export function Shell({ children, panel }: { children: ReactNode; panel?: ReactN
         <main className="sheet" style={panel ? { overflow: 'hidden' } : undefined}>
           {children}
         </main>
-        {panel}
+        {/* The same ChatPanel element on every page (only Chat passes one), so the browser card it holds is never
+            unmounted: the agent's pages live in it. Elsewhere it is parked out of sight. */}
+        {panel ?? <ChatPanel parked />}
       </div>
       <MobileNav />
     </>
