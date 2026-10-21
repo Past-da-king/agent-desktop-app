@@ -45,6 +45,8 @@ export class Store implements SyncStore {
   private readonly now: () => number
   private readonly listeners = new Set<StoreChangeListener>()
   private closed = false
+  /** While a batch runs, changes are collected here and announced once at the end. */
+  private batching: Set<EntityName> | null = null
 
   constructor(file: string, clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
@@ -151,6 +153,28 @@ export class Store implements SyncStore {
     for (const entity of ENTITY_NAMES) this.emit(entity)
   }
 
+  /**
+   * Many writes as one: a single transaction, and one change event per entity at the end (an import of
+   * thousands of rows must not make the window reload thousands of times).
+   */
+  async batch<T>(work: () => Promise<T>): Promise<T> {
+    if (this.batching !== null) return work()
+    const touched = new Set<EntityName>()
+    this.batching = touched
+    this.db.exec('BEGIN')
+    try {
+      const result = await work()
+      this.db.exec('COMMIT')
+      return result
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    } finally {
+      this.batching = null
+      for (const entity of touched) this.emit(entity)
+    }
+  }
+
   close(): void {
     if (this.closed) return
     this.closed = true
@@ -247,6 +271,10 @@ export class Store implements SyncStore {
   }
 
   private emit(entity: EntityName): void {
+    if (this.batching !== null) {
+      this.batching.add(entity)
+      return
+    }
     for (const listener of this.listeners) {
       try {
         listener(entity)

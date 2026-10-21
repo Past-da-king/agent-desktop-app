@@ -59,6 +59,8 @@ export interface Settings {
   voiceName: string
   /** Speak each finished agent reply aloud with Gemini TTS. */
   speakReplies: boolean
+  /** When the end-of-day memory pass runs, "HH:mm" local time; '' turns it off. */
+  dailyMemoryAt: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -89,6 +91,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hasVoiceKey: false,
   voiceName: 'Kore',
   speakReplies: false,
+  dailyMemoryAt: '23:30',
 }
 
 export interface ModelOption {
@@ -834,6 +837,42 @@ export interface MemoryImportResult extends MemoryImportPreview {
   ms: number
 }
 
+/** One change the end-of-day pass made to memory, with the page as it was so it can be undone. */
+export interface UpkeepChange {
+  id: string
+  at: number
+  action: 'where' | 'filed' | 'merged' | 'rewritten' | 'dropped'
+  memoryId: string
+  title: string
+  reason: string
+  /** The page before the change; null when the change created it. */
+  before: MemoryRow | null
+  undone?: boolean
+}
+
+/** What the end-of-day pass did, for the Memory view. */
+export interface UpkeepReport {
+  at: number
+  trigger: 'schedule' | 'manual' | 'catch-up'
+  ok: boolean
+  message: string
+  /** The day the "Where we are" page covers (YYYY-MM-DD), when one was written. */
+  day: string
+  chats: number
+  filed: number
+  merged: number
+  rewritten: number
+  dropped: number
+  changes: UpkeepChange[]
+}
+
+export interface UpkeepSummary {
+  report: UpkeepReport | null
+  lastRunAt: number
+  /** Earlier "Where we are" pages, oldest first. */
+  history: Array<{ day: string; body: string }>
+}
+
 export interface MemoryApi {
   /** Starts a fresh chat at once. The old one is filed into memory in the background. */
   newChat(): Promise<{ dividerId: string | null; saving: boolean }>
@@ -845,4 +884,10 @@ export interface MemoryApi {
   runImport(path: string, includeAll: boolean): Promise<MemoryImportResult>
   /** Full text search over past chats and their summaries. */
   searchChats(query: string, limit?: number): Promise<PastChatHit[]>
+  /** The end-of-day pass now: "Where we are" from today's chats, then the clean-up sweep. */
+  runDaily(): Promise<UpkeepReport>
+  upkeep(): Promise<UpkeepSummary>
+  /** Puts one logged change back. */
+  undoChange(changeId: string): Promise<boolean>
+  onUpkeep(cb: (report: UpkeepReport | null) => void): Unsubscribe
 }
