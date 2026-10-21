@@ -989,6 +989,46 @@ export interface MemoryImportResult extends MemoryImportPreview {
   ms: number
 }
 
+/** What tidying a memory bank with the agent would do: the notes it reads and the steps it takes, before it starts. */
+export interface MemoryTidyPlan {
+  ok: boolean
+  message: string
+  source: string
+  /** Notes the agent reads (retired notes and older day-to-day state are left out unless everything is included). */
+  notes: number
+  projects: number
+  /** One model call each. */
+  steps: number
+  chars: number
+  /** Older day-to-day state and events left out because newer notes say where things stand. */
+  olderState: number
+  retired: number
+}
+
+/** Where tidying a memory bank has got to. It runs in the background and survives closing the dialog. */
+export interface MemoryTidyProgress {
+  running: boolean
+  /** True once every step has run (some may have failed). */
+  finished: boolean
+  source: string
+  /** The project being read now, and its place in the list. */
+  project: string
+  projectIndex: number
+  projects: number
+  steps: number
+  done: number
+  failed: number
+  added: number
+  updated: number
+  /** The last few failures, newest last. */
+  errors: Array<{ project: string; error: string }>
+  startedAt: number
+  finishedAt: number | null
+  /** The whole import can still be undone. */
+  canUndo: boolean
+  message: string
+}
+
 /** One change the end-of-day pass made to memory, with the page as it was so it can be undone. */
 export interface UpkeepChange {
   id: string
@@ -1038,6 +1078,16 @@ export interface MemoryApi {
   pickImport(): Promise<{ path: string; name: string } | null>
   previewImport(path: string, includeAll: boolean): Promise<MemoryImportPreview>
   runImport(path: string, includeAll: boolean): Promise<MemoryImportResult>
+  /** What tidying the file with the agent would take. */
+  previewTidy(path: string, includeAll: boolean): Promise<MemoryTidyPlan>
+  /** Starts (or resumes) tidying the file into memory in the background. Steps already done are skipped. */
+  startTidy(path: string, includeAll: boolean): Promise<MemoryTidyProgress>
+  /** Stops after the step in progress; starting again carries on where it stopped. */
+  stopTidy(): Promise<MemoryTidyProgress>
+  tidyState(): Promise<MemoryTidyProgress | null>
+  /** Takes every page the tidy import added out again and puts every page it changed back as it was. */
+  undoTidy(): Promise<{ removed: number; restored: number }>
+  onTidy(cb: (progress: MemoryTidyProgress) => void): Unsubscribe
   /** Full text search over past chats and their summaries. */
   searchChats(query: string, limit?: number): Promise<PastChatHit[]>
   /** The end-of-day pass now: "Where we are" from today's chats, then the clean-up sweep. */
