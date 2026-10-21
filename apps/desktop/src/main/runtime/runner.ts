@@ -687,7 +687,9 @@ export class Runner {
       if (queued.length === 0) break
       const paused = line.paused
       line.paused = false
-      text = (paused ? `${PAUSED_NOTE}\n\n` : '') + queued.map((entry) => entry.text).join('\n\n')
+      // The task is named again: if the paused session could not be resumed, the new one still knows what it was.
+      const resume = paused ? `${PAUSED_NOTE} The task: "${clip(line.goal, 400)}".\n\n` : ''
+      text = resume + queued.map((entry) => entry.text).join('\n\n')
       pendingImages = queued.flatMap((entry) => entry.images)
     }
     return error

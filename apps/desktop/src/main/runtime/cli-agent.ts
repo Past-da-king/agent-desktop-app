@@ -249,6 +249,11 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         }
       }
     }
+  } catch (error) {
+    // Stopped or paused: keep the session id this turn was given, so the next turn resumes the same conversation
+    // (a fresh conversation's id is only known from its first message, and the outer catch never saw it).
+    if (turn.signal.aborted) return { sessionId, text: lastSaid }
+    throw error
   } finally {
     turn.signal.removeEventListener('abort', onAbort)
   }
@@ -300,31 +305,37 @@ async function runCodex(turn: CliTurn): Promise<CliResult> {
   let lastSaid = ''
   let failure: string | undefined
   const { events } = await thread.runStreamed(input, { signal: turn.signal })
-  for await (const event of events) {
-    const e = event as unknown as Record<string, unknown>
-    const item = (e['item'] ?? {}) as Record<string, unknown>
-    if (e['type'] === 'thread.started' && typeof e['thread_id'] === 'string') sessionId = e['thread_id']
-    else if (e['type'] === 'item.completed' && item['type'] === 'agent_message') {
-      const said = String(item['text'] ?? '').trim()
-      if (said !== '') {
-        lastSaid = said
-        await turn.onEvent({ type: 'said', text: said })
+  try {
+    for await (const event of events) {
+      const e = event as unknown as Record<string, unknown>
+      const item = (e['item'] ?? {}) as Record<string, unknown>
+      if (e['type'] === 'thread.started' && typeof e['thread_id'] === 'string') sessionId = e['thread_id']
+      else if (e['type'] === 'item.completed' && item['type'] === 'agent_message') {
+        const said = String(item['text'] ?? '').trim()
+        if (said !== '') {
+          lastSaid = said
+          await turn.onEvent({ type: 'said', text: said })
+        }
+      } else if (e['type'] === 'item.started' && item['type'] === 'web_search') {
+        const id = String(item['id'] ?? 'search')
+        await turn.onEvent({ type: 'tool_started', call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } } })
+      } else if (e['type'] === 'item.completed' && item['type'] === 'web_search') {
+        const id = String(item['id'] ?? 'search')
+        await turn.onEvent({
+          type: 'tool_finished',
+          call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } },
+          result: '',
+          isError: false,
+        })
+      } else if (e['type'] === 'turn.failed' || e['type'] === 'error') {
+        const err = e['error'] as { message?: string } | undefined
+        failure = err?.message ?? String(e['message'] ?? 'Codex failed')
       }
-    } else if (e['type'] === 'item.started' && item['type'] === 'web_search') {
-      const id = String(item['id'] ?? 'search')
-      await turn.onEvent({ type: 'tool_started', call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } } })
-    } else if (e['type'] === 'item.completed' && item['type'] === 'web_search') {
-      const id = String(item['id'] ?? 'search')
-      await turn.onEvent({
-        type: 'tool_finished',
-        call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } },
-        result: '',
-        isError: false,
-      })
-    } else if (e['type'] === 'turn.failed' || e['type'] === 'error') {
-      const err = e['error'] as { message?: string } | undefined
-      failure = err?.message ?? String(e['message'] ?? 'Codex failed')
     }
+  } catch (error) {
+    // As for Claude: a paused or stopped turn keeps its thread id so the next turn carries on in it.
+    if (turn.signal.aborted) return { sessionId, text: lastSaid }
+    throw error
   }
 
   if (turn.signal.aborted) return { sessionId, text: lastSaid }
