@@ -20,3 +20,12 @@
 
 /* The panel off screen: laid out exactly as before (so the page keeps its size), invisible and inert. */
 .shell .panel-w.panel-parked{display:flex;position:absolute;left:0;top:0;width:var(--panel-w,380px);height:100%;visibility:hidden;pointer-events:none;overflow:hidden}
+
+/* The full-size toolbar on a narrow window: the address keeps a usable width and the actions wrap to their own row. */
+@media (max-width:720px){
+  .br-stage-chrome .br-top{flex-wrap:wrap;row-gap:8px}
+  .br-stage-chrome .br-top .url{flex:1 1 140px}
+  .br-stage-chrome .br-stage-actions{flex:1 1 100%;flex-wrap:wrap;row-gap:8px;margin-left:0}
+  .br-stage-chrome .br-stage-actions .br-mode-size,.br-stage-chrome .br-stage-kbd{display:none}
+  .br-stage-chrome .br-stage-actions > .btn:last-child{margin-left:auto}
+}
