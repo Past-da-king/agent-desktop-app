@@ -31,7 +31,9 @@ function delegateTool(host: HelperHost): Tool {
             properties: {
               label: str('A 2 to 4 word name per helper, e.g. Uber to airport. The user sees this.'),
               brief: str('The full, standalone brief for this helper'),
-              model: str('Optional. Leave it out: every helper runs on the user\'s chosen model.'),
+              model: str(
+                'Optional. Which of the HELPER MODELS (listed in your instructions) runs this job, by its name there, e.g. "Claude plan · opus". Pick by what the job needs. Leave it out for the first one.',
+              ),
               profile: str(
                 "The user's profile this helper works in (e.g. Work). It can then only use that profile's connected accounts, learned apps and browser sign-ins. Leave it out for General: none of their accounts.",
               ),

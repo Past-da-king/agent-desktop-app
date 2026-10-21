@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { hostname as osHostname } from 'node:os'
 import { dirname } from 'node:path'
 
-import { DEFAULT_SETTINGS, VOICES, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, VOICES, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings, cleanRoster, knownRoster } from '@agent/core'
 
 import { upgradeHotkeys } from './hotkeys'
 
@@ -210,7 +210,8 @@ function pickFrom(raw: unknown): AiPick {
 export function picksFrom(raw: unknown): AiPicks | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const o = raw as Record<string, unknown>
-  return { main: pickFrom(o['main']), helpers: pickFrom(o['helpers']) }
+  const roster = cleanRoster(o['roster'])
+  return { main: pickFrom(o['main']), helpers: pickFrom(o['helpers']), ...(roster.length > 0 ? { roster } : {}) }
 }
 
 const LEGACY_KEYS = ['mode', 'cli', 'cliModel', 'provider', 'model', 'baseUrl', 'allowHttp', 'hasKey'] as const
@@ -226,9 +227,18 @@ function mirrorAccounts(next: Settings, patched: string[]): void {
     // A pick that names an account that is gone falls back to the first account (mainPickOf); keep it tidy.
     const main = next.accounts.length === 0 ? { account: '', model: '' } : mainPickOf(next, 'main')
     const helpers = next.ai.helpers
+    // The helper models keep only accounts that still exist; the one helpers pick mirrors the first of them.
+    const roster = knownRoster(next, next.ai.roster)
+    const first = roster[0]
     next.ai = {
       main,
-      helpers: accountById(next, helpers.account) === null ? { account: '', model: helpers.account === '' ? helpers.model : '' } : helpers,
+      helpers:
+        first !== undefined
+          ? { account: first.account, model: first.model }
+          : accountById(next, helpers.account) === null
+            ? { account: '', model: helpers.account === '' ? helpers.model : '' }
+            : helpers,
+      ...(roster.length > 0 ? { roster } : {}),
     }
     Object.assign(next, legacyFieldsOf(accountById(next, main.account), main.model))
     return

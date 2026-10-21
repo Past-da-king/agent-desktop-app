@@ -16,10 +16,13 @@ import {
   accountById,
   accountFamily,
   mainPickOf,
+  mainRosterOf,
   pickModel,
   resolvePick,
+  resolveRoster,
   type AiAccount,
   type AiPick,
+  type AiRosterEntry,
   type AiSlot,
   type BrainFamily,
   type ChatBrain,
@@ -92,6 +95,20 @@ export async function pickFor(deps: Pick<BrainDeps, 'settings' | 'store'>, chat:
     }
   }
   return mainPickOf(settings, slot)
+}
+
+/** The helper models a chat may use (its project's list, else the main thread's), first = the default. */
+export async function rosterFor(deps: Pick<BrainDeps, 'settings' | 'store'>, chat: string): Promise<AiRosterEntry[]> {
+  const settings = deps.settings.get()
+  if (chat !== MAIN_CHAT && deps.store !== undefined) {
+    try {
+      const project = (await deps.store.list('project')).find((each) => each.chats.includes(chat))
+      if (project !== undefined) return resolveRoster(settings, project.ai)
+    } catch {
+      // A store that cannot answer: the main thread's list.
+    }
+  }
+  return mainRosterOf(settings)
 }
 
 /** A pick as something that can run now, or why it cannot. */

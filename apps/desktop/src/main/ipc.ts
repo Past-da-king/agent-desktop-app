@@ -961,7 +961,10 @@ function withKnownPicks(row: Record<string, unknown>, deps: IpcDeps): Record<str
   }
   const known = new Set((deps.accounts?.all() ?? accountsOf(deps.settings.get())).map((account) => account.id))
   const clean = (pick: { account: string; model: string }): { account: string; model: string } => (known.has(pick.account) ? pick : { account: '', model: pick.model })
-  return { ...row, ai: { main: clean(picks.main), helpers: clean(picks.helpers) } }
+  // The project's helper models: known accounts only (cleanRoster already capped the list and the notes).
+  const roster = (picks.roster ?? []).filter((entry) => known.has(entry.account))
+  const first = roster[0]
+  return { ...row, ai: { main: clean(picks.main), helpers: first !== undefined ? { account: first.account, model: first.model } : clean(picks.helpers), roster } }
 }
 
 /** A project's own picture is kept only when it is a small icon image (shared/project-icon.ts); anything else is dropped. */

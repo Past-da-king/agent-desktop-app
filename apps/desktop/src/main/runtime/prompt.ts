@@ -33,8 +33,10 @@ export interface PromptInput {
   helper?: { label: string; brief: string }
   /** Helpers working right now, so the main agent can answer "how's it going?". */
   liveHelpers?: Array<{ id: string; label: string; brief: string; profile?: string }>
-  /** The model every helper runs on. The roster is one model in v1. */
+  /** The model every helper runs on when there is one (kept for older callers). */
   helperModel?: string
+  /** The helper models this chat may use, first = the default, each with what it is good for. */
+  helperModels?: Array<{ name: string; goodFor: string }>
   /** False when the agent runs on the person's plan without helpers: it does the work itself. */
   canDelegate?: boolean
   /** What the environment scan found. When absent, the block is left out. */
@@ -283,12 +285,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push('')
 
     lines.push('YOUR HELPERS')
-    const roster = input.helperModel?.trim() ?? ''
-    lines.push(
-      roster === ''
-        ? '- Every helper runs on the user\'s chosen model with the working tools. The roster is one model in this version: leave `model` out of a brief.'
-        : `- Every helper runs on the user's chosen model (${roster}) with the working tools. The roster is one model in this version: leave \`model\` out of a brief.`,
-    )
+    lines.push(...helperModelLines(input.helperModels ?? [], input.helperModel?.trim() ?? ''))
     lines.push(
       '- Fit the brief to that model: give the goal, all the context and what to bring back, plus the steps in order if the job is fiddly.',
     )
@@ -499,4 +496,24 @@ function platformName(platform: string): string {
 
 function clip(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}...`
+}
+
+/**
+ * Which models the helpers may run on. One model: every helper uses it. Several (Ayanda, 21 Oct 2026): the agent
+ * picks one per job by what the job needs, and does not talk about it unless asked.
+ */
+export function helperModelLines(models: Array<{ name: string; goodFor: string }>, single: string): string[] {
+  if (models.length <= 1) {
+    const name = models[0]?.name ?? single
+    return [
+      name === ''
+        ? "- Every helper runs on the user's chosen model with the working tools. Leave `model` out of a brief."
+        : `- Every helper runs on ${name} with the working tools. Leave \`model\` out of a brief.`,
+    ]
+  }
+  return [
+    '- HELPER MODELS: the user chose these for helpers. Name one per brief with `model` (its name exactly as written here); the first is the default when you leave it out.',
+    ...models.map((model, index) => `  - "${model.name}"${index === 0 ? ' (default)' : ''}: ${model.goodFor}`),
+    "- Pick per job by what it needs: hard reasoning, code, careful writing or anything costly to get wrong -> the strongest; quick lookups, scraping, reading pages, simple browser steps -> the fast, cheap one; the rest -> the balanced one. Do not mention which model you picked unless the user asks.",
+  ]
 }
