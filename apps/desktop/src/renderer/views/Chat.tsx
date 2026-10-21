@@ -40,6 +40,7 @@ import { ReportBody } from '../openui/ReportBody'
 import { useNarrow } from '../shell/Panel'
 import { usePanel } from '../state/usePanel'
 import { withNo } from '../../shared/ask-options'
+import { isIconImage } from '../../shared/project-icon'
 import { ModelPicker } from '../ui/ModelPicker'
 import { Mascot } from '../ui/Mascot'
 import { Skeleton } from '../ui/Skeleton'
@@ -336,7 +337,7 @@ function projectAskOf(meta: Record<string, unknown>): { ask: ProjectAsk; icon: P
       folderNew: c['folderNew'] === true,
       profile: typeof c['profile'] === 'string' ? c['profile'] : 'General',
     },
-    icon: { glyph: typeof icon['glyph'] === 'string' ? icon['glyph'] : 'folder', color },
+    icon: { glyph: typeof icon['glyph'] === 'string' ? icon['glyph'] : 'folder', color, ...(isIconImage(icon['image']) ? { image: icon['image'] } : {}) },
   }
 }
 
