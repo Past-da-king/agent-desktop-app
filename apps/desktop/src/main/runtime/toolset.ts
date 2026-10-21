@@ -33,6 +33,7 @@ import type { EnvironmentService } from './environment'
 import { helperTools } from '../tools/helpers'
 import { gateTool } from '../tools/profile-gate'
 import { profileTools } from '../tools/profiles'
+import { projectTools, type ProjectToolDeps } from '../tools/projects'
 import type { HelperHost } from './helpers'
 import type { SettingsView } from './runner'
 
@@ -60,6 +61,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   voiceNotes?: () => VoiceNoteMaker | null
   /** Past-chat search (memory/service.ts). Without it there are no chats_search and chat_read tools. */
   searchChats?: (query: string, limit: number) => Promise<PastChatHit[]>
+  /** Main agent only: projects and messaging between the main thread and project chats (tools/projects.ts). */
+  projects?: Omit<ProjectToolDeps, 'store'>
 }
 
 /**
@@ -95,6 +98,12 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   'routine_update',
   'routine_delete',
   'profile_create',
+  'project_list',
+  'project_create',
+  'project_update',
+  'project_chat_start',
+  'project_chat_send',
+  'message_main',
 ])
 
 /** Everything a helper may use: all the working groups, never delegate or helper_*. */
@@ -168,6 +177,7 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
     tools.push(...helperTools(deps.helpers)) // delegate, helper_steer, helper_push, helpers_status, helper_stop
     tools.push(...profileTools(deps.apps, deps.learned)) // profile_create
   }
+  if (deps.projects !== undefined) tools.push(...projectTools({ store: deps.store, ...deps.projects })) // project_list, project_create, project_update, project_chat_start, project_chat_send, message_main
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
   const budget = deps.mainBudget

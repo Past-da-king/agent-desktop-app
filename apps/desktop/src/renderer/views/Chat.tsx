@@ -1,13 +1,15 @@
 import { VoiceNote } from '../voice/VoiceNote'
-import { attachmentKind, attachmentProblem, fileSizeLabel, type Attachment, type ChatEvent, type ChatItem } from '@agent/core'
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
+import { PROFILE_COLORS, attachmentKind, attachmentProblem, fileSizeLabel, type Attachment, type ChatEvent, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
-import { branchFrom } from '../lib/chat-actions'
+import { branchFrom, startProjectChat } from '../lib/chat-actions'
+import { projectOfChat, viaOf } from '../lib/projects'
+import { ProjectTile } from '../ui/ProjectTile'
 import { chatTitleOf, isSideRun, itemsOfChat, routeLine } from '../lib/chats'
 import { MAIN_CHAT } from '@agent/core'
 import { startChatTracking, useChatRunning, useChats } from '../state/useChats'
@@ -32,7 +34,8 @@ import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
-import { AgentMessage, AskCard } from '../openui/AgentMessage'
+import { AgentMessage, AskCard, ProjectAskCard } from '../openui/AgentMessage'
+import type { ProjectAsk } from '../openui/ask'
 import { ReportBody } from '../openui/ReportBody'
 import { useNarrow } from '../shell/Panel'
 import { usePanel } from '../state/usePanel'
@@ -317,6 +320,26 @@ function Waiting({ item, full }: { item: ChatItem; full: JSX.Element }): JSX.Ele
   )
 }
 
+/** The project a question card asks to make, when it is one (main/tools/projects.ts project_create). */
+function projectAskOf(meta: Record<string, unknown>): { ask: ProjectAsk; icon: ProjectIcon } | null {
+  const card = meta['card']
+  if (typeof card !== 'object' || card === null || Array.isArray(card)) return null
+  const c = card as Record<string, unknown>
+  if (c['kind'] !== 'project' || typeof c['name'] !== 'string') return null
+  const icon = typeof c['icon'] === 'object' && c['icon'] !== null ? (c['icon'] as Record<string, unknown>) : {}
+  const color = typeof icon['color'] === 'string' && (PROFILE_COLORS as readonly string[]).includes(icon['color']) ? (icon['color'] as ProfileColor) : 'iris'
+  return {
+    ask: {
+      name: c['name'],
+      description: typeof c['description'] === 'string' ? c['description'] : '',
+      path: typeof c['path'] === 'string' ? c['path'] : '',
+      folderNew: c['folderNew'] === true,
+      profile: typeof c['profile'] === 'string' ? c['profile'] : 'General',
+    },
+    icon: { glyph: typeof icon['glyph'] === 'string' ? icon['glyph'] : 'folder', color },
+  }
+}
+
 function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   const meta = parseMeta(item.meta)
   const options = metaStrings(meta, 'options')
@@ -372,10 +395,16 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
     )
   }
 
+  // A project the agent wants to make (project_create): the card shows it, and Create makes it.
+  const project = projectAskOf(meta)
   return (
     <div className="appr ask">
-      {/* An OpenUI ask card as on the phone: one button per answer, and always a No. */}
-      <AskCard question={item.text} options={options.length > 0 ? options : ['Yes']} disabled={sending} onPick={answer} />
+      {project !== null ? (
+        <ProjectAskCard project={project.ask} icon={<ProjectTile icon={project.icon} size={48} />} options={options} disabled={sending} onPick={answer} />
+      ) : (
+        /* An OpenUI ask card as on the phone: one button per answer, and always a No. */
+        <AskCard question={item.text} options={options.length > 0 ? options : ['Yes']} disabled={sending} onPick={answer} />
+      )}
       <form
         className="free"
         onSubmit={(event) => {
@@ -497,12 +526,17 @@ function ReportRow({ item, onOpen }: { item: ChatItem; onOpen: (item: ChatItem) 
   )
 }
 
-/** Copy and Branch from here, under a message. */
+/** Whether messages on screen can be branched: in a project chat yes, in the main thread no. */
+const Branchable = createContext(false)
+
+/** Copy, and in a project chat Branch from here, under a message. */
 function MessageActions({ item, align }: { item: ChatItem; align: 'start' | 'end' }): JSX.Element {
   const [branching, setBranching] = useState(false)
+  const branchable = useContext(Branchable)
   return (
     <div className={`msg-acts ${align}`}>
       {item.text.trim() !== '' ? <CopyButton text={item.text} /> : null}
+      {branchable ? (
       <button
         type="button"
         className="copy-btn"
@@ -516,6 +550,7 @@ function MessageActions({ item, align }: { item: ChatItem; align: 'start' | 'end
         <Icon name="branch" size={16} />
         <span>{branching ? 'Branching' : 'Branch from here'}</span>
       </button>
+      ) : null}
     </div>
   )
 }
@@ -524,8 +559,16 @@ function UserRow({ item }: { item: ChatItem }): JSX.Element {
   const files = attachmentsFromMeta(parseMeta(item.meta)['attachments'])
   const route = routeLine(item)
   const pending = parseMeta(item.meta)['route'] === 'pending'
+  // A message from another chat (the main agent, or a project chat) says who sent it.
+  const via = viaOf(item)
   return (
-    <div className="u-row">
+    <div className={`u-row${via === null ? '' : ' via'}`}>
+      {via === null ? null : (
+        <div className="u-via">
+          <Icon name={via.from === 'main' ? 'person' : 'folder'} size={14} />
+          {via.from === 'main' ? `From ${via.name}, the main agent` : `From ${via.name}${via.title === '' ? '' : ` · ${via.title}`}`}
+        </div>
+      )}
       {item.text !== '' ? <div className="u-msg">{item.text}</div> : null}
       {files.length > 0 ? (
         <div className="u-files">
@@ -830,6 +873,10 @@ export function Chat(): JSX.Element {
   const needsYou = waiting.length > 0 || cards.length > 0
   const agentName = settings?.agentName.trim() || 'Your agent'
   const startCall = useCall((state) => state.start)
+  const projects = useEntity('project')
+  // The main thread is the one main agent; a project chat is that agent at work in one project.
+  const project = projectOfChat(projects, openChat)
+  const navigate = useUi((state) => state.navigate)
 
   useEffect(() => startChatTracking(), [])
 
@@ -1046,11 +1093,30 @@ export function Chat(): JSX.Element {
       <div className="chat-h">
         <Mascot id={settings?.mascot ?? 'scout'} size={40} busy={!needsYou} needsYou={needsYou} />
         <div className="ttl">
-          <b>{title}</b>
-          <span className={needsYou ? 'warn' : ''}>
+          {project === null ? (
+            <b>{agentName}</b>
+          ) : (
+            <button type="button" className="chat-proj" onClick={() => navigate({ page: 'project', id: project.id })} title={`Open ${project.name}`}>
+              <ProjectTile icon={project.icon} size={18} />
+              <span>{project.name}</span>
+              <Icon name="chev" size={14} />
+            </button>
+          )}
+          <span className={`chat-sub${needsYou ? ' warn' : ''}`}>
+            {project === null ? '' : `${title} · `}
             {needsYou ? 'Waiting for you' : running ? 'Working' : 'Ready'}
           </span>
         </div>
+        {project === null ? null : (
+          <IconButton
+            icon="plus"
+            label={`New chat in ${project.name}`}
+            size={20}
+            onClick={() => {
+              void startProjectChat(project)
+            }}
+          />
+        )}
         <ModelPicker />
         <button
           type="button"
@@ -1098,6 +1164,7 @@ export function Chat(): JSX.Element {
             />
           </div>
         ) : (
+          <Branchable.Provider value={project !== null}>
           <div className="thread-in">
             <EarlierChats count={shown.earlier} onShow={() => setShowEarlier(true)} />
             {segments.map((segment, index) =>
@@ -1121,6 +1188,7 @@ export function Chat(): JSX.Element {
               </div>
             ) : null}
           </div>
+          </Branchable.Provider>
         )}
       </div>
 

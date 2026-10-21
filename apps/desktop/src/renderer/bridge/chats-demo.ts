@@ -1,4 +1,4 @@
-import type { ChatItem } from '@agent/core'
+import { EARLIER_CHATS_PROJECT, type ChatItem, type MemoryRow, type ProjectRow } from '@agent/core'
 
 /** Chat ids the demo uses, so screenshots can open one (?chat=...). */
 export const DEMO_CHATS = {
@@ -143,6 +143,86 @@ export function multiChatDemo(now: number): ChatItem[] {
       kind: 'agent',
       text: 'Moved: the Acme contract and the Durban trip. Stuck: the licence renewal. Next: the quarterly invoices.',
       meta: JSON.stringify(review),
+    },
+  ]
+}
+
+/** Projects for the browser preview: the demo chats live in two of them; one older project is hidden. */
+export function projectsDemo(now: number): ProjectRow[] {
+  return [
+    {
+      id: 'pj-acme',
+      createdAt: now - 20 * HOUR,
+      name: 'Acme finance',
+      description: 'Getting Acme paid on time: overdue invoices, the weekly review and calls to their accounts team.',
+      icon: { glyph: 'building', color: 'ocean' },
+      path: 'C:\\Users\\You\\Documents\\Acme',
+      profile: 'p_work',
+      hidden: false,
+      chats: [DEMO_CHATS.acme, DEMO_CHATS.review],
+    },
+    {
+      id: 'pj-home',
+      createdAt: now - 18 * HOUR,
+      name: 'Home admin',
+      description: "The house, the car and family errands: Nomsa's gifts, licences, bills.",
+      icon: { glyph: '\u{1F3E1}', color: 'ember' },
+      path: '',
+      profile: 'p_personal',
+      hidden: false,
+      chats: [DEMO_CHATS.gifts, DEMO_CHATS.licence],
+    },
+    {
+      id: 'pj-site',
+      createdAt: now - 16 * HOUR,
+      name: 'Studio website',
+      description: 'The new site for the studio: copy, photos and the launch.',
+      icon: { glyph: 'globe', color: 'violet' },
+      path: 'C:\\Users\\You\\Projects\\studio-site',
+      profile: 'p_work',
+      hidden: false,
+      chats: [],
+    },
+    {
+      id: EARLIER_CHATS_PROJECT,
+      createdAt: now - 40 * HOUR,
+      name: 'Earlier chats',
+      description: 'Chats from before projects. Nothing was lost.',
+      icon: { glyph: 'clock', color: 'graphite' },
+      path: '',
+      profile: '',
+      hidden: true,
+      chats: [],
+    },
+  ]
+}
+
+/** Project memory for the preview: what Acme finance's chats decided and learned. */
+export function projectMemoriesDemo(now: number): MemoryRow[] {
+  return [
+    {
+      id: 'pm-acme-1',
+      createdAt: now - 3 * HOUR,
+      updatedAt: now - 2 * HOUR,
+      title: 'Call about anything over R 10,000',
+      body: 'Decided 21 Oct: invoices over R 10,000 that are more than 14 days late get a phone call to Thandi in Acme accounts, not an email.',
+      kind: 'decision',
+      topics: 'acme, invoices',
+      pinned: false,
+      source: 'user',
+      project: 'pj-acme',
+    },
+    {
+      id: 'pm-acme-2',
+      createdAt: now - 5 * HOUR,
+      updatedAt: now - 5 * HOUR,
+      title: 'Acme statement arrives on the 1st',
+      body: 'Acme sends its statement as a PDF on the 1st of each month to accounts@. The aging spreadsheet lives in the project folder.',
+      kind: 'fact',
+      topics: 'acme, statement',
+      pinned: false,
+      source: 'agent',
+      project: 'pj-acme',
     },
   ]
 }

@@ -1,7 +1,7 @@
 import type { MemoryKind } from '@agent/core'
 import { create } from 'zustand'
 
-import { hashFor, parseHash, rememberLastView, type AppPage, type Route } from './route'
+import { hashFor, isAppPage, parseHash, rememberLastView, type AppPage, type Route } from './route'
 
 export type OverlayName = 'palette' | 'quick' | null
 export type TaskTab = 'todos' | 'agent'
@@ -67,14 +67,14 @@ export const useUi = create<UiState>((set) => ({
       }
     }
     set({ route })
-    if (route.page !== 'onboarding' && route.page !== 'quick-window' && route.page !== 'dictation') rememberLastView(route.page)
+    if (isAppPage(route.page)) rememberLastView(route.page)
   },
 
   applyHash: (hash) => {
     const route = parseHash(hash)
     if (!route) return
     set({ route })
-    if (route.page !== 'onboarding' && route.page !== 'quick-window' && route.page !== 'dictation') rememberLastView(route.page)
+    if (isAppPage(route.page)) rememberLastView(route.page)
   },
 
   setOverlay: (overlay) => set({ overlay }),

@@ -1,10 +1,10 @@
 import type { ChatItem } from '@agent/core'
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 
 import { agent, chat } from '../bridge'
 import { metaStrings, parseMeta } from '../lib/meta'
 import { Markdown } from '../ui/Markdown'
-import { askProgram } from './ask'
+import { askProgram, projectAskProgram, type ProjectAsk } from './ask'
 import { splitMessage } from './lang'
 import { OpenUiBlock, OpenUiProvider, type OpenUiHandlers } from './OpenUiView'
 
@@ -63,6 +63,20 @@ export function AskCard({ question, options, disabled, onPick }: { question: str
   const handlers = useMemo<OpenUiHandlers>(() => ({ pick: (text) => (disabled ? undefined : onPick(text)), openUrl }), [disabled, onPick])
   return (
     <div className={`oui-ask${disabled ? ' busy' : ''}`}>
+      <OpenUiProvider value={handlers}>
+        <OpenUiBlock source={source} />
+      </OpenUiProvider>
+    </div>
+  )
+}
+
+/** The card for a project the agent wants to make: its tile, where it lives, its profile, and Create / Change / No. */
+export function ProjectAskCard({ project, icon, options, disabled, onPick }: { project: ProjectAsk; icon: ReactNode; options: string[]; disabled: boolean; onPick: (answer: string) => void }): JSX.Element {
+  const source = useMemo(() => projectAskProgram(project, options), [project, options])
+  const handlers = useMemo<OpenUiHandlers>(() => ({ pick: (text) => (disabled ? undefined : onPick(text)), openUrl }), [disabled, onPick])
+  return (
+    <div className={`oui-ask pj-ask${disabled ? ' busy' : ''}`}>
+      <div className="pj-ask-tile">{icon}</div>
       <OpenUiProvider value={handlers}>
         <OpenUiBlock source={source} />
       </OpenUiProvider>

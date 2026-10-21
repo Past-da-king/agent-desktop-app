@@ -18,7 +18,7 @@ import {
 
 import type { AppPlatform } from '@agent/core'
 
-import { MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
+import { EARLIER_CHATS_PROJECT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
@@ -43,6 +43,7 @@ import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
 import { MINE_PARTITION, ProfileStore } from './apps/profiles'
+import { adoptEarlierChats } from './projects/earlier'
 import { ConnectedAppsFile, LearnedStore } from './apps/store'
 import { CliHost } from './runtime/cli-host'
 import { Secrets } from './secrets'
@@ -649,6 +650,14 @@ async function startServices(win: BrowserWindow): Promise<void> {
     learned,
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
+    projects: {
+      post: async (chat, text, via) => {
+        if (runner !== null) await runner.receive(chat, text, via)
+      },
+      state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
+      agentName: () => settings.get().agentName,
+      profiles: () => apps.profiles.all(),
+    },
   })
   runner = new Runner({
     store,
@@ -676,6 +685,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
       for (const path of paths) filePicks.add(path)
     },
   })
+  try {
+    // Old chats from before projects sit under a hidden "Earlier chats" project (projects/earlier.ts).
+    await adoptEarlierChats(store, store.deletedIds('project').has(EARLIER_CHATS_PROJECT))
+  } catch {
+    // The chats are still in the store; they show up once this succeeds on a later start.
+  }
   try {
     await runner.restore()
   } catch {
@@ -705,7 +720,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       if (runner === null) return Promise.reject(new Error('The agent is not running.'))
       return runner.oneShot(system, prompt, signal)
     },
-    forgetSession: () => cliHost?.forget('main'),
+    forgetSession: (thread) => cliHost?.forget(thread),
     emitChat: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
     emitUpkeep: (report) => broadcast(MEMORY_EVENTS.upkeep, report),
     dailyAt: () => dailyRoutineSlot(memoryStore),
