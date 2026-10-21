@@ -47,6 +47,11 @@ import { createTray, type TrayHandle } from './tray'
 import { startUpdates } from './updates'
 import { EVENTS } from '../shared/channels'
 import { registerVoiceIpc } from './voice/ipc'
+import { ChatIndex } from './memory/chat-index'
+import { registerMemoryIpc } from './memory/ipc'
+import { MemoryService } from './memory/service'
+import { UpkeepFile } from './memory/upkeep-log'
+import { MEMORY_EVENTS } from '../shared/memory-channels'
 import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
 
@@ -113,6 +118,8 @@ let store: Store | null = null
 let settingsStore: SettingsStore | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+let memory: MemoryService | null = null
+let chatIndex: ChatIndex | null = null
 let voice: VoiceService | null = null
 let cliHost: CliHost | null = null
 let scheduler: Scheduler | null = null
@@ -435,6 +442,18 @@ async function pickFilePaths(): Promise<string[]> {
   return result.canceled ? [] : result.filePaths
 }
 
+async function pickImportFile(): Promise<string | null> {
+  const options: OpenDialogOptions = {
+    title: 'Choose a memory export',
+    properties: ['openFile'],
+    filters: [{ name: 'Memory export', extensions: ['json'] }],
+  }
+  const result =
+    mainWindow === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(mainWindow, options)
+  if (result.canceled) return null
+  return result.filePaths[0] ?? null
+}
+
 async function pickOneFolder(): Promise<string | null> {
   const options: OpenDialogOptions = {
     title: 'Choose a folder',
@@ -595,6 +614,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     apps,
     learned,
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
+    searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
   })
   runner = new Runner({
     store,
@@ -623,6 +643,34 @@ async function startServices(win: BrowserWindow): Promise<void> {
   } catch {
     // Startup repair is best effort: the app must still open if a row cannot be rewritten.
   }
+
+  // Long-term memory: New Chat files the old chat in the background, past chats are searchable, and the
+  // end-of-day pass writes "Where we are" and cleans up (main/memory).
+  chatIndex = new ChatIndex(join(dir, 'chat-search.db'))
+  const memoryStore = store
+  memory = new MemoryService({
+    store: memoryStore,
+    index: chatIndex,
+    upkeep: new UpkeepFile(join(dir, 'memory-upkeep.json')),
+    complete: (system, prompt, signal) => {
+      if (runner === null) return Promise.reject(new Error('The agent is not running.'))
+      return runner.oneShot(system, prompt, signal)
+    },
+    forgetSession: () => cliHost?.forget('main'),
+    emitChat: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
+    emitUpkeep: (report) => broadcast(MEMORY_EVENTS.upkeep, report),
+    dailyAt: () => settings.get().dailyMemoryAt,
+    log: (message, detail) => logger.info(message, detail),
+  })
+  registerMemoryIpc({
+    ipcMain,
+    service: memory,
+    store: memoryStore,
+    pickFile: pickImportFile,
+    log: (message, detail) => logger.info(message, detail),
+  })
+  void memory.restore().catch(() => undefined)
+  memory.start()
 
   scheduler = new Scheduler({
     store,
@@ -784,6 +832,10 @@ if (!app.requestSingleInstanceLock()) {
     disposeStore = null
     scheduler?.stop()
     scheduler = null
+    memory?.stop()
+    memory = null
+    chatIndex?.close()
+    chatIndex = null
     tray?.destroy()
     tray = null
     quickAsk?.destroy()

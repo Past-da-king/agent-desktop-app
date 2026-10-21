@@ -18,6 +18,7 @@ import { MASCOT_ORDER, Mascot, MASCOTS } from '../ui/Mascot'
 import { SectionHeader } from '../ui/SectionHeader'
 import { VoiceSettings } from '../voice/VoiceSettings'
 import { HotkeySettings } from './HotkeySettings'
+import { MemorySettings } from './MemorySettings'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
 
@@ -554,6 +555,8 @@ export function Settings(): JSX.Element {
               </div>
             </div>
           </section>
+
+          <MemorySettings />
 
           <section>
             <SectionHeader eyebrow="DANGER ZONE" line="Cannot be undone" />
