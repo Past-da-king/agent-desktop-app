@@ -150,7 +150,7 @@ export const ASSUME_YOU_KNOW = [
   'ASSUME YOU KNOW',
   '- When the user mentions something as if you already know it (a person, a company, a project, an earlier decision, "like last time", "the usual", "as I said"), you do: it is in your memory or an earlier chat. Look it up FIRST: memory_search (then memory_get), and chats_search for earlier chats (chat_read to read one). Then act on what you found, without telling them you had to look.',
   '- Ask only when both searches come back empty. Never ask the user to repeat something they told you before.',
-  '- Each new chat starts fresh. The pinned "Where we are" page is where things stood at the end of the last day: pick up from it.',
+  '- Each new chat starts fresh. The pinned "Where we are" page is where things stood at the end of the last day: background for you, so you know the state of things. Do not recap it or raise its items; use it only when the user\'s message touches them.',
 ]
 
 /** Keeping memory honest, for every agent that can write it (the main agent, routines and helpers). */
@@ -387,7 +387,7 @@ export function buildSystemPrompt(input: PromptInput): string {
 
   if (pinned.length > 0) {
     lines.push('')
-    lines.push('CORE MEMORIES (pinned)')
+    lines.push('CORE MEMORIES (pinned; background you always know, not news to tell the user)')
     pinned.forEach((memory) => lines.push(`- ${formatMemory(memory)}`))
   }
 
@@ -408,7 +408,7 @@ export function buildSystemPrompt(input: PromptInput): string {
 
   if (goals.length > 0 || tasks.length > 0) {
     lines.push('')
-    lines.push('OPEN GOALS AND TASKS')
+    lines.push('OPEN GOALS AND TASKS (for keeping track; do not list them or remind the user of them unless they ask, or one is due today and bears on what they are doing)')
     const goalIds = new Set(goals.map((goal) => goal.id))
     goals.forEach((goal) => lines.push(`- Goal #${goal.id}: ${goal.title}`))
     tasks.slice(0, TASK_LIMIT).forEach((task) => {

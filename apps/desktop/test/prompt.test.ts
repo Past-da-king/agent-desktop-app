@@ -84,7 +84,7 @@ describe('buildSystemPrompt', () => {
     const text = prompt({
       memories: [memory({ title: 'Home', body: '42 Sea View Road.', pinned: true })],
     })
-    expect(text).toContain('CORE MEMORIES (pinned)')
+    expect(text).toContain('CORE MEMORIES (pinned')
     expect(text).toContain('42 Sea View Road.')
   })
 
