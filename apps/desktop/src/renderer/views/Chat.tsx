@@ -178,7 +178,7 @@ function StepRow({ item }: { item: ChatItem }): JSX.Element {
   return item.kind === 'approval' ? <ApprovalLine item={item} /> : <ActivityRow item={item} />
 }
 
-function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.Element {
+const ToolSteps = memo(function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.Element {
   const [open, setOpen] = useState(false)
   const statuses = items.map((item) => (item.kind === 'approval' ? 'done' : metaText(parseMeta(item.meta), 'status') || 'done'))
   const running = live && statuses.includes('running')
@@ -228,7 +228,7 @@ function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.E
       ) : null}
     </div>
   )
-}
+}, (a, b) => a.live === b.live && a.items.length === b.items.length && a.items.every((row, i) => sameItem(row, b.items[i] as ChatItem)))
 
 /** True while the side panel shows its list of what needs the person (it is on screen and not taken by a report or helper). */
 function useSidebarWaiting(): boolean {
@@ -754,7 +754,22 @@ const Row = memo(function Row({
     default:
       return <div className="from">{item.text}</div>
   }
-})
+}, sameRow)
+
+/** Rows arrive as fresh objects from the main process: the same row is one whose content did not change. */
+function sameItem(a: ChatItem, b: ChatItem): boolean {
+  return a === b || (a.id === b.id && a.text === b.text && a.meta === b.meta && a.kind === b.kind && a.createdAt === b.createdAt)
+}
+
+function sameRow(a: { item: ChatItem; agentName: string; onOpenReport: unknown; helper?: HelperView | undefined; asked: string }, b: typeof a): boolean {
+  return sameItem(a.item, b.item) && a.agentName === b.agentName && a.onOpenReport === b.onOpenReport && a.asked === b.asked && sameHelper(a.helper, b.helper)
+}
+
+function sameHelper(a: HelperView | undefined, b: HelperView | undefined): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  return a.id === b.id && a.state === b.state && a.summary === b.summary && a.result === b.result && a.queued === b.queued && a.activity.length === b.activity.length && a.activity.every((row, i) => sameItem(row, b.activity[i] as ChatItem))
+}
 
 /** Above the window: more of this stretch, then the earlier stretches of this chat. */
 function EarlierRows({ above, earlier, onMore, onEarlier }: { above: number; earlier: number; onMore: () => void; onEarlier: () => void }): JSX.Element | null {
