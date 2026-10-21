@@ -30,7 +30,8 @@ describe('the AI chooser', () => {
     expect(html).not.toContain('<select')
     expect(html).toContain('aria-label="Agent: Claude plan, fable. Change"')
     expect(html).toContain('<b>Claude plan</b><span>fable</span>')
-    expect(html).toContain('<b>OpenCode Go</b><span>deepseek-v4.1-flash</span>')
+    // Helpers are a list of models: one card here, the model first and its account under it.
+    expect(html).toContain('<b>deepseek-v4.1-flash</b><span>OpenCode Go</span>')
     expect(html).not.toContain('Same as the main thread')
   })
 
@@ -38,7 +39,8 @@ describe('the AI chooser', () => {
     const html = renderToStaticMarkup(createElement(AiPickRows, { settings, picks: { main: { account: '', model: '' }, helpers: { account: '', model: '' } }, inherit: settings.ai, onChange: () => undefined }))
     expect(html.match(/Same as the main thread/g)?.length).toBe(2)
     expect(html).toContain('Claude plan · fable')
-    expect(html).toContain('OpenCode Go · deepseek-v4.1-flash')
+    // The helpers follow the main thread's list, named by model.
+    expect(html).toContain('<b>Same as the main thread</b><span>deepseek-v4.1-flash</span>')
   })
 
   it('reads picks in plain words', () => {
