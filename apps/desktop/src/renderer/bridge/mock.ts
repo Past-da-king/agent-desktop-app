@@ -28,6 +28,9 @@ import type {
   SyncStatus,
   SystemInfo,
   Unsubscribe,
+  MemoryImportPreview,
+  UpkeepChange,
+  UpkeepReport,
 } from '@agent/core'
 
 import { mockVoice } from '../voice/mock-voice'
@@ -1150,6 +1153,71 @@ export const mockAgent: AgentApi = {
     send: (text) => mockAgent.chat.send(text),
   }),
 
+  memory: {
+    async newChat() {
+      const list = rows.chat_item.filter((item) => item.kind !== 'branch').sort((a, b) => b.createdAt - a.createdAt)
+      const latest = list[0]
+      if (latest !== undefined && latest.kind === 'notice' && parseMeta(latest.meta)['divider'] === true) {
+        return { dividerId: latest.id, saving: false }
+      }
+      const hasChat = list.some((item) => item.kind === 'user')
+      const meta: Record<string, unknown> = { divider: true, at: Date.now() }
+      if (hasChat) meta['memory'] = { chat: 'mock-chat', status: 'saving' }
+      const divider = insertChat({ kind: 'notice', text: 'New chat', meta: JSON.stringify(meta) })
+      if (hasChat) {
+        setTimeout(() => {
+          const saved = rows.memory.filter((row) => !row.pinned).slice(0, 3).map((row) => row.id)
+          patchCard(divider.id, {
+            memory: { chat: 'mock-chat', status: 'done', saved, added: 1, updated: saved.length - 1 },
+            summary: 'Planned the Lisbon trip and settled on the TAP direct flight.',
+          })
+        }, 1200)
+      }
+      return { dividerId: divider.id, saving: hasChat }
+    },
+    async retrySave(id) {
+      patchCard(id, { memory: { chat: 'mock-chat', status: 'saving' } })
+      setTimeout(() => patchCard(id, { memory: { chat: 'mock-chat', status: 'done', saved: [], added: 0, updated: 0 } }), 800)
+    },
+    async pickImport() {
+      return { path: 'memory-bank-export.json', name: 'memory-bank-export.json' }
+    },
+    async previewImport(_path, includeAll) {
+      return mockImportPreview(includeAll)
+    },
+    async runImport(_path, includeAll) {
+      await delay(900)
+      const preview = mockImportPreview(includeAll)
+      const total = Object.values(preview.byKind).reduce((sum, n) => sum + (n ?? 0), 0)
+      return { ...preview, added: total, updated: 0, unchanged: 0, redacted: 7, ms: 840, message: `${total.toLocaleString('en')} added, 0 updated, 0 already here.` }
+    },
+    async searchChats() {
+      return []
+    },
+    async runDaily() {
+      await delay(900)
+      mockUpkeep = mockUpkeepReport()
+      for (const listener of upkeepListeners) listener(mockUpkeep)
+      return mockUpkeep
+    },
+    async upkeep() {
+      return { report: mockUpkeep, lastRunAt: mockUpkeep?.at ?? 0, history: [] }
+    },
+    async undoChange(id) {
+      const change = mockUpkeep?.changes.find((item) => item.id === id)
+      if (change === undefined || change.undone === true) return false
+      change.undone = true
+      for (const listener of upkeepListeners) listener(mockUpkeep)
+      return true
+    },
+    onUpkeep(callback) {
+      upkeepListeners.add(callback)
+      return () => {
+        upkeepListeners.delete(callback)
+      }
+    },
+  },
+
   app: {
     async info() {
       return {
@@ -1172,4 +1240,58 @@ export const mockAgent: AgentApi = {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+let mockUpkeep: UpkeepReport | null = null
+const upkeepListeners = new Set<(report: UpkeepReport | null) => void>()
+
+function mockImportPreview(includeAll: boolean): MemoryImportPreview {
+  const byKind: MemoryImportPreview['byKind'] = includeAll
+    ? { decision: 721, fact: 840, 'how-to': 565, person: 29, project: 24, organisation: 6, event: 2348 }
+    : { decision: 464, fact: 553, 'how-to': 464, person: 28, project: 24, organisation: 6 }
+  return {
+    ok: true,
+    message: 'From the A.O.S Memory Bank.',
+    source: 'A.O.S Memory Bank',
+    total: 4553,
+    byKind,
+    skippedRetired: includeAll ? 0 : 2088,
+    skippedTransient: includeAll ? 0 : 930,
+    invalid: 0,
+  }
+}
+
+function mockUpkeepReport(): UpkeepReport {
+  const at = Date.now()
+  const page = (id: string): EntityMap['memory'] | null => rows.memory.find((row) => row.id === id) ?? null
+  const change = (action: UpkeepChange['action'], memoryId: string, title: string, reason: string): UpkeepChange => ({
+    id: `chg-${memoryId}-${action}`,
+    at,
+    action,
+    memoryId,
+    title,
+    reason,
+    before: page(memoryId),
+  })
+  return {
+    at,
+    trigger: 'manual',
+    ok: true,
+    message: '"Where we are" updated from 3 chats, 2 pages filed, 1 merged, 1 rewritten, 2 dropped.',
+    day: new Date(at).toISOString().slice(0, 10),
+    chats: 3,
+    filed: 2,
+    merged: 1,
+    rewritten: 1,
+    dropped: 2,
+    changes: [
+      change('where', 'where-we-are', 'Where we are', 'Compiled from 3 chats today'),
+      change('filed', 'm9', 'Fly TAP direct to Lisbon', 'New page from today'),
+      change('filed', 'm7', 'Lisbon trip', 'Updated from today'),
+      change('merged', 'm2', 'Lerato', 'Merged 1 near-duplicate page into it'),
+      change('rewritten', 'm6', 'Invoice day', 'The send date moved to the 26th'),
+      change('dropped', 'big-m3', 'Checking flights now', 'Progress note, only true that day'),
+      change('dropped', 'm-dup', 'lerato', 'Duplicate of "Lerato"'),
+    ],
+  }
 }

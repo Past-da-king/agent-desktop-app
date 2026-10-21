@@ -6,7 +6,7 @@
  * worker toolset (what a helper runs with) is the same groups without the helper tools and without
  * the budget.
  */
-import { DEFAULT_SETTINGS, type Tool } from '@agent/core'
+import { DEFAULT_SETTINGS, type PastChatHit, type Tool } from '@agent/core'
 
 import { unavailableBrowser, type BrowserDriver } from '../browser/types'
 import type { AppsService } from '../apps/service'
@@ -18,6 +18,7 @@ import { browserProTools } from '../tools/browser-pro'
 import { coreTools, type CoreToolDeps } from '../tools/core'
 import { fileTools } from '../tools/files'
 import { memoryTools } from '../tools/memory'
+import { chatTools } from '../tools/chats'
 import { routineTools } from '../tools/routines'
 import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
@@ -55,6 +56,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   learned?: LearnedStore
   /** Makes voice notes (the voice module). Main agent only. */
   voiceNotes?: () => VoiceNoteMaker | null
+  /** Past-chat search (memory/service.ts). Without it there are no chats_search and chat_read tools. */
+  searchChats?: (query: string, limit: number) => Promise<PastChatHit[]>
 }
 
 /**
@@ -72,6 +75,8 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   'memory_get',
   'memory_save',
   'memory_update',
+  'chats_search',
+  'chat_read',
   'task_add',
   'task_list',
   'task_update',
@@ -122,6 +127,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
   return [
     ...coreTools(deps), // now, ask_user, request_approval, notify_user, web_fetch, report
     ...memoryTools(deps.store), // memory_search, memory_get, memory_save, memory_update
+    ...(deps.searchChats === undefined ? [] : chatTools({ store: deps.store, search: deps.searchChats })), // chats_search, chat_read
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
     ...routineTools(deps.store, deps.now), // routine_create, routine_list, routine_delete
     ...fileTools({

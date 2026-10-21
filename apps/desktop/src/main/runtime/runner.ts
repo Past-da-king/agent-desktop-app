@@ -10,6 +10,7 @@ import {
   PROVIDERS,
   ProviderException,
   msgFromJson,
+  msgText,
   msgToJson,
   repair,
   trimFit,
@@ -37,6 +38,7 @@ import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
 import { quietTapNote } from './openui-prompt'
+import { latestDividerAt } from '../memory/chats'
 
 export interface SettingsView {
   get(): Settings
@@ -640,6 +642,50 @@ export class Runner {
     return { text: summary === '' ? 'The routine finished without a summary.' : summary, waiting: false }
   }
 
+  /**
+   * One plain model call with no tools, on whatever the person runs (their API key or their plan). Used to file a
+   * chat into memory and for the end-of-day pass. Throws with a plain message when it cannot answer.
+   */
+  async oneShot(system: string, prompt: string, signal?: AbortSignal): Promise<string> {
+    const current = this.settings.get()
+    if (current.mode === 'subscription') {
+      if (this.cli === undefined) throw new Error('This build cannot run on a subscription.')
+      const controller = new AbortController()
+      const abort = (): void => controller.abort()
+      signal?.addEventListener('abort', abort)
+      const timer = setTimeout(abort, 300_000)
+      try {
+        const result = await this.cli.turn({
+          cli: current.cli === '' ? 'claude' : current.cli,
+          thread: 'routine',
+          tools: [],
+          system,
+          prompt,
+          ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
+          context: this.toolContext(controller.signal, 'routine'),
+          signal: controller.signal,
+          onEvent: async () => undefined,
+          onCall: async () => undefined,
+          onResult: async () => undefined,
+        })
+        if (controller.signal.aborted) throw new Error('The model took too long to answer.')
+        if (result.error !== undefined) throw new Error(result.error)
+        return result.text
+      } finally {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
+      }
+    }
+    const resolved = this.resolveModel()
+    if (!resolved.ok) throw new Error(resolved.message)
+    try {
+      const completion = await resolved.provider.complete(system, [userMsg(prompt)], [], resolved.model, 4096)
+      return msgText(completion.message)
+    } catch (error) {
+      throw new Error(friendlyError(error))
+    }
+  }
+
   /** The chosen plan's own sign-in, then the same tiny check. */
   async planModels(): Promise<Array<{ id: string; label: string; line: string }>> {
     if (this.cli === undefined) return []
@@ -752,9 +798,13 @@ export class Runner {
 
   private async loadHistory(): Promise<Msg[]> {
     const rows = await this.store.list('turn')
+    // New Chat takes everything before the newest divider out of context. Nothing is deleted: the agent can still
+    // find it with chats_search.
+    const since = latestDividerAt(await this.store.list('chat_item'))
     const messages: Msg[] = []
     for (const row of rows) {
       if (row.thread !== 'main') continue
+      if (row.createdAt < since) continue
       try {
         messages.push(msgFromJson(JSON.parse(row.json) as unknown))
       } catch {
@@ -968,6 +1018,12 @@ export function describeCall(call: ToolCallBlock): string {
       return title === '' ? 'Updated memory' : `Remembered: ${clip(title, 80)}`
     case 'memory_update':
       return 'Updated memory'
+    case 'chats_search': {
+      const query = stringField(input['query'])
+      return query === '' ? 'Searched earlier chats' : `Searched earlier chats for "${clip(query, 80)}"`
+    }
+    case 'chat_read':
+      return 'Read an earlier chat'
     case 'task_add':
       return title === '' ? 'Added a task' : `Added a task: ${clip(title, 80)}`
     case 'task_list':
