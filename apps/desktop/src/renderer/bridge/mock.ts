@@ -692,6 +692,9 @@ export const mockAgent: AgentApi = {
       rows = {
         chat_item: [],
         turn: [],
+        device: [],
+        device_command: [],
+        turn_lease: [],
         memory: [],
         goal: [],
         task: [],
