@@ -7,11 +7,11 @@ import { agent } from '../bridge'
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
 
 function emptyRows(): RowStore {
-  return { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [] }
+  return { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [], project: [] }
 }
 
 function emptyFlags(): Record<EntityName, boolean> {
-  return { chat_item: false, turn: false, memory: false, goal: false, task: false, trigger: false }
+  return { chat_item: false, turn: false, memory: false, goal: false, task: false, trigger: false, project: false }
 }
 
 interface DataState {
