@@ -2,6 +2,7 @@
  * The memory handlers the window can reach. The renderer is untrusted: it may only import a file the person picked
  * in the OS dialog during this session, and every argument is checked.
  */
+import { asWriter } from './history'
 import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 
@@ -72,7 +73,8 @@ export function registerMemoryIpc(deps: MemoryIpcDeps): void {
 
   ipcMain.handle(MEMORY_CHANNELS.runImport, async (_event, path, includeAll) => {
     try {
-      const result = await runImport(deps.store, await readPicked(path), includeAll === true)
+      const raw = await readPicked(path)
+      const result = await asWriter('import', 'memory bank import', () => runImport(deps.store, raw, includeAll === true))
       deps.log?.('Memory imported', { added: result.added, updated: result.updated, unchanged: result.unchanged, deletedHere: result.deletedHere, redacted: result.redacted, ms: result.ms })
       return result
     } catch (error) {

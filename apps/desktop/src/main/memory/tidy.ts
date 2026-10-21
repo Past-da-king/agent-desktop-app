@@ -9,6 +9,7 @@
  * that finished is never run twice for the same file), carries on past a step the model got wrong, logs each page
  * it wrote to the upkeep log, and keeps every page as it was before so the whole import can be undone at once.
  */
+import { aliasList, asWriter } from './history'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -231,10 +232,28 @@ export function parseTidy(reply: string): TidyEntry[] {
  * can see them. When MemoryRow carries them, set the fields here instead of the lines.
  */
 export function foldExtras(entry: TidyEntry): DraftEntry {
-  let body = entry.body
-  if (entry.status === 'closed' && !/^status:\s*closed/im.test(body)) body = `Status: closed.\n${body}`
-  if (entry.aliases !== '' && !/also written as:/i.test(body)) body = `${body}\nAlso written as: ${entry.aliases}`
-  return { kind: entry.kind, title: entry.title, body, topics: entry.topics, update: entry.update }
+  return { kind: entry.kind, title: entry.title, body: entry.body, topics: entry.topics, update: entry.update }
+}
+
+/** Puts an entry's other spellings and its closed status on the page it was filed into. */
+export async function applyExtras(store: DataStore, ids: string[], entries: TidyEntry[]): Promise<void> {
+  const byTitle = new Map(entries.map((entry) => [entry.title.trim().toLowerCase(), entry]))
+  for (const id of ids) {
+    const row = await store.get('memory', id)
+    if (row === null) continue
+    const entry = byTitle.get(row.title.trim().toLowerCase())
+    if (entry === undefined) continue
+    const patch: Record<string, unknown> = {}
+    if (entry.aliases.trim() !== '') {
+      const merged = aliasList(`${row.aliases ?? ''},${entry.aliases}`)
+      if (merged.join(', ') !== (row.aliases ?? '')) patch['aliases'] = merged.join(', ')
+    }
+    if (entry.status === 'closed' && row.status !== 'closed') {
+      patch['status'] = 'closed'
+      patch['closedAt'] = Date.now()
+    }
+    if (Object.keys(patch).length > 0) await store.upsert('memory', { id, ...patch })
+  }
 }
 
 // ---- progress kept across restarts ----
@@ -472,7 +491,11 @@ export class MemoryTidy {
     }
 
     const before = new Map(memories.map((row) => [row.id, row]))
-    const filed = await fileEntries(this.deps.store, entries.map(foldExtras))
+    const filed = await asWriter('import', `memory bank import (${step.project === GENERAL ? 'general notes' : step.project})`, async () => {
+      const result = await fileEntries(this.deps.store, entries.map(foldExtras))
+      await applyExtras(this.deps.store, [...result.added, ...result.updated], entries)
+      return result
+    })
     const at = this.now()
     const changes: UpkeepChange[] = []
     const state = this.deps.file.read()

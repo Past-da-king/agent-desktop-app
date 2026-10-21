@@ -90,10 +90,10 @@ describe('planning', () => {
 })
 
 describe('the reply', () => {
-  it('reads aliases and status, and folds them into the page until memory pages carry them', () => {
+  it('reads aliases and status, and keeps them out of the page text (they go on the page itself)', () => {
     const [entry] = parseTidy('{"memories": [{"kind": "organisation", "title": "Initech", "body": "Construction client.", "aliases": ["Londercorp", "London Corp"], "status": "closed"}]}')
     expect(entry).toMatchObject({ kind: 'organisation', aliases: 'Londercorp, London Corp', status: 'closed' })
-    expect(foldExtras(entry as TidyEntry).body).toBe('Status: closed.\nConstruction client.\nAlso written as: Londercorp, London Corp')
+    expect(foldExtras(entry as TidyEntry).body).toBe('Construction client.')
     expect(() => parseTidy('No JSON here.')).toThrow('did not reply with pages')
   })
 })
@@ -108,7 +108,7 @@ describe('tidying', () => {
     const rows = await store.list('memory')
     const titles = rows.map((row) => row.title).sort()
     expect(titles).toEqual(['Ayanda lives in Durban', 'Creek Retreats sites', 'Creek sites move to Astro', 'Initech ERP', 'Neesha Nadar'])
-    expect(rows.find((row) => row.title === 'Neesha Nadar')?.body).toContain('Also written as: Nisha Nadar')
+    expect(rows.find((row) => row.title === 'Neesha Nadar')?.aliases).toContain('Nisha Nadar')
     expect(model.prompts.join('\n')).not.toContain('Creek stays on Wix')
     // The second creek step updated the page the first one wrote instead of adding another.
     const creekPrompts = model.prompts.filter((prompt) => prompt.includes('PROJECT: creek'))
