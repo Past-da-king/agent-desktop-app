@@ -27,6 +27,7 @@ import {
   snippetOf,
   statusText,
   RUN_STREAM_CAP,
+  TOOL_STREAM_CAP,
   type RunRecord,
 } from '../src/shared/run-record'
 import { secretsView, settingsView, testContext, toolNamed } from './support'
@@ -203,7 +204,32 @@ describe('the record on the activity row', () => {
     const write = { t: 'call' as const, id: '2', name: 'files_write', input: { path: 'C:\\Users\\sam\\out.csv', content: 'a,b\n1,2' } }
     expect(runFinished(write, 'Wrote 7 characters to C:\\Users\\sam\\out.csv.', false, 0, 3)).toMatchObject({ state: 'ok', stdout: 'a,b\n1,2' })
     expect(describeRun(write)).toBe('Wrote out.csv')
-    expect(runStarted({ t: 'call', id: '3', name: 'memory_search', input: {} })).toBeNull()
+    expect(describeRun({ t: 'call', id: '3', name: 'memory_search', input: {} })).toBeNull()
+  })
+
+  it('keeps any other tool call: what it was given and what came back, secrets hidden and long results capped', () => {
+    const script = "const rows = $$('tr')\nreturn rows.length"
+    const evalCall = { t: 'call' as const, id: '4', name: 'browser_eval', input: { js: script } }
+    expect(runStarted(evalCall)).toMatchObject({ kind: 'tool', label: 'browser eval', input: script, state: 'running', ms: null })
+    expect(runFinished(evalCall, '12', false, 1_000, 1_340)).toMatchObject({ state: 'ok', stdout: '12', stderr: '', ms: 340 })
+    const failed = runFinished(evalCall, 'TypeError: rows is undefined', true, 0, 5)
+    expect(failed).toMatchObject({ state: 'failed', stdout: '', stderr: 'TypeError: rows is undefined' })
+
+    const search = { t: 'call' as const, id: '5', name: 'memory_search', input: { query: 'VAT number', limit: 5 } }
+    expect(runStarted(search)?.input).toBe('query: VAT number\nlimit: 5')
+    expect(runStarted({ t: 'call', id: '6', name: 'mcp__aos__os_status', input: {} })).toMatchObject({ label: 'os status', input: '' })
+
+    const fill = { t: 'call' as const, id: '7', name: 'browser_fill', input: { selector: 'input[type=password]', value: 'hunter2hunter2' } }
+    expect(runStarted(fill)?.input).toBe('selector: input[type=password]\nvalue: [hidden]')
+    const login = { t: 'call' as const, id: '8', name: 'connect', input: { user: 'sam', api_key: 'abc', password: 'xyz' } }
+    const shown = runStarted(login)?.input ?? ''
+    expect(shown).toMatch(/^user: sam\napi_key: \[(hidden|redacted)\]\npassword: \[(hidden|redacted)\]$/)
+
+    const big = runFinished(evalCall, 'x'.repeat(TOOL_STREAM_CAP * 3), false, 0, 1)
+    expect(big?.trimmed).toBe(true)
+    expect((big?.stdout.length ?? 0) < TOOL_STREAM_CAP + 200).toBe(true)
+    expect(runFinished(evalCall, 'You did not approve that.', false, 0, 1)?.state).toBe('declined')
+    expect(runFinished(evalCall, 'token sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789', false, 0, 1)?.stdout).not.toContain('abcdefghijklmnop')
   })
 
   it("reads Claude Code's own Bash, Write and Edit calls on the person's plan", () => {
@@ -336,6 +362,24 @@ describe('the run in the chat', () => {
     expect(html).toContain('38 s')
     const interrupted = renderToStaticMarkup(createElement(RunStep, { run: { ...failing, state: 'running', ms: null }, status: 'error' }))
     expect(interrupted).toContain('stopped')
+  })
+
+  it('a tool call row shows its own words and opens to what it was given and what came back', async () => {
+    const { createElement } = await import('react')
+    const { renderToStaticMarkup } = await import('react-dom/server')
+    const { RunStep, RunDetail } = await import('../src/renderer/views/RunStep')
+    const call: RunRecord = { kind: 'tool', label: 'memory search', input: 'query: VAT', stdout: 'm_1 VAT is 15%', stderr: '', exitCode: null, ms: 80, state: 'ok', trimmed: false }
+    const row = renderToStaticMarkup(createElement(RunStep, { run: call, status: 'done', summary: 'Searched memory for "VAT"' }))
+    expect(row).toContain('>memory search<')
+    expect(row).toContain('Searched memory for &quot;VAT&quot;')
+    expect(row).toContain('aria-expanded="false"')
+    const bare = renderToStaticMarkup(createElement(RunStep, { run: { ...call, label: 'browser eval', input: 'document.title' }, status: 'done', summary: 'browser eval' }))
+    expect(bare).toContain('document.title')
+    const detail = renderToStaticMarkup(createElement(RunDetail, { run: call, id: 'y' }))
+    expect(detail).toContain('What it was given')
+    expect(detail).toContain('What came back')
+    expect(detail).toContain('m_1 VAT is 15%')
+    expect(detail).toContain('aria-label="Copy input"')
   })
 
   it('opens to the exact command, folder, exit, folded output, marked stderr and copy buttons', async () => {

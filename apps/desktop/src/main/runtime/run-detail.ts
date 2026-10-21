@@ -2,7 +2,8 @@
  * The run record on a chat activity row (`meta.run`): what the agent actually ran and what came back, for
  * shell_run, run_code and the file tools. Built when a call starts (the command, so the row shows it while it
  * works) and again when it ends (output, exit code, time). Every text is redacted and capped here, so nothing the
- * logs would hide reaches the chat, the database or a synced device.
+ * logs would hide reaches the chat, the database or a synced device. Every other tool gets a lighter record
+ * (kind `tool`): its arguments and the text it handed back.
  */
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
@@ -10,7 +11,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 
 import type { JsonObject, ToolCallBlock } from '@agent/core'
 
-import { capText, RUN_STREAM_CAP, snippetOf, type RunKind, type RunRecord, type RunState } from '../../shared/run-record'
+import { capText, RUN_STREAM_CAP, snippetOf, TOOL_STREAM_CAP, type RunKind, type RunRecord, type RunState } from '../../shared/run-record'
 import { redactSecrets } from '../logger'
 import { takeReleased, takeRun, type ToolRun } from '../tools/run-capture'
 
@@ -100,9 +101,67 @@ function finish(record: RunRecord): RunRecord {
   return out
 }
 
-/** The record while the call runs: what it is running, nothing back yet. Null for tools without one. */
+// ---------------------------------------------------------------------------------------------------------------
+// Every other tool (browser, memory, helpers, apps): what it was called with and what came back
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Argument names whose value is never shown. */
+const SECRET_KEY = /^(pin|otp|cvv)$|pass(word|code|phrase)?$|secret|token|api_?key|cookie|credential/i
+/** A call that mentions one of these is typing into a sensitive field, so its typed text is hidden too. */
+const SENSITIVE_CALL = /password|passcode|one.?time|\botp\b|\bcvv\b|card.?number/i
+const TYPED_KEYS = new Set(['value', 'text', 'keys'])
+
+/** "browser_eval" -> "browser eval"; an MCP tool keeps only its own name. */
+export function toolLabel(name: string): string {
+  return name.replace(/^mcp__.+?__/, '').replace(/_/g, ' ').trim()
+}
+
+/**
+ * The call's arguments for a person: a lone text argument as itself (the script, the address, the query), otherwise
+ * one "name: value" per line. Secret-looking arguments are hidden.
+ */
+export function toolInputText(input: JsonObject): string {
+  const sensitive = SENSITIVE_CALL.test(JSON.stringify(input))
+  const shown: Array<[string, string]> = []
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined || value === null || value === '') continue
+    const hidden = SECRET_KEY.test(key) || (sensitive && TYPED_KEYS.has(key))
+    shown.push([key, hidden ? '[hidden]' : typeof value === 'string' ? value : JSON.stringify(value)])
+  }
+  const only = shown.length === 1 ? shown[0] : undefined
+  if (only !== undefined && typeof input[only[0]] === 'string') return only[1]
+  return shown.map(([key, value]) => (value.includes('\n') ? `${key}:\n${value}` : `${key}: ${value}`)).join('\n')
+}
+
+function capTool(value: string): { text: string; trimmed: boolean } {
+  return capText(redactSecrets(value), TOOL_STREAM_CAP)
+}
+
+function toolRecord(
+  call: ToolCallBlock,
+  outcome: Pick<RunRecord, 'stdout' | 'stderr' | 'ms' | 'state'> & { note?: string; waitedMs?: number },
+): RunRecord {
+  const input = capTool(toolInputText(call.input))
+  const stdout = capTool(outcome.stdout)
+  const stderr = capTool(outcome.stderr)
+  return {
+    kind: 'tool',
+    label: toolLabel(call.name),
+    input: input.text,
+    stdout: stdout.text,
+    stderr: stderr.text,
+    exitCode: null,
+    ms: outcome.ms,
+    state: outcome.state,
+    trimmed: input.trimmed || stdout.trimmed || stderr.trimmed,
+    ...(outcome.note === undefined ? {} : { note: redactSecrets(outcome.note).slice(0, 400) }),
+    ...(outcome.waitedMs === undefined ? {} : { waitedMs: outcome.waitedMs }),
+  }
+}
+
+/** The record while the call runs: what it is running, nothing back yet. */
 export function runStarted(call: ToolCallBlock): RunRecord | null {
-  if (!hasRunRecord(call.name)) return null
+  if (!hasRunRecord(call.name)) return toolRecord(call, { stdout: '', stderr: '', ms: null, state: 'running' })
   const what = inputOf(call)
   return finish({
     kind: kindOf(call.name),
@@ -128,14 +187,24 @@ export function runFinished(
   startedAt: number,
   now = Date.now(),
 ): RunRecord | null {
-  if (!hasRunRecord(call.name)) return null
-  const what = inputOf(call)
-  const kind = kindOf(call.name)
-  const recorded: ToolRun | undefined = takeRun(call.input as JsonObject)
   // On the plan, the approval hook marks when the person let the call go: the time before that was a wait.
   const released = takeReleased(call.id)
   const waited = released !== undefined && released > startedAt ? released - startedAt : 0
   const elapsed = Math.max(0, now - (released !== undefined && released > startedAt ? released : startedAt))
+  if (!hasRunRecord(call.name)) {
+    const firstLine = result.split('\n')[0] ?? ''
+    if (DECLINED.test(firstLine)) return toolRecord(call, { stdout: '', stderr: '', ms: 0, state: 'declined', note: firstLine })
+    return toolRecord(call, {
+      stdout: isError ? '' : result,
+      stderr: isError ? result : '',
+      ms: elapsed,
+      state: isError ? 'failed' : 'ok',
+      ...(waited >= 1000 ? { waitedMs: waited } : {}),
+    })
+  }
+  const what = inputOf(call)
+  const kind = kindOf(call.name)
+  const recorded: ToolRun | undefined = takeRun(call.input as JsonObject)
 
   if (recorded !== undefined) {
     return finish({

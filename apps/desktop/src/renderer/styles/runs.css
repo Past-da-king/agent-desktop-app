@@ -11,6 +11,8 @@
 .run-ic.live{background:var(--pc);color:var(--on-pc)}
 .run-snip{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 13px/24px ui-monospace,'Cascadia Mono',Consolas,'SF Mono',monospace;color:var(--on-bg);background:var(--s-mid);padding:0 8px;border-radius:6px}
 .run-row:hover .run-snip{background:var(--s-high)}
+.run-snip.said{font:400 14px/24px var(--font);background:none;padding:0;color:var(--on-bg)}
+.run-row:hover .run-snip.said{background:none}
 .run-st{flex:none;font:600 12px/22px var(--font);padding:0 8px;border-radius:999px;white-space:nowrap}
 .run-st.ok{background:var(--okc);color:var(--ok)}
 .run-st.bad{background:var(--ec);color:var(--on-ec)}
