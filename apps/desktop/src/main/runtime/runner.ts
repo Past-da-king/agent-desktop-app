@@ -52,7 +52,7 @@ import {
   parseVerdict,
   type Classifier,
 } from './chat-route'
-import { describeRun, runFinished, runStarted } from './run-detail'
+import { describeRun, finishRun, runStarted } from './run-detail'
 import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
 
@@ -1097,7 +1097,7 @@ export class Runner {
     // An error line can quote the command or its output, so it is redacted like the run record.
     const summary = isError ? clip(redactSecrets(result.split('\n')[0] ?? result), MAX_RESULT_CHARS) : describeCall(call)
     const meta: JsonObject = { tool: call.name, status: isError ? 'error' : 'done', summary, ...chatTag(chat) }
-    const run = runFinished(call, result, isError, activity?.started ?? Date.now())
+    const run = await finishRun(call, result, isError, activity?.started ?? Date.now())
     if (run !== null) meta['run'] = run as unknown as JsonObject
     const text = isError ? `${activity?.text ?? describeCall(call)} failed` : activity?.text ?? summary
 

@@ -4,11 +4,15 @@
  * works) and again when it ends (output, exit code, time). Every text is redacted and capped here, so nothing the
  * logs would hide reaches the chat, the database or a synced device.
  */
+import { promises as fs } from 'node:fs'
+import { homedir } from 'node:os'
+import { isAbsolute, relative, resolve } from 'node:path'
+
 import type { JsonObject, ToolCallBlock } from '@agent/core'
 
-import { capText, snippetOf, type RunKind, type RunRecord, type RunState } from '../../shared/run-record'
+import { capText, RUN_STREAM_CAP, snippetOf, type RunKind, type RunRecord, type RunState } from '../../shared/run-record'
 import { redactSecrets } from '../logger'
-import { takeRun, type ToolRun } from '../tools/run-capture'
+import { takeReleased, takeRun, type ToolRun } from '../tools/run-capture'
 
 const FILE_LABELS: Record<string, string> = {
   files_read: 'Read',
@@ -128,7 +132,10 @@ export function runFinished(
   const what = inputOf(call)
   const kind = kindOf(call.name)
   const recorded: ToolRun | undefined = takeRun(call.input as JsonObject)
-  const elapsed = Math.max(0, now - startedAt)
+  // On the plan, the approval hook marks when the person let the call go: the time before that was a wait.
+  const released = takeReleased(call.id)
+  const waited = released !== undefined && released > startedAt ? released - startedAt : 0
+  const elapsed = Math.max(0, now - (released !== undefined && released > startedAt ? released : startedAt))
 
   if (recorded !== undefined) {
     return finish({
@@ -143,7 +150,10 @@ export function runFinished(
   }
 
   const firstLine = result.split('\n')[0] ?? ''
-  if (NATIVE.has(call.name)) return finish(nativeRun(call, kind, what, result, isError, elapsed))
+  if (NATIVE.has(call.name)) {
+    const run = nativeRun(call, kind, what, result, isError, elapsed)
+    return finish(waited >= 1000 && run.state !== 'declined' ? { ...run, waitedMs: waited } : run)
+  }
   if (isError) {
     return finish({ kind, ...what, stdout: '', stderr: result, exitCode: null, ms: elapsed, state: 'failed', trimmed: false, note: firstLine })
   }
@@ -227,6 +237,86 @@ function nativeRun(
     return { ...base, stdout: `Replaced:\n${before}\n\nWith:\n${after}`, state: 'ok' }
   }
   return { ...base, stdout: result, state: 'ok' }
+}
+
+/** Claude Code's note when a result was too big to hand back: it saved the whole output to a file. */
+const PERSISTED = /<persisted-output>[\s\S]*?Full output saved to:\s*(.+?)\s*$/m
+const PREVIEW = /Preview \(first [^)]*\):\s*\n([\s\S]*?)(?:\n?<\/persisted-output>|$)/
+
+/** The folders Claude Code saves big results in: its own config folder, never anywhere else on the disk. */
+function claudeRoots(): string[] {
+  const roots = [resolve(homedir(), '.claude')]
+  const custom = process.env['CLAUDE_CONFIG_DIR']?.trim() ?? ''
+  if (custom !== '') roots.push(resolve(custom))
+  return roots
+}
+
+function inside(path: string, root: string): boolean {
+  const rel = relative(process.platform === 'win32' ? root.toLowerCase() : root, process.platform === 'win32' ? path.toLowerCase() : path)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+/** Read the start and end of a file without loading all of a huge one. */
+async function readCapped(path: string, cap: number): Promise<string> {
+  const handle = await fs.open(path, 'r')
+  try {
+    const size = (await handle.stat()).size
+    if (size <= cap * 2) {
+      const buffer = Buffer.alloc(size)
+      await handle.read(buffer, 0, size, 0)
+      return buffer.toString('utf8')
+    }
+    const head = Buffer.alloc(cap)
+    const tail = Buffer.alloc(cap)
+    await handle.read(head, 0, cap, 0)
+    await handle.read(tail, 0, cap, size - cap)
+    return `${head.toString('utf8')}\n[output trimmed: about ${(size - cap * 2).toLocaleString('en-US')} bytes left out here]\n${tail.toString('utf8')}`
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * A result Claude Code cut down to a preview: the whole output read back from the file it saved, when that file is
+ * inside Claude Code's own folder; otherwise the preview, with a note saying so.
+ */
+export async function expandPersisted(
+  result: string,
+  roots: string[] = claudeRoots(),
+): Promise<{ text: string; note?: string; persisted: boolean }> {
+  const marker = PERSISTED.exec(result)
+  if (marker === null) return { text: result, persisted: false }
+  const preview = (PREVIEW.exec(result)?.[1] ?? '').replace(/\n?<\/persisted-output>\s*$/, '')
+  const path = resolve((marker[1] ?? '').trim())
+  let real = path
+  try {
+    real = await fs.realpath(path)
+  } catch {
+    return { text: preview, note: 'Only the first part is shown: the full output file could not be read.', persisted: true }
+  }
+  if (!roots.some((root) => inside(real, root))) {
+    return { text: preview, note: 'Only the first part is shown: the full output was saved outside the Claude folder, so it was not opened.', persisted: true }
+  }
+  try {
+    return { text: await readCapped(real, RUN_STREAM_CAP), persisted: true }
+  } catch {
+    return { text: preview, note: 'Only the first part is shown: the full output file could not be read.', persisted: true }
+  }
+}
+
+/** runFinished, after reading back any output Claude Code saved to a file because it was too big. */
+export async function finishRun(
+  call: ToolCallBlock,
+  result: string,
+  isError: boolean,
+  startedAt: number,
+  now = Date.now(),
+): Promise<RunRecord | null> {
+  if (!hasRunRecord(call.name) || !NATIVE.has(call.name)) return runFinished(call, result, isError, startedAt, now)
+  const expanded = await expandPersisted(result)
+  const run = runFinished(call, expanded.text, isError, startedAt, now)
+  if (run === null || expanded.note === undefined) return run
+  return { ...run, note: run.note === undefined ? expanded.note : `${run.note} ${expanded.note}` }
 }
 
 function baseName(path: string): string {
