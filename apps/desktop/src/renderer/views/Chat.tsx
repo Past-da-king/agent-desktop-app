@@ -144,16 +144,17 @@ function MessageAttachment({ file }: { file: Attachment }): JSX.Element {
   const src = useThumbnail(file)
   if (isImageFile(file) && src !== null) {
     return (
-      <div className="u-file">
+      <div className="u-file pic" title={file.path}>
         <img src={src} alt={file.name} />
         <span>{file.name}</span>
       </div>
     )
   }
   return (
-    <div className="u-file plain">
-      <Icon name="clip" size={18} />
+    <div className="u-file plain" title={file.path}>
+      <Icon name={file.mime === 'inode/directory' ? 'folder' : 'file'} size={18} />
       <span>{file.name}</span>
+      {file.size !== undefined ? <span className="u-file-size">{fileSizeLabel(file.size)}</span> : null}
     </div>
   )
 }

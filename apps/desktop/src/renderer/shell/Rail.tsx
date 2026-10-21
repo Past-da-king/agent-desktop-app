@@ -4,7 +4,7 @@ import { isOpenCard } from '../lib/cards'
 import { openChat, startNewChat } from '../lib/chat-actions'
 import { STATUS_LABEL, chatList, chatOf, chatStatus } from '../lib/chats'
 import { short, timeAgo } from '../lib/format'
-import { startChatTracking, useChats } from '../state/useChats'
+import { startChatTracking, useAnyRunning, useChats } from '../state/useChats'
 import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useRoute, useUi } from '../state/useUi'
@@ -50,7 +50,8 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
   const userName = settings?.userName.trim() || 'You'
   const email = settings?.syncEmail ?? ''
 
-  const statusText = needs > 0 ? 'Waiting for you' : openGoal ? `Working on ${openGoal.title}` : 'Ready'
+  const anyRunning = useAnyRunning()
+  const statusText = needs > 0 ? 'Waiting for you' : openGoal ? `Working on ${openGoal.title}` : anyRunning ? 'Working' : 'Ready'
 
   return (
     <nav className="rail" aria-label="Main">
