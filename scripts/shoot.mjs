@@ -67,10 +67,36 @@ const GROUPS = {
     ['quick', '?demo=1', '#/home', [[D, 'light']], 'Control+Shift+Space'],
   ],
   chat: [['chat-full', '?demo=1', '#/chat', DESK], ['chat-empty', '?demo=empty', '#/chat', DESK]],
+  // The commands the agent ran: folded rows, then the step opened with one run disclosed (long output folded).
+  runs: [['runs-open', '?demo=1', '#/chat', DESK, null, runsFlow]],
   data: [
     ['home-empty', '?demo=empty', '#/home', DESK], ['tasks-empty', '?demo=empty', '#/tasks', DESK], ['memory-empty', '?demo=empty', '#/memory', DESK], ['routines-empty', '?demo=empty', '#/routines', DESK],
     ['home-big', '?demo=big', '#/home', DESK], ['tasks-big', '?demo=big', '#/tasks', DESK], ['memory-big', '?demo=big', '#/memory', DESK], ['routines-big', '?demo=big', '#/routines', DESK],
   ],
+}
+
+// Shoots the folded run rows first, then opens the step and the failing test run for the main screenshot.
+async function runsFlow(page, tag, vp, theme) {
+  const group = page.getByRole('button', { name: /Used 5 tools/ })
+  await group.scrollIntoViewIfNeeded()
+  await page.evaluate(() => {
+    const el = [...document.querySelectorAll('.u-msg')].find((m) => m.textContent?.includes('shop tests failing'))
+    el?.scrollIntoView({ block: 'start' })
+  })
+  await page.waitForTimeout(200)
+  await page.screenshot({ path: path.join(outDir, `runs-rows-${vp.w}-${theme}.png`) })
+  await group.click()
+  await page.locator('.run-row', { hasText: 'npm test -- --run --reporter=verbose' }).click()
+  await page.waitForTimeout(200)
+  // The opened run with its long output folded, then its stderr; the main shot is the whole step from the top.
+  await page.evaluate(() => document.querySelector('.run.open')?.scrollIntoView({ block: 'start' }))
+  await page.waitForTimeout(200)
+  await page.screenshot({ path: path.join(outDir, `runs-fold-${vp.w}-${theme}.png`) })
+  await page.evaluate(() => document.querySelector('.run.open .run-sec.err')?.scrollIntoView({ block: 'center' }))
+  await page.waitForTimeout(200)
+  await page.screenshot({ path: path.join(outDir, `runs-stderr-${vp.w}-${theme}.png`) })
+  await page.evaluate(() => document.querySelector('.run.open')?.closest('.tool-group')?.scrollIntoView({ block: 'start' }))
+  await page.waitForTimeout(200)
 }
 
 const IGNORE_REQ = /fonts\.(googleapis|gstatic)\.com/
@@ -189,7 +215,7 @@ try {
   if (only === 'onboarding') {
     await onboardingFlow()
   } else {
-    for (const [name, query, hash, vps, key] of GROUPS[only] ?? []) await run(name, query, hash, vps, key)
+    for (const [name, query, hash, vps, key, extra] of GROUPS[only] ?? []) await run(name, query, hash, vps, key, extra)
   }
 } finally {
   await browser.close(); server.close()

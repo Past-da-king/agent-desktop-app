@@ -240,3 +240,51 @@ describe('the record on the activity row', () => {
     expect(JSON.stringify(fake.requests[1]?.body)).toContain('Exit 2')
   }, 30_000)
 })
+
+describe('the run in the chat', () => {
+  const failing: RunRecord = {
+    kind: 'shell',
+    input: 'npm test -- --run\n  --reporter=verbose',
+    label: 'PowerShell 7',
+    cwd: 'C:\\Users\\sam\\shop',
+    stdout: Array.from({ length: 40 }, (_, i) => `  line ${i + 1}`).join('\n'),
+    stderr: 'npm ERR! Test failed.',
+    exitCode: 1,
+    ms: 38_420,
+    state: 'failed',
+    trimmed: true,
+  }
+
+  it('is one line: tag, snippet, how it ended and how long it took', async () => {
+    const { createElement } = await import('react')
+    const { renderToStaticMarkup } = await import('react-dom/server')
+    const { RunStep } = await import('../src/renderer/views/RunStep')
+    const html = renderToStaticMarkup(createElement(RunStep, { run: failing, status: 'done' }))
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('>Shell<')
+    expect(html).toContain('npm test -- --run ...')
+    expect(html).toContain('failed, exit 1')
+    expect(html).toContain('38 s')
+    const interrupted = renderToStaticMarkup(createElement(RunStep, { run: { ...failing, state: 'running', ms: null }, status: 'error' }))
+    expect(interrupted).toContain('stopped')
+  })
+
+  it('opens to the exact command, folder, exit, folded output, marked stderr and copy buttons', async () => {
+    const { createElement } = await import('react')
+    const { renderToStaticMarkup } = await import('react-dom/server')
+    const { RunDetail } = await import('../src/renderer/views/RunStep')
+    const html = renderToStaticMarkup(createElement(RunDetail, { run: failing, id: 'x' }))
+    expect(html).toContain('npm test -- --run\n  --reporter=verbose</pre>')
+    expect(html).toContain('C:\\Users\\sam\\shop')
+    expect(html).toContain('exit 1')
+    expect(html).toContain('Show all 40 lines (28 hidden)')
+    expect(html).toContain('  line 1\n')
+    expect(html).toContain('  line 40</pre>')
+    expect(html).not.toContain('line 20\n')
+    expect(html).toContain('Errors (stderr)')
+    expect(html).toContain('run-sec err')
+    expect(html).toContain('aria-label="Copy command"')
+    expect(html).toContain('aria-label="Copy output"')
+    expect(html).toContain('Output trimmed')
+  })
+})
