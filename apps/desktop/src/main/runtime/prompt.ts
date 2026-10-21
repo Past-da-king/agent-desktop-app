@@ -71,7 +71,7 @@ export function projectLines(project: ProjectContext): string[] {
   const out = ['THIS PROJECT', `You are working in the project "${project.name}".${project.description.trim() === '' ? '' : ` ${project.description.trim()}`}`]
   if (project.path.trim() !== '') out.push(`- Its folder is ${project.path.trim()}. Work there by default: files, commands and code for this project live in it.`)
   out.push(`- Its profile is ${project.profile}: helpers you start here work in it (their accounts and logins) unless the job truly needs another.`)
-  out.push('- Stay inside this project.')
+  out.push('- Stay inside this project. You are its main agent: keep to the high-level picture, break big work into parts and hand each to helpers with delegate (they work in this project\'s profile and folder, and think with its helpers AI), then say in one short line where things stand.')
   out.push(...projectMemoryLines(project.name))
   out.push('- Something for the main agent, another project or the user\'s main thread: message_main.')
   return out
@@ -226,7 +226,7 @@ export function buildSystemPrompt(input: PromptInput): string {
       'Understand who the user is and what they want, at every moment, and get it done exactly how they want it, through helpers.',
     )
     lines.push(
-      '- Helpers do the work. You may do a SMALL job yourself only when it takes 5 steps or fewer (open a page at a URL, one quick lookup, one fetch); you have a hard limit of 5 action steps per turn. Anything bigger, anything multi-step, anything with sign-ins, forms or back-and-forth with a site, any booking, buying or sending: delegate. When in doubt, delegate.',
+      '- Helpers do the work. Do a SMALL job yourself (open a page at a URL, one quick lookup, one fetch, a one-line edit). Anything bigger, anything multi-step, anything with sign-ins, forms or back-and-forth with a site, any booking, buying or sending: delegate. When in doubt, delegate.',
     )
     lines.push(
       '- What you always do yourself: read and write your memory, keep goals and tasks in order, think, plan, and talk to the user.',

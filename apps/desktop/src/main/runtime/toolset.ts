@@ -25,7 +25,7 @@ import { routineTools } from '../tools/routines'
 import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
 import { browserRunner, webAppTools } from '../tools/webapps'
-import { budgeted, type StepBudget } from './budget'
+import type { StepBudget } from './budget'
 import { browserOwner } from '../browser/owner'
 import { voiceNoteTool, type VoiceNoteMaker } from '../tools/voice-note'
 import type { DataStore } from './data'
@@ -180,9 +180,8 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
   if (deps.projects !== undefined) tools.push(...projectTools({ store: deps.store, ...deps.projects })) // project_list, project_create, project_update, project_chat_start, project_chat_send, message_main
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
-  const budget = deps.mainBudget
-  if (budget === undefined) return tools
-  return tools.map((tool) => (MAIN_OWN_TOOLS.has(tool.spec.name) ? tool : budgeted(tool, budget)))
+  // No step counter any more (Ayanda, 21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.
+  return tools
 }
 
 /** Re-exported so a caller only needs this module to build a toolset. */

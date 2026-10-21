@@ -8,7 +8,7 @@ import { mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
-import { MAIN_CHAT, PROFILE_COLORS, bool, schema, str, type AgentProfileInfo, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext } from '@agent/core'
+import { MAIN_CHAT, PROFILE_COLORS, bool, schema, str, NO_PICK, type AgentProfileInfo, type AiAccount, type AiPicks, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext } from '@agent/core'
 
 import { isIconImage } from '../../shared/project-icon'
 import type { DataStore } from '../runtime/data'
@@ -36,6 +36,21 @@ export interface ProjectToolDeps {
   profiles?(): AgentProfileInfo[]
   /** A picture file on this computer as a small square icon (shared/project-icon.ts), or null when it is not one. */
   imageIcon?(path: string): Promise<string | null>
+  /** The AI accounts the person set up, so a project can be given one by name. */
+  accounts?(): AiAccount[]
+}
+
+/** An account by name or id; 'main' / 'same as main' / '' means the main agent's. */
+function accountByName(deps: ProjectToolDeps, raw: string): AiAccount | 'main' | null {
+  const wanted = raw.trim().toLowerCase()
+  if (wanted === '' || wanted === 'main' || wanted === 'same as main' || wanted === 'default') return 'main'
+  const all = deps.accounts?.() ?? []
+  return all.find((account) => account.id === raw.trim()) ?? all.find((account) => account.label.toLowerCase() === wanted) ?? all.find((account) => account.label.toLowerCase().includes(wanted)) ?? null
+}
+
+function accountNames(deps: ProjectToolDeps): string {
+  const names = (deps.accounts?.() ?? []).map((account) => account.label)
+  return names.length === 0 ? 'none yet' : names.join(', ')
 }
 
 /** The picture the agent named for a project's icon: '' for none asked, or an error line for the agent. */
@@ -308,6 +323,10 @@ function projectUpdate(deps: ProjectToolDeps): Tool {
         icon_image: str('Use a picture as its icon: the full path of an image file on this computer (PNG, JPG, WebP or ICO); "none" goes back to the glyph'),
         color: str('New tile colour'),
         hidden: bool('True hides it from the rail, false shows it again'),
+        main_ai: str('Which AI account the agent in its chats thinks with, by name (the user\'s accounts in Settings), or "main" for the same as the main thread'),
+        main_model: str('The model for that agent, or "" for the account\'s default'),
+        helpers_ai: str('Which AI account its helpers think with, by name, or "main" for the same as the main thread'),
+        helpers_model: str('The model for its helpers, or "" for the account\'s default'),
       }),
     },
     run: async (input) => {
@@ -352,6 +371,24 @@ function projectUpdate(deps: ProjectToolDeps): Tool {
       if (typeof input['hidden'] === 'boolean' && input['hidden'] !== project.hidden) {
         patch.hidden = input['hidden']
         changed.push(input['hidden'] ? 'hidden from the rail' : 'back on the rail')
+      }
+      if (['main_ai', 'main_model', 'helpers_ai', 'helpers_model'].some((key) => typeof input[key] === 'string')) {
+        const ai: AiPicks = { main: { ...(project.ai?.main ?? NO_PICK) }, helpers: { ...(project.ai?.helpers ?? NO_PICK) } }
+        for (const slot of ['main', 'helpers'] as const) {
+          const named = input[`${slot}_ai`]
+          if (typeof named === 'string') {
+            const account = accountByName(deps, named)
+            if (account === null) return `No AI account called "${text(named)}". The user's accounts: ${accountNames(deps)}.`
+            ai[slot] = { account: account === 'main' ? '' : account.id, model: ai[slot].model }
+            changed.push(`${slot === 'main' ? 'its agent' : 'its helpers'} think with ${account === 'main' ? "the main thread's AI" : account.label}`)
+          }
+          const model = input[`${slot}_model`]
+          if (typeof model === 'string') {
+            ai[slot] = { account: ai[slot].account, model: model.trim().slice(0, 120) }
+            changed.push(`${slot === 'main' ? 'its agent' : 'its helpers'} on ${model.trim() === '' ? 'the default model' : model.trim()}`)
+          }
+        }
+        patch.ai = ai
       }
       if (changed.length === 0) return 'Nothing to change.'
       await deps.store.upsert('project', patch)

@@ -18,6 +18,8 @@ import { ProjectTile } from '../ui/ProjectTile'
 import { Skeleton } from '../ui/Skeleton'
 import { ProjectDialog } from './ProjectDialog'
 import { useProfiles } from './Profiles'
+import { hasAccounts, pickLine, pickOfChat } from '../lib/ai'
+import { useSettings } from '../state/useSettings'
 
 /** The route id of the Hidden projects list. */
 export const HIDDEN_PROJECTS = '_hidden'
@@ -139,6 +141,7 @@ export function Project({ id }: { id: string }): JSX.Element {
   const items = useEntity('chat_item')
   const memories = useEntity('memory')
   const profiles = useProfiles() ?? []
+  const settings = useSettings((state) => state.settings)
   const runs = useChats((state) => state.runs)
   const seen = useChats((state) => state.seen)
   const since = useChats((state) => state.since)
@@ -182,6 +185,12 @@ export function Project({ id }: { id: string }): JSX.Element {
                 <Icon name="person" size={15} />
                 {profile === undefined ? 'General profile' : `${profile.name} profile`}
               </span>
+              {settings !== null && hasAccounts(settings) ? (
+                <span className="pj-fact" title={`Helpers: ${pickLine(settings, pickOfChat(settings, project, 'helpers'))}`}>
+                  <Icon name="bolt" size={15} />
+                  {pickLine(settings, pickOfChat(settings, project, 'main'))}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>

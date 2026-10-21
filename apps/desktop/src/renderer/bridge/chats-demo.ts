@@ -160,6 +160,7 @@ export function projectsDemo(now: number): ProjectRow[] {
       profile: 'p_work',
       hidden: false,
       chats: [DEMO_CHATS.acme, DEMO_CHATS.review],
+      ai: { main: { account: 'acc_anthropic', model: '' }, helpers: { account: 'acc_claude', model: 'opus' } },
     },
     {
       id: 'pj-home',

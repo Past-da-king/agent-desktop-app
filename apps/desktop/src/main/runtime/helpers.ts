@@ -27,10 +27,12 @@ import {
   type AgentProfileInfo,
   type Tool,
   type ToolContext,
+  type AiPick,
 } from '@agent/core'
 
 import type { DataStore } from './data'
 import type { CliHost } from './cli-host'
+import { brainFor, isBrain, pickFor, type Brain, type BrainDeps } from './brains'
 import { buildSystemPrompt } from './prompt'
 import { finishRun, runStarted } from './run-detail'
 import { redactSecrets } from '../logger'
@@ -160,6 +162,8 @@ interface HelperRun {
   pushMessage?: string
   /** The chat it belongs to. */
   chat: string
+  /** The AI it thinks with: the helpers pick of the chat that started it, taken when it started. */
+  pick: AiPick
   /** A separate run for a message sent while the chat was busy: its result is a summary block, not a new turn. */
   side?: boolean
   /** Pictures for its first message. */
@@ -236,9 +240,11 @@ export class HelperManager implements HelperHost {
 
   async delegate(tasks: HelperTask[], together = false, origin: HelperOrigin = {}): Promise<string> {
     const chat = origin.chat ?? MAIN_CHAT
-    // On the person's plan every helper is its own SDK session: no API key or provider is needed.
-    const ready = this.onPlan() ? { model: this.settings.get().cliModel.trim() } : this.ready()
-    if (typeof ready === 'string') return ready
+    // Helpers think with the chat's helpers pick (its project's, else the main thread's), taken now.
+    const pick = await pickFor(this.brainDeps(), chat, 'helpers')
+    const brain = brainFor(this.brainDeps(), pick)
+    if (!isBrain(brain)) return brain.message
+    const ready = { model: brain.model }
 
     const clean = tasks.filter((task) => task.brief.trim() !== '').slice(0, MAX_TASKS)
     if (clean.length === 0) return 'No tasks given.'
@@ -268,6 +274,7 @@ export class HelperManager implements HelperHost {
       const id = await this.createHelperRow(label, task.brief, ready.model, batch, profile, chat)
       this.runs.set(id, {
         chat,
+        pick,
         id,
         label,
         profileId: profile.id,
@@ -300,7 +307,7 @@ export class HelperManager implements HelperHost {
   async steer(id: string, message: string): Promise<string> {
     const run = this.runs.get(id)
     if (run === undefined) return this.push(id, message)
-    if (this.onPlan()) {
+    if (brainFor(this.brainDeps(), run.pick).kind === 'plan') {
       // An SDK session cannot read a note mid-turn: stop it where it is and send it back with the note.
       await this.stop(id)
       for (let i = 0; i < 50 && this.runs.has(id); i += 1) await new Promise((resolve) => setTimeout(resolve, 100))
@@ -318,18 +325,20 @@ export class HelperManager implements HelperHost {
     const row = await this.store.get('chat_item', id)
     if (row === null || row.kind !== 'helper') return `No helper #${id}.`
 
-    const ready = this.ready()
-    if (typeof ready === 'string') return ready
-
     const meta = parseMeta(row.meta)
     const label = stringField(meta['label']) || 'Helper'
     const chat = stringField(meta['chat']) || MAIN_CHAT
+    const pick = await pickFor(this.brainDeps(), chat, 'helpers')
+    const brain = brainFor(this.brainDeps(), pick)
+    if (!isBrain(brain)) return brain.message
+    const ready = { model: brain.model }
     const side = meta['side'] === true
     const pushes = numberField(meta['pushes']) + 1
-    if (this.onPlan()) {
+    if (brain.kind === 'plan') {
       await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now() })
       this.runs.set(id, {
         chat,
+        pick,
         side,
         id,
         label,
@@ -360,6 +369,7 @@ export class HelperManager implements HelperHost {
     })
     this.runs.set(id, {
       chat,
+      pick,
       side,
       id,
       label,
@@ -475,8 +485,11 @@ export class HelperManager implements HelperHost {
    * helper row itself is the summary block in the chat, and the chat's agent hears about it on its next turn.
    */
   async alongside(job: AlongsideJob): Promise<string | null> {
-    const ready = this.onPlan() ? { model: this.settings.get().cliModel.trim() } : this.ready()
-    if (typeof ready === 'string') return null
+    // A separate run for the person's own message: it thinks with what the chat's agent does.
+    const pick = await pickFor(this.brainDeps(), job.chat, 'main')
+    const brain = brainFor(this.brainDeps(), pick)
+    if (!isBrain(brain)) return null
+    const ready = { model: brain.model }
     const brief = job.text
     const label = labelFromBrief(job.text.split('\n').filter((line) => !line.startsWith('[')).join(' ') || job.text).slice(0, 40)
     const profile = this.generalProfile()
@@ -487,6 +500,7 @@ export class HelperManager implements HelperHost {
     })
     this.runs.set(id, {
       chat: job.chat,
+      pick,
       side: true,
       images: job.images,
       id,
@@ -580,15 +594,16 @@ export class HelperManager implements HelperHost {
   }
 
   private async runHelper(run: HelperRun): Promise<void> {
-    if (this.onPlan()) {
-      await this.runOnPlan(run)
+    const brain = brainFor(this.brainDeps(), run.pick)
+    if (!isBrain(brain)) {
+      await this.finish(run, 'failed', brain.message)
       return
     }
-    const ready = this.ready()
-    if (typeof ready === 'string') {
-      await this.finish(run, 'failed', ready)
+    if (brain.kind === 'plan') {
+      await this.runOnPlan(run, brain)
       return
     }
+    const ready = { provider: brain.provider, model: brain.model }
 
     const controller = new AbortController()
     run.controller = controller
@@ -1060,15 +1075,10 @@ export class HelperManager implements HelperHost {
     return (id !== '' ? this.profiles?.find(id)?.id : undefined) ?? this.generalProfile().id
   }
 
-  private onPlan(): boolean {
-    return this.cli !== null && this.settings.get().mode === 'subscription'
-  }
-
   /** One helper turn as its own SDK session on the person's plan; a pushed helper resumes its session. */
-  private async runOnPlan(run: HelperRun): Promise<void> {
+  private async runOnPlan(run: HelperRun, brain: Brain & { kind: 'plan' }): Promise<void> {
     const cli = this.cli
     if (cli === null) return
-    const current = this.settings.get()
     const controller = new AbortController()
     run.controller = controller
     if (run.pushMessage === undefined) cli.forget(`helper:${run.id}`)
@@ -1078,13 +1088,13 @@ export class HelperManager implements HelperHost {
     let result = ''
     try {
       const outcome = await cli.turn({
-        cli: current.cli === '' ? 'claude' : current.cli,
+        cli: brain.cli,
         thread: `helper:${run.id}`,
         tools: this.workerTools,
         system: await this.buildHelperPrompt(run),
         prompt: run.pushMessage ?? run.brief,
         ...(run.pushMessage === undefined && (run.images ?? []).length > 0 ? { images: run.images } : {}),
-        ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
+        ...(brain.model === '' ? {} : { model: brain.model }),
         context: this.context(run, controller.signal),
         signal: controller.signal,
         onEvent: (event) => this.onEvent(run, event),
@@ -1114,33 +1124,9 @@ export class HelperManager implements HelperHost {
     await this.finish(run, state, result)
   }
 
-  /** The provider and model for a helper, or a plain-words reason there is none. */
-  private ready(): Ready | string {
-    const current = this.settings.get()
-    if (current.mode === 'subscription') {
-      return 'Subscriptions are coming soon. Add an AI key in Settings to start.'
-    }
-    const key = (this.secrets.get('apiKey') ?? '').trim()
-    if (!current.hasKey || key === '') {
-      return 'No AI is set up for helpers yet. Add a key in Settings.'
-    }
-    const model =
-      current.model.trim() ||
-      PROVIDERS.find((provider) => provider.id === current.provider)?.defaultModel ||
-      ''
-    if (model === '') return 'Choose a model in Settings first.'
-    if (current.provider === 'custom' && current.baseUrl.trim() === '') {
-      return 'Add the server address for this provider in Settings.'
-    }
-
-    let provider: LlmProvider | null = null
-    try {
-      provider = this.providerFactory(current, key)
-    } catch {
-      provider = null
-    }
-    if (provider === null) return 'No AI is set up for helpers yet. Add a key in Settings.'
-    return { provider, model }
+  /** What runtime/brains.ts needs to say which AI a helper thinks with. */
+  private brainDeps(): BrainDeps {
+    return { settings: this.settings, secrets: this.secrets, providerFactory: this.providerFactory, hasCli: this.cli !== null, store: this.store }
   }
 
   /** The profile id of the project a chat belongs to, '' when it is in none or the project uses General. */
