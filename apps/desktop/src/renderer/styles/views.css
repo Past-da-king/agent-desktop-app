@@ -430,3 +430,4 @@ button.mem-note:hover{background:color-mix(in srgb,var(--pc) 88%,var(--on-pc))}
 .import-toggle-t b{font:500 15px/1.3 var(--font)}
 .import-toggle-t span{font-size:13px;color:var(--on-sv);line-height:1.4}
 .import-toggle .sw2{flex:none}
+.earlier-chats{display:flex;justify-content:center;padding:4px 0 8px}
