@@ -12,8 +12,14 @@ export const MEMORY_CHANNELS = {
   runDaily: 'agent:memory.runDaily',
   upkeep: 'agent:memory.upkeep',
   undoChange: 'agent:memory.undoChange',
+  previewTidy: 'agent:memory.previewTidy',
+  startTidy: 'agent:memory.startTidy',
+  stopTidy: 'agent:memory.stopTidy',
+  tidyState: 'agent:memory.tidyState',
+  undoTidy: 'agent:memory.undoTidy',
 } as const
 
 export const MEMORY_EVENTS = {
   upkeep: 'agent:evt:memory.upkeep',
+  tidy: 'agent:evt:memory.tidy',
 } as const

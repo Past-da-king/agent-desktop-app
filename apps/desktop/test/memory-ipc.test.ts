@@ -8,6 +8,7 @@ import { Store } from '../src/main/db'
 import { ChatIndex } from '../src/main/memory/chat-index'
 import { registerMemoryIpc } from '../src/main/memory/ipc'
 import { MemoryService } from '../src/main/memory/service'
+import { MemoryTidy, TidyFile } from '../src/main/memory/tidy'
 import { UpkeepFile } from '../src/main/memory/upkeep-log'
 import { MEMORY_CHANNELS } from '../src/shared/memory-channels'
 
@@ -35,6 +36,12 @@ beforeEach(() => {
     service,
     store,
     pickFile: async () => picked,
+    tidy: new MemoryTidy({
+      store,
+      upkeep: new UpkeepFile(null),
+      file: new TidyFile(null),
+      complete: async () => JSON.stringify({ memories: [{ kind: 'person', title: 'Alex Meyer', body: 'CEO of Example Co, the client.', topics: 'clients' }] }),
+    }),
   })
 })
 
@@ -51,6 +58,24 @@ function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
 }
 
 describe('memory IPC', () => {
+  it('tidies only a file the person picked, in the background, with progress', async () => {
+    const file = join(dir, 'bank.json')
+    writeFileSync(file, JSON.stringify({ source: 'Bank', memories: [{ id: 'a', title: 'Ben', text: 'Ben is the CEO.', kind: 'person', project: 'clients' }] }))
+    expect(await invoke(MEMORY_CHANNELS.previewTidy, file, false)).toMatchObject({ ok: false, message: 'Choose the file first.' })
+    await expect(invoke(MEMORY_CHANNELS.startTidy, file, false)).rejects.toThrow('Choose the file first.')
+    expect(await invoke(MEMORY_CHANNELS.tidyState)).toBeNull()
+
+    picked = file
+    await invoke(MEMORY_CHANNELS.pickImport)
+    expect(await invoke(MEMORY_CHANNELS.previewTidy, file, false)).toMatchObject({ ok: true, notes: 1, projects: 1, steps: 1 })
+    expect(await invoke(MEMORY_CHANNELS.startTidy, file, false)).toMatchObject({ running: true, steps: 1 })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(await invoke(MEMORY_CHANNELS.tidyState)).toMatchObject({ running: false, finished: true, done: 1, added: 1, canUndo: true })
+    expect((await store.list('memory')).map((row) => row.title)).toEqual(['Alex Meyer'])
+    expect(await invoke(MEMORY_CHANNELS.undoTidy)).toEqual({ removed: 1, restored: 0 })
+    expect(await store.list('memory')).toHaveLength(0)
+  })
+
   it('registers every memory channel', () => {
     for (const channel of Object.values(MEMORY_CHANNELS)) expect(handlers.has(channel), channel).toBe(true)
   })
