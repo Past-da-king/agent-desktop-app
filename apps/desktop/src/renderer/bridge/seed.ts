@@ -71,7 +71,15 @@ export function demoSettings(): Settings {
       { id: 'acc_anthropic', label: 'Anthropic', kind: 'api', provider: 'anthropic', model: 'claude-sonnet-5-5', hasKey: true },
       { id: 'acc_go', label: 'OpenCode Go', kind: 'api', provider: 'opencode_go', model: 'deepseek-v4.1-flash', hasKey: true },
     ],
-    ai: { main: { account: 'acc_claude', model: 'fable' }, helpers: { account: 'acc_go', model: '' } },
+    ai: {
+      main: { account: 'acc_claude', model: 'fable' },
+      helpers: { account: 'acc_claude', model: 'opus' },
+      roster: [
+        { account: 'acc_claude', model: 'opus', goodFor: 'research, code and careful writing' },
+        { account: 'acc_claude', model: 'sonnet', goodFor: '' },
+        { account: 'acc_go', model: 'deepseek-v4.1-flash', goodFor: 'quick lookups and simple browser steps' },
+      ],
+    },
     hasVoiceKey: true,
     userName: 'Sam',
     agentName: 'Nova',
@@ -525,7 +533,8 @@ export function demoRows(): SeedResult['rows'] {
         summary: 'Checking The Palms',
         queued: false,
         startedAt: now - 80_000,
-        model: 'claude-sonnet-5-5',
+        model: 'opus',
+        modelName: 'Claude plan · opus',
       }),
     },
     {

@@ -13,6 +13,8 @@ export interface HelperView {
   endedAt: number | null
   result: string
   activity: ChatItem[]
+  /** The model it runs on, when it was picked from a list of helper models ('' otherwise). */
+  model: string
 }
 
 function helperState(value: string): HelperState {
@@ -72,6 +74,8 @@ export function helperView(item: ChatItem, items: ChatItem[]): HelperView {
     endedAt: metaNumber(meta, 'endedAt'),
     result: metaText(meta, 'result'),
     activity: helperActivities(items, helperIdOf(item)),
+    // Shown only when it was chosen from a list (delegate writes modelName then); one model needs no label.
+    model: metaText(meta, 'modelName') === '' ? '' : metaText(meta, 'model'),
   }
 }
 

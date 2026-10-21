@@ -39,6 +39,8 @@ export function TipLayer(): JSX.Element | null {
   const current = useRef<{ el: HTMLElement; title: string } | null>(null)
   const timer = useRef<number | null>(null)
   const lastHidden = useRef(0)
+  /** The element just pressed: no label for it again until the pointer leaves it (it may open a menu of its own). */
+  const pressed = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     const restore = (): void => {
@@ -60,7 +62,7 @@ export function TipLayer(): JSX.Element | null {
     }
     const enter = (target: EventTarget | null): void => {
       const el = target instanceof Element ? target.closest<HTMLElement>('[title]') : null
-      if (el === null || el === current.current?.el) return
+      if (el === null || el === current.current?.el || el === pressed.current) return
       hide()
       const text = (el.getAttribute('title') ?? '').trim()
       if (text === '') return
@@ -72,6 +74,10 @@ export function TipLayer(): JSX.Element | null {
       timer.current = window.setTimeout(() => show(el, text), warm ? 0 : DELAY_MS)
     }
     const leave = (event: Event): void => {
+      if (pressed.current !== null && event.type === 'pointerout') {
+        const next = (event as PointerEvent).relatedTarget
+        if (!(next instanceof Node && pressed.current.contains(next))) pressed.current = null
+      }
       const held = current.current
       if (held === null) return
       const next = (event as PointerEvent).relatedTarget ?? (event as FocusEvent).relatedTarget
@@ -87,7 +93,12 @@ export function TipLayer(): JSX.Element | null {
     document.addEventListener('pointerout', leave, true)
     document.addEventListener('focusin', focus, true)
     document.addEventListener('focusout', leave, true)
-    document.addEventListener('pointerdown', hide, true)
+    const press = (event: PointerEvent): void => {
+      const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[title]') : null
+      pressed.current = target ?? current.current?.el ?? null
+      hide()
+    }
+    document.addEventListener('pointerdown', press, true)
     document.addEventListener('keydown', key, true)
     window.addEventListener('scroll', hide, true)
     window.addEventListener('blur', hide)
@@ -97,7 +108,7 @@ export function TipLayer(): JSX.Element | null {
       document.removeEventListener('pointerout', leave, true)
       document.removeEventListener('focusin', focus, true)
       document.removeEventListener('focusout', leave, true)
-      document.removeEventListener('pointerdown', hide, true)
+      document.removeEventListener('pointerdown', press, true)
       document.removeEventListener('keydown', key, true)
       window.removeEventListener('scroll', hide, true)
       window.removeEventListener('blur', hide)
