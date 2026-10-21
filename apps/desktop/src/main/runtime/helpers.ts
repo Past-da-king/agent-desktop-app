@@ -245,9 +245,11 @@ export class HelperManager implements HelperHost {
 
     // Every helper works inside exactly one profile; with none named it gets General. An unknown name
     // stops the whole call before anything starts, so the main agent can fix it and send them again.
+    // Started from a project chat: helpers work in the project's profile unless the brief names another.
+    const projectProfile = chat === MAIN_CHAT ? '' : await this.projectProfileOf(chat)
     const chosen: AgentProfileInfo[] = []
     for (const task of clean) {
-      const wanted = (task.profile ?? '').trim()
+      const wanted = (task.profile ?? '').trim() || projectProfile
       const found = wanted === '' ? this.generalProfile() : (this.profiles?.find(wanted) ?? null)
       if (found === null) {
         const names = (this.profiles?.all() ?? []).map((p) => p.name).join(', ')
@@ -1133,6 +1135,16 @@ export class HelperManager implements HelperHost {
     }
     if (provider === null) return 'No AI is set up for helpers yet. Add a key in Settings.'
     return { provider, model }
+  }
+
+  /** The profile id of the project a chat belongs to, '' when it is in none or the project uses General. */
+  private async projectProfileOf(chat: string): Promise<string> {
+    try {
+      const project = (await this.store.list('project')).find((each) => each.chats.includes(chat))
+      return project === undefined || this.profiles?.find(project.profile) == null ? '' : project.profile
+    } catch {
+      return ''
+    }
   }
 
   /** One model on the roster in v1: the user's chosen one. A requested name falls back to it. */

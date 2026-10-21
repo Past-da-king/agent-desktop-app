@@ -39,7 +39,7 @@ import type { DataStore } from './data'
 import type { StepBudget } from './budget'
 import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
-import { buildSystemPrompt } from './prompt'
+import { buildSystemPrompt, type ProjectContext } from './prompt'
 import { quietTapNote } from './openui-prompt'
 import { prepareMessage, type PreparedMessage } from './attachment-text'
 import { branchChat, chatOf, chatTag, handoffText, threadFor } from './chat-lines'
@@ -53,6 +53,7 @@ import {
   type Classifier,
 } from './chat-route'
 import { describeRun, finishRun, runStarted } from './run-detail'
+import { viaLabel, type ChatVia } from '../tools/projects'
 import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
 
@@ -158,6 +159,9 @@ interface ChatLine {
 /** A joined message the run has not read after this long is started alongside instead, so it is never stuck. */
 export const JOIN_PICKUP_MS = 120_000
 
+/** How long the first turn after New chat waits for the summary of what came before. */
+const CARRY_WAIT_MS = 20_000
+
 export class Runner {
   private readonly store: DataStore
   private readonly settings: SettingsView
@@ -254,6 +258,26 @@ export class Runner {
 
     const row = await this.addUserItem(line.chat, clean, JSON.stringify({ ...meta, route: 'pending' }))
     await this.routeBusy(line, row.id, clean, prepared, attachments.length > 0)
+  }
+
+  /**
+   * A message from another chat: the main agent starting or steering a project chat, or a project chat writing to
+   * the main thread (tools/projects.ts). It shows in `chat` labelled with who sent it and runs that chat's turn like
+   * a message from the person; while the chat is busy it joins the running work. Never waits for the turn.
+   */
+  async receive(chat: string, text: string, via: ChatVia): Promise<void> {
+    const clean = text.trim()
+    if (clean === '') return
+    const line = this.line(chat)
+    const meta = JSON.stringify({ ...chatTag(chat), via: via as unknown as JsonObject })
+    const said = `${viaLabel(via)} ${clean}`
+    if (!line.running) {
+      void this.begin(line, said, [], { text: clean, meta })
+      return
+    }
+    const row = await this.addUserItem(chat, clean, meta)
+    line.steer.push({ text: said, images: [], itemId: row.id, at: this.now() })
+    this.emitFor(chat, { type: 'chat_changed' })
   }
 
   /** Same task joins, different work goes alongside; see chat-route.ts. */
@@ -371,8 +395,13 @@ export class Runner {
 
   /** A new chat with this message's chat history up to and including it. Returns the new chat id. */
   async branch(itemId: string): Promise<string> {
+    const point = await this.store.get('chat_item', itemId)
     const result = await branchChat(this.store, itemId, this.now)
-    if (result === null) throw new Error('That message is gone.')
+    if (result === null || point === null) throw new Error('That message is gone.')
+    // A branch of a project chat is a chat in the same project.
+    const from = chatOf(point)
+    const project = from === MAIN_CHAT ? undefined : (await this.store.list('project')).find((each) => each.chats.includes(from))
+    if (project !== undefined) await this.store.upsert('project', { id: project.id, chats: [...project.chats, result.chat] })
     this.emitFor(result.chat, { type: 'chat_changed' })
     return result.chat
   }
@@ -708,6 +737,9 @@ export class Runner {
     const rows = (await this.store.list('chat_item')).filter((row) => chatOf(row) === line.chat)
     const notes: string[] = []
 
+    const carry = await this.carriedSummary(rows)
+    if (carry !== '') notes.push(`[The user started fresh in this chat. Where things stood before (for you to keep in mind; do not repeat it back):]\n${carry}\n[End of where things stood.]`)
+
     const handoff = rows.find((row) => row.kind === 'notice' && parseMeta(row.meta)['handoff'] === true)
     if (handoff !== undefined) {
       const history = handoffText(rows.filter((row) => row.createdAt <= handoff.createdAt))
@@ -728,6 +760,32 @@ export class Runner {
       await this.patchMeta(row.id, { told: true })
     }
     return notes.length === 0 ? text : `${notes.join('\n\n')}\n\n${text}`
+  }
+
+  /**
+   * After New chat in the main thread: the summary the memory service wrote onto the divider (memory/service.ts
+   * compressChat), handed over once, on the first turn after it. The summary may still be on its way: it is waited
+   * for a little, and if it never comes the last messages before the divider stand in for it.
+   */
+  private async carriedSummary(rows: ChatItem[]): Promise<string> {
+    const divider = rows.filter((row) => row.kind === 'notice' && parseMeta(row.meta)['divider'] === true).sort((a, b) => b.createdAt - a.createdAt)[0]
+    if (divider === undefined) return ''
+    let meta = parseMeta(divider.meta)
+    if (meta['compress'] === undefined || meta['carried'] === true) return ''
+    for (let waited = 0; meta['compress'] === 'pending' && waited < CARRY_WAIT_MS; waited += 500) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      meta = parseMeta((await this.store.get('chat_item', divider.id))?.meta ?? '{}')
+    }
+    let carry = typeof meta['carry'] === 'string' ? meta['carry'].trim() : ''
+    if (carry === '') {
+      carry = rows
+        .filter((row) => row.createdAt < divider.createdAt && (row.kind === 'user' || row.kind === 'agent') && row.text.trim() !== '')
+        .slice(-10)
+        .map((row) => `${row.kind === 'user' ? 'User' : 'You'}: ${clip(row.text.trim(), 600)}`)
+        .join('\n')
+    }
+    await this.patchMeta(divider.id, { carried: true })
+    return carry
   }
 
   private resolveModel():
@@ -838,6 +896,7 @@ export class Runner {
       helperModel: model,
       liveHelpers: this.helpers?.live() ?? [],
       ...this.profilePrompt(),
+      ...(await this.projectPrompt(chat)),
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
@@ -877,7 +936,26 @@ export class Runner {
     }
   }
 
-  private async cliSystem(text: string, role: 'main' | 'routine', routineName?: string): Promise<string> {
+  /**
+   * What the prompt says about projects: in a project chat, the project it belongs to (its description, folder and
+   * the profile its helpers use); in the main thread, the projects there are.
+   */
+  private async projectPrompt(chat: string): Promise<{ project?: ProjectContext | null; projectNames?: string[] }> {
+    try {
+      const projects = await this.store.list('project')
+      const project = chat === MAIN_CHAT ? undefined : projects.find((each) => each.chats.includes(chat))
+      if (project === undefined) return chat === MAIN_CHAT ? { projectNames: projects.filter((each) => !each.hidden).map((each) => each.name) } : {}
+      const profiles = this.profilePrompt().profiles ?? []
+      const profile = profiles.find((each) => each.id === project.profile) ?? profiles.find((each) => each.general)
+      return {
+        project: { id: project.id, name: project.name, description: project.description, path: project.path, profile: profile?.name ?? 'General' },
+      }
+    } catch {
+      return {}
+    }
+  }
+
+  private async cliSystem(text: string, role: 'main' | 'routine', routineName?: string, chat: string = MAIN_CHAT): Promise<string> {
     const current = this.settings.get()
     return buildSystemPrompt({
       settings: current,
@@ -892,6 +970,7 @@ export class Runner {
       helperModel: current.cli === 'codex' ? 'Codex' : 'Claude',
       liveHelpers: this.helpers?.live() ?? [],
       ...this.profilePrompt(),
+      ...(role === 'main' ? await this.projectPrompt(chat) : {}),
       canDelegate: this.helpers !== undefined,
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
@@ -918,7 +997,7 @@ export class Runner {
         cli: current.cli === '' ? 'claude' : current.cli,
         thread: threadFor(chat),
         tools: this.tools,
-        system: await this.cliSystem(text, 'main'),
+        system: await this.cliSystem(text, 'main', undefined, chat),
         prompt: text,
         images,
         ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
