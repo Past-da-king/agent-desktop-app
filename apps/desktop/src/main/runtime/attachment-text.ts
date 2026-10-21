@@ -192,8 +192,11 @@ function wordText(buf: Buffer): string | null {
       part.text
         .replace(/<w:tab\/>/g, '\t')
         .replace(/<w:br[^>]*\/>/g, '\n')
-        .replace(/<\/w:p>/g, '\n')
+        // A table row reads as one line of tab-separated cells.
+        .replace(/<\/w:p>\s*<\/w:tc>/g, '\t')
         .replace(/<\/w:tc>/g, '\t')
+        .replace(/\t?<\/w:tr>/g, '\n')
+        .replace(/<\/w:p>/g, '\n')
         .replace(/<[^>]+>/g, ''),
     )
     .join('\n')
