@@ -290,6 +290,21 @@ describe('the prompt', () => {
     db.close()
   })
 
+  it('nothing in the main prompt tells the agent to raise old things: memories, the day page, goals and tasks are background', () => {
+    const text = buildSystemPrompt({
+      ...base,
+      memories: [{ ...note('w', 'Where we are'), id: 'where-we-are', pinned: true }, note('m2', 'Acme statement')],
+      goals: [{ id: 'g1', createdAt: 1, title: 'Ship the site', why: '', status: 'open' }],
+      latestUserText: 'when does the acme statement come',
+      role: 'main',
+    })
+    expect(text).toContain(FOCUS_LINE)
+    expect(text).not.toContain('pick up from it')
+    expect(text).toContain('not news to tell the user')
+    expect(text).toContain('do not list them or remind the user of them unless they ask')
+    expect(text).toContain('never recite them or raise them unprompted')
+  })
+
   it('in the main thread: the projects there are and how to hand work to them', () => {
     const text = buildSystemPrompt({ ...base, memories: [], latestUserText: 'hi', role: 'main', projectNames: ['Acme finance', 'Guavas'] })
     expect(text).toContain('PROJECTS: Acme finance, Guavas.')

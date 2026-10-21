@@ -96,7 +96,7 @@ describe('end-of-day pass', () => {
 
     // A fresh chat sees it: the pinned page is in every new conversation's prompt.
     const system = buildSystemPrompt({ settings: DEFAULT_SETTINGS, now: new Date(clock), platform: 'win32', memories: await store.list('memory'), goals: [], tasks: [], latestUserText: 'hi', timeZone: 'UTC' })
-    expect(system).toContain('CORE MEMORIES (pinned)')
+    expect(system).toContain('CORE MEMORIES (pinned')
     expect(system).toContain('Send Ben the summary.')
   })
 
