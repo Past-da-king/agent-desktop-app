@@ -55,6 +55,13 @@ describe('the old single choice becomes an account', () => {
     expect(migrateLegacyAccount(settings, secrets)).toBeNull()
   })
 
+  it('a plan signed in beside an API key becomes a second account, ready to pick', () => {
+    const { settings, secrets } = fresh({ mode: 'api_key', provider: 'opencode_go', model: 'deepseek-v4.1-flash', hasKey: true, cli: 'claude', cliModel: 'opus' })
+    migrateLegacyAccount(settings, secrets)
+    expect(settings.get().accounts.map((a) => [a.id, a.kind, a.model])).toEqual([[LEGACY_ACCOUNT, 'api', 'deepseek-v4.1-flash'], ['plan-claude', 'claude', 'opus']])
+    expect(settings.get().ai.main.account).toBe(LEGACY_ACCOUNT)
+  })
+
   it('moves a plan set-up, and does nothing on a fresh install', () => {
     const { settings, secrets } = fresh({ mode: 'subscription', cli: 'claude', cliModel: 'opus' })
     expect(migrateLegacyAccount(settings, secrets)).toMatchObject({ kind: 'claude', model: 'opus', label: 'Claude plan' })

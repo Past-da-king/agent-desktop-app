@@ -39,7 +39,13 @@ export function migrateLegacyAccount(settings: SettingsLike, secrets: SecretsLik
     secrets.set(keyNameFor(LEGACY_ACCOUNT), oldKey)
     legacy.hasKey = true
   }
-  settings.save({ accounts: [legacy], ai: { main: { account: LEGACY_ACCOUNT, model: '' }, helpers: { account: '', model: '' } } })
+  // A plan that was signed in beside an API key (the old AI step kept both) becomes a second account, so it is
+  // there to pick for a project without setting it up again.
+  const plan: AiAccount[] =
+    legacy.kind === 'api' && (current.cli === 'claude' || current.cli === 'codex')
+      ? [{ id: `plan-${current.cli}`, label: current.cli === 'codex' ? 'ChatGPT plan' : 'Claude plan', kind: current.cli, model: current.cliModel.trim(), hasKey: false }]
+      : []
+  settings.save({ accounts: [legacy, ...plan], ai: { main: { account: LEGACY_ACCOUNT, model: '' }, helpers: { account: '', model: '' } } })
   return legacy
 }
 
