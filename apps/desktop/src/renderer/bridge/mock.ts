@@ -781,10 +781,10 @@ export const mockAgent: AgentApi = {
       if (point === undefined) throw new Error('That message is gone.')
       const from = String(parseMeta(point.meta)['chat'] ?? MAIN_CHAT)
       const chat = `c${newId('b').replace(/[^a-z0-9]/gi, '').slice(0, 16)}`
-      const history = rows.chat_item.filter(
+      const ordered = rows.chat_item.filter((item) => String(parseMeta(item.meta)['chat'] ?? MAIN_CHAT) === from).sort((a, b) => a.createdAt - b.createdAt)
+      const cut = ordered.findIndex((item) => item.id === point.id)
+      const history = ordered.slice(0, cut + 1).filter(
         (item) =>
-          String(parseMeta(item.meta)['chat'] ?? MAIN_CHAT) === from &&
-          item.createdAt <= point.createdAt &&
           ['user', 'agent', 'report', 'notice', 'activity'].includes(item.kind) &&
           parseMeta(item.meta)['helper'] === undefined,
       )

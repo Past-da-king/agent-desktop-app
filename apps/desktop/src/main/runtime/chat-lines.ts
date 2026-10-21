@@ -96,8 +96,11 @@ export async function branchChat(store: DataStore, itemId: string, now: () => nu
   const point = await store.get('chat_item', itemId)
   if (point === null) return null
   const from = chatOf(point)
+  // The store lists rows in the order they were written (time, then a clock that never ties), so the cut is
+  // by position: two rows written in the same millisecond still fall on the right side of it.
   const all = (await store.list('chat_item')).filter((row) => chatOf(row) === from)
-  const history = all.filter((row) => row.createdAt <= point.createdAt && (row.id === point.id || copyable(row)))
+  const cut = all.findIndex((row) => row.id === point.id)
+  const history = all.slice(0, cut + 1).filter((row) => row.id === point.id || copyable(row))
   const parentTitle = chatTitle(all)
   const chat = newChatId()
 
@@ -112,7 +115,10 @@ export async function branchChat(store: DataStore, itemId: string, now: () => nu
     })
   }
 
-  const turns = (await store.list('turn')).filter((turn) => turn.thread === threadFor(from) && turn.createdAt <= point.createdAt)
+  const turns = transcriptUpTo(
+    (await store.list('turn')).filter((turn) => turn.thread === threadFor(from) && turn.createdAt <= point.createdAt),
+    point,
+  )
   for (const turn of turns) {
     await store.upsert('turn', { thread: threadFor(chat), json: turn.json, createdAt: turn.createdAt })
   }
@@ -132,6 +138,39 @@ export async function branchChat(store: DataStore, itemId: string, now: () => nu
     }),
   })
   return { chat, title, copiedRows: history.length, copiedTurns: turns.length }
+}
+
+/** The text blocks of a stored model message, joined. */
+function turnText(json: string): { role: string; text: string } {
+  try {
+    const parsed = JSON.parse(json) as { role?: unknown; blocks?: unknown }
+    const blocks = Array.isArray(parsed.blocks) ? parsed.blocks : []
+    const text = blocks
+      .map((block) => (block !== null && typeof block === 'object' && (block as { t?: unknown }).t === 'text' ? String((block as { text?: unknown }).text ?? '') : ''))
+      .join('\n')
+    return { role: String(parsed.role ?? ''), text }
+  } catch {
+    return { role: '', text: '' }
+  }
+}
+
+/**
+ * The model's transcript up to the message the branch is cut at. Turn rows are matched by what was said (a reply
+ * by its words, a typed message by its text), because several rows can share a millisecond; when nothing
+ * matches, everything up to that time is kept and the stored-history repair closes any open tool call.
+ */
+export function transcriptUpTo<T extends { json: string }>(turns: T[], point: Pick<ChatItem, 'kind' | 'text'>): T[] {
+  const words = point.text.trim()
+  if (words === '') return turns
+  const role = point.kind === 'user' ? 'USER' : point.kind === 'agent' ? 'ASSISTANT' : ''
+  if (role === '') return turns
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i]
+    if (turn === undefined) continue
+    const said = turnText(turn.json)
+    if (said.role === role && said.text.includes(words)) return turns.slice(0, i + 1)
+  }
+  return turns
 }
 
 /** The conversation as plain lines, for a branch whose first turn cannot carry the transcript itself. */
