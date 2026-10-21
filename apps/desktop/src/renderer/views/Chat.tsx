@@ -307,7 +307,20 @@ function Waiting({ item, full }: { item: ChatItem; full: JSX.Element }): JSX.Ele
   if (!pending || !inSidebar) return full
   const what = item.kind === 'approval' ? metaText(meta, 'summary') || item.text : item.text
   return (
-    <div className="wait-line" role="status">
+    <button
+      type="button"
+      className="wait-line"
+      title="Show it in the side panel"
+      onClick={() => {
+        // Brings the card into view in the side panel and points it out.
+        const card = document.querySelector<HTMLElement>(`.ny-card[data-item="${item.id}"]`)
+        if (card === null) return
+        card.scrollIntoView({ block: 'center' })
+        card.classList.remove('ny-flash')
+        void card.offsetWidth
+        card.classList.add('ny-flash')
+      }}
+    >
       <i>
         <Icon name={item.kind === 'approval' ? 'shield' : 'person'} size={14} />
       </i>
@@ -315,9 +328,9 @@ function Waiting({ item, full }: { item: ChatItem; full: JSX.Element }): JSX.Ele
         <b>{item.kind === 'approval' ? 'Waiting for your approval' : 'Waiting for your answer'}</b> {what}
       </span>
       <span className="wait-where">
-        In the side panel <Icon name="chev" size={14} />
+        Answer it in the side panel <Icon name="chev" size={14} />
       </span>
-    </div>
+    </button>
   )
 }
 

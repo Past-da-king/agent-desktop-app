@@ -17,6 +17,8 @@ export interface BrowserToolDeps {
 const MAX_TEXT = 8_000
 const MAX_PATH = 4_096
 const HANDOFF_DONE = 'Done, carry on'
+/** What the app answers for the person when they close the tab they were handed (index.ts onHandoffClosed). */
+export const HANDOFF_CLOSED = 'Closed the tab'
 const HANDOFF_SKIP = 'Skip'
 
 export function browserTools(deps: BrowserToolDeps): Tool[] {
@@ -255,6 +257,7 @@ function handoffTool(deps: BrowserToolDeps): Tool {
         if (answer === null) return 'No one is around to help right now.'
         if (answer === NO) return TURNED_DOWN
         if (answer === HANDOFF_SKIP) return 'The user skipped it.'
+        if (answer === HANDOFF_CLOSED) return 'The user closed that tab without saying they were done. Do not reopen it on your own; tell them what you still need, in one line.'
         return 'The user says they are done. Read the page to check.'
       } finally {
         deps.browser.setAgentDriving(true)

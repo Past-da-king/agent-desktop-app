@@ -126,6 +126,8 @@ export interface AgentBrowserOptions {
   partition?: string
   /** Where the person's own tabs open until they pick another browser profile. Defaults to `partition`. */
   personPartition?: string
+  /** The person closed the tab an agent handed them (browser_handoff), so its waiting question can be answered. */
+  onHandoffClosed?: () => void
   maxTabs?: number
   onState?: (state: BrowserState) => void
   openExternal?: (url: string) => Promise<void>
@@ -144,6 +146,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private current: string
   private readonly maxTabs: number
   private readonly onState: (state: BrowserState) => void
+  private readonly onHandoffClosed: () => void
   private readonly openExternal: (url: string) => Promise<void>
   private readonly runDir: string
   private readonly downloadsDir: string
@@ -192,6 +195,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.current = this.partition
     this.maxTabs = Math.max(1, options.maxTabs ?? MAX_TABS)
     this.onState = options.onState ?? (() => undefined)
+    this.onHandoffClosed = options.onHandoffClosed ?? (() => undefined)
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
 
     const root = options.tempRoot ?? tmpdir()
@@ -353,10 +357,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const [tab] = this.tabs.splice(index, 1)
     if (tab === undefined) return
     for (const [owner, tabId] of this.ownerTabs) if (tabId === tab.id) this.ownerTabs.delete(owner)
-    // Closing the tab the person was using hands control back.
+    // Closing the tab the person was using hands control back; one an agent handed them answers its wait.
     if (this.personTab === tab.id) {
+      const handedOver = this.handoffReason !== ''
       this.personTab = null
       this.handoffReason = ''
+      this.expanded = false
+      if (handedOver) this.onHandoffClosed()
     }
     this.inputCss.delete(tab.id)
     // An embedded page ends when the renderer drops its <webview> (it no longer sees the tab); an offscreen one is closed here.
@@ -391,7 +398,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (url === null) return
     const tab = this.shownTab()
     if (tab === null || tab.wc.isDestroyed()) {
-      await this.createTab(url)
+      // The person's first page: their tab, so it takes their clicks straight away.
+      const made = await this.createTab(url)
+      if (made !== null) {
+        this.personTab = made.id
+        for (const each of this.tabs) void this.refreshInputGuard(each)
+        this.emit()
+      }
       return
     }
     // Typing an address in a tab makes it the person's tab.
@@ -1430,8 +1443,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   setAgentDriving(on: boolean, reason = ''): void {
-    // Off: the person takes the tab in question (the agent's own when it asks for help, else the one in front).
-    this.personTab = on ? null : ((this.activeTab() ?? this.shownTab())?.id ?? null)
+    // Off: the person takes the tab in question: the asking agent's own when it hands over, else the one in front
+    // of them (whatever profile it is in; the person's own profile is only where their NEW tabs open).
+    const asking = currentOwner() !== undefined
+    this.personTab = on ? null : ((asking ? (this.activeTab() ?? this.shownTab()) : this.shownTab())?.id ?? null)
     this.handoffReason = on ? '' : reason
     // A handoff opens the page full size so the person can sign in or pass a check comfortably;
     // handing back puts it in the panel again.
@@ -1655,13 +1670,24 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         this.emit()
         return { action: 'deny' }
       }
+      const persons = tab.id === this.personTab
       if (this.tabs.length + this.pending.size >= this.maxTabs) {
+        // The person clicked a link that wants a new tab, but the tabs are full: open it right here, as a click would.
+        if (persons) {
+          void tab.wc.loadURL(policy.url).catch(() => undefined)
+          return { action: 'deny' }
+        }
         this.blockedReason = 'There are already five browser tabs open.'
         this.emit()
         return { action: 'deny' }
       }
-      // A popup opens with its opener's sign-ins.
-      void this.createTab(policy.url, tab.partition)
+      // A popup opens with its opener's sign-ins; one the person opened is theirs to use.
+      void this.createTab(policy.url, tab.partition).then((made) => {
+        if (made === null || !persons) return
+        this.personTab = made.id
+        for (const each of this.tabs) void this.refreshInputGuard(each)
+        this.emit()
+      })
       return { action: 'deny' }
     })
 

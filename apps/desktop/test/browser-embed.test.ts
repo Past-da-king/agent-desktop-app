@@ -110,7 +110,7 @@ describe('which <webview> may attach', () => {
     expect(guardWebview(prefs, params, waiting)).toBe(true)
     expect(prefs.preload).toBeUndefined()
     expect(prefs).toMatchObject({ nodeIntegration: false, nodeIntegrationInSubFrames: false, contextIsolation: true, sandbox: true, webviewTag: false, webSecurity: true, partition: 'persist:agent-browser' })
-    expect((params as Record<string, unknown>)['allowpopups']).toBe(false)
+    expect((params as Record<string, unknown>)['allowpopups']).toBe(true)
   })
 
   it('refuses a partition no tab is waiting for, and any first address but a blank page', () => {
