@@ -7,7 +7,7 @@ import { MicError, startCapture, type Capture } from '../voice/audio'
 import './dictation.css'
 
 const HIDDEN: DictationView = { phase: 'hidden', clean: false, text: '', interim: '', message: '', switchKeys: '' }
-const TAIL = 64
+const TAIL = 140
 
 /** The end of what was said, so the newest words are the ones in view. */
 export function tail(text: string, max = TAIL): string {
@@ -15,7 +15,7 @@ export function tail(text: string, max = TAIL): string {
   if (clean.length <= max) return clean
   const cut = clean.slice(clean.length - max)
   const space = cut.indexOf(' ')
-  return `...${space > 0 && space < 16 ? cut.slice(space + 1) : cut}`
+  return space > 0 && space < 16 ? cut.slice(space + 1) : cut
 }
 
 /**
@@ -142,7 +142,7 @@ export function DictationPill(): JSX.Element {
     )
   } else if (listening || view.phase === 'finishing' || view.phase === 'cleaning') {
     line = (
-      <span className="dpill-words">
+      <span className={`dpill-words${words.length < 44 ? ' short' : ''}`}>
         {view.phase === 'cleaning' ? <span className="dpill-hint">Cleaning up </span> : null}
         {view.phase === 'finishing' && words === '' ? <span className="dpill-hint">Finishing</span> : null}
         <span className="said">{said}</span>
@@ -154,7 +154,7 @@ export function DictationPill(): JSX.Element {
   }
 
   return (
-    <div className={`dpill-stage${preview ? ' preview' : ''}`}>
+    <div className={`dpill-stage${preview ? ' dpill-preview' : ''}`}>
       <div
         className={`dpill is-${view.phase}`}
         role="status"
