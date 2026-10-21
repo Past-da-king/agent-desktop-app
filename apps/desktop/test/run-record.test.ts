@@ -2,7 +2,7 @@
  * What the agent ran is kept with the run: the exact command, stdout and stderr apart, exit code and time, capped
  * with a plain "output trimmed", and redacted the way the logs are. Real child processes and a local fake AI.
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -13,11 +13,11 @@ import { DEFAULT_SETTINGS, providerFor, type ChatItem, type Settings } from '@ag
 import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { Store } from '../src/main/db'
 import { redact, redactSecrets } from '../src/main/logger'
-import { runFinished, runStarted, describeRun } from '../src/main/runtime/run-detail'
+import { expandPersisted, runFinished, runStarted, describeRun } from '../src/main/runtime/run-detail'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset } from '../src/main/runtime/toolset'
 import { codeTools } from '../src/main/tools/code'
-import { StreamCapture, takeRun } from '../src/main/tools/run-capture'
+import { markReleased, StreamCapture, takeRun } from '../src/main/tools/run-capture'
 import { shellTools } from '../src/main/tools/shell'
 import {
   capText,
@@ -227,6 +227,43 @@ describe('the record on the activity row', () => {
     const edit = { t: 'call' as const, id: 'd', name: 'Edit', input: { file_path: '/home/sam/a.txt', old_string: 'hello', new_string: 'hi' } }
     expect(runFinished(edit, 'The file has been updated.', false, 0, 2)?.stdout).toBe('Replaced:\nhello\n\nWith:\nhi')
     expect(describeRun(edit)).toBe('Edited a.txt')
+  })
+
+  it('on the plan, the wait for approval is not counted as running time', () => {
+    const call = { t: 'call' as const, id: 'toolu_wait', name: 'Bash', input: { command: 'npm test' } }
+    // Written at 0, the person approved at 260 s, it finished at 264.2 s.
+    markReleased('toolu_wait', 260_000)
+    const run = runFinished(call, 'ok', false, 0, 264_200)
+    expect(run?.ms).toBe(4_200)
+    expect(run?.waitedMs).toBe(260_000)
+    // No approval needed: the clock runs from the call.
+    expect(runFinished({ ...call, id: 'toolu_none' }, 'ok', false, 0, 900)?.ms).toBe(900)
+  })
+
+  it('reads back output Claude Code saved to a file, only from its own folder', async () => {
+    const root = temp()
+    const folder = join(root, 'projects', 'x', 'tool-results')
+    mkdirSync(folder, { recursive: true })
+    const saved = join(folder, 'be1dvscm1.txt')
+    const full = Array.from({ length: 3_000 }, (_, i) => String(i + 1)).join('\n')
+    writeFileSync(saved, full)
+    // The marker exactly as Claude Code 2.1 wrote it on this box.
+    const marker = (path: string): string =>
+      `<persisted-output>\nOutput too large (59.5KB). Full output saved to: ${path}\n\nPreview (first 2KB):\n1\n2\n3\n...\n</persisted-output>`
+    const read = await expandPersisted(marker(saved), [join(root)])
+    expect(read).toEqual({ text: full, persisted: true })
+    const outside = await expandPersisted(marker(saved), [join(root, 'elsewhere')])
+    expect(outside.text).toBe('1\n2\n3\n...')
+    expect(outside.note).toMatch(/outside the Claude folder/)
+    const missing = await expandPersisted(marker(join(root, 'gone.txt')), [root])
+    expect(missing.note).toMatch(/could not be read/)
+    expect(await expandPersisted('plain output', [root])).toEqual({ text: 'plain output', persisted: false })
+    // A huge saved file keeps its start and end only.
+    writeFileSync(saved, `START${'x'.repeat(200_000)}END`)
+    const big = await expandPersisted(marker(saved), [root])
+    expect(big.text.startsWith('START')).toBe(true)
+    expect(big.text.endsWith('END')).toBe(true)
+    expect(big.text).toContain('[output trimmed:')
   })
 
   it('redacts a secret in the command line on the row text', () => {

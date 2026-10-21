@@ -632,6 +632,17 @@ export function factsLayout(all: FactRow[], heroAmount: string | null, firstFact
   return { mode: 'tiles', rows, lines, bigFirst }
 }
 
+/**
+ * How wide a table column wants to be, from its longest cell: short columns ("Fast", "R150") stay as narrow as their
+ * words; columns of phrases get a real minimum so a sentence is not stacked one word per line; the table scrolls
+ * sideways when the columns together are wider than the card.
+ */
+export function columnWidth(label: string, cells: unknown[]): 'short' | 'mid' | 'long' {
+  const longest = Math.max(label.length, ...cells.map((cell) => fmt(cell).length))
+  if (longest <= 14) return 'short'
+  return longest > 40 ? 'long' : 'mid'
+}
+
 /** Two short choices sit side by side (Approve / Decline); more, or a column asked for, stack at full width. */
 export function buttonsLayout(labels: string[], direction: string | undefined): 'row' | 'column' | 'single' {
   if (labels.length === 1) return 'single'
