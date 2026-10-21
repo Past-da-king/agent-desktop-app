@@ -20,7 +20,8 @@ export interface UpkeepState {
 }
 
 const EMPTY: UpkeepState = { lastDay: '', lastRunAt: 0, history: [], report: null, log: [] }
-const MAX_LOG = 600
+// Big enough for a whole memory bank import (about 110 steps of a few pages each) to stay undoable page by page.
+const MAX_LOG = 3000
 const MAX_HISTORY = 60
 
 export class UpkeepFile {
