@@ -8,6 +8,8 @@
  * mutations and forms are not run. Pure TypeScript: no DOM, so it is unit tested directly.
  */
 
+import type { UiIcon } from './icon-words'
+
 export type V =
   | { t: 'str'; v: string }
   | { t: 'num'; v: number }
@@ -289,7 +291,8 @@ export function parse(src: string): Program {
 export const LIBRARY: Record<string, string[]> = {
   Stack: ['children', 'direction', 'gap', 'align', 'justify', 'wrap'],
   Card: ['children', 'sources'],
-  CardHeader: ['title', 'subtitle'],
+  // The icon is this app's own addition: an explicit Lucide name, else the card's kind decides (headerIcon).
+  CardHeader: ['title', 'subtitle', 'icon'],
   TextContent: ['text', 'size'],
   MarkDownRenderer: ['textMarkdown', 'variant'],
   Callout: ['variant', 'title', 'description', 'visible'],
@@ -655,6 +658,31 @@ export function actionsOf(v: unknown): UiAction[] {
   if (isAction(v)) return [v]
   if (Array.isArray(v)) return v.filter(isAction)
   return []
+}
+
+/**
+ * A card header's icon: the one the agent named, else what the card is (money, a plan, a table, links...), else a
+ * neutral mark. Never guessed from words in the title: "Your projects, 4 total" is not a money card.
+ */
+export function headerIcon(
+  explicit: UiIcon | null,
+  heroAmount: boolean,
+  kids: UiNode[],
+): UiIcon {
+  if (explicit !== null) return explicit
+  if (heroAmount) return 'payments'
+  const types = new Set(kids.map((k) => k.type))
+  if (types.has('Steps')) return 'checklist'
+  if (types.has('BarChart') || types.has('LineChart') || types.has('PieChart')) return 'trendUp'
+  if (types.has('Table')) return 'insights'
+  const lists = kids.filter((k) => k.type === 'ListBlock')
+  if (lists.length > 0) {
+    const items = lists.flatMap((l) => (Array.isArray(l.props['items']) ? (l.props['items'] as unknown[]).filter(isNode) : []))
+    const links = items.length > 0 && items.every((i) => actionsOf(i.props['action']).some((a) => a.kind === 'url'))
+    return links ? 'link' : 'checklist'
+  }
+  if (types.has('EntityList')) return 'info'
+  return 'insights'
 }
 
 // ---- Where each tap is (shared by the view and the tests) ----------------------------------------
