@@ -32,7 +32,7 @@ import {
 import type { DataStore } from './data'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
-import { runFinished, runStarted } from './run-detail'
+import { finishRun, runStarted } from './run-detail'
 import { redactSecrets } from '../logger'
 import {
   describeCall,
@@ -759,7 +759,7 @@ export class HelperManager implements HelperHost {
         const existing = await this.findRunningActivity(run.id, event.call.name)
         const started = this.runStarts.get(event.call.id) ?? Date.now()
         this.runStarts.delete(event.call.id)
-        const record = runFinished(event.call, event.result, isError, started)
+        const record = await finishRun(event.call, event.result, isError, started)
         if (existing !== null) {
           await this.store.upsert('chat_item', {
             id: existing,
