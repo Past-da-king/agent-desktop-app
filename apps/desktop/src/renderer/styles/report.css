@@ -78,7 +78,7 @@
 /* Something new arrived below while the person reads further up: one tap takes them to it. */
 .compose{position:relative}
 .new-below{position:absolute;top:-46px;left:50%;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:6px;height:36px;padding:0 14px 0 10px;border-radius:999px;background:var(--pc);color:var(--on-pc);font:500 13px/1 var(--font);box-shadow:0 4px 14px rgba(0,0,0,.14)}
-.new-below:hover{filter:brightness(.97)}
+.new-below:hover{background:color-mix(in srgb,var(--pc) 88%,var(--on-pc))}
 .ny-src-ic.mascot{background:none}
 
 /* The app's own hover label (ui/TipLayer.tsx), in place of Windows' black box. */
@@ -87,10 +87,11 @@
 @keyframes tip-in{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.tip{animation:none}}
 button.wait-line{width:100%;text-align:left;cursor:pointer}
-button.wait-line:hover{filter:brightness(.97)}
-.ny-card.ny-flash{animation:ny-flash 1.2s var(--effects)}
-@keyframes ny-flash{0%,60%{box-shadow:0 0 0 3px var(--primary)}100%{box-shadow:0 0 0 0 transparent}}
-@media (prefers-reduced-motion:reduce){.ny-card.ny-flash{animation:none;box-shadow:0 0 0 3px var(--primary)}}
+button.wait-line:hover{background:color-mix(in srgb,var(--tc) 90%,var(--on-tc))}
+.ny-card{position:relative}
+.ny-card.ny-flash::after{content:"";position:absolute;inset:-3px;border-radius:inherit;border:3px solid var(--primary);pointer-events:none;animation:ny-flash 1.2s var(--effects) forwards}
+@keyframes ny-flash{0%,60%{opacity:1}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.ny-card.ny-flash::after{animation:none;opacity:1}}
 
 /* The left rail folds from its own corner; the collapsed side panel keeps faces and counts. */
 .me-row{display:flex;align-items:flex-start;gap:4px}

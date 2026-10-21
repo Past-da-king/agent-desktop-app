@@ -126,3 +126,6 @@ kbd{font:500 12px/1 var(--font);padding:4px 7px;border-radius:8px;background:var
 .boot-wordmark{font:500 28px/1.2 var(--font);letter-spacing:-.5px;color:var(--on-bg)}
 .eyes ellipse{transform-box:fill-box;transform-origin:center;animation:blink 5.5s infinite}
 @keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+
+/* A screen loading from disk, drawn where it will appear. */
+.sheet-wait{padding:28px 32px;max-width:820px}

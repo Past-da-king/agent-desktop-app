@@ -10,6 +10,7 @@ export default defineConfig({
   resolve: {
     alias: { '@agent/core': resolve(__dirname, '../../packages/core/src/browser.ts') },
   },
+  build: { minify: 'esbuild', cssMinify: true, target: 'chrome130' },
   server: {
     port: 5173,
     strictPort: true,
