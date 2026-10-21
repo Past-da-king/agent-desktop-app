@@ -37,6 +37,7 @@ import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
 import { quietTapNote } from './openui-prompt'
+import { describeRun, runFinished, runStarted } from './run-detail'
 
 export interface SettingsView {
   get(): Settings
@@ -93,6 +94,8 @@ export interface RunnerDeps {
 interface ActivityRow {
   id: string
   text: string
+  /** When the call started, for how long a run took. */
+  started?: number
 }
 
 const MAX_RESULT_CHARS = 160
@@ -706,12 +709,14 @@ export class Runner {
 
   private async startActivity(call: ToolCallBlock): Promise<void> {
     const summary = describeCall(call)
+    // What it is running, so the row shows the command while it works.
+    const run = runStarted(call)
     const row = await this.store.upsert('chat_item', {
       kind: 'activity',
       text: summary,
-      meta: JSON.stringify({ tool: call.name, status: 'running', summary }),
+      meta: JSON.stringify({ tool: call.name, status: 'running', summary, ...(run === null ? {} : { run }) }),
     })
-    this.activities.set(call.id, { id: row.id, text: summary })
+    this.activities.set(call.id, { id: row.id, text: summary, started: Date.now() })
     this.emit({ type: 'chat_changed' })
   }
 
@@ -720,6 +725,8 @@ export class Runner {
     this.activities.delete(call.id)
     const summary = isError ? clip(result.split('\n')[0] ?? result, MAX_RESULT_CHARS) : describeCall(call)
     const meta: JsonObject = { tool: call.name, status: isError ? 'error' : 'done', summary }
+    const run = runFinished(call, result, isError, activity?.started ?? Date.now())
+    if (run !== null) meta['run'] = run as unknown as JsonObject
     const text = isError ? `${activity?.text ?? describeCall(call)} failed` : activity?.text ?? summary
 
     if (activity !== undefined) {
@@ -953,6 +960,9 @@ export function friendlyError(error: unknown): string {
 
 /** What the activity row says while a tool runs. Kept in one switch so every row reads the same. */
 export function describeCall(call: ToolCallBlock): string {
+  // Commands, code and files: what was run, with any secret in it redacted.
+  const run = describeRun(call)
+  if (run !== null) return run
   const input = call.input
   const title = stringField(input['title']) || stringField(input['summary'])
   switch (call.name) {
