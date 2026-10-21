@@ -1409,6 +1409,8 @@ export function describeCall(call: ToolCallBlock): string {
       return title === '' ? 'Created a routine' : `New routine: ${clip(title, 80)}`
     case 'routine_list':
       return 'Checked routines'
+    case 'routine_update':
+      return 'Changed a routine'
     case 'routine_delete':
       return 'Deleted a routine'
     default:

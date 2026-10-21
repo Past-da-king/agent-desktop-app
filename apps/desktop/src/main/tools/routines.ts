@@ -9,6 +9,7 @@
  * first. Listing and deleting do not need one.
  */
 import {
+  bool,
   enumOf,
   schema,
   str,
@@ -16,6 +17,7 @@ import {
   type TriggerRow,
 } from '@agent/core'
 
+import { BUILTIN_DELETE_REFUSED, isBuiltinRoutine } from '../memory/routine'
 import type { DataStore } from '../runtime/data'
 import { parseWhen } from './tasks'
 
@@ -23,7 +25,7 @@ const KINDS: Array<TriggerRow['kind']> = ['at', 'daily', 'interval']
 const MIN_INTERVAL_MINUTES = 15
 
 export function routineTools(store: DataStore, now: () => Date = () => new Date()): Tool[] {
-  return [routineCreate(store, now), routineList(store), routineDelete(store)]
+  return [routineCreate(store, now), routineList(store), routineUpdate(store, now), routineDelete(store)]
 }
 
 function routineCreate(store: DataStore, now: () => Date): Tool {
@@ -88,15 +90,51 @@ function routineList(store: DataStore): Tool {
       return rows
         .map((row) => {
           const paused = row.enabled ? '' : ' (paused)'
+          const builtin = isBuiltinRoutine(row) ? ' (built in: the app runs it; only its time and on/off change)' : ''
           const last =
             row.lastRunAt === null
               ? ''
               : ` | last ${new Date(row.lastRunAt).toISOString().slice(0, 16).replace('T', ' ')}: ${
                   row.lastResult === '' ? 'no result' : row.lastResult
                 }`
-          return `#${row.id} ${row.name} [${row.kind} ${row.spec}]${paused}: ${clip(row.prompt, 100)}${last}`
+          return `#${row.id} ${row.name} [${row.kind} ${row.spec}]${paused}${builtin}: ${clip(row.prompt, 100)}${last}`
         })
         .join('\n')
+    },
+  }
+}
+
+function routineUpdate(store: DataStore, now: () => Date): Tool {
+  return {
+    spec: {
+      name: 'routine_update',
+      description:
+        "Change when a routine runs or switch it on or off, by id. spec uses the routine's own kind (HH:mm for daily). Built-in routines such as End of day can change only these two things.",
+      schema: schema(['id'], {
+        id: str('Routine id'),
+        spec: str("New time or interval, in the routine's kind"),
+        enabled: bool('true to switch it on, false to switch it off'),
+      }),
+    },
+    run: async (input, ctx) => {
+      const id = text(input['id']).trim()
+      const row = await store.get('trigger', id)
+      if (row === null) return `No routine #${id}.`
+      const spec = text(input['spec']).trim()
+      const enabled = typeof input['enabled'] === 'boolean' ? input['enabled'] : null
+      if (spec === '' && enabled === null) return 'Nothing to change: pass spec, enabled or both.'
+      if (spec !== '') {
+        const problem = specProblem(row.kind, spec, now().getTime())
+        if (problem !== null) return `Not changed: ${problem}`
+      }
+      const said = [spec === '' ? '' : `runs ${plainSchedule(row.kind, spec)}`, enabled === null ? '' : enabled ? 'switched on' : 'switched off']
+        .filter((part) => part !== '')
+        .join(' and ')
+      const approved = await ctx.approve(`Change a routine: ${row.name}`, `It ${said}.`)
+      if (!approved) return 'The user declined.'
+      await store.upsert('trigger', { id: row.id, ...(spec === '' ? {} : { spec }), ...(enabled === null ? {} : { enabled }) })
+      await ctx.activity(`Changed routine: ${row.name}`, { tool: 'routine_update' })
+      return `Routine #${row.id} now ${said}.`
     },
   }
 }
@@ -112,6 +150,7 @@ function routineDelete(store: DataStore): Tool {
       const id = text(input['id']).trim()
       const row = await store.get('trigger', id)
       if (row === null) return `No routine #${id}.`
+      if (isBuiltinRoutine(row)) return BUILTIN_DELETE_REFUSED
       await store.remove('trigger', row.id)
       await ctx.activity(`Removed routine: ${row.name}`, { tool: 'routine_delete' })
       return 'Deleted.'
