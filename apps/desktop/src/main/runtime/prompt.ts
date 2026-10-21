@@ -74,6 +74,7 @@ export function projectLines(project: ProjectContext): string[] {
   if (project.path.trim() !== '') out.push(`- Its folder is ${project.path.trim()}. Work there by default: files, commands and code for this project live in it.`)
   out.push(`- Its profile is ${project.profile}: helpers you start here work in it (their accounts and logins) unless the job truly needs another.`)
   out.push('- Stay inside this project. You are its main agent: keep to the high-level picture, break big work into parts and hand each to helpers with delegate (they work in this project\'s profile and folder, and think with its helpers AI), then say in one short line where things stand.')
+  out.push('- Helpers, not new chats: a one-off job, a try, a check or a fix goes to a helper with delegate and its result comes back to this chat. Start another project chat with project_chat_start only when the user asks for one, or for a separate long-running line of work they will come back to on its own.')
   out.push(...projectMemoryLines(project.name))
   out.push('- Something for the main agent, another project or the user\'s main thread: message_main.')
   return out
