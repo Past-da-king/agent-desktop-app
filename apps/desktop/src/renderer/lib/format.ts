@@ -118,6 +118,8 @@ const KIND_LABELS: Record<MemoryKind, string> = {
   'how-to': 'How-to',
   event: 'Event',
   skill: 'Skill',
+  organisation: 'Organisation',
+  project: 'Project',
 }
 
 export function kindLabel(kind: MemoryKind): string {
