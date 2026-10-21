@@ -1204,7 +1204,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     // The tab's developer tools record its network and console from here, before its first real page.
     if (tab.ready) watchDevtools(wc)
     // Every page from here on sees a whole Chrome window (presence.ts), before its own scripts run.
-    if (tab.ready) await tab.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PRESENCE_SCRIPT }).catch(() => undefined)
+    // Chromium only runs such scripts while the Page domain is on.
+    if (tab.ready) {
+      await tab.cdp.send('Page.enable').catch(() => undefined)
+      await tab.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PRESENCE_SCRIPT }).catch(() => undefined)
+    }
     await this.applyEmulation(tab)
   }
 
