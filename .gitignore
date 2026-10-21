@@ -10,3 +10,4 @@ logs
 logs-driver.out
 shots-*
 .night/
+dist-headless/
