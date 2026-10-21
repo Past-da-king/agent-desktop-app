@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, GENERAL_PROFILE, PROFILE_COLORS, PROVIDERS } from '@agent/core'
+import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS } from '@agent/core'
 import type {
   AccountRules,
   AgentApi,
@@ -207,6 +207,70 @@ function clearChatTimers(): void {
   agentTimer = null
   activityTimer = null
 }
+
+/** Chats with a mock run going, and the timers that finish it. */
+const mockRuns = new Map<string, Array<ReturnType<typeof setTimeout>>>()
+
+function chatEvent(chat: string, event: ChatEvent): ChatEvent {
+  return chat === MAIN_CHAT ? event : ({ ...event, chat } as ChatEvent)
+}
+
+/** A short pretend run in one chat: a tool step, then a reply. */
+function mockRun(chat: string, ms: number, reply?: string): void {
+  const tag = chat === MAIN_CHAT ? {} : { chat }
+  for (const timer of mockRuns.get(chat) ?? []) clearTimeout(timer)
+  running = true
+  emitChat(chatEvent(chat, { type: 'run_started' }))
+  emitChat(chatEvent(chat, { type: 'thinking', step: 1 }))
+  const step = setTimeout(() => {
+    insertChat({
+      kind: 'activity',
+      text: 'Searched memory, 1 found',
+      meta: JSON.stringify({ tool: 'memory_search', status: 'done', summary: 'Searched memory, 1 found', ...tag }),
+    })
+  }, Math.min(300, ms / 2))
+  const done = setTimeout(() => {
+    insertChat({
+      kind: 'agent',
+      text:
+        reply ??
+        "Got it. I've added that to the current goal and I'll tell you as soon as it's done. Anything that spends money still waits for your OK.",
+      meta: JSON.stringify(tag),
+    })
+    mockRuns.delete(chat)
+    running = mockRuns.size > 0
+    emitChat(chatEvent(chat, { type: 'run_finished' }))
+  }, ms)
+  mockRuns.set(chat, [step, done])
+}
+
+/** A different job sent while a chat was busy: a side run with its own block, done after a few seconds. */
+function mockAlongside(chat: string, text: string, userItem: string): void {
+  const tag = chat === MAIN_CHAT ? {} : { chat }
+  const helper = insertChat({
+    kind: 'helper',
+    text,
+    meta: JSON.stringify({ label: text.split(/\s+/).slice(0, 4).join(' '), state: 'working', summary: 'Thinking', side: true, ask: userItem, startedAt: Date.now(), ...tag }),
+  })
+  patchCard(helper.id, { id: helper.id })
+  setTimeout(() => {
+    insertChat({
+      kind: 'activity',
+      text: 'Read a page',
+      meta: JSON.stringify({ tool: 'web_fetch', status: 'done', summary: 'Read a page', helper: helper.id, ...tag }),
+    })
+  }, 900)
+  setTimeout(() => {
+    patchCard(helper.id, {
+      state: 'done',
+      endedAt: Date.now(),
+      summary: 'Done',
+      result: `Done. ${text.replace(/[.?!]+$/, '')}: I looked into it and the short answer is yes. The details are in the steps below.`,
+    })
+  }, 3200)
+}
+
+const pastedPreviews = new Map<string, string>()
 
 function signInError(email: string, password: string): string | null {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'That email address does not look right.'
@@ -650,47 +714,79 @@ export const mockAgent: AgentApi = {
   },
 
   chat: {
-    async send(text, attachments) {
+    async send(text, attachments, chat) {
       const value = text.trim()
-      if (value === '') return
-      insertChat({ kind: 'user', text: value, meta: JSON.stringify({ attachments: attachments ?? [] }) })
-      running = true
-      runState.running = true
-      emitChat({ type: 'run_started' })
-      emitChat({ type: 'thinking', step: 1 })
-      clearChatTimers()
-      activityTimer = setTimeout(() => {
-        insertChat({
-          kind: 'activity',
-          text: 'Searched memory, 1 found',
-          meta: JSON.stringify({ tool: 'memory_search', status: 'done', summary: 'Searched memory, 1 found' }),
-        })
-      }, 300)
-      agentTimer = setTimeout(() => {
-        insertChat({
-          kind: 'agent',
-          text: "Got it. I've added that to the current goal and I'll tell you as soon as it's done. Anything that spends money still waits for your OK.",
-          meta: '{}',
-        })
-        running = false
-        runState.running = false
-        agentTimer = null
-        activityTimer = null
-        emitChat({ type: 'run_finished' })
-      }, 800)
+      const files = attachments ?? []
+      if (value === '' && files.length === 0) return
+      const target = chat === undefined || chat === '' ? MAIN_CHAT : chat
+      const tag = target === MAIN_CHAT ? {} : { chat: target }
+      if (mockRuns.has(target)) {
+        // Busy: the same words the real router checks first decide it here; anything else goes alongside.
+        const join = /^(also|and |plus|wait|actually|no,|instead|sorry|make sure|btw|by the way)/i.test(value)
+        const user = insertChat({ kind: 'user', text: value, meta: JSON.stringify({ attachments: files, ...tag, route: join ? 'join' : 'alongside' }) })
+        if (!join) mockAlongside(target, value, user.id)
+        return
+      }
+      insertChat({ kind: 'user', text: value, meta: JSON.stringify({ attachments: files, ...tag }) })
+      mockRun(target, 800)
     },
-    async stop() {
-      if (!running) return
-      clearChatTimers()
-      running = false
-      runState.running = false
-      insertChat({ kind: 'notice', text: 'Stopped', meta: '{}' })
-      emitChat({ type: 'run_finished' })
+    async stop(chat) {
+      const target = chat === undefined || chat === '' ? MAIN_CHAT : chat
+      const timers = mockRuns.get(target)
+      if (timers === undefined) return
+      for (const timer of timers) clearTimeout(timer)
+      mockRuns.delete(target)
+      running = mockRuns.size > 0
+      insertChat({ kind: 'notice', text: 'Stopped', meta: JSON.stringify(target === MAIN_CHAT ? {} : { chat: target }) })
+      emitChat(target === MAIN_CHAT ? { type: 'run_finished' } : { type: 'run_finished', chat: target })
     },
-    async state() {
-      runState.running = running
-      runState.waiting = waitingIds()
-      return { ...runState, waiting: [...runState.waiting] }
+    async state(chat) {
+      const target = chat === undefined || chat === '' ? null : chat
+      const waiting = waitingIds().filter((id) => {
+        if (target === null) return true
+        const row = rows.chat_item.find((item) => item.id === id)
+        const owner = row === undefined ? MAIN_CHAT : String(parseMeta(row.meta)['chat'] ?? MAIN_CHAT)
+        return owner === target
+      })
+      return { running: target === null ? mockRuns.size > 0 : mockRuns.has(target), waiting }
+    },
+    async states() {
+      const chats = new Set<string>(mockRuns.keys())
+      const byChat = new Map<string, string[]>()
+      for (const id of waitingIds()) {
+        const row = rows.chat_item.find((item) => item.id === id)
+        const owner = row === undefined ? MAIN_CHAT : String(parseMeta(row.meta)['chat'] ?? MAIN_CHAT)
+        byChat.set(owner, [...(byChat.get(owner) ?? []), id])
+        chats.add(owner)
+      }
+      const live = rows.chat_item.filter((item) => item.kind === 'helper' && parseMeta(item.meta)['state'] === 'working')
+      for (const helper of live) chats.add(String(parseMeta(helper.meta)['chat'] ?? MAIN_CHAT))
+      return [...chats].map((chat) => ({
+        chat,
+        running: mockRuns.has(chat),
+        waiting: byChat.get(chat) ?? [],
+        alongside: live.filter((helper) => String(parseMeta(helper.meta)['chat'] ?? MAIN_CHAT) === chat).length,
+      }))
+    },
+    async branch(itemId) {
+      const point = rows.chat_item.find((item) => item.id === itemId)
+      if (point === undefined) throw new Error('That message is gone.')
+      const from = String(parseMeta(point.meta)['chat'] ?? MAIN_CHAT)
+      const chat = `c${newId('b').replace(/[^a-z0-9]/gi, '').slice(0, 16)}`
+      const history = rows.chat_item.filter(
+        (item) =>
+          String(parseMeta(item.meta)['chat'] ?? MAIN_CHAT) === from &&
+          item.createdAt <= point.createdAt &&
+          ['user', 'agent', 'report', 'notice', 'activity'].includes(item.kind) &&
+          parseMeta(item.meta)['helper'] === undefined,
+      )
+      const first = history.find((item) => item.kind === 'user')
+      const title = `${(first?.text ?? 'Chat').slice(0, 50)} (branch)`
+      for (const item of history) {
+        insertChat({ kind: item.kind, text: item.text, createdAt: item.createdAt, meta: JSON.stringify({ ...parseMeta(item.meta), chat, copiedFrom: item.id }) })
+      }
+      insertChat({ kind: 'notice', text: `Branched from "${(first?.text ?? 'Chat').slice(0, 60)}". Everything above is copied; the old chat is unchanged.`, meta: JSON.stringify({ chat, title, branch: true, branchOf: from }) })
+      return chat
     },
     async answer(itemId, answer) {
       patchCard(itemId, { answer })
@@ -705,17 +801,8 @@ export const mockAgent: AgentApi = {
       const meta = parseMeta(row.meta)
       const taps = Array.isArray(meta['taps']) ? meta['taps'].filter((t): t is string => typeof t === 'string') : []
       patchCard(itemId, { taps: taps.includes(message) ? taps : [...taps, message] })
-      running = true
-      runState.running = true
-      emitChat({ type: 'run_started' })
-      clearChatTimers()
-      agentTimer = setTimeout(() => {
-        insertChat({ kind: 'agent', text: `On it: ${label.trim() === '' ? 'your tap' : label.trim()}. I'll tell you when it's done.`, meta: '{}' })
-        running = false
-        runState.running = false
-        agentTimer = null
-        emitChat({ type: 'run_finished' })
-      }, 700)
+      const owner = String(meta['chat'] ?? MAIN_CHAT)
+      mockRun(owner, 700, `On it: ${label.trim() === '' ? 'your tap' : label.trim()}. I'll tell you when it's done.`)
     },
     onEvent(callback: (event: ChatEvent) => void): Unsubscribe {
       chatListeners.add(callback)
@@ -1060,7 +1147,24 @@ export const mockAgent: AgentApi = {
     async pickFolder() {
       return 'C:\\Users\\You\\Documents'
     },
+    async savePasted(name, mime, bytes) {
+      const safe = name.replace(/[\\/:*?"<>|]/g, '-') || 'Pasted image.png'
+      const path = `C:\\Users\\You\\AppData\\Roaming\\Agent\\attachments\\${safe}`
+      if (mime.startsWith('image/')) {
+        try {
+          pastedPreviews.set(path, URL.createObjectURL(new Blob([bytes.slice()], { type: mime })))
+        } catch {
+          // A preview is a nicety in the browser preview.
+        }
+      }
+      return { path, name: safe, mime, size: bytes.byteLength }
+    },
+    async clipboardFiles() {
+      return []
+    },
     async thumbnail(path) {
+      const pasted = pastedPreviews.get(path)
+      if (pasted !== undefined) return pasted
       if (!/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(path)) return null
       const raw = path.split(/[\\/]/).pop() ?? 'image'
       const name = raw.replace(/[<>&"]/g, '').slice(0, 24)

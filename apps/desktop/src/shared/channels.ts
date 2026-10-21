@@ -34,6 +34,8 @@ export const CHANNELS = {
     answer: 'agent:chat.answer',
     decide: 'agent:chat.decide',
     tap: 'agent:chat.tap',
+    states: 'agent:chat.states',
+    branch: 'agent:chat.branch',
   },
   routines: {
     runNow: 'agent:routines.runNow',
@@ -88,6 +90,8 @@ export const CHANNELS = {
     pickFolder: 'agent:files.pickFolder',
     register: 'agent:files.register',
     thumbnail: 'agent:files.thumbnail',
+    savePasted: 'agent:files.savePasted',
+    clipboardFiles: 'agent:files.clipboardFiles',
   },
   system: {
     info: 'agent:system.info',

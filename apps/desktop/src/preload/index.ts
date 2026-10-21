@@ -14,6 +14,7 @@ import type {
   BrowserBounds,
   BrowserState,
   ChatEvent,
+  ChatRunInfo,
   Decision,
   EntityMap,
   EntityName,
@@ -86,9 +87,12 @@ const api: AgentApi = {
   },
 
   chat: {
-    send: (text, attachments?: Attachment[]) => call<void>(CHANNELS.chat.send, text, attachments ?? []),
-    stop: () => call<void>(CHANNELS.chat.stop),
-    state: () => call<RunState>(CHANNELS.chat.state),
+    send: (text, attachments?: Attachment[], chat?: string) =>
+      call<void>(CHANNELS.chat.send, text, attachments ?? [], chat ?? ''),
+    stop: (chat?: string) => call<void>(CHANNELS.chat.stop, chat ?? ''),
+    state: (chat?: string) => call<RunState>(CHANNELS.chat.state, chat ?? ''),
+    states: () => call<ChatRunInfo[]>(CHANNELS.chat.states),
+    branch: (itemId: string) => call<string>(CHANNELS.chat.branch, itemId),
     answer: (itemId, answer) => call<void>(CHANNELS.chat.answer, itemId, answer),
     decide: (itemId, decision: Decision) => call<void>(CHANNELS.chat.decide, itemId, decision),
     tap: (itemId, label, message) => call<void>(CHANNELS.chat.tap, itemId, label, message),
@@ -171,6 +175,9 @@ const api: AgentApi = {
     },
     pickFolder: () => call<string | null>(CHANNELS.files.pickFolder),
     thumbnail: (path: string) => call<string | null>(CHANNELS.files.thumbnail, path),
+    savePasted: (name: string, mime: string, bytes: Uint8Array) =>
+      call<Attachment>(CHANNELS.files.savePasted, name, mime, bytes),
+    clipboardFiles: () => call<Attachment[]>(CHANNELS.files.clipboardFiles),
   },
 
   system: {

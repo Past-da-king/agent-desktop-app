@@ -5,6 +5,7 @@ import { basename, join } from 'node:path'
 import {
   app,
   BrowserWindow,
+  clipboard,
   Notification,
   dialog,
   globalShortcut,
@@ -30,6 +31,8 @@ import { HotkeyBinder, QuickAskWindow, quickAskPaths, type HotkeyStatus } from '
 import { StepBudget } from './runtime/budget'
 import { hostEnvironment } from './runtime/environment-host'
 import { HelperManager } from './runtime/helpers'
+import { clipboardAttachments } from './clipboard-files'
+import { savePastedFile } from './pasted'
 import { Runner } from './runtime/runner'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
@@ -568,8 +571,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
       apps,
       learned,
     }),
-    deliver: async (note) => {
-      if (runner !== null) await runner.deliver(note)
+    deliver: async (note, chat) => {
+      if (runner !== null) await runner.deliver(note, chat)
+    },
+    alongsideDone: async (chat, helperId) => {
+      if (runner !== null) await runner.alongsideDone(chat, helperId)
     },
     platform: process.platform,
     emit: (event) => broadcast(EVENTS.chat, event),
@@ -612,6 +618,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
       tray?.refresh()
     },
     isFocused: () => mainWindow?.isFocused() ?? false,
+    // Files the person attached may be opened by the agent without another ask, like files they picked.
+    allowFiles: (paths) => {
+      for (const path of paths) filePicks.add(path)
+    },
   })
   try {
     await runner.restore()
@@ -667,6 +677,14 @@ async function startServices(win: BrowserWindow): Promise<void> {
     dialogs,
     environment,
     apps,
+    pasted: {
+      save: async (name, mime, bytes) => {
+        const saved = savePastedFile(join(app.getPath('userData'), 'attachments'), name, mime, bytes)
+        filePicks.add(saved.path)
+        return saved
+      },
+      clipboardFiles: () => clipboardAttachments(clipboard),
+    },
     systemInfo: {
       platform: process.platform,
       arch: process.arch,
