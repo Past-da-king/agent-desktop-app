@@ -25,6 +25,11 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 6. Server: full freedom. One-command deploy, own headless browser, runs code and tools itself, relays blocked traffic through a linked device (PC or phone). Failover stays user-ranked. Assigned to C (relay after runtime + deploy).
 - Contract: lease rows are entity `turn_lease` ('turn' is taken by transcript rows); B owns adding device, device_command, turn_lease to EntityName; A writes device rows via store.upsert.
 
+## ADDITION (Ayanda, 01:50), acknowledged 02:10
+1. Phone base is the THIN app (0.13.0, about 30 to 60 MB, runtimes downloaded on first use). Never ship the 360 MB bundled build.
+2. Device tools are shared across linked devices: any agent on any brain can use another device's browser, notifications, files, approvals, shell. General layer: devices advertise tools, agents call with a device target or the router picks the best. Contract: protocol s11. Split: B = brain side (devices_list, device_tool, router, device arg on local tools); A = desktop serves its own tools to other brains; C = server serves its browser/shell and calls others; D = phone serves browser, notifications_read, files, notify/ask approval.
+3. Origin awareness stays (replies, links, files to the sending device).
+
 ## Workstreams (each a project chat; branch off `devices`)
 | # | Work | Branch / worktree | Status |
 |---|---|---|---|
