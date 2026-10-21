@@ -789,7 +789,7 @@ export const mockAgent: AgentApi = {
           parseMeta(item.meta)['helper'] === undefined,
       )
       const first = history.find((item) => item.kind === 'user')
-      const title = `${(first?.text ?? 'Chat').slice(0, 50)} (branch)`
+      const title = `Branch: ${(first?.text ?? 'Chat').slice(0, 50)}`
       for (const item of history) {
         insertChat({ kind: item.kind, text: item.text, createdAt: item.createdAt, meta: JSON.stringify({ ...parseMeta(item.meta), chat, copiedFrom: item.id }) })
       }
@@ -1150,7 +1150,8 @@ export const mockAgent: AgentApi = {
       ]
     },
     pathsFor(files: File[]) {
-      return files.map((file) => `C:\\Users\\You\\Downloads\\${file.name}`)
+      // A pasted screenshot has no file on disk (Electron gives ''), so it is saved first, as in the app.
+      return files.map((file) => (file.name === 'image.png' ? '' : `C:\\Users\\You\\Downloads\\${file.name}`))
     },
     async pickFolder() {
       return 'C:\\Users\\You\\Documents'
@@ -1160,7 +1161,9 @@ export const mockAgent: AgentApi = {
       const path = `C:\\Users\\You\\AppData\\Roaming\\Agent\\attachments\\${safe}`
       if (mime.startsWith('image/')) {
         try {
-          pastedPreviews.set(path, URL.createObjectURL(new Blob([bytes.slice()], { type: mime })))
+          let binary = ''
+          for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+          pastedPreviews.set(path, `data:${mime};base64,${btoa(binary)}`)
         } catch {
           // A preview is a nicety in the browser preview.
         }

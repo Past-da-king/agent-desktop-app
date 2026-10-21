@@ -117,7 +117,7 @@ export async function branchChat(store: DataStore, itemId: string, now: () => nu
     await store.upsert('turn', { thread: threadFor(chat), json: turn.json, createdAt: turn.createdAt })
   }
 
-  const title = short(`${parentTitle} (branch)`, 70)
+  const title = short(`Branch: ${parentTitle}`, 70)
   await store.upsert('chat_item', {
     kind: 'notice',
     text: `Branched from "${short(parentTitle, 60)}". Everything above is copied; the old chat is unchanged.`,
