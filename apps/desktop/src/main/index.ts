@@ -23,6 +23,7 @@ import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
 import { APP_ID, APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
 import { AgentBrowser } from './browser/browser'
+import { runDevtoolsProbe } from './browser/devtools-probe'
 import { Store } from './db'
 import { Logger } from './logger'
 import { Notifier } from './notify'
@@ -513,6 +514,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       if (browser === null) return
       void (async () => {
         console.log(`BROWSER PROBE opened\n${await browser.probeOpen(probeUrl)}`)
+        if (process.env['AGENT_DEVTOOLS_PROBE'] === '1') await runDevtoolsProbe(browser)
         if (process.env['AGENT_BROWSER_PROBE_ACT'] !== '1') return
         // Trusted input by name, at desktop size and again at phone size (where the view is drawn scaled).
         console.log(`BROWSER PROBE click\n${await browser.act({ action: 'click', name: 'Press me' })}`)

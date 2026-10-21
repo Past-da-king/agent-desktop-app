@@ -723,6 +723,8 @@ export interface AgentApi {
     go(address: string): Promise<void>
     /** A new empty tab for the person. */
     newTab(): Promise<void>
+    /** Opens Chromium's own DevTools for the tab in front, in a window of its own. */
+    devtools(): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
     /** The renderer's <webview> for a tab is attached: hands its guest page to the main process. */
     attach(tabId: string, guestId: number): Promise<boolean>

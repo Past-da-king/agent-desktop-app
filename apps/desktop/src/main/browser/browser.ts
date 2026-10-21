@@ -24,6 +24,7 @@ import type { BrowserWindow, DownloadItem, Session, WebContents, WebPreferences 
 import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
 
 import { Cdp, KEY_NAMES } from './cdp'
+import { watchDevtools } from './devtools'
 import {
   chromeVersionOf,
   emulationCommands,
@@ -492,6 +493,22 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   currentUrl(): string {
     const tab = this.activeTab()
     return tab === null ? '' : safeUrl(tab.wc)
+  }
+
+  /** The developer tools' one way in: the agent's current tab's webContents (never the view it is shown in). */
+  devtoolsTarget(): Electron.WebContents | null {
+    const tab = this.activeTab()
+    return tab === null || tab.wc.isDestroyed() ? null : tab.wc
+  }
+
+  /** The person's Developer tools button: Chromium's own DevTools for the tab in front, in its own window. */
+  openDevTools(): void {
+    const tab = this.shownTab()
+    if (tab === null) return
+    const wc = tab.wc
+    if (wc.isDestroyed()) return
+    if (wc.isDevToolsOpened()) wc.devToolsWebContents?.focus()
+    else wc.openDevTools({ mode: 'detach', activate: true })
   }
 
   /**
@@ -1171,6 +1188,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       await wc.loadURL('about:blank').catch(() => undefined)
     }
     tab.ready = tab.cdp.ensure()
+    // The tab's developer tools record its network and console from here, before its first real page.
+    if (tab.ready) watchDevtools(wc)
     await this.applyEmulation(tab)
   }
 

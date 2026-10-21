@@ -15,6 +15,8 @@ import { appTools } from '../tools/apps'
 import { codeTools } from '../tools/code'
 import { browserTools } from '../tools/browser'
 import { browserProTools } from '../tools/browser-pro'
+import { browserDevtoolsTools } from '../tools/browser-devtools'
+import { devtoolsOf } from '../browser/devtools'
 import { coreTools, type CoreToolDeps } from '../tools/core'
 import { fileTools } from '../tools/files'
 import { memoryTools } from '../tools/memory'
@@ -145,8 +147,10 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     }), // browser_open through browser_show_user
     ...appTools(deps.apps), // apps_connected, apps_find_tools, apps_run, apps_connect
     // browser_eval comes from browser-pro (value plus a log); learned apps keep browser_network and webapp_*
-    ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)).filter((tool) => tool.spec.name !== 'browser_eval'), // webapp_*, browser_network
+    ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)).filter((tool) => tool.spec.name !== 'browser_eval' && tool.spec.name !== 'browser_network'), // webapp_*
     ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
+    // The developer tools replace the learned apps' in-page network watcher: every tab records from the start.
+    ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
 
   ]
 }

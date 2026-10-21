@@ -798,6 +798,9 @@ export const mockAgent: AgentApi = {
       // The web preview draws the designed demo page; there is no <webview> to attach.
       return false
     },
+    async devtools() {
+      return undefined
+    },
     async setExpanded(on: boolean) {
       mockBrowser.expanded = on
       notifyBrowser()
