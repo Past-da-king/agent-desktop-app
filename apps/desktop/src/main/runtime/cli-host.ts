@@ -88,6 +88,9 @@ export class CliHost {
   /** The engine binary the SDK ships for this computer, or null to let the SDK find it itself. */
   engine(cli: CliId): string | null {
     const exe = process.platform === 'win32' ? '.exe' : ''
+    // A build without the bundled engines (the headless node) names an installed one: AGENT_CLAUDE_PATH / AGENT_CODEX_PATH.
+    const override = process.env[cli === 'claude' ? 'AGENT_CLAUDE_PATH' : 'AGENT_CODEX_PATH']?.trim() ?? ''
+    if (override !== '' && existsSync(override)) return override
     try {
       if (cli === 'claude') {
         const pkg = this.require.resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/package.json`)
