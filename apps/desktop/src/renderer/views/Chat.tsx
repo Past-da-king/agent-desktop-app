@@ -31,6 +31,7 @@ import { withNo } from '../../shared/ask-options'
 import { ModelPicker } from '../ui/ModelPicker'
 import { Mascot } from '../ui/Mascot'
 import { Skeleton } from '../ui/Skeleton'
+import { ChatDivider } from './ChatDivider'
 
 const TOOL_ICONS: Record<string, IconName> = {
   memory_search: 'memory',
@@ -569,13 +570,7 @@ function renderItem(
     case 'report':
       return <ReportRow item={item} onOpen={onOpenReport} />
     case 'notice':
-      if (isDivider(item)) {
-        return (
-          <div className="divider" role="separator">
-            <span>{item.text || 'New chat'}</span>
-          </div>
-        )
-      }
+      if (isDivider(item)) return <ChatDivider item={item} />
       return (
         <div className="from">
           <Icon name={parseMeta(item.meta)['from'] === 'phone' ? 'phone' : 'bell'} size={14} />
