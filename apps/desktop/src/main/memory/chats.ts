@@ -10,6 +10,8 @@ import type { ChatItem, ChatMemoryNote } from '@agent/core'
 
 export interface ChatSegment {
   id: string
+  /** The chat it is part of ('main' for the first chat). */
+  chat: string
   /** The divider that started it, or null for the first chat. */
   startDivider: ChatItem | null
   /** The divider that closed it, or null for the chat in progress. */
@@ -43,12 +45,46 @@ function isHelperStep(item: ChatItem): boolean {
   return typeof helper === 'string' && helper !== ''
 }
 
-/** Every chat, oldest first. The last one is the chat in progress (it may be empty). */
+/**
+ * Every chat, oldest first. Several chats run side by side now (each row's `meta.chat`, see
+ * runtime/chat-lines.ts): each one is split by its own dividers, so a stretch never mixes two chats. The last
+ * one is the newest stretch (it may be empty).
+ *
+ * New chat opens a fresh chat whose first row is a divider carrying the filing note for the chat it left. That
+ * divider closes the old chat's stretch for summaries and search (its `endDivider`), without cutting the old
+ * chat's own context, so the old chat can still be picked up where it was.
+ */
 export function chatSegments(all: ChatItem[]): ChatSegment[] {
   const rows = all
     .filter((item) => item.kind !== 'branch' && !isHelperStep(item))
     .filter((item) => !(item.kind === 'question' && parseMeta(item.meta)['context'] === 'home'))
     .sort((a, b) => a.createdAt - b.createdAt)
+  const byChat = new Map<string, ChatItem[]>()
+  for (const row of rows) {
+    const chat = chatIdOf(row)
+    const list = byChat.get(chat)
+    if (list === undefined) byChat.set(chat, [row])
+    else list.push(row)
+  }
+  const segments: ChatSegment[] = []
+  for (const [chat, list] of byChat) segments.push(...segmentsOfOneChat(list, chat))
+  const byId = new Map(segments.map((segment) => [segment.id, segment]))
+  for (const row of rows) {
+    if (!isDividerRow(row)) continue
+    const filed = memoryNote(row)?.chat ?? ''
+    const closed = byId.get(filed)
+    if (closed !== undefined && closed.endDivider === null && closed.chat !== chatIdOf(row)) closed.endDivider = row
+  }
+  return segments.sort((a, b) => a.startedAt - b.startedAt)
+}
+
+/** The chat a row belongs to (runtime/chat-lines.ts): `meta.chat`, else the first chat. */
+function chatIdOf(item: ChatItem): string {
+  const value = parseMeta(item.meta)['chat']
+  return typeof value === 'string' && value !== '' ? value : 'main'
+}
+
+function segmentsOfOneChat(rows: ChatItem[], chat: string): ChatSegment[] {
   const segments: ChatSegment[] = []
   let current: ChatSegment | null = null
   for (const row of rows) {
@@ -57,11 +93,11 @@ export function chatSegments(all: ChatItem[]): ChatSegment[] {
         current.endDivider = row
         segments.push(current)
       }
-      current = { id: row.id, startDivider: row, endDivider: null, items: [], startedAt: row.createdAt, endedAt: row.createdAt }
+      current = { id: row.id, chat, startDivider: row, endDivider: null, items: [], startedAt: row.createdAt, endedAt: row.createdAt }
       continue
     }
     if (current === null) {
-      current = { id: row.id, startDivider: null, endDivider: null, items: [], startedAt: row.createdAt, endedAt: row.createdAt }
+      current = { id: row.id, chat, startDivider: null, endDivider: null, items: [], startedAt: row.createdAt, endedAt: row.createdAt }
     }
     current.items.push(row)
     current.endedAt = row.createdAt

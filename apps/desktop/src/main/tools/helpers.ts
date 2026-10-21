@@ -49,10 +49,13 @@ function delegateTool(host: HelperHost): Tool {
         ),
       }),
     },
-    run: async (input) => {
+    run: async (input, ctx) => {
       const tasks = parseTasks(input['tasks'], input['profiles'])
       if (tasks.length === 0) return 'No tasks given.'
-      return host.delegate(tasks, input['together'] === true)
+      // A helper reports back to the chat that started it.
+      return ctx.chat === undefined
+        ? host.delegate(tasks, input['together'] === true)
+        : host.delegate(tasks, input['together'] === true, { chat: ctx.chat })
     },
   }
 }

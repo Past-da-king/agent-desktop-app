@@ -27,7 +27,15 @@ export function registerMemoryIpc(deps: MemoryIpcDeps): void {
   const { ipcMain, service } = deps
   const picked = new Set<string>()
 
-  ipcMain.handle(MEMORY_CHANNELS.newChat, async () => service.newChat())
+  ipcMain.handle(MEMORY_CHANNELS.newChat, async (_event, target) => {
+    // Several chats at once: which chat New chat opened and which it left (plain ids; see runtime/chat-lines.ts).
+    if (target === undefined || target === null) return service.newChat()
+    if (typeof target !== 'object') throw new Error('new chat target must be an object')
+    const chat = text((target as Record<string, unknown>)['chat'], 'chat id', 64)
+    const from = text((target as Record<string, unknown>)['from'], 'chat id', 64)
+    if (!/^[A-Za-z0-9_-]+$/.test(chat) || !/^[A-Za-z0-9_-]+$/.test(from)) throw new Error('chat id must be plain letters and digits')
+    return service.newChat({ chat, from })
+  })
 
   ipcMain.handle(MEMORY_CHANNELS.retrySave, async (_event, id) => {
     await service.retrySave(text(id, 'id', 128))

@@ -44,6 +44,8 @@ export interface AgentLoopHooks {
   onAppend?: (message: Msg) => void | Promise<void>
   /** Messages sent in while it works: steering notes read before every step. */
   incoming?: () => string[] | Promise<string[]>
+  /** What each incoming note starts with. Helpers hear "[The main agent, while you work]"; a chat frames its own. */
+  notePrefix?: string
   signal?: AbortSignal
 }
 
@@ -69,6 +71,7 @@ export class AgentLoop {
     hooks: AgentLoopHooks = {},
   ): Promise<string> {
     const { onEvent, onAppend, incoming, signal } = hooks
+    const prefix = hooks.notePrefix ?? '[The main agent, while you work] '
     let lastText = ''
 
     for (let step = 1; step <= this.maxSteps; step++) {
@@ -78,7 +81,7 @@ export class AgentLoop {
       if (notes.length > 0) {
         const text: TextBlock = {
           t: 'text',
-          text: notes.map((note) => `[The main agent, while you work] ${note}`).join('\n\n'),
+          text: notes.map((note) => `${prefix}${note}`).join('\n\n'),
         }
         // Ride along in the last user message (after tool results) so the turn order stays valid everywhere.
         const last = history[history.length - 1]

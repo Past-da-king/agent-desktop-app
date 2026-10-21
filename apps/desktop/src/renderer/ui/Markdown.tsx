@@ -1,5 +1,22 @@
 import { Fragment, type ReactNode } from 'react'
 
+import { CopyButton } from './CopyButton'
+
+/** A fenced code block, with its language and a copy button. */
+function CodeBlock({ code, lang }: { code: string; lang: string }): JSX.Element {
+  return (
+    <div className="md-code">
+      <div className="md-code-h">
+        <span>{lang === '' ? 'Code' : lang}</span>
+        <CopyButton text={code} label="Copy code" />
+      </div>
+      <pre>
+        <code>{code}</code>
+      </pre>
+    </div>
+  )
+}
+
 /** Very small markdown: headings, bold, inline code, paragraphs, numbered and bulleted lists, and memory links. */
 function inline(text: string, keyPrefix: string, onWikiLink?: (name: string) => void): ReactNode[] {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[\[[^\]]+\]\])/g)
@@ -88,7 +105,24 @@ export function Markdown({
     flushBulleted()
   }
 
+  let fence: { lang: string; lines: string[] } | null = null
   for (const line of text.split('\n')) {
+    // Fenced code (```lang ... ```): kept exactly as written, with a copy button.
+    const fenceLine = /^\s*```\s*([\w+#.-]*)\s*$/.exec(line)
+    if (fence !== null) {
+      if (fenceLine !== null && fenceLine[1] === '') {
+        blocks.push(<CodeBlock key={`code-${blocks.length}`} code={fence.lines.join('\n')} lang={fence.lang} />)
+        fence = null
+      } else {
+        fence.lines.push(line)
+      }
+      continue
+    }
+    if (fenceLine !== null) {
+      flushAll()
+      fence = { lang: fenceLine[1] ?? '', lines: [] }
+      continue
+    }
     const heading = /^(#{1,4})\s+(.*)$/.exec(line)
     if (heading) {
       flushAll()
@@ -119,6 +153,8 @@ export function Markdown({
     if (line.trim() === '') flushParagraph()
     else paragraph.push(line)
   }
+  // A block still open at the end (a reply that is still streaming) shows what it has so far.
+  if (fence !== null) blocks.push(<CodeBlock key={`code-${blocks.length}`} code={fence.lines.join('\n')} lang={fence.lang} />)
   flushAll()
 
   return <>{blocks}</>

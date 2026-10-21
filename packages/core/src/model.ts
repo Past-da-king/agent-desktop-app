@@ -166,6 +166,8 @@ export interface ToolContext {
   owner?: string
   /** The id of the profile a helper works in (its accounts and browser sign-ins). Absent for the main agent. */
   profile?: string
+  /** The chat this run belongs to (MAIN_CHAT when absent), so a helper it starts reports back to the same chat. */
+  chat?: string
   /** Show a short line of activity in the chat ("Searched memory"). Returns an id to update. */
   activity(text: string, meta?: JsonObject): Promise<number>
   updateActivity(id: number, text: string, meta?: JsonObject): Promise<void>

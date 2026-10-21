@@ -1,0 +1,81 @@
+/* Several chats, pasted files, copy buttons and work done alongside (nb-chat-multi). Tokens only. */
+
+/* ---- files waiting to be sent ---- */
+.attach-row{display:flex;gap:8px;flex-wrap:wrap;padding:0 2px 10px;max-width:860px;margin:0 auto}
+.att-chip{display:flex;align-items:center;gap:10px;min-width:0;max-width:300px;height:52px;padding:6px 6px 6px 6px;border-radius:var(--r-sm);background:var(--s-high);color:var(--on-bg);animation:fade .18s var(--effects)}
+.att-chip.reading{opacity:.8}
+.att-thumb{width:40px;height:40px;border-radius:9px;object-fit:cover;flex:none;background:var(--s-highest)}
+.att-icon{width:40px;height:40px;border-radius:9px;display:grid;place-items:center;flex:none;background:var(--pc);color:var(--on-pc)}
+.att-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.att-chip .att-name{font:500 13px/1.25 var(--font);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:none}
+.att-meta{font-size:12px;line-height:1.2;color:var(--on-sv);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.att-x{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--on-sv);background:transparent}
+.att-x:hover{background:var(--s-highest);color:var(--on-bg)}
+.att-x:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+
+/* ---- under a message: copy, branch, and which way a busy message went ---- */
+.msg-acts{display:flex;gap:2px;flex-wrap:wrap;opacity:0;transition:opacity var(--t-fast,.15s) var(--effects);min-height:30px}
+.msg-acts.end{justify-content:flex-end}
+.msg-acts.start{justify-content:flex-start;padding-left:2px}
+.u-row:hover .msg-acts,.a-msg-wrap:hover .msg-acts,.msg-acts:focus-within{opacity:1}
+@media (hover:none){.msg-acts{opacity:1}}
+.copy-btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:999px;font:500 13px/1 var(--font);color:var(--on-sv);background:transparent;white-space:nowrap}
+.copy-btn:hover{background:var(--s-mid);color:var(--on-bg)}
+.copy-btn:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.copy-btn:disabled{opacity:.6;cursor:default}
+.u-route{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:1.3;color:var(--on-sv);padding:2px 4px}
+.u-route svg{color:var(--primary);flex:none}
+.u-route.pending svg{animation:spin 1.6s linear infinite}
+
+/* ---- a different job, done alongside: its own block in the chat ---- */
+.side-run{display:flex;flex-direction:column;gap:10px;min-width:0;max-width:720px;border-radius:var(--r-lg);background:var(--s-low);border:1px solid var(--outline-v);padding:14px 16px}
+.side-top{display:flex;align-items:center;gap:12px;min-width:0}
+.side-i{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--okc);color:var(--ok)}
+.side-run.working .side-i,.side-i.work{background:var(--pc);color:var(--on-pc)}
+.side-run.failed .side-i,.side-run.stopped .side-i{background:var(--s-high);color:var(--on-sv)}
+.side-head{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.side-head b{font:500 15px/1.3 var(--font);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.side-now{font-size:14px;line-height:1.5;color:var(--on-sv);padding-left:48px;overflow-wrap:anywhere}
+.side-sum{font-size:14px;line-height:1.55;padding-left:48px;min-width:0;overflow-wrap:anywhere}
+.side-sum p{margin:0 0 6px}
+.side-acts{display:flex;gap:4px;flex-wrap:wrap;padding-left:40px}
+.side-body{display:flex;flex-direction:column;gap:8px;padding:10px 0 2px 48px;border-top:1px solid var(--outline-v)}
+.side-label{font:500 12px/1.2 var(--font);color:var(--on-sv);text-transform:none;margin-top:4px}
+
+/* ---- fenced code in a reply ---- */
+.md-code{margin:8px 0;border-radius:var(--r-sm);background:var(--s-high);overflow:hidden;min-width:0}
+.md-code-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 4px 4px 14px;font-size:12px;color:var(--on-sv);background:var(--s-highest)}
+.md-code pre{margin:0;padding:12px 14px;overflow-x:auto;font:13px/1.5 ui-monospace,'Cascadia Code',Consolas,monospace;color:var(--on-bg);white-space:pre}
+.md-code code{background:none;padding:0;font:inherit;color:inherit}
+
+/* ---- the rail: every chat, and which ones are busy ---- */
+.chats-h{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.chats-busy{font:500 12px/1 var(--font);letter-spacing:0;text-transform:none;color:var(--primary)}
+.chatrow .cstat{width:16px;height:16px;display:grid;place-items:center;flex:none;color:var(--on-sv)}
+.chatrow .cstat i{width:10px;height:10px;border-radius:50%;display:block}
+.chatrow .cstat.working i{border:2px solid color-mix(in srgb,var(--primary) 22%,transparent);border-top-color:var(--primary);width:14px;height:14px;animation:spin .9s linear infinite}
+.chatrow .cstat.waiting i{background:var(--tert);box-shadow:0 0 0 3px color-mix(in srgb,var(--tert) 25%,transparent)}
+.chatrow .cstat.unread i{background:var(--primary)}
+.chatrow.st-unread .ct{font-weight:600}
+.chatrow.st-working .tm{color:var(--primary);font-weight:500}
+.chatrow.st-waiting .tm{color:var(--tert);font-weight:500}
+.chatmore{margin:2px 14px 0;height:30px;padding:0 10px;border-radius:999px;font:500 13px/1 var(--font);color:var(--primary);background:transparent;align-self:flex-start}
+.chatmore:hover{background:var(--s-mid)}
+.chatlist{display:flex;flex-direction:column;gap:2px}
+
+@media (prefers-reduced-motion:reduce){
+  .chatrow .cstat.working i,.u-route.pending svg{animation:none}
+}
+@media (max-width:600px){
+  .att-chip{max-width:100%;flex:1 1 220px}
+  .side-now,.side-sum,.side-body{padding-left:0}
+  .side-acts{padding-left:0}
+}
+
+/* ---- files on a sent message ---- */
+.u-row .u-files{margin-bottom:0;gap:6px}
+.u-row .u-file{height:auto;min-height:36px;max-width:280px;padding:6px 12px 6px 10px;border-radius:var(--r-sm);background:var(--s-high);color:var(--on-bg);gap:8px}
+.u-row .u-file.pic{padding:4px 12px 4px 4px}
+.u-row .u-file.pic img{width:56px;height:56px;border-radius:9px;object-fit:cover;flex:none}
+.u-row .u-file svg{color:var(--on-sv);flex:none}
+.u-file-size{color:var(--on-sv);font-size:12px;flex:none}

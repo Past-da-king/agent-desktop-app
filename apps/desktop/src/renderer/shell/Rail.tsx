@@ -1,8 +1,10 @@
-import type { ChatItem } from '@agent/core'
+import { useEffect, useMemo, useState } from 'react'
 
-import { metaText, parseMeta } from '../lib/meta'
-import { startNewChat } from '../lib/chat-actions'
+import { isOpenCard } from '../lib/cards'
+import { openChat, startNewChat } from '../lib/chat-actions'
+import { STATUS_LABEL, chatList, chatOf, chatStatus } from '../lib/chats'
 import { short, timeAgo } from '../lib/format'
+import { startChatTracking, useAnyRunning, useChats } from '../state/useChats'
 import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useRoute, useUi } from '../state/useUi'
@@ -19,56 +21,37 @@ const NAV: Array<{ page: 'home' | 'chat' | 'tasks' | 'memory' | 'routines' | 'co
   { page: 'connections', icon: 'apps', label: 'Connections' },
 ]
 
-interface Recent {
-  id: string
-  title: string
-  device: string
-  at: number
-  active: boolean
-}
-
-function recentChats(items: ChatItem[]): Recent[] {
-  const branches = items
-    .filter((item) => item.kind === 'branch')
-    .map((item) => {
-      const meta = parseMeta(item.meta)
-      return {
-        id: item.id,
-        title: metaText(meta, 'title') || item.text,
-        device: metaText(meta, 'device') || 'desk',
-        at: typeof meta['at'] === 'number' ? meta['at'] : item.createdAt,
-        active: meta['active'] === true,
-      }
-    })
-    .sort((a, b) => b.at - a.at)
-  if (branches.length > 0) return branches.slice(0, 5)
-  const first = items.find((item) => item.kind === 'user')
-  if (!first) return []
-  return [
-    {
-      id: first.id,
-      title: short(first.text, 34),
-      device: 'desk',
-      at: first.createdAt,
-      active: true,
-    },
-  ]
-}
-
 export function Rail({ needs }: { needs: number }): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const route = useRoute()
   const navigate = useUi((state) => state.navigate)
-  const draftComposer = useUi((state) => state.draftComposer)
   const items = useEntity('chat_item')
   const goals = useEntity('goal')
-  const chats = recentChats(items)
+  const open = useChats((state) => state.open)
+  const runs = useChats((state) => state.runs)
+  const seen = useChats((state) => state.seen)
+  const since = useChats((state) => state.since)
+  const [showAll, setShowAll] = useState(false)
+  useEffect(() => startChatTracking(), [])
+  const chats = useMemo(() => chatList(items, open), [items, open])
+  const cardsByChat = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of items) if (isOpenCard(item)) counts.set(chatOf(item), (counts.get(chatOf(item)) ?? 0) + 1)
+    return counts
+  }, [items])
+  const rows = chats.map((entry) => ({
+    entry,
+    status: chatStatus(entry, runs[entry.id], seen[entry.id] ?? since, entry.id === open && route.page === 'chat', cardsByChat.get(entry.id) ?? 0),
+  }))
+  const busy = rows.filter((row) => row.status !== 'idle').length
+  const shown = showAll ? rows : rows.filter((row, index) => index < 6 || row.status !== 'idle' || row.entry.id === open)
   const openGoal = goals.find((goal) => goal.status === 'open')
   const agentName = settings?.agentName.trim() || 'Your agent'
   const userName = settings?.userName.trim() || 'You'
   const email = settings?.syncEmail ?? ''
 
-  const statusText = needs > 0 ? 'Waiting for you' : openGoal ? `Working on ${openGoal.title}` : 'Ready'
+  const anyRunning = useAnyRunning()
+  const statusText = needs > 0 ? 'Waiting for you' : openGoal ? `Working on ${openGoal.title}` : anyRunning ? 'Working' : 'Ready'
 
   return (
     <nav className="rail" aria-label="Main">
@@ -120,26 +103,45 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
         )
       })}
 
-      <div className="eyebrow mute grp">RECENT CHATS</div>
-      <div className="chatlist">
+      <div className="eyebrow mute grp chats-h">
+        <span>CHATS</span>
+        {busy > 0 ? <span className="chats-busy">{busy} active</span> : null}
+      </div>
+      <div className="chatlist" role="list">
         {chats.length === 0 ? <p className="chat-none">Your chats will show up here.</p> : null}
-        {chats.map((chat) => (
-          <button
-            key={chat.id}
-            type="button"
-            className={`chatrow${chat.active && route.page === 'chat' ? ' on' : ''}`}
-            onClick={() => {
-              navigate({ page: 'chat' })
-              // One thread holds every chat. Picking an older one starts a message that brings it back.
-              if (!chat.active) draftComposer(`Let's pick up "${chat.title}" again.`)
-            }}
-            title={chat.active ? chat.title : `Pick up ${chat.title}`}
-          >
-            <Icon name={chat.device === 'phone' ? 'phone' : 'monitor'} size={16} />
-            <span className="ct">{chat.title}</span>
-            <span className="tm">{timeAgo(chat.at)}</span>
+        {shown.map(({ entry, status }) => {
+          const on = entry.id === open && route.page === 'chat'
+          const label = STATUS_LABEL[status]
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              role="listitem"
+              className={`chatrow${on ? ' on' : ''} st-${status}`}
+              onClick={() => openChat(entry.id)}
+              title={label === '' ? entry.title : `${entry.title}. ${label}`}
+              aria-current={on ? 'true' : undefined}
+            >
+              <span className={`cstat ${status}`} aria-hidden="true">
+                {status === 'idle' ? (
+                  <Icon name={entry.branch ? 'branch' : entry.device === 'phone' ? 'phone' : 'chat'} size={16} />
+                ) : (
+                  <i />
+                )}
+              </span>
+              <span className="ct">{entry.title}</span>
+              <span className="tm">
+                {status === 'working' ? 'Working' : status === 'waiting' ? 'Needs you' : entry.at === Number.MAX_SAFE_INTEGER ? 'Now' : timeAgo(entry.at)}
+              </span>
+              {label !== '' ? <span className="sr-only">{label}</span> : null}
+            </button>
+          )
+        })}
+        {rows.length > shown.length || showAll ? (
+          <button type="button" className="chatmore" onClick={() => setShowAll((value) => !value)}>
+            {showAll ? 'Show fewer' : `Show ${rows.length - shown.length} more`}
           </button>
-        ))}
+        ) : null}
       </div>
 
       <div className="spacer" />
