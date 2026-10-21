@@ -30,6 +30,7 @@ import { Logger } from './logger'
 import { Notifier } from './notify'
 import { QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
 import { HotkeyManager } from './hotkeys'
+import { cachedLister, likelyHolder, listProcesses } from './hotkey-holders'
 import { createDictation, type DictationSetup } from './dictation/setup'
 import { registerDictationIpc } from './dictation/ipc'
 import { StepBudget } from './runtime/budget'
@@ -129,6 +130,8 @@ let scheduler: Scheduler | null = null
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
 let hotkeys: HotkeyManager | null = null
+let hotkeyRetry: NodeJS.Timeout | null = null
+const runningProcesses = cachedLister(listProcesses)
 let dictation: DictationSetup | null = null
 let agentBrowser: AgentBrowser | null = null
 let disposeIpc: (() => void) | null = null
@@ -307,6 +310,8 @@ function createWindow(stateFile: string): BrowserWindow {
     win.show()
   })
 
+  win.on('focus', retryHotkeys)
+
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
   })
@@ -403,6 +408,20 @@ function applyHotkey(settings: Settings): void {
     dictate: settings.dictateHotkey,
     dictateClean: settings.dictateCleanHotkey,
   })
+}
+
+/** Shortcuts another app held may be free now (that app quit): try again, quietly. */
+function retryHotkeys(): void {
+  const freed = hotkeys?.retry() ?? []
+  if (freed.length > 0) logger.info('Shortcuts registered after a retry', { actions: freed.join(',') })
+}
+
+/** Names the app that probably holds each blocked shortcut (Wispr Flow, PowerToys Run...), when it can tell. */
+async function explainBlockedHotkeys(): Promise<void> {
+  const blocked = hotkeys?.blocked() ?? []
+  if (blocked.length === 0) return
+  const running = await runningProcesses()
+  for (const { action, accelerator } of blocked) hotkeys?.explain(action, likelyHolder(accelerator, running, process.platform))
 }
 
 function openQuickAsk(): void {
@@ -710,8 +729,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
       for (const status of statuses) broadcast(EVENTS.hotkey, status)
       const failed = statuses.filter((status) => !status.ok).map((status) => status.action ?? '')
       if (failed.length > 0) logger.warn('Shortcuts not registered', { actions: failed.join(',') })
+      void explainBlockedHotkeys()
     },
   )
+  // A shortcut another app holds starts working by itself once that app lets go: checked every 25 s, when the
+  // main window gains focus, and after sleep or unlock.
+  hotkeyRetry = setInterval(retryHotkeys, 25_000)
 
   let lastSettings = settings.get()
   disposeSettings = settings.onChange((next) => {
@@ -832,7 +855,9 @@ if (!app.requestSingleInstanceLock()) {
     loadWindow(win)
     powerMonitor.on('resume', () => {
       void scheduler?.resume()
+      retryHotkeys()
     })
+    powerMonitor.on('unlock-screen', retryHotkeys)
     createAppTray()
     const current = settingsStore?.get()
     if (current !== undefined) applyHotkey(current)
@@ -861,6 +886,8 @@ if (!app.requestSingleInstanceLock()) {
     tray = null
     quickAsk?.destroy()
     quickAsk = null
+    if (hotkeyRetry !== null) clearInterval(hotkeyRetry)
+    hotkeyRetry = null
     hotkeys?.dispose()
     hotkeys = null
     dictation?.dispose()

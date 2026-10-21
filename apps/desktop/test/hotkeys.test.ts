@@ -8,6 +8,7 @@ import { DEFAULT_SETTINGS, type HotkeyStatus } from '@agent/core'
 
 import type { ShortcutRegistry } from '../src/main/hotkey'
 import { HotkeyManager, canonicalAccelerator, cleanSwitchAccelerator, upgradeHotkeys } from '../src/main/hotkeys'
+import { cachedLister, likelyHolder, parseTasklist } from '../src/main/hotkey-holders'
 import { SettingsStore } from '../src/main/settings'
 import { cleanSwitchKeys } from '../src/renderer/lib/hotkey'
 
@@ -118,7 +119,7 @@ describe('HotkeyManager', () => {
 
     expect(quick?.ok).toBe(true)
     expect(dictate?.ok).toBe(false)
-    expect(dictate?.message).toBe('Alt+Space could not be registered. Another app may already use it. Pick another, or close that app.')
+    expect(dictate?.message).toBe('Alt+Space could not be registered. Another app may already use it. Pick another, or close that app, and this starts working by itself.')
     expect(clean?.ok).toBe(true)
   })
 
@@ -175,6 +176,59 @@ describe('HotkeyManager', () => {
   })
 })
 
+describe('a shortcut another app holds', () => {
+  it('starts working by itself once that app lets go, and Settings hears it', () => {
+    const shortcuts = registry(['Alt+Space'])
+    const statuses: HotkeyStatus[][] = []
+    const { hotkeys, fired } = manager(shortcuts, (list) => statuses.push(list))
+    hotkeys.apply(DEFAULTS)
+    expect(hotkeys.blocked()).toEqual([{ action: 'dictate', accelerator: 'Alt+Space' }])
+
+    // Still held: nothing changes and nothing is reported.
+    expect(hotkeys.retry()).toEqual([])
+    expect(statuses).toHaveLength(1)
+
+    // Wispr Flow quits.
+    shortcuts.taken.delete('Alt+Space')
+    expect(hotkeys.retry()).toEqual(['dictate'])
+    expect(statuses).toHaveLength(2)
+    expect(statuses[1]?.find((status) => status.action === 'dictate')).toMatchObject({ ok: true, message: 'Ready on Alt+Space.' })
+    expect(hotkeys.blocked()).toEqual([])
+    shortcuts.press('Alt+Space')
+    expect(fired).toEqual(['dictate'])
+    // The other two were never touched again.
+    expect(shortcuts.calls.filter((call) => call.startsWith('register:CommandOrControl'))).toHaveLength(2)
+  })
+
+  it('does not retry a clash between our own shortcuts, an empty one, or while paused', () => {
+    const shortcuts = registry(['Alt+Space'])
+    const { hotkeys } = manager(shortcuts)
+    hotkeys.apply({ ...DEFAULTS, dictateClean: 'Control+Alt+Left', quickAsk: '' })
+    expect(hotkeys.blocked().map((item) => item.action)).toEqual(['dictate'])
+    hotkeys.pause(true)
+    shortcuts.taken.delete('Alt+Space')
+    expect(hotkeys.retry()).toEqual([])
+    hotkeys.pause(false)
+    expect(hotkeys.blocked()).toEqual([])
+  })
+
+  it('names the app that probably holds it, once, and only while it is blocked', () => {
+    const shortcuts = registry(['Alt+Space'])
+    const statuses: HotkeyStatus[][] = []
+    const { hotkeys } = manager(shortcuts, (list) => statuses.push(list))
+    hotkeys.apply(DEFAULTS)
+    hotkeys.explain('dictate', 'Wispr Flow')
+    expect(hotkeys.status()[1]?.message).toBe('Alt+Space is being used by Wispr Flow. Quit Wispr Flow or change its shortcut, and this starts working by itself.')
+    expect(statuses).toHaveLength(2)
+    hotkeys.explain('dictate', 'Wispr Flow')
+    expect(statuses).toHaveLength(2)
+    hotkeys.explain('quickAsk', 'Wispr Flow')
+    expect(hotkeys.status()[0]?.message).toBe('Ready on Ctrl+Alt+Left.')
+    hotkeys.explain('dictate', null)
+    expect(hotkeys.status()[1]?.message).toContain('could not be registered')
+  })
+})
+
 describe('the clean-up switch', () => {
   it('is the dictation shortcut with C in place of its key', () => {
     expect(cleanSwitchAccelerator('Alt+Space')).toBe('Alt+C')
@@ -219,5 +273,39 @@ describe('moving to the new defaults', () => {
     // Choosing the old keys on purpose sticks.
     store.save({ quickAskHotkey: 'CommandOrControl+Shift+Space' })
     expect(new SettingsStore(file, { hostname: () => 'pc' }).get().quickAskHotkey).toBe('CommandOrControl+Shift+Space')
+  })
+})
+
+describe('guessing who holds a shortcut', () => {
+  // The first lines of `tasklist /fo csv /nh` on Ayanda's PC, 21 Oct 2026.
+  const TASKLIST = ['"System Idle Process","0","Services","0","8 K"', '"Wispr Flow.exe","1828","Console","1","214,284 K"', '"Wispr Flow Helper.exe","19120","Console","1","53,328 K"', ''].join('\r\n')
+
+  it('reads process names from tasklist', () => {
+    expect(parseTasklist(TASKLIST)).toEqual(new Set(['system idle process', 'wispr flow.exe', 'wispr flow helper.exe']))
+  })
+
+  it('names Wispr Flow whenever it runs, else an app that takes the shortcut out of the box', () => {
+    expect(likelyHolder('Alt+Space', parseTasklist(TASKLIST))).toBe('Wispr Flow')
+    expect(likelyHolder('Alt+Space', new Set(['powertoys.powerlauncher.exe', 'chatgpt.exe']))).toBe('PowerToys Run')
+    expect(likelyHolder('Alt+Space', new Set(['chatgpt.exe']))).toBe('ChatGPT')
+    expect(likelyHolder('Alt+Space', new Set(['raycast.exe']))).toBe('Raycast')
+    expect(likelyHolder('CommandOrControl+Alt+Left', new Set(['chatgpt.exe']))).toBeNull()
+    expect(likelyHolder('Alt+Space', new Set(['notepad.exe']))).toBeNull()
+  })
+
+  it('asks for the process list at most once in a while', async () => {
+    let calls = 0
+    let now = 0
+    const list = cachedLister(async () => {
+      calls += 1
+      return new Set(['wispr flow.exe'])
+    }, 30_000, () => now)
+    await list()
+    now = 10_000
+    await list()
+    expect(calls).toBe(1)
+    now = 40_001
+    await list()
+    expect(calls).toBe(2)
   })
 })

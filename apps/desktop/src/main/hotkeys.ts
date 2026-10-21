@@ -70,8 +70,12 @@ export function upgradeHotkeys(raw: Record<string, unknown> | null): Record<stri
   return next
 }
 
+/** Why a shortcut is not live: another app holds it (worth retrying), two of ours clash, or it is off. */
+type Failure = 'taken' | 'clash' | 'off'
+
 export class HotkeyManager {
   private readonly live = new Map<HotkeyAction, string>()
+  private readonly failures = new Map<HotkeyAction, Failure>()
   private readonly held = new Map<string, string>()
   private wanted: HotkeyBindings = { quickAsk: '', dictate: '', dictateClean: '' }
   private statuses: HotkeyStatus[] = []
@@ -90,6 +94,50 @@ export class HotkeyManager {
 
   bindings(): HotkeyBindings {
     return { ...this.wanted }
+  }
+
+  /** The shortcuts another app is holding right now, to retry or to explain. */
+  blocked(): Array<{ action: HotkeyAction; accelerator: string }> {
+    return HOTKEY_ACTIONS.filter((action) => this.failures.get(action) === 'taken').map((action) => ({ action, accelerator: this.wanted[action] }))
+  }
+
+  /**
+   * Tries again every shortcut another app was holding (that app may have quit since). Statuses are reported
+   * only when one came free. Returns the actions that are live now.
+   */
+  retry(): HotkeyAction[] {
+    if (this.paused) return []
+    const freed: HotkeyAction[] = []
+    for (const { action, accelerator } of this.blocked()) {
+      let ok = false
+      try {
+        ok = this.registry.register(accelerator, () => this.handlers[action]())
+      } catch {
+        ok = false
+      }
+      if (!ok) continue
+      this.live.set(action, accelerator)
+      this.failures.delete(action)
+      this.setStatus({ action, accelerator, ok: true, message: `Ready on ${formatAccelerator(accelerator, this.platform)}.` })
+      freed.push(action)
+    }
+    if (freed.length > 0) this.onStatus?.(this.status())
+    return freed
+  }
+
+  /** Names the app that is probably holding a blocked shortcut. Reported only when the words change. */
+  explain(action: HotkeyAction, holder: string | null): void {
+    if (this.failures.get(action) !== 'taken') return
+    const accelerator = this.wanted[action]
+    const message = holder === null ? takenMessage(accelerator, this.platform) : holderMessage(accelerator, holder, this.platform)
+    const current = this.statuses.find((status) => status.action === action)
+    if (current === undefined || current.message === message) return
+    this.setStatus({ ...current, message })
+    this.onStatus?.(this.status())
+  }
+
+  private setStatus(next: HotkeyStatus): void {
+    this.statuses = this.statuses.map((status) => (status.action === next.action ? next : status))
   }
 
   /** Points every shortcut at its setting. Unchanged settings are not touched. */
@@ -166,12 +214,14 @@ export class HotkeyManager {
 
   private registerAll(): void {
     this.releaseAll()
+    this.failures.clear()
     const taken = new Map<string, HotkeyAction>()
     const statuses: HotkeyStatus[] = []
     for (const action of HOTKEY_ACTIONS) {
       const accelerator = this.wanted[action]
       const label = HOTKEY_LABELS[action]
       if (accelerator === '') {
+        this.failures.set(action, 'off')
         statuses.push({ action, accelerator, ok: false, message: `${label} has no shortcut. Record one to use it.` })
         continue
       }
@@ -179,6 +229,7 @@ export class HotkeyManager {
       const canonical = canonicalAccelerator(accelerator, this.platform)
       const owner = taken.get(canonical)
       if (owner !== undefined) {
+        this.failures.set(action, 'clash')
         statuses.push({
           action,
           accelerator,
@@ -198,15 +249,21 @@ export class HotkeyManager {
         taken.set(canonical, action)
         statuses.push({ action, accelerator, ok: true, message: `Ready on ${keys}.` })
       } else {
-        statuses.push({
-          action,
-          accelerator,
-          ok: false,
-          message: `${keys} could not be registered. Another app may already use it. Pick another, or close that app.`,
-        })
+        this.failures.set(action, 'taken')
+        statuses.push({ action, accelerator, ok: false, message: takenMessage(accelerator, this.platform) })
       }
     }
     this.statuses = statuses
     this.onStatus?.(this.status())
   }
+}
+
+export function takenMessage(accelerator: string, platform: NodeJS.Platform = process.platform): string {
+  const keys = formatAccelerator(accelerator, platform)
+  return `${keys} could not be registered. Another app may already use it. Pick another, or close that app, and this starts working by itself.`
+}
+
+export function holderMessage(accelerator: string, holder: string, platform: NodeJS.Platform = process.platform): string {
+  const keys = formatAccelerator(accelerator, platform)
+  return `${keys} is being used by ${holder}. Quit ${holder} or change its shortcut, and this starts working by itself.`
 }
