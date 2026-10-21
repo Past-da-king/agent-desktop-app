@@ -31,8 +31,19 @@ const PILLS: Record<string, DictationView> = {
 
 const LABELS = { quickAsk: 'Quick chat', dictate: 'Dictation', dictateClean: 'Dictate and clean up' } as const
 
+/** `?blocked=dictate` shows Dictation held by another app, as on a PC where Wispr Flow still runs. */
+const blockedAction = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('blocked')
+
 function statuses(settings: Settings): HotkeyStatus[] {
   return (['quickAsk', 'dictate', 'dictateClean'] as const).map((action) => {
+    if (action === blockedAction) {
+      return {
+        action,
+        accelerator: settings.dictateHotkey,
+        ok: false,
+        message: 'Alt+Space is being used by Wispr Flow. Quit Wispr Flow or change its shortcut, and this starts working by itself.',
+      }
+    }
     const accelerator =
       action === 'quickAsk' ? settings.quickAskHotkey : action === 'dictate' ? settings.dictateHotkey : settings.dictateCleanHotkey
     return accelerator.trim() === ''
