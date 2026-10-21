@@ -31,7 +31,8 @@ import { withNo } from '../../shared/ask-options'
 import { ModelPicker } from '../ui/ModelPicker'
 import { Mascot } from '../ui/Mascot'
 import { Skeleton } from '../ui/Skeleton'
-import { ChatDivider } from './ChatDivider'
+import { ChatDivider, EarlierChats } from './ChatDivider'
+import { visibleThread } from '../lib/chat-memory'
 
 const TOOL_ICONS: Record<string, IconName> = {
   memory_search: 'memory',
@@ -600,7 +601,11 @@ export function Chat(): JSX.Element {
   const stuck = useRef(true)
   const dragDepth = useRef(0)
 
-  const messages = useMemo(() => threadItems(items), [items])
+  const [showEarlier, setShowEarlier] = useState(false)
+  const all = useMemo(() => threadItems(items), [items])
+  // New chat clears the screen: older chats stay in the history, one tap away (views/ChatDivider.tsx).
+  const shown = useMemo(() => visibleThread(all, showEarlier), [all, showEarlier])
+  const messages = shown.rows
   const segments = useMemo(() => segmentsOf(messages), [messages])
   const title = threadTitle(items)
   const cards = openCards(items, true)
@@ -639,6 +644,7 @@ export function Chat(): JSX.Element {
 
   useEffect(() => {
     if (scrollToken === 0) return
+    setShowEarlier(false)
     stuck.current = true
     const timer = window.setTimeout(() => {
       const el = thread.current
@@ -819,6 +825,7 @@ export function Chat(): JSX.Element {
           </div>
         ) : (
           <div className="thread-in">
+            <EarlierChats count={shown.earlier} onShow={() => setShowEarlier(true)} />
             {segments.map((segment, index) =>
               segment.kind === 'tools' ? (
                 <ToolSteps key={segment.id} items={segment.items} live={running && index === segments.length - 1} />
