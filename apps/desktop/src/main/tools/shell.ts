@@ -9,9 +9,11 @@ import { accessSync, constants, existsSync, promises as fs, statSync } from 'nod
 
 import { int, schema, str, type Tool } from '@agent/core'
 
-import type { ToolContext } from '@agent/core'
+import type { JsonObject, ToolContext } from '@agent/core'
+import type { RunState } from '../../shared/run-record'
 import type { EnvironmentFs, ResolvedCommand } from '../runtime/environment'
 import { spawnResolved, type SpawnResolvedOptions } from '../runtime/spawn'
+import { recordRun, StreamCapture, type ToolRun } from './run-capture'
 
 export const DEFAULT_TIMEOUT_SEC = 60
 export const MAX_TIMEOUT_SEC = 600
@@ -251,6 +253,7 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       if (command === '') return 'Pass the command to run.'
 
       if (deps.settings.get().shell === 'never') {
+        recordRun(input, declinedRun(command, 'Shell commands are turned off in Settings.'))
         return 'Shell commands are turned off in Settings, so I did not run it.'
       }
 
@@ -283,9 +286,12 @@ function shellRunTool(deps: ShellToolDeps): Tool {
         `${cwd === undefined ? '' : `In ${cwd}\n`}Shell: ${plan.label}\nThis runs a real command on this computer. It stops after ${timeoutSec} seconds.`,
           'computer',
         ))
-      if (!approved) return 'The user did not approve that command, so I did not run it.'
+      if (!approved) {
+        recordRun(input, { ...declinedRun(command, 'You did not approve it.'), label: plan.label, ...(cwd === undefined ? {} : { cwd }) })
+        return 'The user did not approve that command, so I did not run it.'
+      }
 
-      return runCommand({ command, cwd, timeoutSec, ctx, deps, plan })
+      return runCommand({ command, cwd, timeoutSec, ctx, deps, plan, input })
     },
   }
 }
@@ -297,6 +303,12 @@ interface RunRequest {
   ctx: ToolContext
   deps: ShellToolDeps
   plan: ShellChoice
+  /** The call's own input object: the run is recorded against it for the chat row. */
+  input?: JsonObject
+}
+
+function declinedRun(command: string, note: string): ToolRun {
+  return { kind: 'shell', input: command, label: 'Shell', stdout: '', stderr: '', exitCode: null, ms: 0, state: 'declined', trimmed: false, note }
 }
 
 async function runCommand(request: RunRequest): Promise<string> {
@@ -304,6 +316,27 @@ async function runCommand(request: RunRequest): Promise<string> {
   const env = sanitiseEnv({ ...(request.deps.env ?? process.env) })
 
   const sink = new OutputSink(MAX_OUTPUT_CHARS)
+  // The person's copy: stdout and stderr apart, longer than the model's, start and end kept.
+  const out = new StreamCapture()
+  const err = new StreamCapture()
+  const started = Date.now()
+  const record = (state: RunState, exitCode: number | null, note?: string): void => {
+    if (request.input === undefined) return
+    recordRun(request.input, {
+      kind: 'shell',
+      input: request.command,
+      label: request.plan.label,
+      // No folder given means the app's own working folder, which is where it really ran.
+      cwd: request.cwd ?? process.cwd(),
+      stdout: out.text(),
+      stderr: err.text(),
+      exitCode,
+      ms: Date.now() - started,
+      state,
+      trimmed: out.trimmed() || err.trimmed(),
+      ...(note === undefined ? {} : { note }),
+    })
+  }
   let child: ChildProcess
   try {
     const spawnOptions: SpawnResolvedOptions = {
@@ -320,11 +353,18 @@ async function runCommand(request: RunRequest): Promise<string> {
       ...(request.deps.spawnImpl === undefined ? {} : { spawnImpl: request.deps.spawnImpl }),
     })
   } catch (error) {
+    record('failed', null, `Could not start: ${messageOf(error)}`)
     return `Could not start that command: ${messageOf(error)}`
   }
 
-  child.stdout?.on('data', (chunk: Buffer) => sink.push(chunk))
-  child.stderr?.on('data', (chunk: Buffer) => sink.push(chunk))
+  child.stdout?.on('data', (chunk: Buffer) => {
+    sink.push(chunk)
+    out.push(chunk)
+  })
+  child.stderr?.on('data', (chunk: Buffer) => {
+    sink.push(chunk)
+    err.push(chunk)
+  })
 
   let timedOut = false
   let stopped = false
@@ -361,13 +401,22 @@ async function runCommand(request: RunRequest): Promise<string> {
 
   const output = sink.text().trimEnd()
   const tail = sink.truncated() ? `\n...(cut, ${sink.total} characters in all)` : ''
-  if (spawnError !== null) return `Could not start that command: ${spawnError}`
-  if (stopped) return `Stopped by the user.${output === '' ? '' : `\n${output}${tail}`}`
+  if (spawnError !== null) {
+    record('failed', null, `Could not start: ${spawnError}`)
+    return `Could not start that command: ${spawnError}`
+  }
+  if (stopped) {
+    record('stopped', child.exitCode, 'Stopped by you.')
+    return `Stopped by the user.${output === '' ? '' : `\n${output}${tail}`}`
+  }
   if (timedOut) {
     const seconds = request.timeoutSec === 1 ? '1 second' : `${request.timeoutSec} seconds`
+    record('timeout', child.exitCode, `Timed out after ${seconds}.`)
     return `Timed out after ${seconds}.${output === '' ? '' : `\n${output}${tail}`}`
   }
-  return `Exit ${child.exitCode ?? 0}\n${output === '' ? '(no output)' : output}${tail}`
+  const exit = child.exitCode ?? 0
+  record(exit === 0 ? 'ok' : 'failed', exit)
+  return `Exit ${exit}\n${output === '' ? '(no output)' : output}${tail}`
 }
 
 class OutputSink {

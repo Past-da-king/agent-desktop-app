@@ -19,9 +19,37 @@ const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[email]'],
 ]
 
+/**
+ * Credentials only, keeping the name they were given (OPENAI_API_KEY=[redacted]), for text the person reads: the
+ * commands the agent ran and what they printed. Addresses stay, since `git config user.email` is not a secret.
+ */
+const CREDENTIAL_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bsk-[A-Za-z0-9_-]{8,}\b/g, 'sk-[redacted]'],
+  [/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[redacted]'],
+  [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted]'],
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, '[redacted]'],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, '[redacted]'],
+  [/\bAKIA[0-9A-Z]{16}\b/g, '[redacted]'],
+  // user:password@ inside a link
+  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+@/gi, '$1[redacted]@'],
+  // NAME=value and name: value where the name says what it is (API_KEY, x-api-key, token, secret, password)
+  [
+    /\b([A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|passw(?:or)?d)[A-Za-z0-9_]*)(["']?\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s"',;&|]+)/gi,
+    '$1$2[redacted]',
+  ],
+  // --password value, --token value
+  [/(--?(?:password|passwd|token|api-key|secret)\s+)("[^"\n]*"|'[^'\n]*'|[^\s"']+)/gi, '$1[redacted]'],
+]
+
+export function redactSecrets(text: string): string {
+  let result = text
+  for (const [pattern, replacement] of CREDENTIAL_PATTERNS) result = result.replace(pattern, replacement)
+  return result
+}
+
 /** Remove anything that looks like a credential or a personal address. */
 export function redact(text: string): string {
-  let result = text
+  let result = redactSecrets(text)
   for (const [pattern, replacement] of SECRET_PATTERNS) result = result.replace(pattern, replacement)
   return result
 }
