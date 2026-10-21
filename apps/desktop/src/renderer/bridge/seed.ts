@@ -10,6 +10,7 @@ import {
 } from '@agent/core'
 
 import { openUiDemo } from './openui-demo'
+import { runsDemo } from './runs-demo'
 
 export type DemoMode = 'fresh' | 'demo' | 'empty' | 'big'
 
@@ -492,6 +493,8 @@ export function demoRows(): SeedResult['rows'] {
         by: 'Airline comparison',
       }),
     },
+    // Commands, code and files the agent ran, each opening to what it wrote and what came back.
+    ...runsDemo(now),
     // Answers drawn as cards (OpenUI), the way the agent writes them.
     ...openUiDemo(now),
   ]

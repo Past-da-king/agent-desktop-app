@@ -9,11 +9,12 @@ import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
-import { enumOf, schema, str, type Tool } from '@agent/core'
+import { enumOf, schema, str, type JsonObject, type Tool } from '@agent/core'
 
 import type { ProgramRef } from '../runtime/environment'
 import { spawnResolved } from '../runtime/spawn'
 import { killProcessTree, sanitiseEnv } from './shell'
+import { recordRun, StreamCapture } from './run-capture'
 
 export const CODE_TIMEOUT_MS = 30_000
 export const MAX_CODE_OUTPUT_CHARS = 20_000
@@ -104,7 +105,12 @@ function runCodeTool(deps: CodeToolDeps): Tool {
       }
 
       const choice = deps.settings?.get().shell ?? 'ask'
-      if (choice === 'never') return 'Running code is turned off on this computer (Settings, This computer). Do the job another way or ask the user to turn it on.'
+      const declined = (note: string): void =>
+        recordRun(input, { kind: 'code', input: code, label: language, stdout: '', stderr: '', exitCode: null, ms: 0, state: 'declined', trimmed: false, note })
+      if (choice === 'never') {
+        declined('Running code is turned off in Settings.')
+        return 'Running code is turned off on this computer (Settings, This computer). Do the job another way or ask the user to turn it on.'
+      }
       const approved =
         choice === 'always' ||
         (await ctx.approve(
@@ -112,9 +118,12 @@ function runCodeTool(deps: CodeToolDeps): Tool {
           code.length > 4_000 ? `${code.slice(0, 4_000)}\n...(the rest is cut here, but all of it runs)` : code,
           'computer',
         ))
-      if (!approved) return 'The user did not approve running that code, so I did not run it.'
+      if (!approved) {
+        declined('You did not approve it.')
+        return 'The user did not approve running that code, so I did not run it.'
+      }
 
-      return execute({ language, code, program: chosen.program, appRuntime: chosen.appRuntime, deps })
+      return execute({ language, code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input })
     },
   }
 }
@@ -165,6 +174,8 @@ interface ExecuteRequest {
   /** True when JavaScript fell back to the runtime inside the app. */
   appRuntime: boolean
   deps: CodeToolDeps
+  /** The call's own input object: the run is recorded against it for the chat row. */
+  input?: JsonObject
 }
 
 async function execute(request: ExecuteRequest): Promise<string> {
@@ -187,6 +198,25 @@ async function execute(request: ExecuteRequest): Promise<string> {
   }
 
   const sink = new OutputSink(MAX_CODE_OUTPUT_CHARS)
+  const out = new StreamCapture()
+  const err = new StreamCapture()
+  const started = Date.now()
+  const record = (state: 'ok' | 'failed' | 'timeout', exitCode: number | null, note?: string): void => {
+    if (request.input === undefined) return
+    recordRun(request.input, {
+      kind: 'code',
+      input: request.code,
+      label: request.language,
+      cwd: folder,
+      stdout: out.text(),
+      stderr: err.text(),
+      exitCode,
+      ms: Date.now() - started,
+      state,
+      trimmed: out.trimmed() || err.trimmed(),
+      ...(note === undefined ? {} : { note }),
+    })
+  }
   const extra = request.appRuntime ? { ELECTRON_RUN_AS_NODE: '1' } : {}
   let child: ChildProcess
   try {
@@ -200,10 +230,17 @@ async function execute(request: ExecuteRequest): Promise<string> {
       ...(request.deps.spawnImpl === undefined ? {} : { spawnImpl: request.deps.spawnImpl }),
     })
   } catch (error) {
+    record('failed', null, `Could not start: ${messageOf(error)}`)
     return `Could not run the program: ${messageOf(error)}`
   }
-  child.stdout?.on('data', (chunk: Buffer) => sink.push(chunk))
-  child.stderr?.on('data', (chunk: Buffer) => sink.push(chunk))
+  child.stdout?.on('data', (chunk: Buffer) => {
+    sink.push(chunk)
+    out.push(chunk)
+  })
+  child.stderr?.on('data', (chunk: Buffer) => {
+    sink.push(chunk)
+    err.push(chunk)
+  })
 
   const timeoutMs = request.deps.timeoutMs ?? CODE_TIMEOUT_MS
   let timedOut = false
@@ -232,7 +269,13 @@ async function execute(request: ExecuteRequest): Promise<string> {
   const output = sink.text().trimEnd()
   const tail = sink.truncated() ? `\n...(cut, ${sink.total} characters in all)` : ''
 
-  if (spawnError !== null) return `Could not run the program: ${spawnError}`
+  if (spawnError !== null) {
+    record('failed', null, `Could not start: ${spawnError}`)
+    return `Could not run the program: ${spawnError}`
+  }
+  const exit = child.exitCode ?? 0
+  if (timedOut) record('timeout', child.exitCode, `Timed out after ${Math.round(timeoutMs / 1000)} seconds.`)
+  else record(exit === 0 ? 'ok' : 'failed', exit, written.length === 0 ? undefined : `Files written: ${written.join(', ')}`)
   const head = timedOut
     ? `Timed out after ${Math.round(timeoutMs / 1000)} seconds.`
     : `Exit ${child.exitCode ?? 0}`
