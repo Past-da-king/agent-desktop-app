@@ -1,10 +1,9 @@
-import { PROVIDERS, type EnvironmentReport, type Found, type HotkeyStatus, type SystemInfo } from '@agent/core'
-import { useEffect, useRef, useState } from 'react'
+import { PROVIDERS, type EnvironmentReport, type Found, type SystemInfo } from '@agent/core'
+import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
 import { folderName } from '../lib/files'
 import { timeAgo } from '../lib/format'
-import { acceleratorFromEvent, formatAccelerator } from '../lib/hotkey'
 import { machineSummary, scanSummary } from '../lib/system'
 import { ACCENTS, applyAccent } from '../state/theme'
 import { useAccountStatus } from '../state/useAccount'
@@ -18,6 +17,7 @@ import { Icon } from '../ui/Icon'
 import { MASCOT_ORDER, Mascot, MASCOTS } from '../ui/Mascot'
 import { SectionHeader } from '../ui/SectionHeader'
 import { VoiceSettings } from '../voice/VoiceSettings'
+import { HotkeySettings } from './HotkeySettings'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
 
@@ -62,55 +62,6 @@ function ResetDialog({ onClose }: { onClose: () => void }): JSX.Element {
   )
 }
 
-function HotkeyRecorder({
-  value,
-  platform,
-  onSave,
-}: {
-  value: string
-  platform: string
-  onSave: (accelerator: string) => void
-}): JSX.Element {
-  const [recording, setRecording] = useState(false)
-  const saveRef = useRef(onSave)
-  saveRef.current = onSave
-
-  useEffect(() => {
-    if (!recording) return
-    const onKey = (event: KeyboardEvent): void => {
-      event.preventDefault()
-      event.stopPropagation()
-      if (event.key === 'Escape') {
-        setRecording(false)
-        return
-      }
-      const accelerator = acceleratorFromEvent(event, platform)
-      if (accelerator === null) return
-      setRecording(false)
-      saveRef.current(accelerator)
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [recording, platform])
-
-  const keys = formatAccelerator(value, platform)
-
-  return (
-    <div className="kbds">
-      {recording ? (
-        <span className="small muted">Press the keys now</span>
-      ) : keys.length > 0 ? (
-        keys.map((key) => <kbd key={key}>{key}</kbd>)
-      ) : (
-        <span className="small muted">No shortcut</span>
-      )}
-      <Button variant="tonal" size="sm" onClick={() => setRecording(true)}>
-        {recording ? 'Listening...' : 'Record'}
-      </Button>
-    </div>
-  )
-}
-
 function toolsLine(report: EnvironmentReport): string {
   const shells = report.shells.filter((item) => item.found).map((item) => item.label)
   const runtimes = report.runtimes.filter((item) => item.found).map((item) => foundName(item))
@@ -147,7 +98,6 @@ export function Settings(): JSX.Element {
   const [resetting, setResetting] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [pickingFolder, setPickingFolder] = useState(false)
-  const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus | null>(null)
   const [system, setSystem] = useState<SystemInfo | null>(null)
   const [environment, setEnvironment] = useState<EnvironmentReport | null>(null)
   const [scanning, setScanning] = useState(true)
@@ -184,8 +134,6 @@ export function Settings(): JSX.Element {
       live = false
     }
   }, [])
-
-  useEffect(() => agent.window.onHotkeyStatus((status) => setHotkeyStatus(status)), [])
 
   const scanAgain = async (): Promise<void> => {
     setScanning(true)
@@ -531,27 +479,7 @@ export function Settings(): JSX.Element {
                   label="Keep running in the tray"
                 />
               </div>
-              <div className="rowc" style={{ flexWrap: 'wrap' }}>
-                <div className="ri">
-                  <Icon name="bolt" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Quick Ask shortcut</b>
-                  <span>A small box from anywhere on this computer</span>
-                </div>
-                <HotkeyRecorder
-                  value={settings?.quickAskHotkey ?? 'CommandOrControl+Shift+Space'}
-                  platform={agent.platform}
-                  onSave={(accelerator) => {
-                    void save({ quickAskHotkey: accelerator })
-                  }}
-                />
-              </div>
-              {hotkeyStatus !== null ? (
-                <div className="small muted" style={{ padding: '0 18px 12px 78px' }}>
-                  {hotkeyStatus.message}
-                </div>
-              ) : null}
+              <HotkeySettings />
               <div className="rowc">
                 <div className="ri">
                   <Icon name="folder" size={22} />
