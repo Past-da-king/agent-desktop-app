@@ -3,12 +3,16 @@
  * chat uses, every name is used, every component is one the renderer draws with its arguments in the right
  * shape, and together the examples show every component there is.
  */
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { OPENUI_PROMPT } from '../src/main/runtime/openui-prompt'
-import { isAction, isNode, LIBRARY, parse, render, splitMessage, type UiNode, type V } from '../src/renderer/openui/lang'
+import { hasOpenUi, isAction, isNode, LIBRARY, parse, render, splitMessage, type UiNode, type V } from '../src/renderer/openui/lang'
 import { OpenUiBlock, OpenUiProvider } from '../src/renderer/openui/OpenUiView'
 
 const examples = [...OPENUI_PROMPT.matchAll(/```openui-lang\n([\s\S]*?)```/g)].map((match) => match[1] ?? '')
@@ -186,5 +190,34 @@ describe('the OpenUI prompt examples', () => {
     // Col data is one plain value per row: the old {id, values} teaching drew "[object Object]".
     expect(OPENUI_PROMPT).not.toContain('{ id, values }')
     expect(OPENUI_PROMPT).not.toMatch(/[—–]/)
+  })
+})
+
+/**
+ * Replies a real model (Claude Sonnet through Claude Code, 21 Oct 2026) wrote with the new system prompt and no
+ * tools, saved as they came back. The structured asks came back as cards that render; the greeting stayed plain.
+ */
+describe('real replies written with the new prompt', () => {
+  const read = (name: string): string => readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'openui', `live-${name}.md`), 'utf8')
+
+  it.each(['hosting', 'day', 'projects', 'weekend'])('%s is one short line and a card that renders', (name) => {
+    const parts = splitMessage(read(name))
+    expect(parts[0]?.kind).toBe('prose')
+    const blocks = parts.filter((part) => part.kind === 'openui')
+    expect(blocks).toHaveLength(1)
+    const source = blocks[0]?.kind === 'openui' ? blocks[0].source : ''
+    const tree = render(parse(source))
+    expect(tree.errors).toEqual([])
+    expect([...tree.unresolved]).toEqual([])
+    expect(tree.root).not.toBeNull()
+    if (tree.root !== null) expect(problems(tree.root)).toEqual([])
+    const html = renderToStaticMarkup(createElement(OpenUiProvider, { value: {} }, createElement(OpenUiBlock, { source })))
+    expect(html).not.toContain('oui-raw')
+  })
+
+  it('a greeting stays plain words', () => {
+    const reply = read('hello')
+    expect(hasOpenUi(reply)).toBe(false)
+    expect(reply.trim().split('\n')).toHaveLength(1)
   })
 })
