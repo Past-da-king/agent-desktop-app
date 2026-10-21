@@ -15,6 +15,7 @@ import { IconChip, UiGlyph } from './icons'
 import {
   actionsOf,
   buttonsLayout,
+  columnWidth,
   cardTitle,
   factRows,
   factsLayout,
@@ -655,13 +656,14 @@ function TableComp({ cols }: { cols: UiNode[] }): JSX.Element | null {
   const data = cols.map((c) => list(c, 'data'))
   const rows = Math.max(...data.map((d) => d.length))
   const numeric = data.map((d) => d.length > 0 && d.every((v) => typeof v === 'number'))
+  const widths = cols.map((c, i) => `w-${columnWidth(str(c, 'label') ?? '', data[i] ?? [])}`)
   return (
     <div className="oui-table-wrap">
       <table className="oui-table">
         <thead>
           <tr>
             {cols.map((c, i) => (
-              <th key={i} className={numeric[i] ? 'num' : ''}>
+              <th key={i} className={`${widths[i]}${numeric[i] ? ' num' : ''}`}>
                 {str(c, 'label') ?? ''}
               </th>
             ))}
@@ -675,7 +677,7 @@ function TableComp({ cols }: { cols: UiNode[] }): JSX.Element | null {
                 // Words wrap only between words; a long unbroken token (a link, an id) may break anywhere.
                 const long = /\S{28,}/.test(cell) ? ' long' : ''
                 return (
-                  <td key={c} className={`${numeric[c] ? 'num' : ''}${signClass(cell)}${long}`}>
+                  <td key={c} className={`${widths[c]}${numeric[c] ? ' num' : ''}${signClass(cell)}${long}`}>
                     {cell}
                   </td>
                 )

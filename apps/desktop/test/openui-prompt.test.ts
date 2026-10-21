@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { OPENUI_PROMPT } from '../src/main/runtime/openui-prompt'
-import { hasOpenUi, headerIcon, heroSplit, isAction, isNode, LIBRARY, parse, render, splitMessage, type UiNode, type V } from '../src/renderer/openui/lang'
+import { columnWidth, hasOpenUi, headerIcon, heroSplit, isAction, isNode, LIBRARY, parse, render, splitMessage, type UiNode, type V } from '../src/renderer/openui/lang'
 import { iconForText } from '../src/renderer/openui/icon-words'
 import { OpenUiBlock, OpenUiProvider } from '../src/renderer/openui/OpenUiView'
 
@@ -255,7 +255,14 @@ describe('card header icons and table cells', () => {
     const html = renderToStaticMarkup(
       createElement(OpenUiProvider, { value: {} }, createElement(OpenUiBlock, { source: 'root = Stack([c])\nc = Card([t])\nt = Table([Col("Place", ["Magaliesberg", "https://example.com/a/very/long/path/that/never/stops"])])' })),
     )
-    expect(html).toMatch(/<td class="">Magaliesberg<\/td>/)
-    expect(html).toMatch(/<td class=" long">https:\/\/example.com/)
+    expect(html).toMatch(/<td class="w-long">Magaliesberg<\/td>/)
+    expect(html).toMatch(/<td class="w-long long">https:\/\/example.com/)
+  })
+
+  it('short columns stay short, phrases get room', () => {
+    expect(columnWidth('Speed', ['Fast', 'Slow'])).toBe('short')
+    expect(columnWidth('From (R)', [60, 0, 150])).toBe('short')
+    expect(columnWidth('Paid', ['From $19 a month', 'About R150'])).toBe('mid')
+    expect(columnWidth('Free tier', ['300 credits a month (about 15 GB or 20 deploys)', 'None'])).toBe('long')
   })
 })

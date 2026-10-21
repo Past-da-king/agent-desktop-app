@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import type { AgentEvent, JsonObject } from '@agent/core'
 
 import { SDK_TOOLS } from './sdk-permissions'
+import { markReleased } from '../tools/run-capture'
 
 export type CliId = 'claude' | 'codex'
 
@@ -180,13 +181,15 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
           PreToolUse: [
             {
               hooks: [
-                async (input: unknown) => {
-                  const hook = input as { tool_name?: string; tool_input?: unknown }
+                async (input: unknown, toolUseId?: string) => {
+                  const hook = input as { tool_name?: string; tool_input?: unknown; tool_use_id?: string }
                   const name = String(hook.tool_name ?? '')
                   if (name.startsWith(TOOL_PREFIX) || name === 'WebSearch' || name === 'WebFetch') return {}
                   const args = (hook.tool_input ?? {}) as Record<string, unknown>
                   const verdict =
                     turn.permission === undefined ? { allow: false as const, message: 'Not allowed here.' } : await turn.permission(name, args)
+                  // The clock for "ran in" starts now, not when the call was written: the approval wait is not run time.
+                  if (verdict.allow) markReleased(String(toolUseId ?? hook.tool_use_id ?? ''))
                   return {
                     hookSpecificOutput: {
                       hookEventName: 'PreToolUse' as const,

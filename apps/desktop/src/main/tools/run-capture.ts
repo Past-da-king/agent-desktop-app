@@ -38,6 +38,28 @@ export function takeRun(input: JsonObject): ToolRun | undefined {
 }
 
 /**
+ * When a call was let go, for tools that cannot time themselves (Claude Code's own Bash on the person's plan):
+ * the app's approval hook marks the moment the person answered, so the wait is not counted as running time.
+ * Keyed by the tool call id; entries are taken once, and old ones are dropped so nothing piles up.
+ */
+const releases = new Map<string, number>()
+
+export function markReleased(callId: string, at = Date.now()): void {
+  if (callId === '') return
+  releases.set(callId, at)
+  if (releases.size > 500) {
+    const oldest = releases.keys().next().value
+    if (oldest !== undefined) releases.delete(oldest)
+  }
+}
+
+export function takeReleased(callId: string): number | undefined {
+  const at = releases.get(callId)
+  releases.delete(callId)
+  return at
+}
+
+/**
  * One output stream kept for the person: the first half of the cap as it arrives and a rolling last half, so a
  * long build log keeps both how it started and how it ended. Separate from what the model gets.
  */

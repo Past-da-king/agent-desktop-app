@@ -90,6 +90,7 @@ export function runsDemo(now: number): ChatItem[] {
       stderr: TEST_ERR,
       exitCode: 1,
       ms: 38_420,
+      waitedMs: 252_000,
       state: 'failed',
       trimmed: false,
     }),

@@ -35,6 +35,8 @@ export interface RunRecord {
   note?: string
   /** True when stdout and stderr came back as one stream (Claude Code's own shell), so stdout holds both. */
   merged?: boolean
+  /** How long it waited for the person's approval before it ran (not counted in ms), when that is known. */
+  waitedMs?: number
 }
 
 /** The most the record keeps of any one stream: the first and last halves of this, the middle cut. */
@@ -70,6 +72,8 @@ export function runFromMeta(meta: Record<string, unknown>): RunRecord | null {
   if (text('target') !== '') record.target = text('target')
   if (text('note') !== '') record.note = text('note')
   if (r['merged'] === true) record.merged = true
+  const waited = num('waitedMs')
+  if (waited !== null && waited > 0) record.waitedMs = waited
   return record
 }
 

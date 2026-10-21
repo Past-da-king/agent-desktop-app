@@ -172,6 +172,14 @@
    its card scrolls sideways inside .oui-table-wrap instead. Only a long unbroken token may break mid-way. */
 .oui-table td{overflow-wrap:normal;word-break:normal;hyphens:manual}
 .oui-table td.long{overflow-wrap:anywhere;min-width:14em}
+/* Column widths from their longest cell (lang.ts columnWidth): short ones stay short and on one line, phrases get a
+   real minimum, the first column (usually names) may be narrower. Too wide for the card: it scrolls sideways. */
+.oui-table .w-short{white-space:nowrap}
+.oui-table .w-mid{min-width:8rem}
+.oui-table .w-long{min-width:10.5rem}
+.oui-table tr>.w-mid:first-child,.oui-table tr>.w-long:first-child{min-width:6rem}
+.oui-table th,.oui-table td{padding-left:12px;padding-right:12px}
+.oui-table th.w-mid,.oui-table th.w-long{white-space:normal}
 .oui-table tr:first-child td{border-top:0}
 .oui-table .num{text-align:right}
 .oui-chart{display:flex;flex-direction:column;gap:8px}

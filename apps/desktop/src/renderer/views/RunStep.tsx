@@ -135,7 +135,8 @@ export function RunDetail({ run, id }: { run: RunRecord; id: string }): JSX.Elem
   const facts = [
     run.kind === 'shell' && run.label !== '' && run.label !== 'Shell' ? run.label : '',
     run.exitCode !== null ? `exit ${run.exitCode}` : '',
-    run.state === 'running' ? 'still running' : formatMs(run.ms),
+    run.state === 'running' ? 'still running' : run.ms === null ? '' : `ran in ${formatMs(run.ms)}`,
+    run.waitedMs !== undefined ? `waited ${formatMs(run.waitedMs)} for you first` : '',
   ].filter((fact) => fact !== '')
   return (
     <div className="run-body" id={id}>
