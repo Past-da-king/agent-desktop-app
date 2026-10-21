@@ -38,6 +38,8 @@ export function BrowserHost({ state, parked }: { state: BrowserState | null; par
   const pages = useRef(new Map<string, PageNode>())
   const shade = useRef<HTMLDivElement | null>(null)
   const curtain = useRef<HTMLDivElement | null>(null)
+  /** Over a page an agent is driving: a click hands it to the person; the wheel still scrolls the panel. */
+  const catcher = useRef<HTMLDivElement | null>(null)
   const latest = useRef({ state, parked, inView: true, sent: '' })
   latest.current.state = state
   latest.current.parked = parked
@@ -83,6 +85,8 @@ export function BrowserHost({ state, parked }: { state: BrowserState | null; par
     // The person can use the page only when it is theirs and in sight; otherwise the wheel scrolls the panel.
     const theirs = now !== null && now.agentActive === false && place !== 'backstage'
     host.classList.toggle('live', theirs)
+    // A page in sight that an agent is driving: clicking it takes it over, as the Take over button does.
+    if (catcher.current !== null) catcher.current.hidden = theirs || place === 'backstage' || shown === undefined || shown.embed !== true
 
     let shadeAt: { left: number; top: number; width: number; height: number } | null = null
     for (const tab of now?.tabs ?? []) {
@@ -138,6 +142,17 @@ export function BrowserHost({ state, parked }: { state: BrowserState | null; par
       host.appendChild(node)
       shade.current = node
     }
+    if (catcher.current === null) {
+      const node = document.createElement('div')
+      node.className = 'br-catch'
+      node.hidden = true
+      node.title = 'Click to take over this page'
+      node.addEventListener('click', () => {
+        void agent.browser.takeOver()
+      })
+      host.appendChild(node)
+      catcher.current = node
+    }
     const wanted = new Map<string, BrowserTab>()
     for (const tab of state?.tabs ?? []) {
       if (tab.embed === true && typeof tab.partition === 'string' && tab.partition !== '') wanted.set(tab.id, tab)
@@ -157,6 +172,8 @@ export function BrowserHost({ state, parked }: { state: BrowserState | null; par
       // Set before the element is connected: the partition can never change once the guest exists.
       view.setAttribute('partition', tab.partition ?? '')
       view.setAttribute('src', 'about:blank')
+      // New windows go to the main process's handler, which opens them as checked tabs (embed.ts guardWebview).
+      view.setAttribute('allowpopups', '')
       // Reached by clicking the page when it is the person's, never by tabbing through the app.
       view.tabIndex = -1
       // The guest's id can be read once its first (blank) document is ready; hand it over once.

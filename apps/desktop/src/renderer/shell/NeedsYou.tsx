@@ -51,7 +51,7 @@ export function WaitingCard({ item, source, onOpen }: { item: ChatItem; source: 
   }
 
   return (
-    <li className={`ny-card${approval ? ' appr-k' : ''}`}>
+    <li data-item={item.id} className={`ny-card${approval ? ' appr-k' : ''}`}>
       <div className="ny-top">
         <SourceTag source={source} />
         <span className="ny-kind">{approval ? 'Approve' : handoff ? 'Your turn' : 'Question'}</span>

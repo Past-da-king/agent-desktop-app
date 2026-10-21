@@ -86,3 +86,8 @@
 .tip.above{transform:translateY(-100%)}
 @keyframes tip-in{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.tip{animation:none}}
+button.wait-line{width:100%;text-align:left;cursor:pointer}
+button.wait-line:hover{filter:brightness(.97)}
+.ny-card.ny-flash{animation:ny-flash 1.2s var(--effects)}
+@keyframes ny-flash{0%,60%{box-shadow:0 0 0 3px var(--primary)}100%{box-shadow:0 0 0 0 transparent}}
+@media (prefers-reduced-motion:reduce){.ny-card.ny-flash{animation:none;box-shadow:0 0 0 3px var(--primary)}}

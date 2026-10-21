@@ -17,6 +17,7 @@ import {
   type OpenDialogOptions,
 } from 'electron'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
+import { HANDOFF_CLOSED } from './tools/browser'
 
 import type { AppPlatform } from '@agent/core'
 
@@ -554,6 +555,23 @@ async function startServices(win: BrowserWindow): Promise<void> {
   agentBrowser = new AgentBrowser({
     window: win,
     onState: (state) => broadcast(EVENTS.browser, state),
+    // Closing the tab an agent handed over answers its "needs you in the browser" card, so nothing waits forever.
+    onHandoffClosed: () => {
+      void (async () => {
+        const rows = store === null ? [] : await store.list('chat_item')
+        for (const row of rows) {
+          if (row.kind !== 'question') continue
+          let meta: Record<string, unknown> = {}
+          try {
+            meta = JSON.parse(row.meta) as Record<string, unknown>
+          } catch {
+            continue
+          }
+          const options = Array.isArray(meta['options']) ? meta['options'] : []
+          if (meta['answer'] === '' && options.includes('Done, carry on')) await runner?.answer(row.id, HANDOFF_CLOSED)
+        }
+      })().catch(() => undefined)
+    },
     openExternal: (url) => shell.openExternal(url),
     sitesFile: join(app.getPath('userData'), 'browser-sites.json'),
     // The person's own tabs keep their own sign-ins, apart from every agent's (apps/profiles.ts MINE_PARTITION).

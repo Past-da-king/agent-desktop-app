@@ -41,8 +41,10 @@ export function guardWebview(
   const src = typeof params['src'] === 'string' ? params['src'] : ''
   // The main process loads every address itself (url-policy decides); the tag only ever starts blank.
   if (src !== '' && src !== 'about:blank') return false
-  // Popups go through the tab's own window-open handler, never the tag.
-  ;(params as Record<string, unknown>)['allowpopups'] = false
+  // A page's popups and target=_blank links (Google opens every result that way) must reach the tab's own
+  // window-open handler, which always denies the window and opens a checked tab instead. Without allowpopups
+  // the tag drops them before the handler ever sees them, and a click on a result does nothing.
+  ;(params as Record<string, unknown>)['allowpopups'] = true
   return true
 }
 

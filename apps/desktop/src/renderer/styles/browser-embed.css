@@ -29,3 +29,6 @@
   .br-stage-chrome .br-stage-actions .br-mode-size,.br-stage-chrome .br-stage-kbd{display:none}
   .br-stage-chrome .br-stage-actions > .btn:last-child{margin-left:auto}
 }
+/* Over a page an agent drives: a click takes it over; the wheel falls through to the panel. */
+.br-host .br-catch{position:absolute;inset:0;z-index:5;pointer-events:auto;cursor:pointer;background:transparent}
+.br-host .br-catch[hidden]{display:none}
