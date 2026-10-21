@@ -183,6 +183,37 @@ Revised 01:45 (owner's correction): both apps stay standalone; linking is option
   Downloads, notify) and `hello` with DeviceFacts. Local images in chat load from `/v1/file` with the pass.
 - The `/app/` web UI route is optional and not part of v1.
 
+## 11. Shared device tools (added 01:50)
+
+Any agent on any brain can use a tool that lives on another linked device (browser, notifications, files, shell,
+approvals). General for any devices; nothing assumes a phone or a particular machine.
+
+- **Advertise**: every device (node or screen) sends its tool catalogue in `hello` as `tools: DeviceTool[]` and the
+  node stores it on the device row as `tools`. `DeviceTool = { name, description, params (JSON schema), group:
+  "browser|notifications|files|shell|approval|phone|other", readOnly }`. Tool names are the device's own names
+  (e.g. `browser_open`, `notifications_read`, `file_send`, `shell_run`, `ask_user`).
+- **Call**: a brain sends a device command `{ kind: "tool", id, tool, args, chatId, deadlineMs }` (s5.2) to the
+  target device; the device runs it and answers with RPC `device.result(id, ok, value | error)` (value JSON, images as
+  `{ type: "image", mime, data base64 }` or a `/v1/file` path on the device's node). Default deadline 120 s,
+  browser up to 600 s. While the device is offline the command waits in `device_command` (expires 10 min).
+  A screen-only device (phone) reaches the brain over its existing `/v1/rpc` socket, so tools on it work without
+  inbound connections to it.
+- **Agent side** (every brain): two tools plus routing.
+  `devices_list()` lists linked devices with kind, online, and tool groups.
+  `device_tool(device, tool, args)` calls one tool on a named device (`device` by id or name, forgiving match, or
+  `"best"`). Existing local tools gain an optional `device` argument where cheap (browser tools, notify, ask_user,
+  send_file, open_url); without it they act locally, except open_url/send_file/notify which default to the origin
+  device.
+- **Router** for `"best"`: prefer the origin device if it has the tool; else a device the user marked preferred for
+  that group in Settings > Devices (optional); else the online device with the tool, by brain priority, phones
+  last for heavy work. If a local browser call fails with a block (HTTP 403/429, captcha, "access denied") the agent
+  is told which linked devices have a browser and may retry there.
+- **Approval on another device**: `ask_user` / `request_approval` with `device` puts the question on that device
+  (on the phone: a notification with the buttons); the answer comes back as the tool result and work continues on
+  the brain.
+- **Safety**: only paired, non-revoked devices; each device may turn groups off ("Let other devices use my
+  browser/notifications/files/shell"), default ON for browser, files, notifications, approval and OFF for shell.
+
 ## 10. Overlay network (optional, pluggable)
 
 A sidecar (`agent-net`, Go, tsnet) can join a Tailscale-compatible control server (Tailscale or the user's own
