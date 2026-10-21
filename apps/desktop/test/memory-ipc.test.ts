@@ -72,6 +72,11 @@ describe('memory IPC', () => {
 
   it('starts a new chat, searches chats and runs the daily pass', async () => {
     expect(await invoke(MEMORY_CHANNELS.newChat)).toMatchObject({ saving: false })
+    // Every New chat from the window opens a fresh chat: no divider ever lands inside an existing (maybe running) chat.
+    const divider = (await store.list('chat_item')).find((row) => row.kind === 'notice')
+    expect(JSON.parse(divider?.meta ?? '{}')['chat']).toMatch(/^c[a-z0-9]{6,}$/i)
+    expect(await invoke(MEMORY_CHANNELS.newChat, { chat: 'main', from: 'main' })).toEqual({ dividerId: null, saving: false })
+    await expect(invoke(MEMORY_CHANNELS.newChat, { chat: '../x', from: 'main' })).rejects.toThrow('plain letters')
     expect(await invoke(MEMORY_CHANNELS.searchChats, 'anything', 3)).toEqual([])
     const report = (await invoke(MEMORY_CHANNELS.runDaily)) as { ok: boolean }
     expect(report.ok).toBe(true)

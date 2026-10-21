@@ -161,7 +161,7 @@ describe('New Chat and the model context', () => {
     }
   })
 
-  it('keeps a run that was still going when New chat was pressed in the old chat', async () => {
+  it('keeps a run that was still going when New chat was pressed in the old chat (the app path: a fresh chat)', async () => {
     let release: () => void = () => undefined
     const gate = new Promise<void>((resolve) => (release = resolve))
     let entered: () => void = () => undefined
@@ -196,8 +196,13 @@ describe('New Chat and the model context', () => {
     try {
       const running = runner.send('The old question about apricots')
       await inTool
-      await memory.newChat()
-      late = () => void runner.deliver('[Helper #1] OLD-HELPER-NOTE')
+      // What the New chat button does (renderer/lib/chat-actions.ts): open a fresh chat, filed from the one it left.
+      const fresh = 'cfreshchat00001'
+      const made = await memory.newChat({ chat: fresh, from: 'main' })
+      const divider = (await store.list('chat_item')).find((row) => row.id === made.dividerId)
+      expect(JSON.parse(divider?.meta ?? '{}')['chat']).toBe(fresh)
+      // A helper started by the old run reports back to the chat that started it (HelperManager.deliver(note, chat)).
+      late = () => void runner.deliver('[Helper #1] OLD-HELPER-NOTE', 'main')
       release()
       await running
       while (runner.state().running) await new Promise((resolve) => setTimeout(resolve, 20))
@@ -205,7 +210,9 @@ describe('New Chat and the model context', () => {
       await memory.idle()
       // The old run finished after the divider, but its turns belong to the old chat.
       expect((await store.list('chat_item')).some((row) => row.text === 'OLD-FINAL-ANSWER')).toBe(true)
-      await runner.send('A brand new question')
+      // The helper's note stayed with the old chat's run.
+      expect(JSON.stringify(fake.requests[2]?.body ?? {})).toContain('OLD-HELPER-NOTE')
+      await runner.send('A brand new question', [], fresh)
       const last = JSON.stringify(fake.requests.at(-1)?.body ?? {})
       expect(last).toContain('A brand new question')
       expect(last).not.toContain('apricots')

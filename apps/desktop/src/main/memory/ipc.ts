@@ -11,6 +11,7 @@ import { MEMORY_CHANNELS } from '../../shared/memory-channels'
 import type { IpcMainLike } from '../ipc'
 import { parseExport, planImport, runImport, type BatchingStore } from './importer'
 import type { MemoryService } from './service'
+import { newChatId } from '../runtime/chat-lines'
 
 export interface MemoryIpcDeps {
   ipcMain: IpcMainLike
@@ -29,7 +30,9 @@ export function registerMemoryIpc(deps: MemoryIpcDeps): void {
 
   ipcMain.handle(MEMORY_CHANNELS.newChat, async (_event, target) => {
     // Several chats at once: which chat New chat opened and which it left (plain ids; see runtime/chat-lines.ts).
-    if (target === undefined || target === null) return service.newChat()
+    // Every New chat from the window opens a fresh chat of its own, so a divider never lands inside a chat whose run
+    // is still going. A caller that names no chat gets a new one, left from the first chat.
+    if (target === undefined || target === null) return service.newChat({ chat: newChatId(), from: 'main' })
     if (typeof target !== 'object') throw new Error('new chat target must be an object')
     const chat = text((target as Record<string, unknown>)['chat'], 'chat id', 64)
     const from = text((target as Record<string, unknown>)['from'], 'chat id', 64)
