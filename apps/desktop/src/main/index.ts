@@ -687,6 +687,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
       agentName: () => settings.get().agentName,
       profiles: () => apps.profiles.all(),
       accounts: () => accounts.all(),
+      // project_open: the window shows the project's page (renderer state/keys.ts listens for the route).
+      open: (projectId) => broadcast(EVENTS.route, { view: 'project', id: projectId }),
       imageIcon: async (path) => {
         const picture = nativeImage.createFromPath(path)
         if (picture.isEmpty()) return null

@@ -1,4 +1,4 @@
-import { PROFILE_COLORS, type AiPicks, type ProfileColor, type ProjectRow } from '@agent/core'
+import { PROFILE_COLORS, parseAliases, type AiPicks, type ProfileColor, type ProjectRow } from '@agent/core'
 import { useRef, useState, type CSSProperties } from 'react'
 
 import { agent } from '../bridge'
@@ -25,6 +25,7 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
   const profiles = useProfiles() ?? []
   const [name, setName] = useState(project?.name ?? '')
   const [description, setDescription] = useState(project?.description ?? '')
+  const [aliases, setAliases] = useState((project?.aliases ?? []).join(', '))
   const [glyph, setGlyph] = useState(project?.icon.glyph ?? 'folder')
   const [color, setColor] = useState<ProfileColor>(project?.icon.color ?? 'iris')
   const [emoji, setEmoji] = useState(project !== undefined && singleEmoji(project.icon.glyph) !== '' ? project.icon.glyph : '')
@@ -54,6 +55,7 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
         ...(project === undefined ? { chats: [] } : { id: project.id }),
         name: clean,
         description: description.trim().slice(0, 600),
+        aliases: parseAliases(aliases),
         icon,
         path,
         profile,
@@ -86,9 +88,22 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
           setName(value)
           setError('')
         }}
-        placeholder="Guavas website"
+        placeholder="Shop website"
         error={error === '' ? undefined : error}
       />
+
+      <div className="field">
+        <label htmlFor="project-aliases">Other names</label>
+        <input
+          id="project-aliases"
+          className="input"
+          value={aliases}
+          onChange={(event) => setAliases(event.target.value)}
+          placeholder="Rumbler, the dictation app"
+          autoComplete="off"
+        />
+        <span className="small muted pj-hint">What you call it out loud, split by commas. Search and your agent find it by these too.</span>
+      </div>
 
       <div className="field">
         <label>Icon</label>

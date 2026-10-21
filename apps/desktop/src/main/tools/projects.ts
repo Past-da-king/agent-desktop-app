@@ -1,5 +1,5 @@
 /**
- * Projects as tools, so the one main agent can work across them (Ayanda, 21 Oct 2026). In the main thread it lists
+ * Projects as tools, so the one main agent can work across them (21 Oct 2026). In the main thread it lists
  * projects and what each chat is doing, starts a chat in a project with a brief, and sends a message into one; a
  * project chat can write back to the main thread with message_main. A message between them shows in the receiving
  * chat labelled with who sent it, and runs that chat's turn like a message from the person.
@@ -8,7 +8,7 @@ import { mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
-import { MAIN_CHAT, PROFILE_COLORS, bool, schema, str, NO_PICK, type AgentProfileInfo, type AiAccount, type AiPicks, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext } from '@agent/core'
+import { MAIN_CHAT, PROFILE_COLORS, bool, findProjects, parseAliases, pickMatch, schema, str, NO_PICK, type AgentProfileInfo, type AiAccount, type AiPicks, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext } from '@agent/core'
 
 import { isIconImage } from '../../shared/project-icon'
 import type { DataStore } from '../runtime/data'
@@ -38,6 +38,8 @@ export interface ProjectToolDeps {
   imageIcon?(path: string): Promise<string | null>
   /** The AI accounts the person set up, so a project can be given one by name. */
   accounts?(): AiAccount[]
+  /** Puts a project's page on screen in the app window (project_open). Without it there is no project_open. */
+  open?(projectId: string): void
 }
 
 /** An account by name or id; 'main' / 'same as main' / '' means the main agent's. */
@@ -72,11 +74,20 @@ function clip(value: string, limit: number): string {
   return flat.length <= limit ? flat : `${flat.slice(0, limit - 3)}...`
 }
 
-/** A project by id or by name, ignoring case; a hidden one is found too. */
+/**
+ * A project by id or by name, ignoring case; a hidden one is found too. Failing those, the one clear winner of the
+ * forgiving matcher ("lender select" for Acme Lender Selector), never a guess between two close ones.
+ */
 export function findProject(projects: ProjectRow[], ref: string): ProjectRow | null {
   const wanted = ref.trim().toLowerCase()
   if (wanted === '') return null
-  return projects.find((p) => p.id.toLowerCase() === wanted) ?? projects.find((p) => p.name.toLowerCase() === wanted) ?? projects.find((p) => p.name.toLowerCase().includes(wanted)) ?? null
+  return (
+    projects.find((p) => p.id.toLowerCase() === wanted) ??
+    projects.find((p) => p.name.toLowerCase() === wanted) ??
+    projects.find((p) => p.name.toLowerCase().includes(wanted)) ??
+    pickMatch(findProjects(ref, projects)).winner?.item ??
+    null
+  )
 }
 
 /** The project a chat belongs to. */
@@ -85,7 +96,44 @@ export function projectOfChat(projects: ProjectRow[], chat: string): ProjectRow 
 }
 
 export function projectTools(deps: ProjectToolDeps): Tool[] {
-  return [projectsList(deps), projectCreate(deps), projectUpdate(deps), projectChatStart(deps), projectChatSend(deps), messageMain(deps)]
+  const tools = [projectsList(deps), projectCreate(deps), projectUpdate(deps), projectChatStart(deps), projectChatSend(deps), messageMain(deps)]
+  const open = deps.open
+  if (open !== undefined) tools.push(projectOpen(deps, open))
+  return tools
+}
+
+/**
+ * "Show me the lender select": puts that project's page on screen (22 Oct 2026). Same matcher as the
+ * palette's search. One clear winner opens; two close ones come back for the agent to ask; none says so.
+ */
+function projectOpen(deps: ProjectToolDeps, open: (projectId: string) => void): Tool {
+  return {
+    spec: {
+      name: 'project_open',
+      description:
+        'Put one of the user\'s projects on screen: its page opens in the app. Pass what the user called it, as they said it ("the lender select", "strategic website"); it forgives filler words, cut-off words, typos and dictation slips, and also matches the project\'s other names, description and folder. If two projects are close it opens neither and returns both, so ask which one.',
+      schema: schema(['project'], { project: str('The project as the user said it, or its id') }),
+    },
+    run: async (input) => {
+      const said = text(input['project'])
+      if (said === '') return 'Pass the project, as the user said it.'
+      const projects = await deps.store.list('project')
+      if (projects.length === 0) return 'The user has no projects yet.'
+      const byId = projects.find((p) => p.id === said)
+      const exact = byId ?? projects.find((p) => p.name.toLowerCase() === said.toLowerCase())
+      const picked = exact !== undefined ? { winner: { item: exact, score: 1 }, close: [] } : pickMatch(findProjects(said, projects))
+      const winner = picked.winner?.item
+      if (winner !== undefined) {
+        open(winner.id)
+        return `Opened ${winner.name}${winner.hidden ? ' (a hidden project)' : ''} on screen.`
+      }
+      if (picked.close.length > 0) {
+        const names = picked.close.map((hit) => `${hit.item.name} (id ${hit.item.id})`)
+        return `Nothing opened: "${said}" is close to ${names.length} projects: ${names.join('; ')}. Ask the user which one (ask_user with their names as buttons), then call project_open with its id.`
+      }
+      return `No project matches "${said}". The projects are: ${projects.map((p) => p.name).join(', ')}. If one of these is what they meant, call again with its name; otherwise tell the user there is none by that name.`
+    },
+  }
 }
 
 function projectsList(deps: ProjectToolDeps): Tool {
@@ -106,6 +154,7 @@ function projectsList(deps: ProjectToolDeps): Tool {
         .map((project) => {
           const lines = [`${project.name} (id ${project.id})${project.hidden ? ' [hidden]' : ''}${project.description === '' ? '' : `: ${clip(project.description, 200)}`}`]
           if (project.path !== '') lines.push(`  folder: ${project.path}`)
+          if ((project.aliases ?? []).length > 0) lines.push(`  also called: ${(project.aliases ?? []).join(', ')}`)
           if (project.chats.length === 0) lines.push('  no chats yet')
           for (const chat of project.chats) {
             const own = rows.filter((row) => chatOf(row) === chat)
@@ -271,6 +320,7 @@ function projectCreate(deps: ProjectToolDeps): Tool {
         name: str('Short project name'),
         path: str('The full path of its folder on this computer (found with your file tools). Leave out for none.'),
         description: str('One or two lines: what it is for'),
+        aliases: str('Other names the user calls it, comma separated (e.g. "Rumbler" for RMBLR), so search and project_open find it'),
         profile: str("The profile whose accounts and logins its helpers use, by name. Leave out for General."),
         icon: str('An icon: one of folder, building, code, term, globe, doc, mail, cal, chat, tasks, heart, bolt, shield, key, palette, monitor, phone, person, server, shot; or one emoji'),
         icon_image: str("A picture to use as its icon instead: the full path of an image file on this computer (PNG, JPG, WebP or ICO), e.g. the website's logo or favicon in the project folder. Only when the user asks for their own picture."),
@@ -302,7 +352,7 @@ function projectCreate(deps: ProjectToolDeps): Tool {
       if (answer === 'Change') return 'The user wants something changed before it is made. Ask what (name, folder, profile, icon or description), then call project_create again with it.'
       if (answer !== 'Create') return `The user answered "${clip(answer, 300)}" instead of Create. Adjust the project to that and call project_create again.`
       if (!exists) await mkdir(path, { recursive: true })
-      const made = await deps.store.upsert('project', { name, description, icon, path, profile: profile === 'general' ? '' : profile.id, hidden: false, chats: [] })
+      const made = await deps.store.upsert('project', { name, description, aliases: parseAliases(text(input['aliases'])), icon, path, profile: profile === 'general' ? '' : profile.id, hidden: false, chats: [] })
       return `Made the project ${name} (id ${made.id})${path === '' ? '' : ` in ${path}`}. It is in the rail. Start work in it with project_chat_start.`
     },
   }
@@ -312,12 +362,13 @@ function projectUpdate(deps: ProjectToolDeps): Tool {
   return {
     spec: {
       name: 'project_update',
-      description: 'Change a project the user asked you to change: rename it, move it to another folder, change its profile, icon, colour or description, or hide it from the rail and show it again. Pass only what changes.',
+      description: 'Change a project the user asked you to change: rename it, move it to another folder, change its profile, icon, colour, description or other names, or hide it from the rail and show it again. Pass only what changes.',
       schema: schema(['project'], {
         project: str('The project, by name or id'),
         name: str('New name'),
         path: str('New folder: its full path on this computer, or "none"'),
         description: str('New description'),
+        aliases: str('Its other names, the full list, comma separated (replaces the list; "" clears it)'),
         profile: str('New profile by name, or "General"'),
         icon: str('New icon (a glyph name or one emoji)'),
         icon_image: str('Use a picture as its icon: the full path of an image file on this computer (PNG, JPG, WebP or ICO); "none" goes back to the glyph'),
@@ -350,6 +401,10 @@ function projectUpdate(deps: ProjectToolDeps): Tool {
       if (typeof input['description'] === 'string') {
         patch.description = text(input['description']).slice(0, 600)
         changed.push('description')
+      }
+      if (typeof input['aliases'] === 'string') {
+        patch.aliases = parseAliases(input['aliases'])
+        changed.push(patch.aliases.length === 0 ? 'no other names' : `other names ${patch.aliases.join(', ')}`)
       }
       if (typeof input['profile'] === 'string') {
         const profile = profileByName(deps, text(input['profile']))
