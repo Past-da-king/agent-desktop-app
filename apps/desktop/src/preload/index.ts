@@ -11,6 +11,8 @@ import type {
   Attachment,
   CallEvent,
   CallSummary,
+  DictationCommand,
+  DictationView,
   BrowserBounds,
   BrowserState,
   ChatEvent,
@@ -199,6 +201,21 @@ const api: AgentApi = {
     callMute: (muted) => call<void>(CHANNELS.voice.callMute, muted),
     callEnd: () => call<CallSummary | null>(CHANNELS.voice.callEnd),
     onCall: (callback) => on<CallEvent>(EVENTS.voiceCall, callback),
+  },
+
+  hotkeys: {
+    status: () => call<HotkeyStatus[]>(CHANNELS.hotkeys.status),
+    pause: (paused) => call<void>(CHANNELS.hotkeys.pause, paused),
+  },
+
+  dictation: {
+    audio: (session, pcm) => {
+      ipcRenderer.send(CHANNELS.dictation.audio, session, pcm)
+    },
+    micState: (session, ok, message) => call<void>(CHANNELS.dictation.micState, session, ok, message),
+    stop: () => call<void>(CHANNELS.dictation.stop),
+    onCommand: (callback) => on<DictationCommand>(EVENTS.dictationCommand, callback),
+    onView: (callback) => on<DictationView>(EVENTS.dictationView, callback),
   },
 
   app: {

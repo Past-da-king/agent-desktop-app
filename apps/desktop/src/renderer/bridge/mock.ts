@@ -31,6 +31,7 @@ import type {
 } from '@agent/core'
 
 import { mockVoice } from '../voice/mock-voice'
+import { mockHotkeys } from './mock-hotkeys'
 import { readMode, seedFor, type DemoMode } from './seed'
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
@@ -1149,6 +1150,8 @@ export const mockAgent: AgentApi = {
     insertChat: (item) => insertChat(item),
     send: (text) => mockAgent.chat.send(text),
   }),
+
+  ...mockHotkeys(() => settings),
 
   app: {
     async info() {
