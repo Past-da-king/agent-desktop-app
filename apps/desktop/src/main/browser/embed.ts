@@ -42,7 +42,7 @@ export function guardWebview(
   // The main process loads every address itself (url-policy decides); the tag only ever starts blank.
   if (src !== '' && src !== 'about:blank') return false
   // Popups go through the tab's own window-open handler, never the tag.
-  delete params['allowpopups']
+  ;(params as Record<string, unknown>)['allowpopups'] = false
   return true
 }
 

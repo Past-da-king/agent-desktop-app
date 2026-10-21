@@ -157,15 +157,21 @@ export function BrowserHost({ state, parked }: { state: BrowserState | null; par
       // Set before the element is connected: the partition can never change once the guest exists.
       view.setAttribute('partition', tab.partition ?? '')
       view.setAttribute('src', 'about:blank')
-      view.addEventListener('did-attach', () => {
+      // The guest's id can be read once its first (blank) document is ready; hand it over once.
+      let handed = false
+      const handOver = (): void => {
+        if (handed) return
         let guestId = 0
         try {
           guestId = view.getWebContentsId()
         } catch {
           return
         }
+        handed = true
         void agent.browser.attach(id, guestId).catch(() => false)
-      })
+      }
+      view.addEventListener('did-attach', handOver)
+      view.addEventListener('dom-ready', handOver)
       wrap.appendChild(view)
       host.appendChild(wrap)
       pages.current.set(id, { wrap, view })
