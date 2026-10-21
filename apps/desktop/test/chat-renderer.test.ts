@@ -106,3 +106,19 @@ describe('demo chat data', () => {
     ).toBe(true)
   })
 })
+
+describe('the thread window', () => {
+  it('draws only the newest rows, keeps cards still waiting, and counts what is above', async () => {
+    const { windowThread } = await import('../src/renderer/lib/chat-memory')
+    const rows = Array.from({ length: 120 }, (_, i) => row(`r${i}`, i % 2 ? 'agent' : 'user', i + 1))
+    rows[3] = row('q', 'question', 4, { options: ['Yes'], answer: '' })
+    const { rows: drawn, above } = windowThread(rows, 80)
+    expect(drawn).toHaveLength(81)
+    expect(drawn[0]?.id).toBe('q')
+    expect(drawn[1]?.id).toBe('r40')
+    expect(above).toBe(39)
+    // Everything fits: nothing hidden.
+    expect(windowThread(rows.slice(0, 50), 80)).toEqual({ rows: rows.slice(0, 50), above: 0 })
+    expect(windowThread(rows, Number.POSITIVE_INFINITY).above).toBe(0)
+  })
+})

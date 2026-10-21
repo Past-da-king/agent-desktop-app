@@ -51,3 +51,8 @@
   --desk:#0A0910; --shadow:0 24px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.05);
   color-scheme:dark;
 }
+
+/* Motion off when the person asked their system for less: every transition and animation ends at once. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important;scroll-behavior:auto !important}
+}
