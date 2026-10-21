@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { hostname as osHostname } from 'node:os'
 import { dirname } from 'node:path'
 
-import { DEFAULT_SETTINGS, VOICES, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, VOICES, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings } from '@agent/core'
 
 import { upgradeHotkeys } from './hotkeys'
 
@@ -70,6 +70,7 @@ export class SettingsStore {
       if (coerced === INVALID) continue
       target[key] = coerced
     }
+    mirrorAccounts(next, Object.keys(patch))
     this.state = next
     this.writeState(next)
     this.emit()
@@ -149,6 +150,16 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     if (!value.every((item) => typeof item === 'string')) return INVALID
     return value.map((item) => clamp(item as string))
   }
+  if (key === 'accounts') {
+    if (!Array.isArray(value)) return INVALID
+    const list = value.map(accountFrom).filter((item): item is AiAccount => item !== null)
+    const seen = new Set<string>()
+    return list.filter((item) => !seen.has(item.id) && seen.add(item.id) !== undefined).slice(0, 24)
+  }
+  if (key === 'ai') {
+    const picks = picksFrom(value)
+    return picks === null ? INVALID : picks
+  }
 
   const expected = DEFAULT_SETTINGS[key]
   if (typeof expected === 'boolean') return typeof value === 'boolean' ? value : INVALID
@@ -159,6 +170,88 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     return clamp(value)
   }
   return INVALID
+}
+
+/** One stored account, cleaned; null when it is not one. */
+function accountFrom(raw: unknown): AiAccount | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  const id = typeof o['id'] === 'string' ? o['id'].replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) : ''
+  const kind = o['kind']
+  if (id === '' || (kind !== 'claude' && kind !== 'codex' && kind !== 'api')) return null
+  const providers = STRING_ENUMS.provider ?? []
+  const provider = typeof o['provider'] === 'string' && providers.includes(o['provider']) ? (o['provider'] as AiAccount['provider']) : undefined
+  const account: AiAccount = {
+    id,
+    label: clamp(typeof o['label'] === 'string' ? o['label'].trim() : '').slice(0, 60) || (kind === 'api' ? 'API key' : kind === 'codex' ? 'ChatGPT plan' : 'Claude plan'),
+    kind,
+    model: clamp(typeof o['model'] === 'string' ? o['model'].trim() : ''),
+    hasKey: o['hasKey'] === true,
+  }
+  if (kind === 'api') {
+    account.provider = provider ?? 'anthropic'
+    if (typeof o['baseUrl'] === 'string') account.baseUrl = clamp(o['baseUrl'].trim())
+    if (o['allowHttp'] === true) account.allowHttp = true
+  }
+  return account
+}
+
+/** A pick as stored, cleaned. */
+function pickFrom(raw: unknown): AiPick {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { account: '', model: '' }
+  const o = raw as Record<string, unknown>
+  return {
+    account: typeof o['account'] === 'string' ? o['account'].replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) : '',
+    model: typeof o['model'] === 'string' ? clamp(o['model'].trim()) : '',
+  }
+}
+
+/** Both picks as stored, or null when it is not an object. */
+export function picksFrom(raw: unknown): AiPicks | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  return { main: pickFrom(o['main']), helpers: pickFrom(o['helpers']) }
+}
+
+const LEGACY_KEYS = ['mode', 'cli', 'cliModel', 'provider', 'model', 'baseUrl', 'allowHttp', 'hasKey'] as const
+
+/**
+ * The old single-choice fields and the accounts list say the same thing: a change to either is copied to the other.
+ * The accounts win when both are in one patch. Older code (onboarding, the first Settings page) keeps working.
+ */
+function mirrorAccounts(next: Settings, patched: string[]): void {
+  const accountsChanged = patched.includes('accounts') || patched.includes('ai')
+  const legacyChanged = patched.some((key) => (LEGACY_KEYS as readonly string[]).includes(key))
+  if (accountsChanged || (!legacyChanged && next.accounts.length > 0)) {
+    // A pick that names an account that is gone falls back to the first account (mainPickOf); keep it tidy.
+    const main = next.accounts.length === 0 ? { account: '', model: '' } : mainPickOf(next, 'main')
+    const helpers = next.ai.helpers
+    next.ai = {
+      main,
+      helpers: accountById(next, helpers.account) === null ? { account: '', model: helpers.account === '' ? helpers.model : '' } : helpers,
+    }
+    Object.assign(next, legacyFieldsOf(accountById(next, main.account), main.model))
+    return
+  }
+  if (!legacyChanged || next.accounts.length === 0) return
+  // The old fields changed (onboarding): the main account follows them.
+  const mainPick = mainPickOf(next, 'main')
+  const main = accountById(next, mainPick.account)
+  if (main === null) return
+  const fresh: AiAccount =
+    next.mode === 'subscription'
+      ? { id: main.id, label: main.kind === (next.cli === 'codex' ? 'codex' : 'claude') ? main.label : next.cli === 'codex' ? 'ChatGPT plan' : 'Claude plan', kind: next.cli === 'codex' ? 'codex' : 'claude', model: next.cliModel.trim(), hasKey: false }
+      : next.mode === 'api_key'
+        ? { id: main.id, label: main.kind === 'api' && main.provider === next.provider ? main.label : (STRING_ENUMS.provider ?? []).includes(next.provider) ? providerLabel(next.provider) : next.provider, kind: 'api', provider: next.provider, baseUrl: next.baseUrl.trim(), model: next.model.trim(), hasKey: next.hasKey, ...(next.allowHttp ? { allowHttp: true } : {}) }
+        : main
+  next.accounts = next.accounts.map((account) => (account.id === main.id ? fresh : account))
+  // The main pick's own model override gives way to what onboarding just chose.
+  next.ai = { ...next.ai, main: { account: main.id, model: '' } }
+}
+
+function providerLabel(id: string): string {
+  const labels: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini', deepseek: 'DeepSeek', opencode_go: 'OpenCode Go', opencode_zen: 'OpenCode Zen', openrouter: 'OpenRouter', custom: 'Other' }
+  return labels[id] ?? id
 }
 
 function clamp(value: string): string {

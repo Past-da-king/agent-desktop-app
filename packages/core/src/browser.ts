@@ -5,3 +5,4 @@
 export * from './ipc'
 export * from './attachments'
 export * from './providers/catalog'
+export * from './accounts'

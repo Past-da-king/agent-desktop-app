@@ -13,6 +13,7 @@ import { useUi } from '../state/useUi'
 import { Avatar, IconButton, Pill } from '../ui/bits'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
+import { AiAccounts } from './AiAccounts'
 import { Icon } from '../ui/Icon'
 import { MASCOT_ORDER, Mascot, MASCOTS } from '../ui/Mascot'
 import { SectionHeader } from '../ui/SectionHeader'
@@ -281,61 +282,8 @@ export function Settings(): JSX.Element {
           </section>
 
           <section>
-            <SectionHeader eyebrow="YOUR AI" line="The service that does the thinking" />
-            <div className="card" style={{ padding: 10 }}>
-              {settings?.mode === 'subscription' ? (
-                <div className="rowc">
-                  <div className="ri ok">
-                    <Icon name="bolt" size={22} />
-                  </div>
-                  <div className="rt">
-                    <b>{settings.cli === 'codex' ? 'Your ChatGPT plan, through Codex' : 'Your Claude plan'}</b>
-                    <span>{cliStatus === '' ? 'No API key needed. Billed by your plan, not by the app.' : cliStatus}</span>
-                  </div>
-                  <Button variant="tonal" size="sm" disabled={cliBusy} onClick={() => void checkCli()}>
-                    {cliBusy ? 'Checking...' : 'Check'}
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <div className="rowc">
-                    <div className="ri">
-                      <Icon name="bolt" size={22} />
-                    </div>
-                    <div className="rt">
-                      <b>{provider?.label ?? 'No provider yet'}</b>
-                      <span>Model: {model}</span>
-                    </div>
-                  </div>
-                  <div className="rowc">
-                    <div className="ri">
-                      <Icon name="key" size={22} />
-                    </div>
-                    <div className="rt">
-                      <b>API key</b>
-                      <span>
-                        {settings?.hasKey
-                          ? 'Stored by your operating system, never shown in this window.'
-                          : 'No key on this computer yet.'}
-                      </span>
-                    </div>
-                    <Pill tone={settings?.hasKey ? 'ok' : 'mute'}>{settings?.hasKey ? 'Works' : 'Not yet'}</Pill>
-                  </div>
-                </>
-              )}
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="sync" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Change how your agent thinks</b>
-                  <span>Switch between your Claude plan, your ChatGPT plan and an API key</span>
-                </div>
-                <Button variant="tonal" size="sm" onClick={() => navigateTo({ page: 'onboarding', step: 'ai' })}>
-                  Change
-                </Button>
-              </div>
-            </div>
+            <SectionHeader eyebrow="YOUR AI" line="Your plans and keys, and who thinks for what" />
+            <AiAccounts />
           </section>
 
           <VoiceSettings />

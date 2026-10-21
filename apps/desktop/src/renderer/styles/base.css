@@ -126,6 +126,16 @@ kbd{font:500 12px/1 var(--font);padding:4px 7px;border-radius:8px;background:var
 .boot-wordmark{font:500 28px/1.2 var(--font);letter-spacing:-.5px;color:var(--on-bg)}
 .eyes ellipse{transform-box:fill-box;transform-origin:center;animation:blink 5.5s infinite}
 @keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+/* The window has no native frame: the title bar is the handle that moves it; its controls stay clickable. */
+.titlebar{-webkit-app-region:drag}
+.titlebar button,.titlebar input,.titlebar [role="button"],.titlebar .search,.titlebar .syncpill,.titlebar kbd{-webkit-app-region:no-drag}
 
 /* A screen loading from disk, drawn where it will appear. */
 .sheet-wait{padding:28px 32px;max-width:820px}
+
+/* The boot screen: the person's own agent, drawn at once from the last run's hint, while the real settings arrive. */
+.boot-card{display:flex;flex-direction:column;align-items:center;gap:10px;animation:boot-in .5s var(--effects) both}
+.boot-name{font:500 22px/1.2 var(--font);letter-spacing:-.3px;color:var(--on-bg)}
+.boot-line{font-size:13px;color:var(--on-sv);animation:boot-breathe 1.8s ease-in-out infinite}
+@keyframes boot-in{from{opacity:0;transform:translateY(6px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes boot-breathe{0%,100%{opacity:.55}50%{opacity:1}}

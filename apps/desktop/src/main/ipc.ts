@@ -25,6 +25,11 @@ import {
   type RunState,
   type Settings,
   type SystemInfo,
+  accountsOf,
+  type AiAccount,
+  type AiAccountDraft,
+  type ChatBrain,
+  type ProviderId,
 } from '@agent/core'
 import { readFile, stat } from 'node:fs/promises'
 import { arch as osArch, hostname as osHostname, platform as osPlatform } from 'node:os'
@@ -37,6 +42,8 @@ import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
 import { asWriter } from './memory/history'
 import { isIconImage } from '../shared/project-icon'
+import { picksFrom } from './settings'
+import type { AccountStore } from './accounts'
 import { listPeople, type PeopleSource } from './browser/people'
 import { isRule } from './apps/store'
 import type { Store } from './db'
@@ -88,9 +95,11 @@ export interface ChatRunner {
   /** A button tap on an agent card, heard by the agent quietly. */
   tap(itemId: string, label: string, message: string): Promise<void>
   /** Optional: only the real runner can drive an installed AI tool. */
-  checkCli?(): Promise<{ ok: boolean; message: string }>
-  cliLogin?(): Promise<{ ok: boolean; message: string }>
-  planModels?(): Promise<Array<{ id: string; label: string; line: string }>>
+  checkCli?(accountId?: string): Promise<{ ok: boolean; message: string }>
+  cliLogin?(accountId?: string): Promise<{ ok: boolean; message: string }>
+  planModels?(accountId?: string): Promise<Array<{ id: string; label: string; line: string }>>
+  /** What a chat thinks with, for the picker in its header. */
+  chatBrain?(chat: string): Promise<ChatBrain>
 }
 
 export interface RoutineService {
@@ -128,6 +137,8 @@ export interface BrowserControl {
 
 export interface IpcDeps {
   store: Store
+  /** The AI accounts (main/accounts.ts). Absent in a build without them: the old single choice only. */
+  accounts?: AccountStore
   settings: SettingsStore
   secrets: Secrets
   account: AccountService
@@ -229,6 +240,77 @@ export function registerIpc(deps: IpcDeps): () => void {
       ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
     })
   })
+  // ---- AI accounts (main/accounts.ts) ----
+  const accountsStore = (): AccountStore => {
+    if (deps.accounts === undefined) throw new Error('Not available in this build.')
+    return deps.accounts
+  }
+  const accountDraft = (raw: unknown): AiAccountDraft => {
+    const o = requireObject(raw, 'account')
+    const out: AiAccountDraft = {}
+    if (typeof o['label'] === 'string') out.label = requireString(o['label'], 'label', 60)
+    if (o['kind'] === 'claude' || o['kind'] === 'codex' || o['kind'] === 'api') out.kind = o['kind']
+    if (typeof o['provider'] === 'string') {
+      if (!PROVIDERS.some((p) => p.id === o['provider'])) throw new Error('Unknown provider')
+      out.provider = o['provider'] as ProviderId
+    }
+    if (typeof o['baseUrl'] === 'string') out.baseUrl = requireString(o['baseUrl'], 'server address', MAX_STRING)
+    if (typeof o['model'] === 'string') out.model = requireString(o['model'], 'model', 200)
+    if (typeof o['allowHttp'] === 'boolean') out.allowHttp = o['allowHttp']
+    return out
+  }
+  const accountId = (raw: unknown): string => requireString(raw, 'account', 64)
+  handle(CHANNELS.settings.accounts.add, async (_event, raw) => accountsStore().add(accountDraft(raw)))
+  handle(CHANNELS.settings.accounts.update, async (_event, rawId, raw) => accountsStore().update(accountId(rawId), accountDraft(raw)))
+  handle(CHANNELS.settings.accounts.remove, async (_event, rawId) => {
+    accountsStore().remove(accountId(rawId))
+  })
+  handle(CHANNELS.settings.accounts.setKey, async (_event, rawId, rawKey) => {
+    accountsStore().setKey(accountId(rawId), requireString(rawKey, 'key', MAX_KEY))
+  })
+  handle(CHANNELS.settings.accounts.check, async (_event, rawId) => {
+    const id = accountId(rawId)
+    const account = accountsStore().find(id)
+    if (account === null) throw new Error('No such account')
+    if (account.kind !== 'api') {
+      return deps.chat.checkCli === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.checkCli(id)
+    }
+    return checkAccountKey(deps, account, accountsStore().key(id))
+  })
+  handle(CHANNELS.settings.accounts.listModels, async (_event, rawId) => {
+    const id = accountId(rawId)
+    const account = accountsStore().find(id)
+    if (account === null) throw new Error('No such account')
+    if (account.kind !== 'api') {
+      const models = (await deps.chat.planModels?.(id)) ?? []
+      const name = account.kind === 'codex' ? 'ChatGPT' : 'Claude'
+      return models.length > 0
+        ? { ok: true, models, message: `${models.length} models on your ${name} plan.` }
+        : { ok: false, models: [], message: `Could not get the models from your ${name} plan yet. Send one message first, then try again.` }
+    }
+    const key = accountsStore().key(id)
+    if (key === '') return { ok: false, models: [], message: 'Add an API key first.' }
+    return listModels({
+      provider: account.provider ?? 'anthropic',
+      key,
+      ...((account.baseUrl ?? '').trim() === '' ? {} : { baseUrl: (account.baseUrl ?? '').trim() }),
+      ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
+    })
+  })
+  handle(CHANNELS.settings.accounts.signIn, async (_event, rawId) => {
+    const id = accountId(rawId)
+    if (accountsStore().find(id) === null) throw new Error('No such account')
+    return deps.chat.cliLogin === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.cliLogin(id)
+  })
+  handle(CHANNELS.settings.accounts.chatBrain, async (_event, rawChat) => {
+    const chat = requireString(rawChat, 'chat', 64)
+    if (deps.chat.chatBrain === undefined) {
+      const none = { account: '', model: '' }
+      return { main: { wanted: none, using: none, deferred: false }, helpers: { wanted: none, using: none, deferred: false } }
+    }
+    return deps.chat.chatBrain(chat)
+  })
+
   handle(CHANNELS.settings.cliLogin, async () =>
     deps.chat.cliLogin === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.cliLogin(),
   )
@@ -278,7 +360,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     const entity = entityArg(rawEntity)
     let row = requireObject(rawRow, 'row')
     if (entity === 'trigger') row = await guardRoutineWrite(store, row)
-    if (entity === 'project') row = withSafeIcon(row)
+    if (entity === 'project') row = withSafeIcon(withKnownPicks(row, deps))
     // A memory page changed in the window is the person's own edit (memory/history.ts).
     const saved = await asWriter('you', undefined, () => store.upsert(entity, row as RowInput<EntityName>))
     account.nudge()
@@ -696,20 +778,26 @@ async function checkKey(deps: IpcDeps): Promise<{ ok: boolean; message: string }
   const current = deps.settings.get()
   const key = deps.secrets.get('apiKey')
   if (key === null || key.trim() === '') return { ok: false, message: 'Add an API key first.' }
+  return checkAccountKey(deps, { id: 'legacy', label: '', kind: 'api', provider: current.provider, baseUrl: current.baseUrl, model: current.model, hasKey: true, allowHttp: current.allowHttp }, key)
+}
 
-  const info = PROVIDERS.find((provider) => provider.id === current.provider)
-  const model = current.model.trim() || info?.defaultModel || ''
+/** One tiny real request with an account's key and model. */
+async function checkAccountKey(deps: IpcDeps, account: AiAccount, key: string): Promise<{ ok: boolean; message: string }> {
+  if (key.trim() === '') return { ok: false, message: 'Add an API key first.' }
+  const providerId = account.provider ?? 'anthropic'
+  const info = PROVIDERS.find((provider) => provider.id === providerId)
+  const model = account.model.trim() || info?.defaultModel || ''
   if (model === '') return { ok: false, message: 'Choose a model first.' }
-  if (current.provider === 'custom' && current.baseUrl.trim() === '') {
+  if (providerId === 'custom' && (account.baseUrl ?? '').trim() === '') {
     return { ok: false, message: 'Add the server address for this provider.' }
   }
 
   try {
     const provider = providerFor({
-      provider: current.provider,
+      provider: providerId,
       key,
-      baseUrl: current.baseUrl.trim() || undefined,
-      allowHttp: current.allowHttp,
+      baseUrl: (account.baseUrl ?? '').trim() || undefined,
+      allowHttp: account.allowHttp === true,
       fetchImpl: deps.fetchImpl,
     })
     await provider.complete(
@@ -850,6 +938,19 @@ function parseHttpUrl(value: string): string {
 
 /** Kept exported for callers that want the concrete row type behind an entity name. */
 export type RowFor<E extends EntityName> = EntityMap[E]
+
+/** A project's AI picks name accounts that exist (or '' for the main thread's); anything else is dropped. */
+function withKnownPicks(row: Record<string, unknown>, deps: IpcDeps): Record<string, unknown> {
+  if (!('ai' in row)) return row
+  const picks = picksFrom(row['ai'])
+  if (picks === null) {
+    const { ai: _ai, ...rest } = row
+    return rest
+  }
+  const known = new Set((deps.accounts?.all() ?? accountsOf(deps.settings.get())).map((account) => account.id))
+  const clean = (pick: { account: string; model: string }): { account: string; model: string } => (known.has(pick.account) ? pick : { account: '', model: pick.model })
+  return { ...row, ai: { main: clean(picks.main), helpers: clean(picks.helpers) } }
+}
 
 /** A project's own picture is kept only when it is a small icon image (shared/project-icon.ts); anything else is dropped. */
 function withSafeIcon(row: Record<string, unknown>): Record<string, unknown> {

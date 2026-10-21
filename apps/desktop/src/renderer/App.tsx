@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, type ReactNode } from 'react'
+import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react'
 
 import { useGlobalKeys } from './state/keys'
 import { useHotkeyNotice } from './state/useHotkeyNotice'
@@ -7,6 +7,9 @@ import { useSettings } from './state/useSettings'
 import { useRoute, useUi } from './state/useUi'
 import { Chat } from './views/Chat'
 import { Skeleton } from './ui/Skeleton'
+import { Mascot } from './ui/Mascot'
+import { readBootHint, writeBootHint } from './lib/boot-hint'
+import { applyAccent, applyTheme } from './state/theme'
 import { useData } from './state/useData'
 
 // Screens off the chat load when first opened, so the chat is on screen sooner; each is one small file on disk.
@@ -139,6 +142,20 @@ export function App(): JSX.Element {
   const route = useRoute()
   // Settings and the chat rows are asked for together at boot, so the first screen is drawn once, with both.
   const ready = settingsReady && rowsReady
+  // The last run's look, so the first frame is already the person's: their theme, accent, mascot and agent name.
+  const [hint] = useState(() => {
+    const found = readBootHint()
+    if (found !== null) {
+      applyTheme(found.theme)
+      applyAccent(found.accent)
+    }
+    return found
+  })
+  useEffect(() => {
+    if (!settingsReady) return
+    const settings = useSettings.getState().settings
+    if (settings !== null) writeBootHint(settings)
+  }, [settingsReady])
 
   useEffect(() => {
     void load()
@@ -186,7 +203,15 @@ export function App(): JSX.Element {
         <TitleBar onboarding />
         <div className="stage">
           <div className="boot">
-            <div className="boot-wordmark">Agent</div>
+            {hint === null ? (
+              <div className="boot-wordmark">Agent</div>
+            ) : (
+              <div className="boot-card">
+                <Mascot id={hint.mascot} size={72} busy />
+                <div className="boot-name">{hint.agentName.trim() || 'Agent'}</div>
+                <div className="boot-line">Starting</div>
+              </div>
+            )}
           </div>
         </div>
       </div>

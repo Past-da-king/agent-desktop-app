@@ -17,6 +17,8 @@ import {
   type OpenDialogOptions,
 } from 'electron'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
+import { AccountStore, migrateLegacyAccount } from './accounts'
+import { FileBrainLocks } from './brain-locks'
 import { HANDOFF_CLOSED } from './tools/browser'
 
 import type { AppPlatform } from '@agent/core'
@@ -522,6 +524,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const settings = new SettingsStore(join(dir, 'settings.json'))
   settingsStore = settings
   const secrets = new Secrets(join(dir, 'secrets'), safeStorage)
+  // The old single AI choice becomes the first account, once; after that the accounts list is the truth.
+  migrateLegacyAccount(settings, secrets)
+  const accounts = new AccountStore(settings, secrets)
+  const brainLocks = new FileBrainLocks(join(dir, 'brain-locks.json'))
   account = new AccountService(store, settings, secrets)
   disposeStore = store.onChange(() => account?.nudge())
 
@@ -677,6 +683,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
       agentName: () => settings.get().agentName,
       profiles: () => apps.profiles.all(),
+      accounts: () => accounts.all(),
       imageIcon: async (path) => {
         const picture = nativeImage.createFromPath(path)
         if (picture.isEmpty()) return null
@@ -699,6 +706,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       void shell.openExternal(url)
     },
     budget,
+    locks: brainLocks,
     profiles: () => ({ profiles: apps.profiles.all(), learnedNames: learnedNames() }),
     environment: () => environment.current(),
     providerFactory: factory,
@@ -832,6 +840,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     store,
     settings,
     secrets,
+    accounts,
     account,
     chat: runner,
     routines: scheduler,
