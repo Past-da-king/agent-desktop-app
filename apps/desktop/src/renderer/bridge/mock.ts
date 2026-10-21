@@ -11,6 +11,7 @@ import type {
   LearnedAppInfo,
   BrowserBounds,
   BrowserPerson,
+  DataChange,
   ProjectRow,
   BrowserState,
   BrowserViewMode,
@@ -144,7 +145,7 @@ let activityTimer: ReturnType<typeof setTimeout> | null = null
 let syncTimer: ReturnType<typeof setTimeout> | null = null
 
 const settingsListeners = new Set<(next: Settings) => void>()
-const dataListeners = new Set<(entity: EntityName) => void>()
+const dataListeners = new Set<(change: DataChange) => void>()
 const statusListeners = new Set<(next: SyncStatus) => void>()
 const progressListeners = new Set<(next: SyncProgress) => void>()
 const chatListeners = new Set<(event: ChatEvent) => void>()
@@ -163,7 +164,7 @@ function emitSettings(): void {
 }
 
 function emitData(entity: EntityName): void {
-  for (const listener of dataListeners) listener(entity)
+  for (const listener of dataListeners) listener({ entity, reset: true })
 }
 
 function emitStatus(next?: Partial<SyncStatus>): void {
@@ -812,6 +813,10 @@ export const mockAgent: AgentApi = {
     async list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
       return copy(rows[entity] as Array<EntityMap[E]>)
     },
+    async get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null> {
+      const row = (rows[entity] as Array<EntityMap[E]>).find((each) => each.id === id)
+      return row === undefined ? null : (copy(row) as EntityMap[E])
+    },
     async upsert<E extends EntityName>(entity: E, row: RowInput<E>): Promise<EntityMap[E]> {
       const raw = row as { id?: string }
       const before = entity === 'memory' ? (copy(rows.memory.find((each) => each.id === raw.id) ?? null) as MemoryRow | null) : null
@@ -829,7 +834,7 @@ export const mockAgent: AgentApi = {
         emitData(entity)
       }
     },
-    onChanged(callback: (entity: EntityName) => void): Unsubscribe {
+    onChanged(callback: (change: DataChange) => void): Unsubscribe {
       dataListeners.add(callback)
       return () => {
         dataListeners.delete(callback)

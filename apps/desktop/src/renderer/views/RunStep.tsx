@@ -9,7 +9,8 @@
  */
 import { useEffect, useId, useRef, useState } from 'react'
 
-import { foldLines, formatMs, runTag, snippetOf, statusText, type RunRecord } from '../../shared/run-record'
+import { foldLines, formatMs, runFromMeta, runTag, snippetOf, statusText, type RunRecord } from '../../shared/run-record'
+import { parseMeta } from '../lib/meta'
 import { Icon, type IconName } from '../ui/Icon'
 import { toast } from '../state/useToast'
 
@@ -189,16 +190,35 @@ export function RunStep({
   status,
   by,
   summary,
+  rowId,
 }: {
   run: RunRecord
   status: string
   by?: string
   /** The row's own words ("Searched memory for VAT"); a tool call shows them when they say more than its name. */
   summary?: string
+  /** The chat row this record sits on: a listed row holds only the head of long output, the rest is fetched on open. */
+  rowId?: string
 }): JSX.Element {
   const [open, setOpen] = useState(false)
+  const [full, setFull] = useState<RunRecord | null>(null)
   const bodyId = useId()
-  const run = settled(raw, status)
+  useEffect(() => {
+    if (!open || raw.more !== true || rowId === undefined || full !== null) return
+    let live = true
+    void import('../bridge')
+      .then(({ agent }) => agent.data.get('chat_item', rowId))
+      .then((row) => {
+        if (!live || row === null) return
+        const whole = runFromMeta(parseMeta(row.meta))
+        if (whole !== null) setFull(whole)
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [open, raw.more, rowId, full])
+  const run = settled(full ?? raw, status)
   const running = run.state === 'running'
   const said = run.kind === 'tool' && summary !== undefined && summary.trim().toLowerCase() !== run.label.toLowerCase() ? summary.trim() : ''
   const snippet = said !== '' ? snippetOf(said) : snippetOf(run.input) || (run.kind === 'tool' ? 'no input' : '(empty)')

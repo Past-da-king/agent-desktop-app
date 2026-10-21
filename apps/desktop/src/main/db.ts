@@ -19,8 +19,10 @@ import {
   encodeStamp,
   isEntityName,
   type Change,
+  type DataChange,
   type EntityMap,
   type EntityName,
+  type ListWhere,
   type MemoryVersion,
   type RowInput,
   type SyncStore,
@@ -35,7 +37,18 @@ interface StoredRow {
   payload: Record<string, unknown>
 }
 
-export type StoreChangeListener = (entity: EntityName) => void
+/** A change as listeners hear it: the row as it is now, a deleted id, or a reset (read the list again). */
+export type StoreChange = DataChange
+export type StoreChangeListener = (change: StoreChange) => void
+
+/** Up to this many rows in one batch or sync are announced one by one; more becomes one reset per entity. */
+const MAX_SINGLE_CHANGES = 40
+
+/**
+ * A chat row's chat, read inside SQLite: `meta` is JSON text inside the payload JSON. Rows of the first chat carry
+ * no tag. Only well-formed meta is looked into, so a damaged row never breaks a query.
+ */
+const CHAT_SQL = "CASE WHEN json_valid(json_extract(payload, '$.meta')) THEN json_extract(json_extract(payload, '$.meta'), '$.chat') END"
 
 const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project']
 
@@ -52,7 +65,7 @@ export class Store implements SyncStore {
   private readonly listeners = new Set<StoreChangeListener>()
   private closed = false
   /** While a batch runs, changes are collected here and announced once at the end. */
-  private batching: Set<EntityName> | null = null
+  private batching: StoreChange[] | null = null
 
   constructor(file: string, clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
@@ -70,6 +83,10 @@ export class Store implements SyncStore {
         PRIMARY KEY(entity, cid)
       );
       CREATE INDEX IF NOT EXISTS rows_stamp ON rows(stamp);
+      CREATE INDEX IF NOT EXISTS rows_thread ON rows(entity, json_extract(payload, '$.thread'));
+      CREATE INDEX IF NOT EXISTS rows_kind ON rows(entity, json_extract(payload, '$.kind'));
+      CREATE INDEX IF NOT EXISTS rows_created ON rows(entity, json_extract(payload, '$.createdAt'));
+      CREATE INDEX IF NOT EXISTS rows_chat ON rows(entity, ${CHAT_SQL});
       CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_versions(
         memory_id TEXT NOT NULL,
@@ -100,13 +117,44 @@ export class Store implements SyncStore {
   async list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
     this.assertEntity(entity)
     const rows = this.readEntity(entity).filter((row) => !row.deleted)
-    rows.sort((a, b) => {
-      const left = numberField(a.payload.createdAt)
-      const right = numberField(b.payload.createdAt)
-      if (left !== right) return left < right ? -1 : 1
-      return compareStampStrings(a.stamp, b.stamp)
-    })
-    return rows.map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+    return sortedRows(rows, false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+  }
+
+  /**
+   * The rows that match, read inside SQLite (indexed), instead of every row of the entity parsed and filtered in
+   * JavaScript: a conversation's own turns, a chat's dividers, the newest user message.
+   */
+  async listWhere<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>> {
+    this.assertEntity(entity)
+    const clauses = ['entity = ?', 'deleted = 0']
+    const args: Array<string | number> = [entity]
+    if (where.thread !== undefined) {
+      clauses.push("json_extract(payload, '$.thread') = ?")
+      args.push(where.thread)
+    }
+    if (where.kind !== undefined) {
+      clauses.push("json_extract(payload, '$.kind') = ?")
+      args.push(where.kind)
+    }
+    if (where.chat !== undefined) {
+      if (where.chat === 'main') clauses.push(`(${CHAT_SQL} IS NULL OR ${CHAT_SQL} = '' OR ${CHAT_SQL} = 'main')`)
+      else {
+        clauses.push(`${CHAT_SQL} = ?`)
+        args.push(where.chat)
+      }
+    }
+    if (where.since !== undefined && where.since > 0) {
+      clauses.push("json_extract(payload, '$.createdAt') > ?")
+      args.push(where.since)
+    }
+    const order = where.newestFirst === true ? 'DESC' : 'ASC'
+    let sql = `SELECT cid, stamp, deleted, payload FROM rows WHERE ${clauses.join(' AND ')} ORDER BY json_extract(payload, '$.createdAt') ${order}, stamp ${order}`
+    if (where.limit !== undefined && where.limit > 0) {
+      sql += ' LIMIT ?'
+      args.push(Math.floor(where.limit))
+    }
+    const rows = this.db.prepare(sql).all(...args).map(rowFromSql)
+    return sortedRows(rows, where.newestFirst === true).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
   }
 
   async get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null> {
@@ -156,8 +204,9 @@ export class Store implements SyncStore {
       )
       .run(entity, id, stamp, JSON.stringify(payload))
 
-    this.emit(entity)
-    return { id, ...payload } as EntityMap[E]
+    const saved = { id, ...payload } as EntityMap[E]
+    this.emit({ entity, row: saved })
+    return saved
   }
 
   async remove(entity: EntityName, id: string): Promise<void> {
@@ -169,7 +218,7 @@ export class Store implements SyncStore {
     this.db
       .prepare('UPDATE rows SET stamp = ?, deleted = 1, local = 1 WHERE entity = ? AND cid = ?')
       .run(stamp, entity, id)
-    this.emit(entity)
+    this.emit({ entity, id, deleted: true })
   }
 
   /** Wipe the synced rows and the watermarks. The device id is kept so HLC stamps stay stable. */
@@ -177,7 +226,7 @@ export class Store implements SyncStore {
     this.db.exec('DELETE FROM rows')
     this.db.exec('DELETE FROM memory_versions')
     this.db.prepare("DELETE FROM kv WHERE k IN ('push_mark', 'cursor')").run()
-    for (const entity of ENTITY_NAMES) this.emit(entity)
+    for (const entity of ENTITY_NAMES) this.emit({ entity, reset: true })
   }
 
   /**
@@ -186,7 +235,7 @@ export class Store implements SyncStore {
    */
   async batch<T>(work: () => Promise<T>): Promise<T> {
     if (this.batching !== null) return work()
-    const touched = new Set<EntityName>()
+    const touched: StoreChange[] = []
     this.batching = touched
     this.db.exec('BEGIN')
     try {
@@ -198,7 +247,21 @@ export class Store implements SyncStore {
       throw error
     } finally {
       this.batching = null
-      for (const entity of touched) this.emit(entity)
+      this.announce(touched)
+    }
+  }
+
+  /** A few changes go out one by one; a flood becomes one reset per entity, so the window reads the list once. */
+  private announce(changes: StoreChange[]): void {
+    const perEntity = new Map<EntityName, StoreChange[]>()
+    for (const change of changes) {
+      const list = perEntity.get(change.entity)
+      if (list === undefined) perEntity.set(change.entity, [change])
+      else list.push(change)
+    }
+    for (const [entity, list] of perEntity) {
+      if (list.length > MAX_SINGLE_CHANGES) this.emit({ entity, reset: true })
+      else for (const change of list) this.emit(change)
     }
   }
 
@@ -298,7 +361,7 @@ export class Store implements SyncStore {
   }
 
   async applyRemote(changes: Change[]): Promise<void> {
-    const touched = new Set<EntityName>()
+    const touched: StoreChange[] = []
     for (const change of changes) {
       if (!isEntityName(change.entity)) continue
       const remote = decodeStamp(change.stamp)
@@ -330,9 +393,9 @@ export class Store implements SyncStore {
              local = 0`,
         )
         .run(change.entity, change.id, change.stamp, change.deleted ? 1 : 0, JSON.stringify(payload))
-      touched.add(change.entity)
+      touched.push(change.deleted ? { entity: change.entity, id: change.id, deleted: true } : { entity: change.entity, row: { id: change.id, ...payload } as EntityMap[EntityName] })
     }
-    for (const entity of touched) this.emit(entity)
+    this.announce(touched)
   }
 
   async pushMark(): Promise<string | null> {
@@ -363,14 +426,14 @@ export class Store implements SyncStore {
     }
   }
 
-  private emit(entity: EntityName): void {
+  private emit(change: StoreChange): void {
     if (this.batching !== null) {
-      this.batching.add(entity)
+      this.batching.push(change)
       return
     }
     for (const listener of this.listeners) {
       try {
-        listener(entity)
+        listener(change)
       } catch {
         // A listener is UI code; one failing must not break a write.
       }
@@ -437,6 +500,27 @@ function parsePayload(value: SQLOutputValue | undefined): Record<string, unknown
   } catch {
     return {}
   }
+}
+
+/** Rows in store order (createdAt, then stamp), each stamp decoded once rather than on every comparison. */
+function sortedRows(rows: StoredRow[], newestFirst: boolean): StoredRow[] {
+  const keyed = rows.map((row) => ({ row, at: numberField(row.payload.createdAt), stamp: decodeStamp(row.stamp) }))
+  keyed.sort((a, b) => {
+    const byTime =
+      a.at === b.at
+        ? a.stamp === null || b.stamp === null
+          ? a.row.stamp < b.row.stamp
+            ? -1
+            : a.row.stamp > b.row.stamp
+              ? 1
+              : 0
+          : compareStamps(a.stamp, b.stamp)
+        : a.at < b.at
+          ? -1
+          : 1
+    return newestFirst ? -byTime : byTime
+  })
+  return keyed.map((entry) => entry.row)
 }
 
 function compareStampStrings(a: string, b: string): number {

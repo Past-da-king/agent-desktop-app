@@ -1,10 +1,10 @@
 import type { ChatItem } from '@agent/core'
 
-import { parseMeta } from './meta'
+import { metaOf } from './meta'
 
 export function isOpenCard(item: ChatItem): boolean {
   if (item.kind !== 'question' && item.kind !== 'approval') return false
-  const meta = parseMeta(item.meta)
+  const meta = metaOf(item)
   if (item.kind === 'question') {
     const answer = meta['answer']
     return typeof answer !== 'string' || answer === ''
@@ -17,7 +17,7 @@ export function isOpenCard(item: ChatItem): boolean {
 export function openCards(items: ChatItem[], forChat = false): ChatItem[] {
   return items
     .filter(isOpenCard)
-    .filter((item) => !forChat || parseMeta(item.meta)['context'] !== 'home')
+    .filter((item) => !forChat || metaOf(item)['context'] !== 'home')
     .sort((a, b) => a.createdAt - b.createdAt)
 }
 
@@ -29,6 +29,6 @@ export function cardsForIds(items: ChatItem[], ids: string[], forChat = false): 
   const waiting = new Set(ids)
   return items
     .filter((item) => waiting.has(item.id) && isOpenCard(item))
-    .filter((item) => !forChat || parseMeta(item.meta)['context'] !== 'home')
+    .filter((item) => !forChat || metaOf(item)['context'] !== 'home')
     .sort((a, b) => a.createdAt - b.createdAt)
 }

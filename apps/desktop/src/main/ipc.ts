@@ -42,6 +42,7 @@ import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
 import { asWriter } from './memory/history'
 import { isIconImage } from '../shared/project-icon'
+import { lightRow } from '../shared/light-row'
 import { picksFrom } from './settings'
 import type { AccountStore } from './accounts'
 import { listPeople, type PeopleSource } from './browser/people'
@@ -353,7 +354,13 @@ export function registerIpc(deps: IpcDeps): () => void {
   // ---- data ----
 
   handle(CHANNELS.data.list, async (_event, rawEntity) => {
-    return store.list(entityArg(rawEntity))
+    const entity = entityArg(rawEntity)
+    // Listed rows travel light (a run's long output stays behind); data.get has the whole row.
+    return (await store.list(entity)).map((row) => lightRow(entity, row))
+  })
+
+  handle(CHANNELS.data.get, async (_event, rawEntity, rawId) => {
+    return store.get(entityArg(rawEntity), requireString(rawId, 'id', MAX_STRING))
   })
 
   handle(CHANNELS.data.upsert, async (_event, rawEntity, rawRow) => {
@@ -760,7 +767,12 @@ export function registerIpc(deps: IpcDeps): () => void {
   const offSettings = settings.onChange((next) => send(EVENTS.settings, next))
   const offStatus = account.onStatus((status) => send(EVENTS.accountStatus, status))
   const offProgress = account.onProgress((progress) => send(EVENTS.accountProgress, progress))
-  const offData = store.onChange((entity) => send(EVENTS.data, entity))
+  // Each change goes to the window with its row (light), so the window patches its list instead of reading it all.
+  const offData = store.onChange((change) => {
+    // Nothing in the window shows turns (the model's own transcript); sending them only costs.
+    if (change.entity === 'turn') return
+    send(EVENTS.data, change.row === undefined ? change : { ...change, row: lightRow(change.entity, change.row) })
+  })
   const offApps = deps.apps?.onChange(() => send(EVENTS.apps, null)) ?? (() => undefined)
   const offProfiles = deps.apps?.profiles.onChange(() => send(EVENTS.profiles, null)) ?? (() => undefined)
 

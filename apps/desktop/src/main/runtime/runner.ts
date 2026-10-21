@@ -37,7 +37,7 @@ import {
   type ChatBrain,
 } from '@agent/core'
 
-import type { DataStore } from './data'
+import { listWhere, type DataStore } from './data'
 import type { StepBudget } from './budget'
 import { chatBrainOf, isBrain, mainBrain, pickBrain, type Brain, type BrainDeps, type BrainLocks } from './brains'
 import type { HelperHost } from './helpers'
@@ -760,7 +760,7 @@ export class Runner {
    * turn, and for a branched chat with no transcript of its own, the conversation it was branched from.
    */
   private async withContextNotes(line: ChatLine, text: string): Promise<string> {
-    const rows = (await this.store.list('chat_item')).filter((row) => chatOf(row) === line.chat)
+    const rows = await listWhere(this.store, 'chat_item', { chat: line.chat })
     const notes: string[] = []
 
     const carry = await this.carriedSummary(rows)
@@ -859,8 +859,8 @@ export class Runner {
 
   /** A few recent lines of a chat, oldest first, for the classifier. */
   private async recentLines(chat: string): Promise<string[]> {
-    const rows = (await this.store.list('chat_item')).filter(
-      (row) => chatOf(row) === chat && (row.kind === 'user' || row.kind === 'agent') && row.text.trim() !== '',
+    const rows = (await listWhere(this.store, 'chat_item', { chat })).filter(
+      (row) => (row.kind === 'user' || row.kind === 'agent') && row.text.trim() !== '',
     )
     return rows.slice(-7, -1).map((row) => `${row.kind === 'user' ? 'User' : 'Agent'}: ${row.text}`)
   }
@@ -1228,11 +1228,11 @@ export class Runner {
   }
 
   private async loadHistory(chat: string = MAIN_CHAT): Promise<Msg[]> {
-    const rows = await this.store.list('turn')
     const thread = threadFor(chat)
     // New Chat takes everything before the newest divider out of context. Nothing is deleted: the agent can still
-    // find it with chats_search. Each chat has its own dividers.
-    const since = latestDividerAt((await this.store.list('chat_item')).filter((item) => chatOf(item) === chat))
+    // find it with chats_search. Each chat has its own dividers. Only this thread's turns since then are read.
+    const since = latestDividerAt(await listWhere(this.store, 'chat_item', { kind: 'notice', chat }))
+    const rows = await listWhere(this.store, 'turn', { thread, since })
     const messages: Msg[] = []
     for (const row of rows) {
       if (row.thread !== thread) continue

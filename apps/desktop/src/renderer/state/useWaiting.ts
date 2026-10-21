@@ -16,7 +16,8 @@ export function useWaiting(forChat = false): ChatItem[] {
 
   useEffect(() => {
     let alive = true
-    const sync = (): void => {
+    let timer: number | null = null
+    const ask = (): void => {
       void chat
         .state()
         .then((state) => {
@@ -26,7 +27,15 @@ export function useWaiting(forChat = false): ChatItem[] {
           if (alive) setIds(null)
         })
     }
-    sync()
+    // A burst of events (a helper's steps) asks once, not once per event.
+    const sync = (): void => {
+      if (timer !== null) return
+      timer = window.setTimeout(() => {
+        timer = null
+        ask()
+      }, 40)
+    }
+    ask()
     const off = chat.onEvent((event) => {
       if (
         event.type === 'needs_you' ||
@@ -39,6 +48,7 @@ export function useWaiting(forChat = false): ChatItem[] {
     })
     return () => {
       alive = false
+      if (timer !== null) window.clearTimeout(timer)
       off()
     }
   }, [])

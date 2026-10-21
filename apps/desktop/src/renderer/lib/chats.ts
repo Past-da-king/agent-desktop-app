@@ -1,11 +1,11 @@
 import { MAIN_CHAT, type ChatItem, type ChatRunInfo } from '@agent/core'
 
 import { short } from './format'
-import { metaText, parseMeta } from './meta'
+import { metaOf, metaText } from './meta'
 
 /** The chat a row belongs to: `meta.chat`, or the first chat for rows written before chats existed. */
 export function chatOf(item: Pick<ChatItem, 'meta'>): string {
-  const value = parseMeta(item.meta)['chat']
+  const value = metaOf(item)['chat']
   return typeof value === 'string' && value !== '' ? value : MAIN_CHAT
 }
 
@@ -34,11 +34,11 @@ function titleOf(rows: ChatItem[]): string {
   // A New chat divider also carries a title (of the stretch it filed); only a branch's own title names the chat.
   let start = 0
   rows.forEach((row, index) => {
-    const meta = parseMeta(row.meta)
+    const meta = metaOf(row)
     if (row.kind === 'notice' && meta['divider'] === true) start = index + 1
   })
   for (const row of rows) {
-    const meta = parseMeta(row.meta)
+    const meta = metaOf(row)
     const title = metaText(meta, 'title')
     if (row.kind === 'notice' && meta['branch'] === true && title !== '') return short(title, 60)
   }
@@ -63,9 +63,9 @@ export function chatList(items: ChatItem[], open?: string): ChatEntry[] {
   for (const [id, rows] of groups) {
     if (!rows.some((row) => LISTED.has(row.kind))) continue
     rows.sort((a, b) => a.createdAt - b.createdAt)
-    const replies = rows.filter((row) => row.kind === 'agent' || row.kind === 'report' || (row.kind === 'helper' && parseMeta(row.meta)['side'] === true))
+    const replies = rows.filter((row) => row.kind === 'agent' || row.kind === 'report' || (row.kind === 'helper' && metaOf(row)['side'] === true))
     const lastReplyAt = replies.reduce((latest, row) => {
-      const ended = parseMeta(row.meta)['endedAt']
+      const ended = metaOf(row)['endedAt']
       return Math.max(latest, row.kind === 'helper' ? (typeof ended === 'number' ? ended : 0) : row.createdAt)
     }, 0)
     out.push({
@@ -73,8 +73,8 @@ export function chatList(items: ChatItem[], open?: string): ChatEntry[] {
       title: titleOf(rows),
       at: rows.reduce((latest, row) => Math.max(latest, row.createdAt), 0),
       lastReplyAt,
-      branch: rows.some((row) => row.kind === 'notice' && parseMeta(row.meta)['branch'] === true),
-      device: rows.some((row) => parseMeta(row.meta)['from'] === 'phone') && !rows.some((row) => row.kind === 'user' && parseMeta(row.meta)['from'] !== 'phone') ? 'phone' : 'desk',
+      branch: rows.some((row) => row.kind === 'notice' && metaOf(row)['branch'] === true),
+      device: rows.some((row) => metaOf(row)['from'] === 'phone') && !rows.some((row) => row.kind === 'user' && metaOf(row)['from'] !== 'phone') ? 'phone' : 'desk',
     })
   }
   if (open !== undefined && !out.some((entry) => entry.id === open)) {
@@ -113,12 +113,12 @@ export function chatTitleOf(rows: ChatItem[]): string {
 
 /** A separate run started from a message sent while the chat was busy: shown in the thread as its own block. */
 export function isSideRun(item: ChatItem): boolean {
-  return item.kind === 'helper' && parseMeta(item.meta)['side'] === true
+  return item.kind === 'helper' && metaOf(item)['side'] === true
 }
 
 /** Which way a busy message went, in plain words, or '' for an ordinary message. */
 export function routeLine(item: ChatItem): string {
-  const meta = parseMeta(item.meta)
+  const meta = metaOf(item)
   const route = metaText(meta, 'route')
   if (route === 'pending') return 'Reading this next to the current task'
   if (route === 'join') return 'Added to the current task'

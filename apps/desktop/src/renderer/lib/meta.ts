@@ -23,3 +23,17 @@ export function metaStrings(meta: Meta, key: string): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((item): item is string => typeof item === 'string')
 }
+
+const metaCache = new WeakMap<object, Meta>()
+
+/**
+ * A row's meta, parsed once per row object. Lists are patched row by row, so unchanged rows keep their identity
+ * and their parsed meta; only the row that changed is parsed again.
+ */
+export function metaOf(item: { meta: string }): Meta {
+  const hit = metaCache.get(item)
+  if (hit !== undefined) return hit
+  const parsed = parseMeta(item.meta)
+  metaCache.set(item, parsed)
+  return parsed
+}
