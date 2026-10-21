@@ -1194,7 +1194,7 @@ export const mockAgent: AgentApi = {
       await delay(900)
       const preview = mockImportPreview(includeAll)
       const total = Object.values(preview.byKind).reduce((sum, n) => sum + (n ?? 0), 0)
-      return { ...preview, added: total, updated: 0, unchanged: 0, redacted: 7, ms: 840, message: `${total.toLocaleString('en')} added, 0 updated, 0 already here.` }
+      return { ...preview, added: total, updated: 0, unchanged: 0, deletedHere: 0, redacted: 7, ms: 840, message: `${total.toLocaleString('en')} added, 0 updated, 0 already here.` }
     },
     async searchChats() {
       return []

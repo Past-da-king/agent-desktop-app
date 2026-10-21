@@ -135,6 +135,8 @@ export class Runner {
   private readonly activities = new Map<string, ActivityRow>()
   private readonly activityIds = new Map<number, string>()
   private activitySeq = 0
+  /** The divider epoch the current main run started under; its turns stay in that chat's context. */
+  private runEpoch = 0
 
   constructor(deps: RunnerDeps) {
     this.store = deps.store
@@ -414,6 +416,8 @@ export class Runner {
     user: { text: string; meta: string } | null,
   ): Promise<void> {
     this.running = true
+    // The run belongs to the chat it started in, even if New chat is pressed while it works.
+    this.runEpoch = latestDividerAt(await this.store.list('chat_item'))
     // A message the person sent starts a fresh action budget. A helper's result does not.
     if (user !== null) this.budget?.reset()
     const controller = new AbortController()
@@ -802,18 +806,21 @@ export class Runner {
 
   private async appendTurn(message: Msg): Promise<void> {
     if (this.controller?.signal.aborted === true) return
-    await this.store.upsert('turn', { thread: 'main', json: JSON.stringify(msgToJson(message)) })
+    await this.store.upsert('turn', { thread: 'main', json: JSON.stringify(msgToJson(message)), epoch: this.runEpoch })
   }
 
   private async loadHistory(): Promise<Msg[]> {
     const rows = await this.store.list('turn')
     // New Chat takes everything before the newest divider out of context. Nothing is deleted: the agent can still
-    // find it with chats_search.
-    const since = latestDividerAt(await this.store.list('chat_item'))
+    // find it with chats_search. A turn belongs to the chat its run started in (its epoch), so a run still going
+    // when New chat was pressed stays in the old chat; rows from before epochs existed go by their time.
+    const since = this.runEpoch
     const messages: Msg[] = []
     for (const row of rows) {
       if (row.thread !== 'main') continue
-      if (since > 0 && row.createdAt <= since) continue
+      if (typeof row.epoch === 'number') {
+        if (row.epoch !== since) continue
+      } else if (since > 0 && row.createdAt <= since) continue
       try {
         messages.push(msgFromJson(JSON.parse(row.json) as unknown))
       } catch {
