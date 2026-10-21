@@ -19,6 +19,8 @@ export type Route =
   | { page: 'onboarding'; step: OnboardingStep }
   | { page: 'quick-window' }
   | { page: 'dictation' }
+  /** One project: its chats and its memory. */
+  | { page: 'project'; id: string }
 
 export function isAppPage(value: string): value is AppPage {
   return (APP_PAGES as readonly string[]).includes(value)
@@ -38,6 +40,7 @@ export function parseHash(hash: string): Route | null {
   }
   if (first === 'quick-window') return { page: 'quick-window' }
   if (first === 'dictation') return { page: 'dictation' }
+  if (first === 'project' && second !== undefined && /^[A-Za-z0-9_-]{1,64}$/.test(second)) return { page: 'project', id: second }
   if (first && isAppPage(first)) return { page: first }
   return null
 }
@@ -46,6 +49,7 @@ export function hashFor(route: Route): string {
   if (route.page === 'onboarding') return `#/onboarding/${route.step}`
   if (route.page === 'quick-window') return '#/quick-window'
   if (route.page === 'dictation') return '#/dictation'
+  if (route.page === 'project') return `#/project/${route.id}`
   return `#/${route.page}`
 }
 

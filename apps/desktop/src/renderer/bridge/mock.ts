@@ -591,6 +591,7 @@ export const mockAgent: AgentApi = {
         goal: [],
         task: [],
         trigger: [],
+        project: [],
       }
       settings = { ...DEFAULT_SETTINGS, deviceName: 'This computer' }
       apiKey = ''
@@ -1311,9 +1312,19 @@ export const mockAgent: AgentApi = {
         return { dividerId: latest.id, saving: false }
       }
       const hasChat = list.some((item) => item.kind === 'user')
-      const meta: Record<string, unknown> = { divider: true, at: Date.now(), ...tag }
+      // The main thread's New chat carries on with a summary of itself (memory/service.ts compressChat).
+      const inPlace = target === undefined || target.chat === target.from
+      const meta: Record<string, unknown> = { divider: true, at: Date.now(), ...tag, ...(inPlace && hasChat ? { compress: 'pending' } : {}) }
       if (hasChat) meta['memory'] = { chat: 'mock-chat', status: 'saving' }
       const divider = insertChat({ kind: 'notice', text: 'New chat', meta: JSON.stringify(meta) })
+      if (inPlace && hasChat) {
+        setTimeout(() => {
+          patchCard(divider.id, {
+            compress: 'done',
+            carry: '**Working on**\n- Durban trip on Fri 30 Oct: flights and a guesthouse.\n\n**Decided**\n- SkyHop 06:05 at R 899, the best value.\n\n**Asked last**\n- Hold the 06:05 and check a window seat back.',
+          })
+        }, 700)
+      }
       if (hasChat) {
         setTimeout(() => {
           const saved = rows.memory.filter((row) => !row.pinned).slice(0, 3).map((row) => row.id)

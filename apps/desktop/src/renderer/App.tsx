@@ -10,6 +10,7 @@ import { Chat } from './views/Chat'
 import { Connections } from './views/Connections'
 import { Home } from './views/Home'
 import { Memory } from './views/Memory'
+import { Project } from './views/Project'
 import { Routines } from './views/Routines'
 import { Settings } from './views/Settings'
 import { Tasks } from './views/Tasks'
@@ -59,6 +60,12 @@ function Page(): JSX.Element {
       return (
         <Shell>
           <Settings />
+        </Shell>
+      )
+    case 'project':
+      return (
+        <Shell>
+          <Project id={route.id} />
         </Shell>
       )
     case 'quick-window':
