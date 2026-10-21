@@ -10,54 +10,59 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** The slice of Electron's clipboard this needs. */
+/**
+ * The clipboard as dictation needs it. Electron 44's clipboard is asynchronous and item based (like the web's),
+ * so saving means copying every type of every item out, and restoring means writing them back as new items.
+ */
 export interface ClipboardLike {
-  readText(): string
-  readHTML(): string
-  readRTF(): string
-  readImage(): { isEmpty(): boolean }
-  write(data: { text?: string; html?: string; rtf?: string; image?: unknown }): void
-  writeText(text: string): void
+  readText(): Promise<string>
+  writeText(text: string): Promise<void>
+  /** Everything on the clipboard now, copied out. */
+  save(): Promise<SavedClipboard>
+  /** Puts a saved clipboard back (an empty one clears it). */
+  restore(saved: SavedClipboard): Promise<void>
+}
+
+/** One entry per clipboard item: each MIME type and its payload (a Blob, or a bookmark). */
+export type SavedClipboard = Array<Record<string, unknown>>
+
+/** The slice of Electron's clipboard module the adapter uses. */
+export interface ElectronClipboardLike {
+  read(): Promise<Array<{ readonly types: string[]; getType(type: string): Promise<unknown> }>>
+  readText(): Promise<string>
+  write(items: never[]): Promise<void>
+  writeText(text: string): Promise<void>
   clear(): void
 }
 
-export interface ClipboardSnapshot {
-  text: string
-  html: string
-  rtf: string
-  image: { isEmpty(): boolean } | null
-}
-
-/** Sends the paste keys to the foreground window. False when it could not. */
-export interface KeySender {
-  paste(): Promise<boolean>
-  /** Hides a held Alt from the app in front (see `mask` in the helper). Fire and forget. */
-  mask(): void
-  warm(): void
-  dispose(): void
-}
-
-export function snapshot(clipboard: ClipboardLike): ClipboardSnapshot {
-  const image = clipboard.readImage()
+/** Electron's clipboard behind `ClipboardLike`. `makeItem` is `(entries) => new ClipboardItem(entries)`. */
+export function electronClipboard(clipboard: ElectronClipboardLike, makeItem: (entries: Record<string, unknown>) => unknown): ClipboardLike {
   return {
-    text: clipboard.readText(),
-    html: clipboard.readHTML(),
-    rtf: clipboard.readRTF(),
-    image: image.isEmpty() ? null : image,
+    readText: () => clipboard.readText(),
+    writeText: (text) => clipboard.writeText(text),
+    save: async () => {
+      const saved: SavedClipboard = []
+      for (const item of await clipboard.read()) {
+        const entries: Record<string, unknown> = {}
+        for (const type of item.types) {
+          try {
+            entries[type] = await item.getType(type)
+          } catch {
+            // A type the platform offers but cannot hand over is skipped.
+          }
+        }
+        if (Object.keys(entries).length > 0) saved.push(entries)
+      }
+      return saved
+    },
+    restore: async (saved) => {
+      if (saved.length === 0) {
+        clipboard.clear()
+        return
+      }
+      await clipboard.write(saved.map((entries) => makeItem(entries)) as never[])
+    },
   }
-}
-
-export function restore(clipboard: ClipboardLike, saved: ClipboardSnapshot): void {
-  if (saved.text === '' && saved.html === '' && saved.rtf === '' && saved.image === null) {
-    clipboard.clear()
-    return
-  }
-  const data: { text?: string; html?: string; rtf?: string; image?: unknown } = {}
-  if (saved.text !== '') data.text = saved.text
-  if (saved.html !== '') data.html = saved.html
-  if (saved.rtf !== '') data.rtf = saved.rtf
-  if (saved.image !== null) data.image = saved.image
-  clipboard.write(data)
 }
 
 export type TypeOutcome = 'pasted' | 'copied'
@@ -73,8 +78,13 @@ export interface TypeDeps {
 /** Pastes `text` at the cursor and puts the old clipboard back. Without a way to send keys the text stays copied. */
 export async function typeText(text: string, deps: TypeDeps): Promise<TypeOutcome> {
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
-  const saved = snapshot(deps.clipboard)
-  deps.clipboard.writeText(text)
+  let saved: SavedClipboard | null = null
+  try {
+    saved = await deps.clipboard.save()
+  } catch {
+    saved = null // Could not read it: paste anyway, and leave the words on the clipboard afterwards.
+  }
+  await deps.clipboard.writeText(text)
   let pasted = false
   if (deps.keys !== null) {
     try {
@@ -86,8 +96,23 @@ export async function typeText(text: string, deps: TypeDeps): Promise<TypeOutcom
   if (!pasted) return 'copied'
   await wait(deps.restoreAfterMs ?? 450)
   // Only put the old clipboard back if nothing else has been copied meanwhile.
-  if (deps.clipboard.readText() === text) restore(deps.clipboard, saved)
+  if (saved !== null && (await deps.clipboard.readText()) === text) {
+    try {
+      await deps.clipboard.restore(saved)
+    } catch {
+      // The words stay on the clipboard; nothing is lost.
+    }
+  }
   return 'pasted'
+}
+
+/** Sends the paste keys to the foreground window. False when it could not. */
+export interface KeySender {
+  paste(): Promise<boolean>
+  /** Hides a held Alt from the app in front (see `mask` in the helper). Fire and forget. */
+  mask(): void
+  warm(): void
+  dispose(): void
 }
 
 // ---- Windows: one PowerShell process, fed over stdin -------------------------------------------------------

@@ -803,6 +803,8 @@ export interface AgentApi {
     micState(session: number, ok: boolean, message: string): Promise<void>
     /** The pill was clicked: stop now and type what was heard. */
     stop(): Promise<void>
+    /** The pill's page is listening for commands (it loaded, or reloaded). */
+    ready(): Promise<void>
     onCommand(cb: (command: DictationCommand) => void): Unsubscribe
     onView(cb: (view: DictationView) => void): Unsubscribe
   }

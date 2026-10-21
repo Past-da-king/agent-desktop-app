@@ -62,6 +62,9 @@ export function mockHotkeys(settings: () => Settings): Pick<AgentApi, 'hotkeys' 
       async stop() {
         return undefined
       },
+      async ready() {
+        return undefined
+      },
       onCommand(): Unsubscribe {
         return () => undefined
       },

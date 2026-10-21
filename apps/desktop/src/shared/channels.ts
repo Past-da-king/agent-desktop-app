@@ -118,6 +118,7 @@ export const CHANNELS = {
     audio: 'agent:dictation.audio',
     micState: 'agent:dictation.micState',
     stop: 'agent:dictation.stop',
+    ready: 'agent:dictation.ready',
   },
   app: {
     info: 'agent:app.info',
