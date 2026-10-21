@@ -82,7 +82,7 @@ function TidyProgressView({ progress }: { progress: MemoryTidyProgress | null })
         </span>
       </div>
       <div className="tidy-bar" role="progressbar" aria-label="Tidying the memory bank" aria-valuemin={0} aria-valuemax={steps} aria-valuenow={done}>
-        <span style={{ width: `${pct}%` }} />
+        <span style={{ transform: `scaleX(${Math.max(0, Math.min(100, pct)) / 100})` }} />
       </div>
       <div className="import-kinds">
         <div className="import-kind">

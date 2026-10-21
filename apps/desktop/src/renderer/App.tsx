@@ -1,19 +1,41 @@
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react'
 
-import { Onboarding } from './onboarding/Onboarding'
 import { useGlobalKeys } from './state/keys'
 import { useHotkeyNotice } from './state/useHotkeyNotice'
 import { lastView, parseHash, type Route } from './state/route'
 import { useSettings } from './state/useSettings'
 import { useRoute, useUi } from './state/useUi'
 import { Chat } from './views/Chat'
-import { Connections } from './views/Connections'
+import { Skeleton } from './ui/Skeleton'
+import { Mascot } from './ui/Mascot'
+import { readBootHint, writeBootHint } from './lib/boot-hint'
+import { applyAccent, applyTheme } from './state/theme'
+import { useData } from './state/useData'
+
+// Screens off the chat load when first opened, so the chat is on screen sooner; each is one small file on disk.
+const Onboarding = lazy(() => import('./onboarding/Onboarding').then((m) => ({ default: m.Onboarding })))
+const Connections = lazy(() => import('./views/Connections').then((m) => ({ default: m.Connections })))
+const Memory = lazy(() => import('./views/Memory').then((m) => ({ default: m.Memory })))
+const Routines = lazy(() => import('./views/Routines').then((m) => ({ default: m.Routines })))
+const Settings = lazy(() => import('./views/Settings').then((m) => ({ default: m.Settings })))
+const Tasks = lazy(() => import('./views/Tasks').then((m) => ({ default: m.Tasks })))
+
+/** A screen still loading from disk shows its bones, never a blank sheet. */
+function Loading({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <Suspense
+      fallback={
+        <div className="sheet-wait">
+          <Skeleton rows={6} />
+        </div>
+      }
+    >
+      {children}
+    </Suspense>
+  )
+}
 import { Home } from './views/Home'
-import { Memory } from './views/Memory'
 import { Project } from './views/Project'
-import { Routines } from './views/Routines'
-import { Settings } from './views/Settings'
-import { Tasks } from './views/Tasks'
 import { BrowserStage, ChatPanel } from './shell/Panel'
 import { Palette } from './shell/Palette'
 import { QuickAsk } from './shell/QuickAsk'
@@ -36,31 +58,41 @@ function Page(): JSX.Element {
     case 'tasks':
       return (
         <Shell>
-          <Tasks />
+          <Loading>
+            <Tasks />
+          </Loading>
         </Shell>
       )
     case 'memory':
       return (
         <Shell>
-          <Memory />
+          <Loading>
+            <Memory />
+          </Loading>
         </Shell>
       )
     case 'routines':
       return (
         <Shell>
-          <Routines />
+          <Loading>
+            <Routines />
+          </Loading>
         </Shell>
       )
     case 'connections':
       return (
         <Shell>
-          <Connections />
+          <Loading>
+            <Connections />
+          </Loading>
         </Shell>
       )
     case 'settings':
       return (
         <Shell>
-          <Settings />
+          <Loading>
+            <Settings />
+          </Loading>
         </Shell>
       )
     case 'project':
@@ -91,7 +123,7 @@ function Main({ route }: { route: Route }): JSX.Element {
   return (
     <div className="win">
       <TitleBar onboarding={onboarding} />
-      <div className="stage">{onboarding ? <Onboarding step={route.step} /> : <Page />}</div>
+      <div className="stage">{onboarding ? <Loading><Onboarding step={route.step} /></Loading> : <Page />}</div>
       {onboarding ? null : <BrowserStage />}
       <div className="overlay">
         <Palette />
@@ -104,12 +136,30 @@ function Main({ route }: { route: Route }): JSX.Element {
 }
 
 export function App(): JSX.Element {
-  const ready = useSettings((state) => state.ready)
+  const settingsReady = useSettings((state) => state.ready)
+  const rowsReady = useData((state) => state.loaded.chat_item)
   const load = useSettings((state) => state.load)
   const route = useRoute()
+  // Settings and the chat rows are asked for together at boot, so the first screen is drawn once, with both.
+  const ready = settingsReady && rowsReady
+  // The last run's look, so the first frame is already the person's: their theme, accent, mascot and agent name.
+  const [hint] = useState(() => {
+    const found = readBootHint()
+    if (found !== null) {
+      applyTheme(found.theme)
+      applyAccent(found.accent)
+    }
+    return found
+  })
+  useEffect(() => {
+    if (!settingsReady) return
+    const settings = useSettings.getState().settings
+    if (settings !== null) writeBootHint(settings)
+  }, [settingsReady])
 
   useEffect(() => {
     void load()
+    void useData.getState().load('chat_item')
   }, [load])
 
   useEffect(() => {
@@ -153,7 +203,15 @@ export function App(): JSX.Element {
         <TitleBar onboarding />
         <div className="stage">
           <div className="boot">
-            <div className="boot-wordmark">Agent</div>
+            {hint === null ? (
+              <div className="boot-wordmark">Agent</div>
+            ) : (
+              <div className="boot-card">
+                <Mascot id={hint.mascot} size={72} busy />
+                <div className="boot-name">{hint.agentName.trim() || 'Agent'}</div>
+                <div className="boot-line">Starting</div>
+              </div>
+            )}
           </div>
         </div>
       </div>

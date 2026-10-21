@@ -16,9 +16,11 @@
 .ob-hero .big-mascot svg{width:min(300px,34vh);height:auto}
 .ob-main{display:flex;flex-direction:column;min-height:0;overflow:auto;padding:28px 56px 28px}
 .dots{display:flex;gap:6px;justify-content:flex-end;margin-bottom:8px}
-.dots i{width:10px;height:10px;border-radius:999px;background:var(--outline-v);transition:width .45s var(--spatial),background .2s}
+.dots i{position:relative;width:10px;height:10px;border-radius:999px;background:var(--outline-v);transition:background .2s;overflow:hidden}
+.dots i::after{content:"";position:absolute;inset:0;border-radius:inherit;background:var(--primary);transform:scaleX(.34);transform-origin:left center;transition:transform .45s var(--spatial),opacity .2s;opacity:0}
 .dots i.done{background:var(--primary)}
-.dots i.cur{width:30px;background:var(--primary)}
+.dots i.cur{width:30px}
+.dots i.cur::after{transform:scaleX(1);opacity:1}
 .ob-col{width:100%;max-width:440px;margin:auto;display:flex;flex-direction:column;gap:16px;padding:12px 0}
 .ob-col .h1{font-size:34px}
 .or{display:flex;align-items:center;gap:12px;color:var(--on-sv);font-size:12px}

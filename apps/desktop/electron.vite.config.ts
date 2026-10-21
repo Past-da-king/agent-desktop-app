@@ -39,6 +39,10 @@ export default defineConfig({
       outDir: resolve(__dirname, 'out/renderer'),
       emptyOutDir: true,
       sourcemap: false,
+      // Electron reads the bundle from disk with no gzip: the smaller the file, the sooner the window is up.
+      minify: 'esbuild',
+      cssMinify: true,
+      target: 'chrome130',
       rollupOptions: {
         input: resolve(__dirname, 'src/renderer/index.html'),
       },
