@@ -285,6 +285,38 @@ function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.E
   )
 }
 
+/** True while the side panel shows its list of what needs the person (it is on screen and not taken by a report or helper). */
+function useSidebarWaiting(): boolean {
+  const narrow = useNarrow()
+  const panel = usePanel((store) => !store.collapsed && store.report === null && store.helper === null)
+  return panel && !narrow
+}
+
+/**
+ * An approval or question still waiting: it is answered in the side panel, so the chat keeps one line pointing
+ * there. When the panel is not on screen the whole card is here instead, so nothing can be missed.
+ */
+function Waiting({ item, full }: { item: ChatItem; full: JSX.Element }): JSX.Element {
+  const inSidebar = useSidebarWaiting()
+  const meta = parseMeta(item.meta)
+  const pending = item.kind === 'approval' ? metaText(meta, 'decision') === '' : !(typeof meta['answer'] === 'string' && meta['answer'] !== '')
+  if (!pending || !inSidebar) return full
+  const what = item.kind === 'approval' ? metaText(meta, 'summary') || item.text : item.text
+  return (
+    <div className="wait-line" role="status">
+      <i>
+        <Icon name={item.kind === 'approval' ? 'shield' : 'person'} size={14} />
+      </i>
+      <span>
+        <b>{item.kind === 'approval' ? 'Waiting for your approval' : 'Waiting for your answer'}</b> {what}
+      </span>
+      <span className="wait-where">
+        In the side panel <Icon name="chev" size={14} />
+      </span>
+    </div>
+  )
+}
+
 function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   const meta = parseMeta(item.meta)
   const options = metaStrings(meta, 'options')
@@ -694,9 +726,9 @@ function renderItem(
     case 'activity':
       return <ActivityRow item={item} />
     case 'question':
-      return <QuestionRow item={item} />
+      return <Waiting item={item} full={<QuestionRow item={item} />} />
     case 'approval':
-      return <ApprovalRow item={item} />
+      return <Waiting item={item} full={<ApprovalRow item={item} />} />
     case 'helper':
       if (isSideRun(item)) {
         const ask = metaText(parseMeta(item.meta), 'ask')

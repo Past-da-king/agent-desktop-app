@@ -477,10 +477,6 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
         }}
       />
 
-      <NeedsYou />
-
-      <HelpersPanel />
-
       {tucked ? (
         <BrowserLine
           state={state}
@@ -584,6 +580,11 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
           </p>
         ) : null}
       </section>
+
+      {/* The browser always sits at the top; what needs the person comes straight under it, then helpers. */}
+      <NeedsYou />
+
+      <HelpersPanel />
 
       <section>
         <div className="sec">
