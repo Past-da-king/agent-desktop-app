@@ -172,7 +172,7 @@ export interface ToolContext {
   activity(text: string, meta?: JsonObject): Promise<number>
   updateActivity(id: number, text: string, meta?: JsonObject): Promise<void>
   /** Ask the person and wait for the answer. Null when nobody can answer (a background run). */
-  ask(question: string, options: string[]): Promise<string | null>
+  ask(question: string, options: string[], card?: JsonObject): Promise<string | null>
   /** Ask permission before something that changes the outside world. */
   /**
    * Ask the person to approve. `scope: 'computer'` marks an action that stays on this computer (a command, code,

@@ -1280,8 +1280,8 @@ export class Runner {
         })
         this.emitFor(chat, { type: 'chat_changed' })
       },
-      ask: (question, options) =>
-        role === 'routine' ? this.askInRoutine(question, options) : this.ask(question, options, signal, chat),
+      ask: (question, options, card) =>
+        role === 'routine' ? this.askInRoutine(question, options) : this.ask(question, options, signal, chat, card),
       approve: (summary, details, scope) =>
         role === 'routine' ? this.approveInRoutine(summary, details) : this.approve(summary, details, signal, scope, chat),
       notify: async (title, body) => this.sendNotification(title, body, false),
@@ -1289,12 +1289,13 @@ export class Runner {
     }
   }
 
-  private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT): Promise<string | null> {
+  private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT, card?: JsonObject): Promise<string | null> {
     const line = this.line(chat)
     const row = await this.store.upsert('chat_item', {
       kind: 'question',
       text: question,
-      meta: JSON.stringify({ options, answer: '', ...chatTag(chat) }),
+      // `card`: how the window draws it, when it is more than a question (a project to confirm, tools/projects.ts).
+      meta: JSON.stringify({ options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI: the person may answer the moment the card appears.
     const pending = new Promise<string | null>((resolve) => {

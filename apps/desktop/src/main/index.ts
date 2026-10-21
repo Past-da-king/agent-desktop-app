@@ -653,6 +653,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       },
       state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
       agentName: () => settings.get().agentName,
+      profiles: () => apps.profiles.all(),
     },
   })
   runner = new Runner({
