@@ -2,6 +2,7 @@ import { agent } from '../bridge'
 import { useChats } from '../state/useChats'
 import { useUi } from '../state/useUi'
 import { chatOf } from './chats'
+import { isDivider } from './thread'
 import { toast } from '../state/useToast'
 
 /** A fresh chat id, the same shape the main process makes (c + 16 letters and digits). */
@@ -14,19 +15,30 @@ export function newChatId(): string {
 }
 
 /**
- * Start a fresh chat. The one you were in keeps going if it was working, and stays in the rail. Nothing is
- * deleted. A chat with nothing in it yet is reused instead of making another empty one.
+ * Start a fresh chat. The one you were in keeps going if it was working, keeps its context and stays in the rail;
+ * nothing is deleted. Its conversation so far is filed into memory in the background (main/memory/service.ts),
+ * and the new chat opens with a divider that says so. A chat with nothing in it yet is reused.
  */
 export async function startNewChat(): Promise<void> {
   const ui = useUi.getState()
   const chats = useChats.getState()
+  const previous = chats.open
   ui.navigate({ page: 'chat' })
+  let used = true
   try {
     const rows = await agent.data.list('chat_item')
-    const openHasRows = rows.some((row) => chatOf(row) === chats.open && row.kind !== 'branch')
-    if (openHasRows) chats.openChat(newChatId())
+    used = rows.some((row) => chatOf(row) === previous && row.kind !== 'branch' && !isDivider(row))
   } catch {
-    chats.openChat(newChatId())
+    used = true
+  }
+  if (used) {
+    const next = newChatId()
+    chats.openChat(next)
+    try {
+      await agent.memory.newChat({ chat: next, from: previous })
+    } catch {
+      // An older main process without memory: the new chat simply starts empty.
+    }
   }
   ui.focusComposer()
   ui.scrollChat()

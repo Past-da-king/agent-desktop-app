@@ -11,7 +11,7 @@ import { appName } from '../apps/catalog'
 
 import { OPENUI_PROMPT } from './openui-prompt'
 import { VOICE_NOTE_GUIDE } from '../tools/voice-note'
-import { formatMemory, rank } from './recall'
+import { formatMemory, formatMemoryBrief, recallFor } from './recall'
 import { formatDateTime, localTimeZone } from './time'
 
 export interface PromptInput {
@@ -88,6 +88,14 @@ export function helperProfileLines(profile: AgentProfileInfo, learnedNames: Reco
   ]
 }
 
+/** Long-term memory across chats: the person talks as if the agent remembers, so it looks before it asks. */
+export const ASSUME_YOU_KNOW = [
+  'ASSUME YOU KNOW',
+  '- When the user mentions something as if you already know it (a person, a company, a project, an earlier decision, "like last time", "the usual", "as I said"), you do: it is in your memory or an earlier chat. Look it up FIRST: memory_search (then memory_get), and chats_search for earlier chats (chat_read to read one). Then act on what you found, without telling them you had to look.',
+  '- Ask only when both searches come back empty. Never ask the user to repeat something they told you before.',
+  '- Each new chat starts fresh. The pinned "Where we are" page is where things stood at the end of the last day: pick up from it.',
+]
+
 export const NO_NAME = 'Your agent'
 export const MEMORY_LIMIT = 8
 export const TASK_LIMIT = 25
@@ -97,7 +105,8 @@ export function buildSystemPrompt(input: PromptInput): string {
   const zone = input.timeZone ?? localTimeZone()
   const pinned = memories.filter((memory) => memory.pinned)
   const pinnedIds = new Set(pinned.map((memory) => memory.id))
-  const recalled = rank(
+  // People, organisations and projects the message names come first, then the best word matches.
+  const recalled = recallFor(
     latestUserText,
     memories.filter((memory) => !pinnedIds.has(memory.id)),
     MEMORY_LIMIT,
@@ -236,10 +245,18 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push(
       "- A website you will need again (a site with no API): check webapp_list for tools you already wrote and run them with webapp_run. If there are none, teach yourself the site once (webapp_guide, then browser_network and browser_eval to map it, then webapp_save).",
     )
+    lines.push(
+      "- Your browser has developer tools, as a person has with Ctrl+Shift+I: browser_network and browser_network_get show what a page sent and got back (its API), browser_fetch tries a request from inside the page, browser_console shows errors, browser_inspect and browser_storage show elements, cookies and storage, browser_eval runs code.",
+    )
     if (input.role === 'helper' && input.profile !== undefined && input.profile !== null) {
       lines.push('')
       lines.push(...helperProfileLines(input.profile, input.learnedNames))
     }
+  }
+
+  if (input.role === undefined || input.role === 'main') {
+    lines.push(...ASSUME_YOU_KNOW)
+    lines.push('')
   }
 
   lines.push(
@@ -283,7 +300,7 @@ export function buildSystemPrompt(input: PromptInput): string {
   if (recalled.length > 0) {
     lines.push('')
     lines.push('POSSIBLY RELEVANT MEMORIES')
-    recalled.forEach((memory) => lines.push(`- ${formatMemory(memory)}`))
+    recalled.forEach((memory) => lines.push(`- ${formatMemoryBrief(memory)}`))
   }
 
   if (goals.length > 0 || tasks.length > 0) {

@@ -111,6 +111,7 @@ export interface BrowserControl {
   frame?(): Promise<string | null>
   personOpen?(address: string): Promise<void>
   personNewTab?(): void
+  openDevTools?(): void
 }
 
 export interface IpcDeps {
@@ -391,6 +392,9 @@ export function registerIpc(deps: IpcDeps): () => void {
   })
   handle(CHANNELS.browser.newTab, async () => {
     deps.browser?.personNewTab?.()
+  })
+  handle(CHANNELS.browser.devtools, async () => {
+    deps.browser?.openDevTools?.()
   })
   handle(CHANNELS.browser.setExpanded, async (_event, rawOn) => {
     if (typeof rawOn !== 'boolean') throw new Error('expanded must be true or false')

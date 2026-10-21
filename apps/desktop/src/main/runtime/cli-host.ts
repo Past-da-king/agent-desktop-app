@@ -167,7 +167,11 @@ export class CliHost {
 
   forget(thread = 'main'): void {
     const sessions = this.sessions()
-    delete sessions[thread]
+    // Sessions are kept per engine as "<cli>:<thread>" (plus "#rev"), so forget the thread on every engine.
+    for (const key of Object.keys(sessions)) {
+      const bare = key.replace(/#rev$/, '')
+      if (bare === thread || bare.endsWith(`:${thread}`)) delete sessions[key]
+    }
     this.saveSessions(sessions)
   }
 

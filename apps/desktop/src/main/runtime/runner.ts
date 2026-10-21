@@ -52,6 +52,9 @@ import {
   parseVerdict,
   type Classifier,
 } from './chat-route'
+import { describeRun, runFinished, runStarted } from './run-detail'
+import { redactSecrets } from '../logger'
+import { latestDividerAt } from '../memory/chats'
 
 export interface SettingsView {
   get(): Settings
@@ -117,6 +120,8 @@ export interface RunnerDeps {
 interface ActivityRow {
   id: string
   text: string
+  /** When the call started, for how long a run took. */
+  started?: number
 }
 
 const MAX_RESULT_CHARS = 160
@@ -816,7 +821,7 @@ export class Runner {
     const memories = await this.store.list('memory')
     const goals = await this.store.list('goal')
     const tasks = await this.store.list('task')
-    const history = await this.loadHistory(threadFor(chat))
+    const history = await this.loadHistory(chat)
     const first = userMsg(text, images)
     history.push(first)
     await this.appendTurn(first, chat, signal)
@@ -965,6 +970,50 @@ export class Runner {
     return { text: summary === '' ? 'The routine finished without a summary.' : summary, waiting: false }
   }
 
+  /**
+   * One plain model call with no tools, on whatever the person runs (their API key or their plan). Used to file a
+   * chat into memory and for the end-of-day pass. Throws with a plain message when it cannot answer.
+   */
+  async oneShot(system: string, prompt: string, signal?: AbortSignal): Promise<string> {
+    const current = this.settings.get()
+    if (current.mode === 'subscription') {
+      if (this.cli === undefined) throw new Error('This build cannot run on a subscription.')
+      const controller = new AbortController()
+      const abort = (): void => controller.abort()
+      signal?.addEventListener('abort', abort)
+      const timer = setTimeout(abort, 300_000)
+      try {
+        const result = await this.cli.turn({
+          cli: current.cli === '' ? 'claude' : current.cli,
+          thread: 'routine',
+          tools: [],
+          system,
+          prompt,
+          ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
+          context: this.toolContext(controller.signal, 'routine'),
+          signal: controller.signal,
+          onEvent: async () => undefined,
+          onCall: async () => undefined,
+          onResult: async () => undefined,
+        })
+        if (controller.signal.aborted) throw new Error('The model took too long to answer.')
+        if (result.error !== undefined) throw new Error(result.error)
+        return result.text
+      } finally {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
+      }
+    }
+    const resolved = this.resolveModel()
+    if (!resolved.ok) throw new Error(resolved.message)
+    try {
+      const completion = await resolved.provider.complete(system, [userMsg(prompt)], [], resolved.model, 4096)
+      return msgText(completion.message)
+    } catch (error) {
+      throw new Error(friendlyError(error))
+    }
+  }
+
   /** The chosen plan's own sign-in, then the same tiny check. */
   async planModels(): Promise<Array<{ id: string; label: string; line: string }>> {
     if (this.cli === undefined) return []
@@ -1031,20 +1080,25 @@ export class Runner {
 
   private async startActivity(call: ToolCallBlock, chat: string = MAIN_CHAT): Promise<void> {
     const summary = describeCall(call)
+    // What it is running, so the row shows the command while it works.
+    const run = runStarted(call)
     const row = await this.store.upsert('chat_item', {
       kind: 'activity',
       text: summary,
-      meta: JSON.stringify({ tool: call.name, status: 'running', summary, ...chatTag(chat) }),
+      meta: JSON.stringify({ tool: call.name, status: 'running', summary, ...(run === null ? {} : { run }), ...chatTag(chat) }),
     })
-    this.activities.set(call.id, { id: row.id, text: summary })
+    this.activities.set(call.id, { id: row.id, text: summary, started: Date.now() })
     this.emitFor(chat, { type: 'chat_changed' })
   }
 
   private async finishActivity(call: ToolCallBlock, result: string, isError: boolean, chat: string = MAIN_CHAT): Promise<void> {
     const activity = this.activities.get(call.id)
     this.activities.delete(call.id)
-    const summary = isError ? clip(result.split('\n')[0] ?? result, MAX_RESULT_CHARS) : describeCall(call)
+    // An error line can quote the command or its output, so it is redacted like the run record.
+    const summary = isError ? clip(redactSecrets(result.split('\n')[0] ?? result), MAX_RESULT_CHARS) : describeCall(call)
     const meta: JsonObject = { tool: call.name, status: isError ? 'error' : 'done', summary, ...chatTag(chat) }
+    const run = runFinished(call, result, isError, activity?.started ?? Date.now())
+    if (run !== null) meta['run'] = run as unknown as JsonObject
     const text = isError ? `${activity?.text ?? describeCall(call)} failed` : activity?.text ?? summary
 
     if (activity !== undefined) {
@@ -1088,11 +1142,16 @@ export class Runner {
     await this.store.upsert('turn', { thread: threadFor(chat), json: JSON.stringify(msgToJson(message)) })
   }
 
-  private async loadHistory(thread = 'main'): Promise<Msg[]> {
+  private async loadHistory(chat: string = MAIN_CHAT): Promise<Msg[]> {
     const rows = await this.store.list('turn')
+    const thread = threadFor(chat)
+    // New Chat takes everything before the newest divider out of context. Nothing is deleted: the agent can still
+    // find it with chats_search. Each chat has its own dividers.
+    const since = latestDividerAt((await this.store.list('chat_item')).filter((item) => chatOf(item) === chat))
     const messages: Msg[] = []
     for (const row of rows) {
       if (row.thread !== thread) continue
+      if (since > 0 && row.createdAt <= since) continue
       try {
         messages.push(msgFromJson(JSON.parse(row.json) as unknown))
       } catch {
@@ -1304,6 +1363,9 @@ export function friendlyError(error: unknown): string {
 
 /** What the activity row says while a tool runs. Kept in one switch so every row reads the same. */
 export function describeCall(call: ToolCallBlock): string {
+  // Commands, code and files: what was run, with any secret in it redacted.
+  const run = describeRun(call)
+  if (run !== null) return run
   const input = call.input
   const title = stringField(input['title']) || stringField(input['summary'])
   switch (call.name) {
@@ -1319,6 +1381,12 @@ export function describeCall(call: ToolCallBlock): string {
       return title === '' ? 'Updated memory' : `Remembered: ${clip(title, 80)}`
     case 'memory_update':
       return 'Updated memory'
+    case 'chats_search': {
+      const query = stringField(input['query'])
+      return query === '' ? 'Searched earlier chats' : `Searched earlier chats for "${clip(query, 80)}"`
+    }
+    case 'chat_read':
+      return 'Read an earlier chat'
     case 'task_add':
       return title === '' ? 'Added a task' : `Added a task: ${clip(title, 80)}`
     case 'task_list':

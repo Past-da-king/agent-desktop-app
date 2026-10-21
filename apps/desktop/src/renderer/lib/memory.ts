@@ -14,7 +14,11 @@ export function linkedNames(body: string): string[] {
 
 /** The body with the brackets removed, for list previews. */
 export function plainBody(body: string): string {
-  return body.replace(/\[\[([^\]]+)\]\]/g, '$1')
+  return body
+    .replace(/\[\[([^\]]+)\]\]/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/\s*\n+\s*/g, ' ')
 }
 
 /** A page linked by name, case-insensitively. The first page with that title wins. */
@@ -64,4 +68,32 @@ export function newPage(title: string, now = Date.now()): MemoryRow {
     source: 'user',
     updatedAt: now,
   }
+}
+
+/** The kinds in the order Memory shows them, with the section's name and what it is for. */
+export const MEMORY_TYPES: Array<{ kind: MemoryKind; label: string; line: string }> = [
+  { kind: 'person', label: 'People', line: 'Who they are and how to work with them' },
+  { kind: 'organisation', label: 'Organisations', line: 'Companies, teams and places you deal with' },
+  { kind: 'project', label: 'Projects', line: 'What you are building or running' },
+  { kind: 'how-to', label: 'How-tos', line: 'Steps to do it again' },
+  { kind: 'decision', label: 'Decisions', line: 'What was decided and why' },
+  { kind: 'preference', label: 'Preferences', line: 'How you like things done' },
+  { kind: 'fact', label: 'Facts', line: 'Things that stay true' },
+  { kind: 'event', label: 'Events', line: 'Moments worth remembering' },
+  { kind: 'skill', label: 'Skills', line: 'What your agent learned to do' },
+]
+
+/** Pages per kind, each list newest first. Kinds with no pages are left out. */
+export function groupByKind(memories: MemoryRow[]): Array<{ kind: MemoryKind; label: string; line: string; rows: MemoryRow[] }> {
+  return MEMORY_TYPES.map((type) => ({
+    ...type,
+    rows: memories.filter((memory) => memory.kind === type.kind).sort((a, b) => b.updatedAt - a.updatedAt),
+  })).filter((group) => group.rows.length > 0)
+}
+
+/** How many pages of each kind. */
+export function kindCounts(memories: MemoryRow[]): Partial<Record<MemoryKind, number>> {
+  const counts: Partial<Record<MemoryKind, number>> = {}
+  for (const memory of memories) counts[memory.kind] = (counts[memory.kind] ?? 0) + 1
+  return counts
 }

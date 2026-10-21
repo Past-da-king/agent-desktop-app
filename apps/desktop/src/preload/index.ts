@@ -11,6 +11,8 @@ import type {
   Attachment,
   CallEvent,
   CallSummary,
+  DictationCommand,
+  DictationView,
   BrowserBounds,
   BrowserState,
   ChatEvent,
@@ -33,8 +35,10 @@ import type {
   Unsubscribe,
   VoiceResult,
 } from '@agent/core'
+import type { MemoryImportPreview, MemoryImportResult, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
 import { CHANNELS, EVENTS } from '../shared/channels'
+import { MEMORY_CHANNELS, MEMORY_EVENTS } from '../shared/memory-channels'
 
 const platform: AgentApi['platform'] =
   process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
@@ -118,6 +122,7 @@ const api: AgentApi = {
     frame: () => call<string | null>(CHANNELS.browser.frame),
     go: (address) => call<void>(CHANNELS.browser.go, address),
     newTab: () => call<void>(CHANNELS.browser.newTab),
+    devtools: () => call<void>(CHANNELS.browser.devtools),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
   },
 
@@ -208,10 +213,40 @@ const api: AgentApi = {
     onCall: (callback) => on<CallEvent>(EVENTS.voiceCall, callback),
   },
 
+  hotkeys: {
+    status: () => call<HotkeyStatus[]>(CHANNELS.hotkeys.status),
+    pause: (paused) => call<void>(CHANNELS.hotkeys.pause, paused),
+  },
+
+  dictation: {
+    audio: (session, pcm) => {
+      ipcRenderer.send(CHANNELS.dictation.audio, session, pcm)
+    },
+    micState: (session, ok, message) => call<void>(CHANNELS.dictation.micState, session, ok, message),
+    stop: () => call<void>(CHANNELS.dictation.stop),
+    ready: () => call<void>(CHANNELS.dictation.ready),
+    onCommand: (callback) => on<DictationCommand>(EVENTS.dictationCommand, callback),
+    onView: (callback) => on<DictationView>(EVENTS.dictationView, callback),
+  },
+
   app: {
     info: () => call<AppInfo>(CHANNELS.app.info),
     openLogsFolder: () => call<void>(CHANNELS.app.openLogsFolder),
     openLicences: () => call<void>(CHANNELS.app.openLicences),
+  },
+
+  memory: {
+    newChat: (target?: { chat: string; from: string }) =>
+      call<{ dividerId: string | null; saving: boolean }>(MEMORY_CHANNELS.newChat, target ?? null),
+    retrySave: (id) => call<void>(MEMORY_CHANNELS.retrySave, id),
+    pickImport: () => call<{ path: string; name: string } | null>(MEMORY_CHANNELS.pickImport),
+    previewImport: (path, includeAll) => call<MemoryImportPreview>(MEMORY_CHANNELS.previewImport, path, includeAll),
+    runImport: (path, includeAll) => call<MemoryImportResult>(MEMORY_CHANNELS.runImport, path, includeAll),
+    searchChats: (query, limit) => call<PastChatHit[]>(MEMORY_CHANNELS.searchChats, query, limit),
+    runDaily: () => call<UpkeepReport>(MEMORY_CHANNELS.runDaily),
+    upkeep: () => call<UpkeepSummary>(MEMORY_CHANNELS.upkeep),
+    undoChange: (id) => call<boolean>(MEMORY_CHANNELS.undoChange, id),
+    onUpkeep: (callback) => on<UpkeepReport | null>(MEMORY_EVENTS.upkeep, callback),
   },
 }
 

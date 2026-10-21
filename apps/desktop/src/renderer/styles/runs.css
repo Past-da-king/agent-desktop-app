@@ -1,0 +1,54 @@
+/* What the agent ran: one line per command, program or file step, opening to the full record (views/RunStep.tsx). */
+.run{display:flex;flex-direction:column;min-width:0}
+.run-row{display:flex;align-items:center;gap:10px;width:100%;min-width:0;min-height:36px;padding:2px 8px 2px 0;border-radius:var(--r-sm);background:transparent;color:var(--on-sv);font:500 13px/1 var(--font);text-align:left;cursor:pointer;transition:background var(--t-fast,160ms) var(--effects)}
+.run-row:hover{background:var(--s-mid)}
+.run-row:focus-visible,.run-copy:focus-visible,.run-more:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.run-ic{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--sc);color:var(--on-sc)}
+.run-ic>span{display:grid;place-items:center}
+.run-ic.ok{background:var(--okc);color:var(--ok)}
+.run-ic.bad{background:var(--ec);color:var(--on-ec)}
+.run-ic.warn{background:var(--tc);color:var(--on-tc)}
+.run-ic.live{background:var(--pc);color:var(--on-pc)}
+.run-snip{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 13px/24px ui-monospace,'Cascadia Mono',Consolas,'SF Mono',monospace;color:var(--on-bg);background:var(--s-mid);padding:0 8px;border-radius:6px}
+.run-row:hover .run-snip{background:var(--s-high)}
+.run-st{flex:none;font:600 12px/22px var(--font);padding:0 8px;border-radius:999px;white-space:nowrap}
+.run-st.ok{background:var(--okc);color:var(--ok)}
+.run-st.bad{background:var(--ec);color:var(--on-ec)}
+.run-st.warn{background:var(--tc);color:var(--on-tc)}
+.run-st.live{background:var(--pc);color:var(--on-pc)}
+.run-st.mute{background:var(--s-high);color:var(--on-sv)}
+.run-ms{flex:none;font:500 12px/1 var(--font);color:var(--on-sv);font-variant-numeric:tabular-nums;white-space:nowrap}
+.run-chev{margin-left:auto;flex:none;display:grid;place-items:center;color:var(--on-sv)}
+.run-body{margin:6px 0 6px 38px;display:flex;flex-direction:column;gap:14px;padding:14px 16px 16px;border-radius:var(--r-md);background:var(--s-low);border:1px solid var(--outline-v);min-width:0}
+.run-sec{display:flex;flex-direction:column;gap:6px;min-width:0}
+.run-sec-h{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px}
+.run-sec.err .eyebrow{color:var(--err)}
+.run-copy{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:999px;background:transparent;color:var(--primary);font:600 12px/1 var(--font);cursor:pointer}
+.run-copy:hover{background:var(--s-high)}
+.run-pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:400 13px/1.55 ui-monospace,'Cascadia Mono',Consolas,'SF Mono',monospace;color:var(--on-bg);background:var(--s-lowest);border:1px solid var(--outline-v);border-radius:var(--r-sm);padding:10px 12px;max-height:420px;overflow:auto;tab-size:4}
+.run-pre.cmd{background:var(--s-mid);border-color:var(--s-mid)}
+.run-sec.err .run-pre{border-left:3px solid var(--err)}
+.run-fold{display:flex;flex-direction:column}
+.run-fold .run-pre.head{border-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0}
+.run-fold .run-pre.tail{border-top:0;border-top-left-radius:0;border-top-right-radius:0}
+.run-sec.err .run-fold .run-more{border-left:3px solid var(--err)}
+.run-more{display:flex;align-items:center;justify-content:center;min-height:34px;padding:0 12px;border:1px dashed var(--outline-v);background:var(--s-mid);color:var(--primary);font:600 12px/1 var(--font);cursor:pointer}
+.run-fold .run-more{border-radius:0}
+.run-sec>.run-more{align-self:flex-start;border-radius:999px;border-style:solid}
+.run-more:hover{background:var(--s-high)}
+.run-facts{display:flex;flex-wrap:wrap;gap:4px 16px;font:400 12px/1.6 var(--font);color:var(--on-sv)}
+.run-facts code{font:500 12px/1.6 ui-monospace,'Cascadia Mono',Consolas,'SF Mono',monospace;color:var(--on-bg);overflow-wrap:anywhere}
+.run-none{font-size:13px;color:var(--on-sv)}
+.run-note{font-size:13px;line-height:1.5;color:var(--on-bg);background:var(--s-mid);border-radius:var(--r-sm);padding:8px 12px;overflow-wrap:anywhere}
+.run-note.failed{background:var(--ec);color:var(--on-ec)}
+.run-note.timeout{background:var(--tc);color:var(--on-tc)}
+.run-trim{font-size:12px;line-height:1.5;color:var(--on-sv)}
+/* The folded "Used 4 tools" line keeps a snippet of the last thing it ran. */
+.tool-sum-row{max-width:100%;min-width:0}
+.tool-sum-row>span{white-space:nowrap;flex:none}
+.run-snip.in-sum{max-width:min(420px,42vw);line-height:22px}
+@media (max-width:560px){
+  .run-row .tool-tag{display:none}
+  .run-body{margin-left:0;padding:12px}
+  .run-snip.in-sum{display:none}
+}
