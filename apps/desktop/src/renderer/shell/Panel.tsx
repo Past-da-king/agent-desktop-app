@@ -23,19 +23,6 @@ const VIEW_CHOICES: Array<{ mode: Exclude<BrowserViewMode, 'fit'>; label: string
   { mode: 'phone', label: 'Phone', icon: 'phone' },
 ]
 
-/** Where the page sits inside a slot: laid out at its own size, scaled down to fit, centred. */
-export function fittedRect(
-  slot: { width: number; height: number },
-  view: BrowserState['view'],
-): { left: number; top: number; width: number; height: number } | null {
-  if (view === undefined || view.mode === 'fit' || view.width <= 0 || view.height <= 0) return null
-  if (slot.width <= 0 || slot.height <= 0) return null
-  const scale = Math.min(1, slot.width / view.width, slot.height / view.height)
-  const width = Math.max(1, Math.round(view.width * scale))
-  const height = Math.max(1, Math.round(view.height * scale))
-  return { left: Math.floor((slot.width - width) / 2), top: Math.floor((slot.height - height) / 2), width, height }
-}
-
 /** The compact device switch: shows the mode and size the page is laid out at, and changes it. */
 function ViewSwitch({ state, disabled }: { state: BrowserState | null; disabled: boolean }): JSX.Element {
   const view = state?.view
@@ -446,7 +433,7 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
                 ? 'Waiting for you'
                 : state?.agentActive === false
                   ? 'You have control'
-                  : 'Live, in its own window'}
+                  : 'Live, right here in the card'}
             </span>
           </div>
           <div className="panel-h-actions">
