@@ -30,6 +30,8 @@ import type {
   SystemInfo,
   Unsubscribe,
   MemoryImportPreview,
+  MemoryRow,
+  MemoryVersion,
   UpkeepChange,
   UpkeepReport,
 } from '@agent/core'
@@ -78,6 +80,59 @@ function writeStoredSettings(value: Settings): void {
 
 let settings: Settings = readStoredSettings(seed.settings)
 let rows: RowStore = copy(seed.rows)
+
+// ---- memory versions (the main process keeps these in the Store; here, in memory) ----
+
+const mockVersions = new Map<string, MemoryVersion[]>()
+
+function versionOf(memoryId: string, n: number, at: number, by: string, reason: string, changed: string[], row: Partial<MemoryRow>, deleted = false): MemoryVersion {
+  return {
+    memoryId,
+    n,
+    at,
+    by,
+    reason,
+    changed,
+    deleted,
+    title: row.title ?? '',
+    body: row.body ?? '',
+    kind: row.kind ?? 'fact',
+    topics: row.topics ?? '',
+    status: row.status === 'closed' ? 'closed' : 'open',
+    aliases: row.aliases ?? '',
+    pinned: row.pinned === true,
+  }
+}
+
+function keepMockVersion(before: MemoryRow | null, after: MemoryRow | null, by: string, reason = ''): void {
+  const id = after?.id ?? before?.id ?? ''
+  const list = mockVersions.get(id) ?? []
+  if (list.length === 0 && before !== null) list.push(versionOf(id, 1, before.updatedAt, 'earlier', '', ['created'], before))
+  const fields = ['title', 'body', 'kind', 'topics', 'status', 'aliases', 'pinned'] as const
+  const changed =
+    after === null
+      ? ['deleted']
+      : before === null
+        ? ['created']
+        : fields.filter((key) => String(before[key] ?? (key === 'status' ? 'open' : '')) !== String(after[key] ?? (key === 'status' ? 'open' : '')))
+  if (changed.length === 0) return
+  list.push(versionOf(id, list.length + 1, Date.now(), by, reason, changed, after ?? before ?? {}, after === null))
+  mockVersions.set(id, list)
+}
+
+// The demo's TAP decision changed over a few days, so its history has a story to show.
+{
+  const tap = rows.memory.find((row) => row.id === 'm9')
+  if (tap !== undefined) {
+    const day = 86_400_000
+    const at = tap.updatedAt
+    mockVersions.set('m9', [
+      versionOf('m9', 1, at - 3 * day, 'chat filing', '', ['created'], { ...tap, title: 'Lisbon flights', body: 'Looking at a one-stop flight via Madrid for R7,900, the cheapest found.', kind: 'decision' }),
+      versionOf('m9', 2, at - 2 * day, 'helper Airline comparison', 'compared three airlines', ['title', 'body'], { ...tap, title: 'Lisbon flights', body: 'Two options: one-stop via Madrid R7,900 (leaves 23:40), TAP direct R8,750. Waiting on Sam.' }),
+      versionOf('m9', 3, at, 'agent', 'Sam chose TAP in the chat', ['title', 'body'], tap),
+    ])
+  }
+}
 let apiKey = ''
 let running = false
 let agentTimer: ReturnType<typeof setTimeout> | null = null
@@ -708,11 +763,16 @@ export const mockAgent: AgentApi = {
       return copy(rows[entity] as Array<EntityMap[E]>)
     },
     async upsert<E extends EntityName>(entity: E, row: RowInput<E>): Promise<EntityMap[E]> {
-      return upsertRow(entity, row)
+      const raw = row as { id?: string }
+      const before = entity === 'memory' ? (copy(rows.memory.find((each) => each.id === raw.id) ?? null) as MemoryRow | null) : null
+      const saved = upsertRow(entity, row)
+      if (entity === 'memory') keepMockVersion(before, saved as unknown as MemoryRow, 'you')
+      return saved
     },
     async remove(entity, id) {
       const list = rows[entity] as Array<{ id: string }>
       const index = list.findIndex((row) => row.id === id)
+      if (entity === 'memory' && index >= 0) keepMockVersion(copy(rows.memory[index] ?? null) as MemoryRow | null, null, 'you')
       if (index >= 0) {
         list.splice(index, 1)
         emitData(entity)
@@ -1352,6 +1412,18 @@ export const mockAgent: AgentApi = {
     },
     async upkeep() {
       return { report: mockUpkeep, lastRunAt: mockUpkeep?.at ?? 0, history: [] }
+    },
+    async history(memoryId: string) {
+      return copy([...(mockVersions.get(memoryId) ?? [])].reverse())
+    },
+    async restoreVersion(memoryId: string, n: number) {
+      const version = mockVersions.get(memoryId)?.find((each) => each.n === n)
+      const current = rows.memory.find((row) => row.id === memoryId)
+      if (version === undefined || version.deleted || current === undefined) return false
+      const before = copy(current)
+      const after = upsertRow('memory', { id: memoryId, title: version.title, body: version.body, kind: version.kind, topics: version.topics, status: version.status, aliases: version.aliases, pinned: version.pinned })
+      keepMockVersion(before, after, 'you', `restored version ${n}`)
+      return true
     },
     async undoChange(id) {
       const change = mockUpkeep?.changes.find((item) => item.id === id)

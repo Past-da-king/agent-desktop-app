@@ -10,7 +10,8 @@ import { formatAccelerator } from '../hotkey'
 import type { SocketFactory, SocketLike } from '../voice/live'
 import { LIVE_URL } from '../voice/gemini'
 import type { VoiceService } from '../voice/service'
-import { cleanUp } from './cleanup'
+import { applyAliases, EMPTY_VOCABULARY, vocabularyBrief, type Vocabulary } from '../memory/vocabulary'
+import { CLEANUP_MODELS, cleanUp } from './cleanup'
 import { DictationController } from './controller'
 import { electronClipboard, keySenderFor, typeText, type KeySender } from './paste'
 import { PillWindow, type PillOptions } from './pill'
@@ -30,6 +31,8 @@ export interface DictationSetupDeps {
   pill: PillOptions
   locale: string
   log: (message: string, fields?: Record<string, string | number | boolean>) => void
+  /** The names memory knows and their mis-hearings (memory/vocabulary.ts). */
+  vocabulary?: () => Promise<Vocabulary>
 }
 
 /** Node's own WebSocket (Node 22+, so Electron's main process has it). */
@@ -80,7 +83,8 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
         onDrop: handlers.onDrop,
       }),
     batch: (pcm) => deps.voice.transcribe(pcm),
-    cleanUp: (text) => cleanUp({ key }, text),
+    cleanUp: async (text) => cleanUp({ key }, text, CLEANUP_MODELS, vocabularyBrief((await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY)),
+    fixNames: async (text) => applyAliases(text, (await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY),
     type: async (text) => {
       // Into one of the app's own windows (the quick chat box, the composer): no clipboard needed.
       const target = ownTarget !== null && !ownTarget.isDestroyed() && ownTarget.isVisible() ? ownTarget : focusedOwn()

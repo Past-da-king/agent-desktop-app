@@ -36,10 +36,11 @@ import type {
   Unsubscribe,
   VoiceResult,
 } from '@agent/core'
-import type { MemoryImportPreview, MemoryImportResult, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
+import type { MemoryImportPreview, MemoryImportResult, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
 import { CHANNELS, EVENTS } from '../shared/channels'
 import { MEMORY_CHANNELS, MEMORY_EVENTS } from '../shared/memory-channels'
+import { MEMORY_HISTORY_CHANNELS } from '../shared/memory-history-channels'
 
 const platform: AgentApi['platform'] =
   process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
@@ -252,6 +253,8 @@ const api: AgentApi = {
     runDaily: () => call<UpkeepReport>(MEMORY_CHANNELS.runDaily),
     upkeep: () => call<UpkeepSummary>(MEMORY_CHANNELS.upkeep),
     undoChange: (id) => call<boolean>(MEMORY_CHANNELS.undoChange, id),
+    history: (memoryId) => call<MemoryVersion[]>(MEMORY_HISTORY_CHANNELS.history, memoryId),
+    restoreVersion: (memoryId, n) => call<boolean>(MEMORY_HISTORY_CHANNELS.restoreVersion, memoryId, n),
     onUpkeep: (callback) => on<UpkeepReport | null>(MEMORY_EVENTS.upkeep, callback),
   },
 }

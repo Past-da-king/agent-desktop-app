@@ -43,6 +43,8 @@ export interface DictationDeps {
   /** The whole recording in one call: the fallback when the live session is not there. */
   batch: (pcm: Buffer) => Promise<{ ok: true; text: string } | { ok: false; error: string }>
   cleanUp: (text: string) => Promise<string>
+  /** Puts names memory knows were mis-heard right (memory/vocabulary.ts), on every dictation. */
+  fixNames?: (text: string) => Promise<string>
   /** Types the words where the cursor is. 'inserted' means straight into one of the app's own windows. */
   type: (text: string) => Promise<TypeOutcome | 'inserted'>
   /** Hides a held Alt from the app in front (Windows); called on every shortcut press. */
@@ -328,6 +330,15 @@ export class DictationController {
       this.finishSession(session)
       this.flash(problem === '' ? 'notice' : 'error', problem === '' ? 'Nothing was heard. Try again a little closer to the microphone.' : `${problem} Nothing was typed.`, problem === '' ? 3000 : 5000)
       return
+    }
+
+    if (this.deps.fixNames !== undefined) {
+      try {
+        text = (await this.deps.fixNames(text)).trim() || text
+      } catch {
+        // Names stay as heard; the words are still typed.
+      }
+      if (this.session !== session) return
     }
 
     let note = ''

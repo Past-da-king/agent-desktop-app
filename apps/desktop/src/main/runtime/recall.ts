@@ -58,7 +58,8 @@ export function rank(query: string, rows: MemoryRow[], limit: number): MemoryRow
   const now = Date.now()
   const scored: Array<{ row: MemoryRow; score: number }> = []
   for (const row of rows) {
-    const title = terms(row.title)
+    // Other names it answers to count like its title ("Londercorp" finds Initech).
+    const title = terms(`${row.title} ${row.aliases ?? ''}`)
     const topics = terms(row.topics)
     const body = terms(row.body)
     let score = 0
@@ -67,7 +68,7 @@ export function rank(query: string, rows: MemoryRow[], limit: number): MemoryRow
       if (topics.has(term)) score += 2
       if (body.has(term)) score += 1
       if (term.length > 3) {
-        const text = `${row.title} ${row.body}`.toLowerCase()
+        const text = `${row.title} ${row.aliases ?? ''} ${row.body}`.toLowerCase()
         if (text.includes(term)) score += 0.5
       }
     }
@@ -83,9 +84,15 @@ export function rank(query: string, rows: MemoryRow[], limit: number): MemoryRow
 /** One line per memory, the way the model reads it in a tool result. */
 export function formatMemory(row: MemoryRow): string {
   const tags = row.topics.trim()
-  return `#${row.id} [${row.kind}${row.pinned ? ', pinned' : ''}] ${row.title}: ${row.body}${
-    tags === '' ? '' : ` (topics: ${tags})`
-  }`
+  const aliases = (row.aliases ?? '').trim()
+  return `#${row.id} [${row.kind}${row.pinned ? ', pinned' : ''}${row.status === 'closed' ? ', closed' : ''}] ${row.title}${
+    aliases === '' ? '' : ` (also called: ${aliases})`
+  }: ${row.body}${tags === '' ? '' : ` (topics: ${tags})`}`
+}
+
+/** A closed page is done and ticked off: kept and searchable, but nothing reminds the agent of it. */
+export function isOpen(row: MemoryRow): boolean {
+  return row.status !== 'closed'
 }
 
 /** People, organisations and projects whose name appears in the text. Kept small so the prompt stays small. */
@@ -97,7 +104,11 @@ export function namedPages(text: string, memories: MemoryRow[], limit = 6): Memo
     const name = nameKey(row.title)
     if (name.length < 3) continue
     // "GrowOS / GrowFactory" answers to either name; "Fretak (was Ember): swipe cards" to "Fretak".
-    const names = [name, ...row.title.split(/\s[/|:\u2013\u2014-]\s|[/|:\u2013\u2014]/).map(nameKey)].filter((part) => part.length >= 3)
+    const names = [
+      name,
+      ...row.title.split(/\s[/|:\u2013\u2014-]\s|[/|:\u2013\u2014]/).map(nameKey),
+      ...(row.aliases ?? '').split(',').map(nameKey),
+    ].filter((part) => part.length >= 3)
     if (names.some((part) => haystack.includes(` ${part} `))) {
       found.push(row)
       continue
@@ -122,8 +133,9 @@ function capital(word: string): string {
   return escaped.charAt(0).toUpperCase() + escaped.slice(1)
 }
 
-/** The memories to put in front of the model for a message: pages it names first, then the best matches. */
-export function recallFor(text: string, rows: MemoryRow[], limit: number): MemoryRow[] {
+/** The memories to put in front of the model for a message: pages it names first, then the best matches. Closed pages stay out. */
+export function recallFor(text: string, all: MemoryRow[], limit: number): MemoryRow[] {
+  const rows = all.filter(isOpen)
   const named = namedPages(text, rows, 5)
   const seen = new Set(named.map((row) => row.id))
   return [...named, ...rank(text, rows.filter((row) => !seen.has(row.id)), limit)].slice(0, limit + named.length)

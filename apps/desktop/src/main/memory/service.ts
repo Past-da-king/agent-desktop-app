@@ -9,6 +9,7 @@ import type { DataStore } from '../runtime/data'
 import type { ChatIndex } from './chat-index'
 import { chatSegments, hasSubstance, isDividerRow, memoryNote, parseMeta, transcript } from './chats'
 import { DEFAULT_DAILY_AT, dayKey, dueDay, runDaily, undoChange } from './daily'
+import { asWriter } from './history'
 import { FILE_SYSTEM, candidatesFor, fileEntries, filePrompt, parseDigest, type ChatDigest, type Complete } from './summarise'
 import type { UpkeepFile, UpkeepReport, UpkeepState } from './upkeep-log'
 
@@ -149,7 +150,7 @@ export class MemoryService {
       const memories = await this.deps.store.list('memory')
       const prompt = filePrompt(chat, candidatesFor(chat, memories), dayKey(this.now()))
       const digest = await this.digestOf(prompt)
-      const result = await fileEntries(this.deps.store, digest.entries)
+      const result = await asWriter('chat filing', digest.title, () => fileEntries(this.deps.store, digest.entries))
       const fresh = (await this.deps.store.get('chat_item', dividerId)) ?? divider
       await this.writeNote(
         fresh,
@@ -251,14 +252,14 @@ export class MemoryService {
   }
 
   async undo(changeId: string): Promise<boolean> {
-    const done = await undoChange(this.deps.store, this.deps.upkeep, changeId)
+    const done = await asWriter('you', 'undid an end of day change', () => undoChange(this.deps.store, this.deps.upkeep, changeId))
     if (done) this.deps.emitUpkeep?.(this.deps.upkeep.read().report)
     return done
   }
 
   private daily(trigger: UpkeepReport['trigger'], window: { day: string; from: number; to: number }): Promise<UpkeepReport> {
     if (this.dailyRunning !== null) return this.dailyRunning
-    const run = runDaily({ store: this.deps.store, complete: this.deps.complete, upkeep: this.deps.upkeep, now: this.now }, trigger, window)
+    const run = asWriter('end of day', undefined, () => runDaily({ store: this.deps.store, complete: this.deps.complete, upkeep: this.deps.upkeep, now: this.now }, trigger, window))
       .then((report) => {
         this.deps.log?.('Daily memory pass', { trigger, changes: report.changes.length, ok: report.ok ? 1 : 0 })
         this.deps.emitUpkeep?.(report)

@@ -24,10 +24,10 @@ export const CLEANUP_BRIEF = [
   'Reply with the cleaned text only. If there are no words, reply with nothing.',
 ].join('\n')
 
-/** The generateContent body for one clean-up. */
-export function cleanupRequest(transcript: string): Record<string, unknown> {
+/** The generateContent body for one clean-up, with the names memory knows (vocabulary.ts) when there are any. */
+export function cleanupRequest(transcript: string, names = ''): Record<string, unknown> {
   return {
-    systemInstruction: { parts: [{ text: CLEANUP_BRIEF }] },
+    systemInstruction: { parts: [{ text: names === '' ? CLEANUP_BRIEF : `${CLEANUP_BRIEF}\n\n${names}` }] },
     contents: [{ role: 'user', parts: [{ text: `<transcript>\n${transcript.trim()}\n</transcript>` }] }],
     generationConfig: { temperature: 0 },
   }
@@ -48,7 +48,7 @@ export function acceptCleanup(raw: string, reply: string): string | null {
 }
 
 /** Cleans one transcript. Throws a GeminiError when no model could do it; the caller types the raw words. */
-export async function cleanUp(deps: GeminiDeps, transcript: string, models: string[] = CLEANUP_MODELS): Promise<string> {
+export async function cleanUp(deps: GeminiDeps, transcript: string, models: string[] = CLEANUP_MODELS, names = ''): Promise<string> {
   const raw = transcript.trim()
   if (raw === '') return ''
   const key = deps.key()
@@ -61,7 +61,7 @@ export async function cleanUp(deps: GeminiDeps, transcript: string, models: stri
       response = await fetcher(`${GEMINI_BASE}/v1beta/models/${model}:generateContent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': key.trim() },
-        body: JSON.stringify(cleanupRequest(raw)),
+        body: JSON.stringify(cleanupRequest(raw, names)),
         signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
       })
     } catch {
