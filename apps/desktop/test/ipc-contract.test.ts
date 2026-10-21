@@ -189,6 +189,7 @@ const METHODS: Record<string, string[]> = {
     'takeOver',
     'giveBack',
     'openInSystem',
+    'attach',
   ],
   helpers: ['stop', 'stopAll'],
   apps: ['status', 'setKey', 'catalog', 'connect', 'disconnect', 'setRules', 'learned', 'removeLearned', 'setTrusted'],

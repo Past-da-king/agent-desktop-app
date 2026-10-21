@@ -1,7 +1,9 @@
 /**
- * The agent's own browser: one WebContentsView per tab, attached to the chat panel's rectangle in
- * the main window. It has its own session partition, so it is separate from the app UI and keeps
- * its sign-ins across runs.
+ * The agent's own browser. Each tab's page is a <webview> the renderer hosts inside the browser card
+ * (embed.ts), so it scrolls, clips and resizes with the card in the same frame; this class stays in charge
+ * of the page through the guest's webContents (debugger, emulation, site fixes, trusted input). Only when no
+ * renderer can host a tab (onboarding, the smoke test) does a tab get its own offscreen WebContentsView.
+ * It has its own session partition, so it is separate from the app UI and keeps its sign-ins across runs.
  *
  * Two modes:
  *   - the agent drives (the default): the person's mouse and keyboard are ignored, and only public
@@ -16,10 +18,10 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { Script } from 'node:vm'
 
-import { shell, WebContentsView } from 'electron'
-import type { BrowserWindow, DownloadItem, Session } from 'electron'
+import { session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
+import type { BrowserWindow, DownloadItem, Session, WebContents, WebPreferences } from 'electron'
 
-import type { BrowserBounds, BrowserState, BrowserTab } from '@agent/core'
+import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
 
 import { Cdp, KEY_NAMES } from './cdp'
 import { watchDevtools } from './devtools'
@@ -65,6 +67,7 @@ import {
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, ViewRequest } from './types'
 import { pickTab } from './tab-pick'
 import { checkBrowserUrl } from './url-policy'
+import { EMBED_WAIT_MS, guardWebview, isEmbeddedGuest } from './embed'
 import {
   PAGE_WORLD_ID,
   clickScript,
@@ -86,11 +89,24 @@ const MAX_TABS = 5
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 const EMPTY_BOUNDS: BrowserBounds = { x: 0, y: 0, width: 0, height: 0, visible: false }
 
+/** A tab whose <webview> the renderer is creating; it becomes a Tab once the guest is handed over. */
+interface PendingTab {
+  partition: string
+  spec: ViewSpec
+  /** The guest page, null when no renderer hosted it in time (the tab then opens offscreen), or closed. */
+  resolve: (outcome: WebContents | null | 'closed') => void
+}
+
 interface Tab {
   id: string
   /** The session partition: General's original one, or a profile's own (its cookies and sign-ins). */
   partition: string
-  view: WebContentsView
+  /** The page: the guest of the renderer's <webview> for this tab, or the offscreen view's own. */
+  wc: WebContents
+  /** Only a tab no renderer could host has a native view of its own; it is never added to the window. */
+  view: WebContentsView | null
+  /** The view this tab was set up with, before it takes the shape of its box. The renderer places the page by it. */
+  spec: ViewSpec
   cdp: Cdp
   /** The emulation is set up (the debugger can only attach once a document exists). */
   ready: boolean
@@ -126,6 +142,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private readonly downloadsDir: string
   private readonly screenshotsDir: string
   private readonly tabs: Tab[] = []
+  /** New tabs waiting for the renderer's <webview> (see embed.ts), by tab id. */
+  private readonly pending = new Map<string, PendingTab>()
+  /** Listeners on the main window's webContents, removed when the browser leaves that window. */
+  private readonly windowCleanups: Array<() => void> = []
   /** The pointer guard per tab: its insertCSS key once inserted, and a token so a stale insert removes itself. */
   private readonly inputCss = new Map<string, { token: number; key: string | null }>()
   /** How many agent actions are under way per tab with the guard lifted. */
@@ -159,7 +179,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private expanded = false
 
   constructor(options: AgentBrowserOptions) {
-    this.window = options.window
+    // Set by attach() below, which also guards the window's <webview>s.
+    this.window = null
     this.partition = options.partition ?? PARTITION
     this.current = this.partition
     this.maxTabs = Math.max(1, options.maxTabs ?? MAX_TABS)
@@ -203,15 +224,29 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   state(): BrowserState {
     // The panel shows the tab in front, whichever profile it belongs to.
     const active = this.shownTab()
-    const tabs: BrowserTab[] = this.tabs.map((tab) => ({
-      id: tab.id,
-      title: safeTitle(tab.view),
-      url: safeUrl(tab.view),
-      active: tab.id === this.activeId,
-    }))
+    const tabs: BrowserTab[] = [
+      ...this.tabs.map((tab) => ({
+        id: tab.id,
+        title: safeTitle(tab.wc),
+        url: safeUrl(tab.wc),
+        active: tab.id === this.activeId,
+        partition: tab.partition,
+        embed: tab.view === null,
+        view: pageSpecOf(tab.spec),
+      })),
+      ...[...this.pending].map(([id, waiting]) => ({
+        id,
+        title: '',
+        url: '',
+        active: id === this.activeId,
+        partition: waiting.partition,
+        embed: true,
+        view: pageSpecOf(waiting.spec),
+      })),
+    ].sort((a, b) => tabNumber(a.id) - tabNumber(b.id))
     return {
-      url: active === null ? '' : safeUrl(active.view),
-      title: active === null ? '' : safeTitle(active.view),
+      url: active === null ? '' : safeUrl(active.wc),
+      title: active === null ? '' : safeTitle(active.wc),
       tabs,
       visible: this.bounds.visible,
       agentActive: this.personTab === null || this.personTab !== (this.shownTab()?.id ?? null),
@@ -252,10 +287,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async back(): Promise<string> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
-    const wc = tab.view.webContents
+    const wc = tab.wc
     if (!wc.navigationHistory.canGoBack()) return 'There is no earlier page.'
     wc.navigationHistory.goBack()
     await this.waitForLoad(tab)
@@ -266,7 +301,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   async reload(): Promise<void> {
     const tab = this.shownTab()
     if (tab === null) return
-    tab.view.webContents.reload()
+    tab.wc.reload()
     this.emit()
   }
 
@@ -281,6 +316,15 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   closeTab(id: string): void {
+    const waiting = this.pending.get(id)
+    if (waiting !== undefined) {
+      // Closed before its page was even attached: the open that made it gives up.
+      waiting.resolve('closed')
+      for (const [owner, tabId] of this.ownerTabs) if (tabId === id) this.ownerTabs.delete(owner)
+      if (this.activeId === id) this.activeId = this.tabs[this.tabs.length - 1]?.id ?? null
+      this.emit()
+      return
+    }
     const index = this.tabs.findIndex((tab) => tab.id === id)
     if (index === -1) return
     const [tab] = this.tabs.splice(index, 1)
@@ -292,15 +336,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       this.handoffReason = ''
     }
     this.inputCss.delete(tab.id)
-    try {
-      this.window?.contentView.removeChildView(tab.view)
-    } catch {
-      // The window may already be gone.
-    }
-    try {
-      tab.view.webContents.close()
-    } catch {
-      // Already closed.
+    // An embedded page ends when the renderer drops its <webview> (it no longer sees the tab); an offscreen one is closed here.
+    if (tab.view !== null) {
+      try {
+        tab.wc.close()
+      } catch {
+        // Already closed.
+      }
     }
     if (this.activeId === id) {
       this.activeId = this.tabs[Math.max(0, index - 1)]?.id ?? this.tabs[0]?.id ?? null
@@ -325,8 +367,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const url = addressOf(raw)
     if (url === null) return
     const tab = this.shownTab()
-    if (tab === null || tab.view.webContents.isDestroyed()) {
-      this.createTab(url)
+    if (tab === null || tab.wc.isDestroyed()) {
+      await this.createTab(url)
       return
     }
     // Typing an address in a tab makes it the person's tab.
@@ -334,13 +376,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     for (const each of this.tabs) void this.refreshInputGuard(each)
     this.currentView = this.sites.viewFor(url)
     await this.prepare(tab).catch(() => undefined)
-    await tab.view.webContents.loadURL(url).catch(() => undefined)
+    await tab.wc.loadURL(url).catch(() => undefined)
     this.emit()
   }
 
   /** A new tab for the person, in front, on Google. */
-  personNewTab(): void {
-    const tab = this.createTab(NEW_TAB_PAGE)
+  async personNewTab(): Promise<void> {
+    const tab = await this.createTab(NEW_TAB_PAGE)
     // A tab the person opened is theirs to use.
     if (tab !== null) {
       this.personTab = tab.id
@@ -352,7 +394,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   async openInSystem(): Promise<void> {
     const tab = this.activeTab()
     if (tab === null) return
-    const url = safeUrl(tab.view)
+    const url = safeUrl(tab.wc)
     if (!/^https?:\/\//i.test(url)) return
     await this.openExternal(url)
   }
@@ -364,27 +406,50 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
     this.detach()
     this.window = win
-    for (const tab of this.tabs) {
-      try {
-        win.contentView.addChildView(tab.view)
-      } catch {
-        // A view can only belong to one window; a fresh one is created on the next open.
-      }
+    // Only <webview>s the browser asked for may attach to this window, and only locked down (embed.ts).
+    const host = win.webContents
+    const onWillAttach = (event: Electron.Event, prefs: WebPreferences, params: Record<string, string>): void => {
+      const wanted = (partition: string): boolean => [...this.pending.values()].some((waiting) => waiting.partition === partition)
+      if (!guardWebview(prefs, params, wanted)) event.preventDefault()
     }
+    host.on('will-attach-webview', onWillAttach)
+    this.windowCleanups.push(() => host.removeListener('will-attach-webview', onWillAttach))
     this.layout()
     this.emit()
   }
 
   detach(): void {
     if (this.window === null) return
-    for (const tab of this.tabs) {
+    for (const cleanup of this.windowCleanups.splice(0)) {
       try {
-        this.window.contentView.removeChildView(tab.view)
+        cleanup()
       } catch {
-        // Already removed.
+        // The window is already gone.
       }
     }
     this.window = null
+  }
+
+  /**
+   * The renderer's <webview> for a waiting tab is attached: adopt its guest page, once it is proven to be a
+   * webview of this window in the tab's own session. False (and nothing changes) for anything else.
+   */
+  attachGuest(tabId: string, guestId: number, senderId: number | null): boolean {
+    const waiting = this.pending.get(tabId)
+    const win = this.window
+    if (waiting === undefined || win === null || win.isDestroyed()) return false
+    if (senderId !== null && senderId !== win.webContents.id) return false
+    if (this.tabs.some((tab) => !tab.wc.isDestroyed() && tab.wc.id === guestId)) return false
+    const guest = allWebContents.fromId(guestId)
+    if (guest === undefined || !isEmbeddedGuest(guest, win.webContents.id, electronSession.fromPartition(waiting.partition))) return false
+    waiting.resolve(guest)
+    return true
+  }
+
+  /** A tab's page, for main-process code that needs it directly (the devtools tools). Null for an unknown tab. */
+  tabWebContents(tabId?: string): WebContents | null {
+    const tab = tabId === undefined ? this.activeTab() : (this.tabs.find((item) => item.id === tabId) ?? null)
+    return tab === null || tab.wc.isDestroyed() ? null : tab.wc
   }
 
   destroy(): void {
@@ -398,9 +463,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       }
     }
     this.detach()
+    for (const waiting of [...this.pending.values()]) waiting.resolve('closed')
     for (const tab of this.tabs.splice(0)) {
+      // Embedded pages end with their window; only an offscreen view is closed by hand.
+      if (tab.view === null) continue
       try {
-        tab.view.webContents.close()
+        tab.wc.close()
       } catch {
         // Already closed.
       }
@@ -416,25 +484,25 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   hasPage(): boolean {
     const tab = this.activeTab()
-    return tab !== null && isRealPage(tab.view)
+    return tab !== null && isRealPage(tab.wc)
   }
 
   currentUrl(): string {
     const tab = this.activeTab()
-    return tab === null ? '' : safeUrl(tab.view)
+    return tab === null ? '' : safeUrl(tab.wc)
   }
 
   /** The developer tools' one way in: the agent's current tab's webContents (never the view it is shown in). */
   devtoolsTarget(): Electron.WebContents | null {
     const tab = this.activeTab()
-    return tab === null || tab.view.webContents.isDestroyed() ? null : tab.view.webContents
+    return tab === null || tab.wc.isDestroyed() ? null : tab.wc
   }
 
   /** The person's Developer tools button: Chromium's own DevTools for the tab in front, in its own window. */
   openDevTools(): void {
     const tab = this.shownTab()
     if (tab === null) return
-    const wc = tab.view.webContents
+    const wc = tab.wc
     if (wc.isDestroyed()) return
     if (wc.isDevToolsOpened()) wc.devToolsWebContents?.focus()
     else wc.openDevTools({ mode: 'detach', activate: true })
@@ -447,13 +515,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
    */
   async evaluateRaw(code: string, timeoutMs = 30_000): Promise<unknown> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) throw new Error('No page is open yet. Use browser_open with a web address.')
+    if (tab === null || !isRealPage(tab.wc)) throw new Error('No page is open yet. Use browser_open with a web address.')
     let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new Error(`The page did not answer within ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs)
     })
     try {
-      return await Promise.race([tab.view.webContents.executeJavaScript(code, true), timeout])
+      return await Promise.race([tab.wc.executeJavaScript(code, true), timeout])
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
@@ -479,11 +547,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   private async openChecked(policy: ReturnType<typeof checkBrowserUrl>, asked: ViewRequest | null): Promise<string> {
     if (!policy.ok) return policy.reason
-    const tab = this.activeTab() ?? this.createTab()
+    const tab = this.activeTab() ?? (await this.createTab())
     if (tab === null) return 'I could not open another browser tab.'
 
     this.blockedReason = ''
-    const before = safeUrl(tab.view)
+    const before = safeUrl(tab.wc)
     await this.prepare(tab)
     const askedView = asked === null ? null : resolveView(this.sites.viewFor(policy.url), asked)
     const port: SitePort = {
@@ -501,7 +569,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     } finally {
       this.opening = false
     }
-    if (safeUrl(tab.view) === before && before === '' && opened.verdict.refusal === 'load_error') {
+    if (safeUrl(tab.wc) === before && before === '' && opened.verdict.refusal === 'load_error') {
       return `I could not open ${hostOf(policy.url)}. ${opened.verdict.evidence}`
     }
     this.layout()
@@ -511,7 +579,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async snapshot(): Promise<string> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     return this.snapshotText(tab, {})
@@ -519,7 +587,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async snapshotPro(options: { filter?: string; deep?: boolean }): Promise<string> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     return this.snapshotText(tab, options)
@@ -549,12 +617,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async read(target: ReadTarget = {}): Promise<string> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     const result = parseRead(await this.run(tab, readScript(target)))
     if (!result.ok) return result.reason
-    const head = `URL: ${safeUrl(tab.view)}\nTitle: ${safeTitle(tab.view)}\n\n`
+    const head = `URL: ${safeUrl(tab.wc)}\nTitle: ${safeTitle(tab.wc)}\n\n`
     return `${head}${result.text === '' ? '(no text)' : result.text}`
   }
 
@@ -572,7 +640,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async scroll(dy: number): Promise<string> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     await this.run(tab, scrollScript(dy))
@@ -586,7 +654,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     signal?: AbortSignal,
   ): Promise<string> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     if (signal?.aborted === true) return 'Stopped.'
@@ -603,9 +671,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** The page as it is drawn in the panel, as a small JPEG, for the still picture shown while it steps aside. */
   async frame(): Promise<string | null> {
     const tab = this.shownTab()
-    if (tab === null || !isRealPage(tab.view) || !this.bounds.visible) return null
+    if (tab === null || !isRealPage(tab.wc) || !this.bounds.visible) return null
     try {
-      const image = await Promise.race([tab.view.webContents.capturePage(), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000))])
+      const image = await Promise.race([tab.wc.capturePage(), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000))])
       if (image === null || image.isEmpty()) return null
       return `data:image/jpeg;base64,${image.toJPEG(72).toString('base64')}`
     } catch {
@@ -616,12 +684,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** A PNG of the page at the size it is laid out at (1440x900 for desktop), not the small panel copy. */
   async screenshot(): Promise<string | null> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) return null
+    if (tab === null || !isRealPage(tab.wc)) return null
     let png: Buffer | null = null
     try {
       const image = await Promise.race([
-        tab.view.webContents.capturePage(),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+        tab.wc.capturePage(),
+        // A page out of sight paints nothing to capture; the debugger below gets its own picture.
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4_000)),
       ])
       if (image !== null && !image.isEmpty()) png = image.toPNG()
     } catch {
@@ -648,7 +717,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async upload(index: number, path: string): Promise<string> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     let info: { name: string; type: string; base64: string; size: number }
@@ -677,7 +746,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async view(request: ViewRequest): Promise<string> {
     const tab = this.activeTab()
-    const url = tab === null ? '' : safeUrl(tab.view)
+    const url = tab === null ? '' : safeUrl(tab.wc)
     const site = siteOf(url)
     let next: ViewSpec
     if (request.reset === true) {
@@ -707,8 +776,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     for (const each of this.tabs) await this.applyEmulation(each)
     this.layout()
     // A new user agent only reaches the site on the next request; reload so the site sees the device it is meant to.
-    if (tab !== null && isRealPage(tab.view) && changedIdentity) {
-      tab.view.webContents.reload()
+    if (tab !== null && isRealPage(tab.wc) && changedIdentity) {
+      tab.wc.reload()
       await this.waitForLoad(tab, 10_000)
       await this.settle(300)
     } else {
@@ -718,9 +787,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const lines = [`View: ${viewLabel(next)}${next.mode === 'fit' ? '' : `, drawn at ${Math.round(this.lastFit.scale * 100)}% to fit the panel`}.`]
     if (request.asDefault === true) lines.push('This is now the default for sites I have not learned yet.')
     if (request.reset !== true && request.remember !== false && site !== null) lines.push(`Remembered for ${site}.`)
-    if (tab !== null && isRealPage(tab.view)) {
+    if (tab !== null && isRealPage(tab.wc)) {
       try {
-        const seen = await tab.view.webContents.executeJavaScript(
+        const seen = await tab.wc.executeJavaScript(
           'JSON.stringify({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio, ua: navigator.userAgent, touch: navigator.maxTouchPoints })',
         )
         lines.push(`The page sees: ${String(seen)}`)
@@ -736,7 +805,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   async fix(request: FixRequest): Promise<string> {
     const tab = this.activeTab()
-    const url = tab === null ? '' : safeUrl(tab.view)
+    const url = tab === null ? '' : safeUrl(tab.wc)
     const site = siteOf(url)
     if (request.action === 'list') {
       const all = this.sites.list().slice(0, 30)
@@ -756,10 +825,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       ].join('\n')
     }
     if (this.heldByPerson()) return this.pausedLine()
-    if (tab === null || !isRealPage(tab.view) || site === null) {
+    if (tab === null || !isRealPage(tab.wc) || site === null) {
       return 'Open the site first (browser_open), then fix it.'
     }
-    const wc = tab.view.webContents
+    const wc = tab.wc
     const persist = request.persist !== false
     switch (request.action) {
       case 'css': {
@@ -834,10 +903,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   async act(request: ActRequest): Promise<string> {
     if (this.heldByPerson()) return this.pausedLine()
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
-    const wc = tab.view.webContents
+    const wc = tab.wc
     await this.prepare(tab)
     const scale = this.drawScale(tab)
     const action = request.action
@@ -939,7 +1008,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   private async actOn(tab: Tab, target: Resolved, request: ActRequest, scale: number): Promise<string> {
-    const wc = tab.view.webContents
+    const wc = tab.wc
     const point = { x: target.x * this.zoomOf(tab), y: target.y * this.zoomOf(tab) }
     const covered = target.covered === '' ? '' : `\nWARNING: ${target.covered} is on top of it, so the click may have landed there. If nothing changed, hide the overlay with browser_fix css or close it first.`
     const action = request.action
@@ -1034,7 +1103,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
 
     // click, double_click, right_click, check, uncheck
-    const before = safeUrl(tab.view)
+    const before = safeUrl(tab.wc)
     if (cdpOk) {
       await this.trustedInput(async () =>
         tab.cdp.click(point, scale, {
@@ -1051,7 +1120,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     await this.settle(450)
     if (wc.isLoading()) await this.waitForLoad(tab, 8_000)
     this.emit()
-    const moved = safeUrl(tab.view) !== before ? ` The page moved to ${safeUrl(tab.view)}.` : ''
+    const moved = safeUrl(tab.wc) !== before ? ` The page moved to ${safeUrl(tab.wc)}.` : ''
     return `Clicked ${target.label}.${moved}${covered}\n\n${await this.snapshotText(tab, {})}`
   }
 
@@ -1060,7 +1129,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   async evaluate(code: string, seconds: number, signal?: AbortSignal): Promise<string> {
     if (this.heldByPerson()) return this.pausedLine()
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.view)) {
+    if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     if (signal?.aborted === true) return 'Stopped.'
@@ -1077,7 +1146,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const value = await Promise.race([
-        this.liftGuard(tab, async () => tab.view.webContents.executeJavaScript(wrapped, true) as Promise<unknown>),
+        this.liftGuard(tab, async () => tab.wc.executeJavaScript(wrapped, true) as Promise<unknown>),
         new Promise<'timeout'>((resolve) => {
           timer = setTimeout(() => resolve('timeout'), limit)
         }),
@@ -1109,9 +1178,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** Attaches the debugger and applies the current view. The first document must exist first. */
   private async prepare(tab: Tab): Promise<void> {
     if (tab.ready) return
-    const wc = tab.view.webContents
+    const wc = tab.wc
     if (wc.isDestroyed()) return
-    if (safeUrl(tab.view) === '') {
+    if (safeUrl(tab.wc) === '') {
       // Attaching the debugger to a view that never loaded a document crashes Electron 44.
       await wc.loadURL('about:blank').catch(() => undefined)
     }
@@ -1127,14 +1196,19 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   private async applyEmulation(tab: Tab): Promise<void> {
-    const wc = tab.view.webContents
+    const wc = tab.wc
     if (wc.isDestroyed()) return
     const view = this.effectiveView()
     const fit = fitView(this.slotRect(), view)
     if (tab.id === this.activeId || this.tabs.length === 1) this.lastFit = fit
-    tab.scale = fit.scale
+    // The renderer places and scales the page by this spec (shared/page-place.ts).
+    tab.spec = { ...this.currentView }
+    // Pages are never drawn scaled by the engine any more: an embedded page is scaled by its card (a CSS
+    // transform), an offscreen one is not shown at all. So input and screenshots are in plain page pixels.
+    tab.scale = 1
     if (tab.ready) {
-      for (const command of emulationCommands(view, this.engine, fit)) {
+      // An embedded page lays out at its <webview>'s own size, which the card sets in the same frame as it moves.
+      for (const command of emulationCommands(view, this.engine, { bounds: fit.bounds, scale: 1 }, tab.view === null)) {
         try {
           await tab.cdp.send(command.method, command.params)
         } catch {
@@ -1155,30 +1229,48 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
     tab.cdp.touch = view.touch && tab.ready
     tab.applied = { ...view }
-    tab.view.setBackgroundColor(view.mode === 'fit' ? '#ffffff' : '#00000000')
+    if (tab.view !== null) this.sizeOffscreen(tab)
   }
 
-  /** Only the scale changed (the panel was resized): no new user agent, no reload. */
-  private async rescale(tab: Tab, fit: FitResult): Promise<void> {
-    if (!tab.ready || this.currentView.mode === 'fit') return
+  /**
+   * The slot changed size. An embedded page follows its <webview> on its own; only an offscreen tab's fixed
+   * emulated size and native view are updated here.
+   */
+  private async rescale(tab: Tab): Promise<void> {
+    if (tab.view === null || !tab.ready || this.currentView.mode === 'fit') return
     const view = this.effectiveView()
-    // A shaped desktop page changes its size with the slot, not only its scale.
     const sameSize = tab.applied !== undefined && tab.applied !== null && tab.applied.width === view.width && tab.applied.height === view.height
-    if (Math.abs(tab.scale - fit.scale) < 0.0005 && sameSize) return
-    tab.scale = fit.scale
+    if (sameSize) return
     tab.applied = { ...view }
-    const command = emulationCommands(view, this.engine, fit).find((c) => c.method === 'Emulation.setDeviceMetricsOverride')
+    this.sizeOffscreen(tab)
+    const command = emulationCommands(view, this.engine, { bounds: this.slotRect(), scale: 1 }).find((c) => c.method === 'Emulation.setDeviceMetricsOverride')
     if (command === undefined) return
     await tab.cdp.send(command.method, command.params).catch(() => undefined)
+  }
+
+  /** An offscreen tab's native view is the size its page lays out at; it is never added to a window. */
+  private sizeOffscreen(tab: Tab): void {
+    if (tab.view === null) return
+    const view = tab.applied ?? this.effectiveView()
+    const slot = this.slotRect()
+    const size =
+      view.mode === 'fit' || view.width <= 0 || view.height <= 0
+        ? { width: slot.width > 0 ? slot.width : 1280, height: slot.height > 0 ? slot.height : 800 }
+        : { width: view.width, height: view.height }
+    try {
+      tab.view.setBounds({ x: 0, y: 0, ...size })
+    } catch {
+      // The view is already gone.
+    }
   }
 
   private slotRect(): { x: number; y: number; width: number; height: number } {
     return { x: this.bounds.x, y: this.bounds.y, width: this.bounds.width, height: this.bounds.height }
   }
 
-  /** Page CSS px to view px for CDP input. */
+  /** Page CSS px to view px for CDP input: 1, since the engine no longer draws pages scaled (applyEmulation). */
   private drawScale(tab: Tab): number {
-    return this.currentView.mode === 'fit' ? 1 : tab.scale
+    return tab.scale
   }
 
   /** Screenshot px to view px. Screenshots are taken at the emulated size, so this is the draw scale. */
@@ -1188,7 +1280,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   private zoomOf(tab: Tab): number {
     try {
-      return tab.view.webContents.getZoomFactor()
+      return tab.wc.getZoomFactor()
     } catch {
       return 1
     }
@@ -1201,7 +1293,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   /** Loads a URL and reports what came back, for the site health check. */
   private async loadAndRead(tab: Tab, url: string): Promise<{ status: number | null; error: string | null; title: string; text: string }> {
-    const wc = tab.view.webContents
+    const wc = tab.wc
     tab.status = null
     tab.loadError = null
     try {
@@ -1225,13 +1317,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       const raw = objectOf(await this.run(tab, pageTextScript()))
       return { title: typeof raw['title'] === 'string' ? raw['title'] : '', text: typeof raw['text'] === 'string' ? raw['text'] : '' }
     } catch {
-      return { title: safeTitle(tab.view), text: '' }
+      return { title: safeTitle(tab.wc), text: '' }
     }
   }
 
   private async applySiteFixes(tab: Tab): Promise<void> {
-    const wc = tab.view.webContents
-    const url = safeUrl(tab.view)
+    const wc = tab.wc
+    const url = safeUrl(tab.wc)
     const profile = this.sites.get(url)
     tab.siteCss = []
     if (profile === null) return
@@ -1248,7 +1340,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   private async clearSiteData(tab: Tab, url: string): Promise<number> {
-    const session = tab.view.webContents.session
+    const session = tab.wc.session
     const site = siteOf(url) ?? ''
     let removed = 0
     try {
@@ -1369,24 +1461,49 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.emit()
   }
 
-  private createTab(initialUrl?: string, partition: string = this.partitionNow()): Tab | null {
-    if (this.tabs.length >= this.maxTabs) return null
-    const view = new WebContentsView({
-      webPreferences: {
-        partition,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        backgroundThrottling: false,
-      },
-    })
-    view.setBackgroundColor('#ffffff')
+  /**
+   * A new tab, in front. The renderer hosts its page in a <webview> inside the card (attachGuest hands it over);
+   * when no renderer does so in time (onboarding, the smoke test) the page opens in an offscreen view instead.
+   * Null when there are already as many tabs as allowed, or the tab was closed before its page arrived.
+   */
+  private async createTab(initialUrl?: string, partition: string = this.partitionNow()): Promise<Tab | null> {
+    if (this.tabs.length + this.pending.size >= this.maxTabs || this.destroyed) return null
+    const id = `tab-${++this.tabSeq}`
+    // A popup opens in the view its site needs, with the emulation in place before the first request.
+    if (initialUrl !== undefined) this.currentView = this.sites.viewFor(initialUrl)
+    const spec = { ...this.currentView }
+    this.configureSession(electronSession.fromPartition(partition), partition)
+    this.activeId = id
+    const owner = currentOwner()
+    if (owner !== undefined) this.ownerTabs.set(owner, id)
+
+    const outcome = await this.embedPage(id, partition, spec)
+    if (outcome === 'closed' || this.destroyed) return null
+    let view: WebContentsView | null = null
+    let wc: WebContents
+    if (outcome !== null) {
+      wc = outcome
+    } else {
+      view = new WebContentsView({
+        webPreferences: {
+          partition,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          backgroundThrottling: false,
+        },
+      })
+      view.setBackgroundColor('#ffffff')
+      wc = view.webContents
+    }
 
     const tab: Tab = {
-      id: `tab-${++this.tabSeq}`,
+      id,
       partition,
+      wc,
       view,
-      cdp: new Cdp(view.webContents.debugger),
+      spec,
+      cdp: new Cdp(wc.debugger),
       ready: false,
       applied: null,
       scale: 1,
@@ -1394,27 +1511,15 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       loadError: null,
       siteCss: [],
     }
+    tab.cdp.guest = view === null
     this.tabs.push(tab)
-    this.activeId = tab.id
-    const owner = currentOwner()
-    if (owner !== undefined) this.ownerTabs.set(owner, tab.id)
-    this.configureSession(view.webContents.session, partition)
     this.wireTab(tab)
-
-    if (this.window !== null) {
-      try {
-        this.window.contentView.addChildView(view)
-      } catch {
-        // The window may be closing; the view still loads and can be attached later.
-      }
-    }
+    if (view !== null) this.sizeOffscreen(tab)
     this.layout()
 
     if (initialUrl !== undefined) {
-      // A popup opens in the view its site needs, with the emulation in place before the first request.
-      this.currentView = this.sites.viewFor(initialUrl)
       void this.prepare(tab)
-        .then(() => view.webContents.loadURL(initialUrl))
+        .then(() => tab.wc.loadURL(initialUrl))
         .catch(() => undefined)
     }
     void this.refreshInputGuard(tab)
@@ -1422,8 +1527,26 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     return tab
   }
 
+  /** Shows the renderer the new tab and waits for its <webview> page (see attachGuest). */
+  private async embedPage(id: string, partition: string, spec: ViewSpec): Promise<WebContents | null | 'closed'> {
+    const win = this.window
+    if (win === null || win.isDestroyed()) return null
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => finish(null), EMBED_WAIT_MS)
+      const finish = (outcome: WebContents | null | 'closed'): void => {
+        if (this.pending.get(id) !== waiting) return
+        clearTimeout(timer)
+        this.pending.delete(id)
+        resolve(outcome)
+      }
+      const waiting: PendingTab = { partition, spec, resolve: finish }
+      this.pending.set(id, waiting)
+      this.emit()
+    })
+  }
+
   private wireTab(tab: Tab): void {
-    const wc = tab.view.webContents
+    const wc = tab.wc
 
     const guard = (event: Electron.Event, url: string): void => {
       const policy = checkBrowserUrl(url, { personTyped: tab.id === this.personTab })
@@ -1442,13 +1565,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         this.emit()
         return { action: 'deny' }
       }
-      if (this.tabs.length >= this.maxTabs) {
+      if (this.tabs.length + this.pending.size >= this.maxTabs) {
         this.blockedReason = 'There are already five browser tabs open.'
         this.emit()
         return { action: 'deny' }
       }
       // A popup opens with its opener's sign-ins.
-      this.createTab(policy.url, tab.partition)
+      void this.createTab(policy.url, tab.partition)
       return { action: 'deny' }
     })
 
@@ -1478,7 +1601,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     wc.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument || this.opening) return
       // Following a link to another site: present the way that site needs, as browser_open would.
-      const from = siteOf(safeUrl(tab.view))
+      const from = siteOf(safeUrl(tab.wc))
       const to = siteOf(details.url)
       if (to === null || to === from) return
       const wanted = this.sites.viewFor(details.url)
@@ -1499,7 +1622,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       this.emit()
     })
     wc.on('render-process-gone', () => this.emit())
-    wc.on('destroyed', () => this.emit())
+    // The renderer went away (a reload, a crash) and took the <webview> with it: the tab is gone too.
+    wc.on('destroyed', () => this.closeTab(tab.id))
   }
 
   private configureSession(session: Session, partition: string): void {
@@ -1510,7 +1634,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     session.setPermissionCheckHandler(() => false)
     // No Electron or app token in the user agent: sites treat those as an embedded shell.
     try {
-      session.setUserAgent(userAgentFor(presetView('desktop'), this.engine), 'en-US,en;q=0.9')
+      session.setUserAgent(userAgentFor(presetView('desktop'), this.engine), 'en-US,en')
     } catch {
       // A session that refuses a user agent keeps its own.
     }
@@ -1549,24 +1673,17 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   private layout(): void {
-    const visible = this.bounds.visible && this.bounds.width > 0 && this.bounds.height > 0
-    // The page keeps the size it is emulating; the view is that page drawn scaled to fit the slot.
-    const fit = fitView(this.slotRect(), this.effectiveView())
-    this.lastFit = fit
+    // The renderer places every embedded page itself, in the same frame as its card; this only keeps the scale
+    // the panel reports, and the size of any offscreen tab.
+    this.lastFit = fitView(this.slotRect(), this.effectiveView())
     for (const tab of this.tabs) {
-      if (tab.view.webContents.isDestroyed()) continue
-      try {
-        tab.view.setBounds(fit.bounds)
-        tab.view.setVisible(visible && tab.id === this.activeId)
-      } catch {
-        // Bounds cannot be set on a view whose window has gone.
-      }
-      void this.rescale(tab, fit)
+      if (tab.wc.isDestroyed()) continue
+      void this.rescale(tab)
     }
   }
 
   private async refreshInputGuard(tab: Tab): Promise<void> {
-    const wc = tab.view.webContents
+    const wc = tab.wc
     if (wc.isDestroyed()) return
     const wanted = (): boolean => tab.id !== this.personTab && (this.lifted.get(tab.id) ?? 0) === 0
     const current = this.inputCss.get(tab.id)
@@ -1600,11 +1717,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   // ---- page helpers -----------------------------------------------------------------------
 
   private async run(tab: Tab, code: string): Promise<unknown> {
-    return tab.view.webContents.executeJavaScriptInIsolatedWorld(PAGE_WORLD_ID, [{ code }])
+    return tab.wc.executeJavaScriptInIsolatedWorld(PAGE_WORLD_ID, [{ code }])
   }
 
   private pressKey(tab: Tab, key: string): void {
-    const wc = tab.view.webContents
+    const wc = tab.wc
     this.injectingInput = true
     try {
       wc.sendInputEvent({ type: 'keyDown', keyCode: key })
@@ -1616,7 +1733,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   private async waitForLoad(tab: Tab, timeoutMs = 5_000): Promise<void> {
-    const wc = tab.view.webContents
+    const wc = tab.wc
     await new Promise<void>((resolve) => {
       let done = false
       const finish = (): void => {
@@ -1647,10 +1764,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** Used by the Electron smoke test: load a data: page and prove the outline helper sees it. */
   async smokeOutline(html: string): Promise<boolean> {
     this.setBounds({ x: 0, y: 0, width: 480, height: 360, visible: true })
-    const tab = this.activeTab() ?? this.createTab()
+    const tab = this.activeTab() ?? (await this.createTab())
     if (tab === null) return false
     try {
-      await tab.view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+      await tab.wc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
       await this.settle(200)
       const outline = parseOutline(await this.run(tab, outlineScript()))
       return (
@@ -1691,22 +1808,22 @@ function objectOf(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
-function isRealPage(view: WebContentsView): boolean {
-  const url = safeUrl(view)
+function isRealPage(wc: WebContents): boolean {
+  const url = safeUrl(wc)
   return url !== '' && url !== 'about:blank'
 }
 
-function safeUrl(view: WebContentsView): string {
+function safeUrl(wc: WebContents): string {
   try {
-    return view.webContents.getURL()
+    return wc.isDestroyed() ? '' : wc.getURL()
   } catch {
     return ''
   }
 }
 
-function safeTitle(view: WebContentsView): string {
+function safeTitle(wc: WebContents): string {
   try {
-    return view.webContents.getTitle()
+    return wc.isDestroyed() ? '' : wc.getTitle()
   } catch {
     return ''
   }
@@ -1759,6 +1876,16 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | nu
       () => finish(null),
     )
   })
+}
+
+function pageSpecOf(view: ViewSpec): BrowserPageSpec {
+  return { mode: view.mode, width: view.width, height: view.height, zoom: view.zoom, fixed: view.fixed === true }
+}
+
+/** "tab-12" -> 12, so tabs keep the order they were opened in. */
+function tabNumber(id: string): number {
+  const n = Number(/(\d+)$/.exec(id)?.[1] ?? '0')
+  return Number.isFinite(n) ? n : 0
 }
 
 export type { BrowserBounds, BrowserState }
