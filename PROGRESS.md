@@ -36,7 +36,7 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 | A | Desktop node: server, TLS, pairing, RPC, /app web build + remote bridge, Settings > Devices UI | devices-node / ~/agent-desktop-wt/devices-node | chat pca89bc68131914ac8, running |
 | B | Replication, bundle + secrets, origin awareness, device commands, turn leases, crash resume | devices-sync / ~/agent-desktop-wt/devices-sync | chat pc06e6196729724dbf, running |
 | C | Headless node (plain Node 24) + deploy on server as a service | devices-headless / ~/agent-desktop-wt/devices-headless | chat pc79d2a9989e324333, running |
-| D | Phone: merge 0.13.0 into server repo, Remote mode | server ~/phone-aos | chat pc2f0194f996a947e0, running |
+| D | Phone: linking on 0.13.0 (server feature/remote off 3811400, worktree ~/phone-aos/app-remote; backups backup/app-0.11.23-dirty, backup/app-thin-snapshot) | server ~/phone-aos | chat pc2f0194f996a947e0, running |
 | E | agent-net tsnet sidecar | later | held: Windows had 1.6 GB free at 01:55 |
 
 ## Shared machine rules
