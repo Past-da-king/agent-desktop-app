@@ -316,6 +316,7 @@ function createWindow(stateFile: string): BrowserWindow {
   win.once('ready-to-show', () => {
     if (saved.maximized) win.maximize()
     win.show()
+    logger.info('Window shown', { ms: Math.round(process.uptime() * 1000) })
   })
 
   win.on('focus', retryHotkeys)
@@ -714,17 +715,23 @@ async function startServices(win: BrowserWindow): Promise<void> {
       for (const path of paths) filePicks.add(path)
     },
   })
-  try {
-    // Old chats from before projects sit under a hidden "Earlier chats" project (projects/earlier.ts).
-    await adoptEarlierChats(store, store.deletedIds('project').has(EARLIER_CHATS_PROJECT))
-  } catch {
-    // The chats are still in the store; they show up once this succeeds on a later start.
+  // The start-up repairs each read the whole chat; they run once the window has painted, not before it.
+  const repairs = async (): Promise<void> => {
+    if (store === null || runner === null) return
+    try {
+      // Old chats from before projects sit under a hidden "Earlier chats" project (projects/earlier.ts).
+      await adoptEarlierChats(store, store.deletedIds('project').has(EARLIER_CHATS_PROJECT))
+    } catch {
+      // The chats are still in the store; they show up once this succeeds on a later start.
+    }
+    try {
+      await runner.restore()
+    } catch {
+      // Startup repair is best effort: the app must still open if a row cannot be rewritten.
+    }
   }
-  try {
-    await runner.restore()
-  } catch {
-    // Startup repair is best effort: the app must still open if a row cannot be rewritten.
-  }
+  if (isSmoke) await repairs()
+  else win.webContents.once('did-finish-load', () => setTimeout(() => void repairs(), 250))
 
   // Long-term memory: New Chat files the old chat in the background, past chats are searchable, and the
   // end-of-day pass writes "Where we are" and cleans up (main/memory).

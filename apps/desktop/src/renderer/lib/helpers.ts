@@ -1,6 +1,6 @@
 import type { ChatItem, HelperState } from '@agent/core'
 
-import { metaText, parseMeta } from './meta'
+import { metaOf, metaText } from './meta'
 
 export interface HelperView {
   id: string
@@ -30,18 +30,18 @@ export function isHelper(item: ChatItem): boolean {
 }
 
 export function helperIdOf(item: ChatItem): string {
-  const meta = parseMeta(item.meta)
+  const meta = metaOf(item)
   const id = metaText(meta, 'id')
   return id === '' ? item.id : id
 }
 
 export function isHelperActivity(item: ChatItem): boolean {
-  return item.kind === 'activity' && metaText(parseMeta(item.meta), 'helper') !== ''
+  return item.kind === 'activity' && metaText(metaOf(item), 'helper') !== ''
 }
 
 export function helperActivities(items: ChatItem[], id: string): ChatItem[] {
   return items
-    .filter((item) => item.kind === 'activity' && metaText(parseMeta(item.meta), 'helper') === id)
+    .filter((item) => item.kind === 'activity' && metaText(metaOf(item), 'helper') === id)
     .sort((a, b) => a.createdAt - b.createdAt)
 }
 
@@ -51,7 +51,7 @@ export function helperActivities(items: ChatItem[], id: string): ChatItem[] {
  */
 export function helperVisible(item: ChatItem, items: ChatItem[]): boolean {
   if (!isHelper(item)) return false
-  const meta = parseMeta(item.meta)
+  const meta = metaOf(item)
   const state = helperState(metaText(meta, 'state'))
   if (state === 'working') return true
   if (state === 'stopped') return false
@@ -60,7 +60,7 @@ export function helperVisible(item: ChatItem, items: ChatItem[]): boolean {
 }
 
 export function helperView(item: ChatItem, items: ChatItem[]): HelperView {
-  const meta = parseMeta(item.meta)
+  const meta = metaOf(item)
   return {
     id: helperIdOf(item),
     label: metaText(meta, 'label') || 'Helper',

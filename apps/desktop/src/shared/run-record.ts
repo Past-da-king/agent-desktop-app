@@ -32,6 +32,8 @@ export interface RunRecord {
   state: RunState
   /** True when the input or the output was longer than the cap and the middle was left out. */
   trimmed: boolean
+  /** Listed rows carry only the head of long output; the full row has the rest (shared/light-row.ts). */
+  more?: boolean
   /** One plain line when it did not run normally ("Timed out after 60 seconds"). */
   note?: string
   /** True when stdout and stderr came back as one stream (Claude Code's own shell), so stdout holds both. */
@@ -70,6 +72,7 @@ export function runFromMeta(meta: Record<string, unknown>): RunRecord | null {
     ms: num('ms'),
     state: state as RunState,
     trimmed: r['trimmed'] === true,
+    ...(r['more'] === true ? { more: true } : {}),
   }
   if (text('cwd') !== '') record.cwd = text('cwd')
   if (text('target') !== '') record.target = text('target')
