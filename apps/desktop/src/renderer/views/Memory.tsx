@@ -27,7 +27,9 @@ import { Icon, type IconName } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 import { Markdown } from '../ui/Markdown'
 import { Skeleton } from '../ui/Skeleton'
+import { MemoryHistoryDialog, useMemoryHistory, versionLine } from './MemoryHistory'
 import { MemoryUpkeep } from './MemoryUpkeep'
+import { Pill } from '../ui/bits'
 
 const KIND_ORDER: MemoryKind[] = MEMORY_TYPES.map((type) => type.kind)
 
@@ -59,6 +61,7 @@ function MemoryDialog({
   const [body, setBody] = useState(memory?.body ?? '')
   const [kind, setKind] = useState<MemoryKind>(memory?.kind ?? 'fact')
   const [topics, setTopics] = useState(memory?.topics ?? '')
+  const [aliases, setAliases] = useState(memory?.aliases ?? '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -76,6 +79,11 @@ function MemoryDialog({
       body: body.trim(),
       kind,
       topics: topics.trim(),
+      aliases: aliases
+        .split(',')
+        .map((alias) => alias.trim())
+        .filter(Boolean)
+        .join(', '),
       pinned: memory?.pinned ?? false,
       source: memory?.source ?? 'user',
       updatedAt: now,
@@ -142,6 +150,12 @@ function MemoryDialog({
           placeholder="work, travel"
         />
       </div>
+      <Field
+        label="Other names it answers to"
+        value={aliases}
+        onChange={setAliases}
+        placeholder="How dictation mis-hears it, nicknames: Londercorp, London Corp"
+      />
       <div className="dialog-actions">
         <Button variant="text" onClick={onClose}>
           Cancel
@@ -281,6 +295,7 @@ export function Memory(): JSX.Element {
   const [editing, setEditing] = useState<MemoryRow | 'new' | null>(null)
   const [creating, setCreating] = useState<string | null>(null)
   const [shown, setShown] = useState(LIST_STEP)
+  const [historyOf, setHistoryOf] = useState<MemoryRow | null>(null)
 
   useEffect(() => {
     const timer = setTimeout(() => setQuery(input), 150)
@@ -299,10 +314,14 @@ export function Memory(): JSX.Element {
   const counts = kindCounts(scope)
   // With no search and no kind chosen, the list is organised by kind; otherwise it is one flat list.
   const sectioned = query.trim() === '' && filter === 'all' && only === null
-  const groups = sectioned ? groupByKind(rest) : []
+  // Closed pages are done: out of the kind groups, together at the end, kept for the record.
+  const groups = sectioned ? groupByKind(rest.filter((memory) => memory.status !== 'closed')) : []
+  const closed = sectioned ? rest.filter((memory) => memory.status === 'closed') : []
   const selected = filtered.find((memory) => memory.id === selectedId) ?? filtered[0] ?? null
   const links = selected ? linkTargets(selected, memories) : []
   const topicList = selected ? selected.topics.split(',').map((topic) => topic.trim()).filter(Boolean) : []
+  const aliasList = selected ? (selected.aliases ?? '').split(',').map((alias) => alias.trim()).filter(Boolean) : []
+  const versions = useMemoryHistory(selected?.id ?? null, selected?.updatedAt ?? 0)
 
   const openLink = (name: string): void => {
     const page = findPage(memories, name)
@@ -333,14 +352,17 @@ export function Memory(): JSX.Element {
       <button
         key={memory.id}
         type="button"
-        className={`mrow${selected?.id === memory.id ? ' on' : ''}`}
+        className={`mrow${selected?.id === memory.id ? ' on' : ''}${memory.status === 'closed' ? ' closed' : ''}`}
         onClick={() => selectMemory(memory.id)}
       >
         <span className={`mi2${memory.pinned ? ' pri' : ''}`}>
           <Icon name={KIND_ICONS[memory.kind]} size={22} />
         </span>
         <span style={{ minWidth: 0, flex: 1 }}>
-          <div className="mt">{memory.title}</div>
+          <div className="mt">
+            {memory.title}
+            {memory.status === 'closed' ? <Pill tone="ok">Closed</Pill> : null}
+          </div>
           <div className="ms">{plainBody(memory.body)}</div>
           <div className="mm">
             {kindLabel(memory.kind)} · {count === 1 ? '1 link' : `${count} links`} · {timeAgo(memory.updatedAt)}
@@ -467,7 +489,26 @@ export function Memory(): JSX.Element {
                           </div>
                         ) : null}
                       </section>
-                    ))
+                    )).concat(
+                      closed.length > 0
+                        ? [
+                            <section key="closed">
+                              <div className="sec" style={{ margin: '16px 8px 6px' }}>
+                                <span className="eyebrow">CLOSED · {closed.length.toLocaleString('en')}</span>
+                                <span className="sec-line">Done and ticked off. Kept, searchable, no longer brought up</span>
+                              </div>
+                              {closed.slice(0, SECTION_ROWS).map(renderRow)}
+                              {closed.length > SECTION_ROWS ? (
+                                <div className="mem-more">
+                                  <Button variant="text" size="sm" onClick={() => setInput('is:closed')}>
+                                    Show all {closed.length.toLocaleString('en')} closed
+                                  </Button>
+                                </div>
+                              ) : null}
+                            </section>,
+                          ]
+                        : [],
+                    )
                   : rest.length > 0 ? (
                       <>
                         <div className="sec" style={{ margin: '16px 8px 6px' }}>
@@ -499,6 +540,12 @@ export function Memory(): JSX.Element {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <span className="eyebrow">{kindLabel(selected.kind).toUpperCase()}</span>
                   <h2 className="h2">{selected.title}</h2>
+                  {versionLine(versions[0]) === '' ? null : (
+                    <button type="button" className="mem-ver" onClick={() => setHistoryOf(selected)}>
+                      <Icon name="clock" size={14} />
+                      {versionLine(versions[0])}
+                    </button>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -510,9 +557,31 @@ export function Memory(): JSX.Element {
                 </button>
               </div>
 
+              {selected.status === 'closed' ? (
+                <div className="mem-closed" role="status">
+                  <Icon name="check" size={18} />
+                  <span>
+                    <b>Closed{selected.closedAt ? ` ${timeAgo(selected.closedAt)}` : ''}.</b> Done and ticked off. Agents can still find it, but it no longer comes up on its own.
+                  </span>
+                </div>
+              ) : null}
+
               <div className="mem-body">
                 <Markdown text={selected.body} onWikiLink={openLink} />
               </div>
+
+              {aliasList.length > 0 ? (
+                <div>
+                  <span className="eyebrow mute">ALSO CALLED</span>
+                  <div className="mem-chips" style={{ marginTop: 8 }}>
+                    {aliasList.map((alias) => (
+                      <span className="chip" key={alias}>
+                        {alias}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {topicList.length > 0 ? (
                 <div className="mem-chips">
@@ -574,6 +643,25 @@ export function Memory(): JSX.Element {
                 >
                   {selected.pinned ? 'Unpin' : 'Pin it'}
                 </Button>
+                <Button
+                  variant="tonal"
+                  onClick={() => {
+                    const closing = selected.status !== 'closed'
+                    void agent.data
+                      .upsert('memory', { id: selected.id, status: closing ? 'closed' : 'open', closedAt: closing ? Date.now() : null })
+                      .then(() => toast(closing ? 'Closed. It stays searchable and stops coming up.' : 'Open again.'))
+                      .catch((cause: unknown) => {
+                        toast(cause instanceof Error ? cause.message : 'Could not change that page.')
+                      })
+                  }}
+                >
+                  <Icon name={selected.status === 'closed' ? 'sync' : 'check'} size={18} />
+                  {selected.status === 'closed' ? 'Open again' : 'Close it'}
+                </Button>
+                <Button variant="text" onClick={() => setHistoryOf(selected)}>
+                  <Icon name="clock" size={18} />
+                  History
+                </Button>
               </div>
             </div>
           ) : null}
@@ -584,6 +672,9 @@ export function Memory(): JSX.Element {
         <MemoryDialog memory={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />
       ) : null}
       {creating ? <CreatePageDialog name={creating} onClose={() => setCreating(null)} /> : null}
+      {historyOf !== null ? (
+        <MemoryHistoryDialog memory={memories.find((memory) => memory.id === historyOf.id) ?? historyOf} onClose={() => setHistoryOf(null)} />
+      ) : null}
     </div>
   )
 }

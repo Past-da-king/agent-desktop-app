@@ -45,10 +45,14 @@ export function searchMemories(
   query: string,
   kind: MemoryKindFilter = 'all',
 ): MemoryRow[] {
-  const q = query.trim().toLowerCase()
+  // "is:closed" (or "is:open") narrows to closed (or open) pages; the rest of the words are searched as usual.
+  const raw = query.trim().toLowerCase()
+  const state = /(^|\s)is:(closed|open)(\s|$)/.exec(raw)?.[2] ?? null
+  const q = raw.replace(/(^|\s)is:(closed|open)(?=\s|$)/, ' ').trim()
   return memories
     .filter((memory) => kind === 'all' || memory.kind === kind)
-    .filter((memory) => q === '' || `${memory.title} ${memory.body} ${memory.topics}`.toLowerCase().includes(q))
+    .filter((memory) => state === null || (state === 'closed') === (memory.status === 'closed'))
+    .filter((memory) => q === '' || `${memory.title} ${memory.aliases ?? ''} ${memory.body} ${memory.topics}`.toLowerCase().includes(q))
     .sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
       return b.updatedAt - a.updatedAt
