@@ -543,7 +543,7 @@ function SideRunRow({ helper, asked }: { helper: HelperView; asked: string }): J
           <Icon name={live ? 'branch' : done ? 'check' : helper.state === 'failed' ? 'x' : 'stop'} size={18} />
         </span>
         <div className="side-head">
-          <span className="eyebrow">DONE ALONGSIDE</span>
+          <span className="eyebrow">{live ? 'RUNNING ALONGSIDE' : 'DONE ALONGSIDE'}</span>
           <b>{asked === '' ? helper.label : asked}</b>
         </div>
         <Pill tone={tone}>{label}</Pill>
@@ -1177,7 +1177,6 @@ export function Chat(): JSX.Element {
           <span>
             <Kbd>Ctrl</Kbd> <Kbd>V</Kbd> paste files or pictures
           </span>
-          {running ? <span>Sent while it works: same job joins in, anything else runs alongside</span> : null}
         </div>
       </div>
 
