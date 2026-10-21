@@ -57,7 +57,7 @@ export function ModelPicker({ chat = MAIN_CHAT, project = null }: { chat?: strin
 
   return (
     <div className="model-pick" ref={root}>
-      <button type="button" className="model" aria-haspopup="menu" aria-expanded={open} title="Choose what this chat thinks with" onClick={() => setOpen((value) => !value)}>
+      <button type="button" className="model" aria-haspopup="menu" aria-expanded={open} title={open ? undefined : 'Choose what this chat thinks with'} onClick={() => setOpen((value) => !value)}>
         <Icon name="bolt" size={16} />
         <span>{shown}</span>
         {deferred ? <span className="model-wait-dot" aria-label="A change waits for your next new chat" /> : null}

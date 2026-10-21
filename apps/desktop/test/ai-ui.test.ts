@@ -26,10 +26,11 @@ describe('the AI chooser', () => {
     const html = renderToStaticMarkup(createElement(AiPickRows, { settings, picks: settings.ai, onChange: () => undefined }))
     expect(html).toContain('Agent')
     expect(html).toContain('Helpers')
-    expect(html).toContain('<option value="claude" selected="">Claude plan</option>')
-    expect(html).toContain('<option value="go" selected="">OpenCode Go</option>')
-    expect(html).toContain('>fable<')
-    expect(html).toContain('Default (deepseek-v4.1-flash)')
+    // One chooser per row, no native select: the account and its model in full words.
+    expect(html).not.toContain('<select')
+    expect(html).toContain('aria-label="Agent: Claude plan, fable. Change"')
+    expect(html).toContain('<b>Claude plan</b><span>fable</span>')
+    expect(html).toContain('<b>OpenCode Go</b><span>deepseek-v4.1-flash</span>')
     expect(html).not.toContain('Same as the main thread')
   })
 

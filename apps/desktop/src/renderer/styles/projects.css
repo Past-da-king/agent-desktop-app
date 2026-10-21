@@ -90,3 +90,6 @@
 .hp-av{width:32px;height:32px;display:grid;place-items:center;flex:none}
 .hp-card .pj-tile,.hp-stage-bar .pj-tile{flex:none}
 .rail .nav .nav-av{width:24px;height:24px;display:grid;place-items:center;flex:none}
+/* The folder shows its end (the part that tells folders apart); the whole path is in its hover label. */
+.pj-folder-path{flex:1 1 220px}
+.pj-folder-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

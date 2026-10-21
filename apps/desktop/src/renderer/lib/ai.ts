@@ -17,8 +17,8 @@ export function pickLine(settings: Settings | null, pick: AiPick): string {
 
 /** A short word for what kind of account it is. */
 export function kindLine(account: AiAccount): string {
-  if (account.kind === 'claude') return 'Claude plan'
-  if (account.kind === 'codex') return 'ChatGPT plan, through Codex'
+  if (account.kind === 'claude') return 'On your Claude plan, no key'
+  if (account.kind === 'codex') return 'On your ChatGPT plan, through Codex'
   const provider = PROVIDERS.find((each) => each.id === account.provider)
   return `${provider?.label ?? account.provider ?? 'API'} key`
 }
