@@ -15,6 +15,7 @@ import type {
   DictationView,
   BrowserBounds,
   BrowserPerson,
+  DataChange,
   BrowserState,
   ChatEvent,
   ChatRunInfo,
@@ -86,10 +87,11 @@ const api: AgentApi = {
 
   data: {
     list: <E extends EntityName>(entity: E) => call<Array<EntityMap[E]>>(CHANNELS.data.list, entity),
+    get: <E extends EntityName>(entity: E, id: string) => call<EntityMap[E] | null>(CHANNELS.data.get, entity, id),
     upsert: <E extends EntityName>(entity: E, row: RowInput<E>) =>
       call<EntityMap[E]>(CHANNELS.data.upsert, entity, row),
     remove: (entity, id) => call<void>(CHANNELS.data.remove, entity, id),
-    onChanged: (callback) => on<EntityName>(EVENTS.data, callback),
+    onChanged: (callback) => on<DataChange>(EVENTS.data, callback),
   },
 
   chat: {

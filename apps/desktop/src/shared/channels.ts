@@ -24,6 +24,7 @@ export const CHANNELS = {
   },
   data: {
     list: 'agent:data.list',
+    get: 'agent:data.get',
     upsert: 'agent:data.upsert',
     remove: 'agent:data.remove',
   },

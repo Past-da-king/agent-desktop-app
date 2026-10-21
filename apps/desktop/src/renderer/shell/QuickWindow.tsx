@@ -63,9 +63,17 @@ export function QuickWindow(): JSX.Element {
       input.current?.focus()
     })
 
+    // The reply lands as a row change; the list is read only once the run ends, in case a change was missed.
+    const offData = agent.data.onChanged((change) => {
+      const since = sentAt.current
+      if (since === 0 || change.entity !== 'chat_item' || change.row === undefined) return
+      const row = change.row as { createdAt: number; kind: string; text: string }
+      if (row.createdAt < since || (row.kind !== 'agent' && row.kind !== 'notice')) return
+      setAnswer(row.kind === 'agent' ? plainText(row.text) : row.text)
+      setWaiting(false)
+    })
     const off = chat.onEvent((event: ChatEvent) => {
       if (event.type === 'run_started') setRunning(true)
-      if (event.type === 'chat_changed') void refresh()
       if (event.type === 'needs_you' && sentAt.current !== 0) {
         setWaiting(false)
         setAnswer(`${agentName} needs you in the main window.`)
@@ -78,6 +86,7 @@ export function QuickWindow(): JSX.Element {
     })
 
     return () => {
+      offData()
       offQuick()
       off()
     }

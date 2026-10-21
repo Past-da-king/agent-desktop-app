@@ -282,6 +282,32 @@ export interface EntityMap {
 /** What a caller supplies to create or update: everything except what the store fills in. `id` present = update. */
 export type RowInput<E extends EntityName> = Partial<EntityMap[E]> & (E extends 'chat_item' ? { kind: string; text: string } : unknown)
 
+/**
+ * One change to the local data, as the window hears it: the row as it is now, or the id of a deleted row, or
+ * `reset` when many rows changed at once (a sync, an import) and the list should be read again. The window patches
+ * its copy of the list from these instead of reading the whole list on every write.
+ */
+export interface DataChange {
+  entity: EntityName
+  row?: EntityMap[EntityName]
+  id?: string
+  deleted?: boolean
+  reset?: boolean
+}
+
+/** The rows a list query narrows to (Store.listWhere); every field is optional. */
+export interface ListWhere {
+  /** A turn's thread ("main", "chat:<id>", "helper:<id>"). */
+  thread?: string
+  /** A chat row's chat: MAIN_CHAT matches rows with no chat tag. */
+  chat?: string
+  kind?: string
+  /** Only rows created after this time (ms). */
+  since?: number
+  limit?: number
+  newestFirst?: boolean
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Account and sync
 // ---------------------------------------------------------------------------------------------------------------
@@ -833,11 +859,14 @@ export interface AgentApi {
   }
 
   data: {
+    /** Every row of an entity. Chat rows come light: a long run record is cut short (get the row for all of it). */
     list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>>
+    /** One row in full, or null. */
+    get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null>
     upsert<E extends EntityName>(entity: E, row: RowInput<E>): Promise<EntityMap[E]>
     remove(entity: EntityName, id: string): Promise<void>
-    /** Fires after any local or remote change. The renderer reloads the lists it shows. */
-    onChanged(cb: (entity: EntityName) => void): Unsubscribe
+    /** Fires after any local or remote change, with the changed row, so the window patches its list in place. */
+    onChanged(cb: (change: DataChange) => void): Unsubscribe
   }
 
   chat: {

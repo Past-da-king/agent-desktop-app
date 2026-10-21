@@ -2,7 +2,7 @@ import type { Attachment, ChatItem } from '@agent/core'
 
 import { short } from './format'
 import { isHelper, isHelperActivity } from './helpers'
-import { metaText, parseMeta } from './meta'
+import { metaOf, metaText } from './meta'
 
 /**
  * The conversation, oldest first. Branch markers, Home-only cards and a helper's own steps are not
@@ -12,7 +12,7 @@ import { metaText, parseMeta } from './meta'
 export function threadItems(items: ChatItem[]): ChatItem[] {
   return items
     .filter((item) => item.kind !== 'branch')
-    .filter((item) => !(item.kind === 'question' && parseMeta(item.meta)['context'] === 'home'))
+    .filter((item) => !(item.kind === 'question' && metaOf(item)['context'] === 'home'))
     .filter((item) => !isHelperActivity(item))
     // Helpers live in the side panel (shell/HelpersPanel.tsx), not in the thread.
     .filter((item) => !isHelper(item))
@@ -21,7 +21,7 @@ export function threadItems(items: ChatItem[]): ChatItem[] {
 
 /** A notice that starts a fresh stretch of conversation without deleting the history above it. */
 export function isDivider(item: ChatItem): boolean {
-  return item.kind === 'notice' && parseMeta(item.meta)['divider'] === true
+  return item.kind === 'notice' && metaOf(item)['divider'] === true
 }
 
 /** The chat header: the newest stretch after a divider, else the active branch's title. */
@@ -36,9 +36,9 @@ export function threadTitle(items: ChatItem[], fallback = 'New chat'): string {
     return firstAfter ? short(firstAfter.text, 42) : fallback
   }
   const branches = items.filter((item) => item.kind === 'branch')
-  const active = branches.find((item) => parseMeta(item.meta)['active'] === true) ?? branches[0]
+  const active = branches.find((item) => metaOf(item)['active'] === true) ?? branches[0]
   if (active) {
-    const title = metaText(parseMeta(active.meta), 'title')
+    const title = metaText(metaOf(active), 'title')
     if (title !== '') return title
   }
   const firstUser = thread.find((item) => item.kind === 'user')
@@ -47,7 +47,7 @@ export function threadTitle(items: ChatItem[], fallback = 'New chat'): string {
 
 /** Files the person attached to a message. Old mock rows store only a count, so they have none. */
 export function attachmentsOf(item: ChatItem): Attachment[] {
-  const value = parseMeta(item.meta)['attachments']
+  const value = metaOf(item)['attachments']
   if (!Array.isArray(value)) return []
   return value.flatMap((entry) => {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return []

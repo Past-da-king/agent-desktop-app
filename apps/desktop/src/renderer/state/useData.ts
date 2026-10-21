@@ -1,8 +1,9 @@
-import type { EntityMap, EntityName } from '@agent/core'
+import type { DataChange, EntityMap, EntityName } from '@agent/core'
 import { useEffect } from 'react'
 import { create } from 'zustand'
 
 import { agent } from '../bridge'
+import { patched } from '../lib/patch'
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
 
@@ -20,6 +21,8 @@ interface DataState {
   loading: Record<EntityName, boolean>
   errors: Partial<Record<EntityName, string>>
   load: <E extends EntityName>(entity: E) => Promise<void>
+  /** One row changed: the list is patched in place, in its order, without reading it all again. */
+  patch: (change: DataChange) => void
 }
 
 let subscribed = false
@@ -29,8 +32,16 @@ const again = new Set<EntityName>()
 function subscribeOnce(): void {
   if (subscribed) return
   subscribed = true
-  agent.data.onChanged((entity) => {
-    void useData.getState().load(entity)
+  agent.data.onChanged((change) => {
+    const state = useData.getState()
+    // A list not on screen yet is read whole when something first asks for it.
+    if (!state.loaded[change.entity] && !state.loading[change.entity]) return
+    if (change.reset === true || (change.row === undefined && change.id === undefined) || state.loading[change.entity]) {
+      again.add(change.entity)
+      if (!state.loading[change.entity]) void state.load(change.entity)
+      return
+    }
+    state.patch(change)
   })
 }
 
@@ -69,6 +80,15 @@ export const useData = create<DataState>((set, get) => ({
       }))
     }
     if (again.delete(entity)) void get().load(entity)
+  },
+
+  patch: (change) => {
+    set((state) => {
+      const nextRows = { ...state.rows } as Record<EntityName, unknown[]>
+      const current = state.rows[change.entity] as Array<{ id: string; createdAt: number }>
+      nextRows[change.entity] = patched(current, change)
+      return { rows: nextRows as unknown as RowStore }
+    })
   },
 }))
 

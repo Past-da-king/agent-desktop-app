@@ -1,5 +1,5 @@
 import { VoiceNote } from '../voice/VoiceNote'
-import { PROFILE_COLORS, attachmentKind, attachmentProblem, fileSizeLabel, type Attachment, type ChatEvent, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
+import { PROFILE_COLORS, attachmentKind, attachmentProblem, fileSizeLabel, type Attachment, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
@@ -16,7 +16,7 @@ import { startChatTracking, useChatRunning, useChats } from '../state/useChats'
 import { CopyButton } from '../ui/CopyButton'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { plainPreview, reportText } from '../lib/report'
-import { refreshEntity, useEntity, useEntityLoaded } from '../state/useData'
+import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
@@ -178,7 +178,7 @@ function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
   const summary = metaText(meta, 'summary') || item.text
   // A command, program or file step shows what it actually ran, and opens to the full record.
   const run = runFromMeta(meta)
-  if (run !== null) return <RunStep run={run} status={status} by={metaText(meta, 'by') || undefined} summary={summary} />
+  if (run !== null) return <RunStep run={run} status={status} by={metaText(meta, 'by') || undefined} summary={summary} rowId={item.id} />
   const icon: IconName = status === 'error' ? 'x' : status === 'running' ? toolIcon(tool) : 'check'
   return (
     <div className={`tool ${status}`} title={tool === '' ? undefined : tool}>
@@ -901,12 +901,6 @@ export function Chat(): JSX.Element {
     if (agent.platform === 'web' && new URLSearchParams(window.location.search).get('call') === '1') void startCall()
   }, [startCall])
 
-  useEffect(() => {
-    const off = chat.onEvent((event: ChatEvent) => {
-      if (event.type === 'chat_changed' || event.type === 'needs_you') refreshEntity('chat_item')
-    })
-    return off
-  }, [])
 
   // Opening a chat (or reading the one on screen) marks it read, and starts at its newest message.
   useEffect(() => {

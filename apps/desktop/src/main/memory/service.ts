@@ -3,6 +3,7 @@
  * end-of-day pass. New Chat returns as soon as the divider is written; the model call that files the old chat runs
  * on a queue behind it and writes its outcome onto that divider, where the chat shows "Saved 3 memories".
  */
+import { listWhere } from '../runtime/data'
 import type { ChatItem, ChatMemoryNote, PastChatHit } from '@agent/core'
 
 import type { DataStore } from '../runtime/data'
@@ -288,8 +289,8 @@ export class MemoryService {
     const slot = (await this.deps.dailyAt?.()) ?? DEFAULT_DAILY_AT
     if (slot.trim() === '' || this.dailyRunning !== null) return null
     const state = this.deps.upkeep.read()
-    const items = await this.deps.store.list('chat_item')
-    const lastChatAt = items.reduce((latest, item) => (item.kind === 'user' && item.createdAt > latest ? item.createdAt : latest), 0)
+    const [newest] = await listWhere(this.deps.store, 'chat_item', { kind: 'user', limit: 1, newestFirst: true })
+    const lastChatAt = newest?.createdAt ?? 0
     const due = dueDay(this.now(), slot, state.lastDay, lastChatAt)
     if (due === null) return null
     return this.daily(due.catchUp ? 'catch-up' : 'schedule', due)
