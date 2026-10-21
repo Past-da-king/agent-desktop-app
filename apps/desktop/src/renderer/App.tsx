@@ -63,8 +63,9 @@ function Page(): JSX.Element {
         </Shell>
       )
     case 'project':
+      // The side panel stays on a project's page: what needs the person, its helpers and the browser.
       return (
-        <Shell>
+        <Shell panel={<ChatPanel />}>
           <Project id={route.id} />
         </Shell>
       )
