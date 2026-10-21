@@ -16,6 +16,8 @@ interface UiState {
   memSel: string | null
   memQuery: string
   memKind: MemoryFilter
+  /** When set, the Memory view shows only these pages (the ones the last chat saved). */
+  memOnly: string[] | null
   /** Bumped when New chat or a palette action should put the cursor in the composer. */
   composerFocus: number
   /** Text to put in the composer the next time it takes focus (a recent chat picked from the rail). */
@@ -34,6 +36,8 @@ interface UiState {
   selectMemory: (id: string | null) => void
   setMemoryQuery: (query: string) => void
   setMemoryKind: (kind: MemoryFilter) => void
+  /** Opens Memory on just these pages; null shows everything again. */
+  showMemories: (ids: string[] | null) => void
   focusComposer: () => void
   draftComposer: (text: string) => void
   scrollChat: () => void
@@ -48,6 +52,7 @@ export const useUi = create<UiState>((set) => ({
   memSel: null,
   memQuery: '',
   memKind: 'all',
+  memOnly: null,
   composerFocus: 0,
   composerDraft: '',
   chatScroll: 0,
@@ -62,14 +67,14 @@ export const useUi = create<UiState>((set) => ({
       }
     }
     set({ route })
-    if (route.page !== 'onboarding' && route.page !== 'quick-window') rememberLastView(route.page)
+    if (route.page !== 'onboarding' && route.page !== 'quick-window' && route.page !== 'dictation') rememberLastView(route.page)
   },
 
   applyHash: (hash) => {
     const route = parseHash(hash)
     if (!route) return
     set({ route })
-    if (route.page !== 'onboarding' && route.page !== 'quick-window') rememberLastView(route.page)
+    if (route.page !== 'onboarding' && route.page !== 'quick-window' && route.page !== 'dictation') rememberLastView(route.page)
   },
 
   setOverlay: (overlay) => set({ overlay }),
@@ -82,6 +87,14 @@ export const useUi = create<UiState>((set) => ({
   selectMemory: (memSel) => set({ memSel }),
   setMemoryQuery: (memQuery) => set({ memQuery }),
   setMemoryKind: (memKind) => set({ memKind }),
+  showMemories: (ids) => {
+    if (ids !== null) {
+      useUi.getState().navigate({ page: 'memory' })
+      set({ memOnly: ids, memQuery: '', memKind: 'all', memSel: ids[0] ?? null })
+      return
+    }
+    set({ memOnly: null })
+  },
   focusComposer: () => set((state) => ({ composerFocus: state.composerFocus + 1, overlay: null })),
   draftComposer: (composerDraft) =>
     set((state) => ({ composerDraft, composerFocus: state.composerFocus + 1, overlay: null })),

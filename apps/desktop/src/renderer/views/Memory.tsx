@@ -4,7 +4,10 @@ import { useEffect, useState } from 'react'
 import { agent } from '../bridge'
 import { kindLabel, short, timeAgo } from '../lib/format'
 import {
+  MEMORY_TYPES,
   findPage,
+  groupByKind,
+  kindCounts,
   linkedNames,
   linkTargets,
   newPage,
@@ -24,18 +27,25 @@ import { Icon, type IconName } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 import { Markdown } from '../ui/Markdown'
 import { Skeleton } from '../ui/Skeleton'
+import { MemoryUpkeep } from './MemoryUpkeep'
 
-const KIND_ORDER: MemoryKind[] = ['person', 'fact', 'preference', 'decision', 'how-to', 'event', 'skill']
+const KIND_ORDER: MemoryKind[] = MEMORY_TYPES.map((type) => type.kind)
 
 const KIND_ICONS: Record<MemoryKind, IconName> = {
   person: 'person',
-  fact: 'building',
-  preference: 'heart',
+  organisation: 'building',
+  project: 'folder',
+  'how-to': 'sliders',
   decision: 'bolt',
-  'how-to': 'clock',
+  preference: 'heart',
+  fact: 'memory',
   event: 'cal',
-  skill: 'bolt',
+  skill: 'apps',
 }
+
+/** Rows shown per kind before "Show all", and per step of a long filtered list. */
+const SECTION_ROWS = 6
+const LIST_STEP = 60
 
 function MemoryDialog({
   memory,
@@ -265,19 +275,31 @@ export function Memory(): JSX.Element {
   const setFilter = useUi((state) => state.setMemoryKind)
   const selectedId = useUi((state) => state.memSel)
   const selectMemory = useUi((state) => state.selectMemory)
+  const only = useUi((state) => state.memOnly)
+  const showMemories = useUi((state) => state.showMemories)
   const [input, setInput] = useState(query)
   const [editing, setEditing] = useState<MemoryRow | 'new' | null>(null)
   const [creating, setCreating] = useState<string | null>(null)
+  const [shown, setShown] = useState(LIST_STEP)
 
   useEffect(() => {
     const timer = setTimeout(() => setQuery(input), 150)
     return () => clearTimeout(timer)
   }, [input, setQuery])
 
+  useEffect(() => {
+    setShown(LIST_STEP)
+  }, [query, filter, only])
+
   const agentName = settings?.agentName.trim() || 'your agent'
-  const filtered = searchMemories(memories, query, filter)
+  const scope = only === null ? memories : memories.filter((memory) => only.includes(memory.id))
+  const filtered = searchMemories(scope, query, filter)
   const pinned = filtered.filter((memory) => memory.pinned)
   const rest = filtered.filter((memory) => !memory.pinned)
+  const counts = kindCounts(scope)
+  // With no search and no kind chosen, the list is organised by kind; otherwise it is one flat list.
+  const sectioned = query.trim() === '' && filter === 'all' && only === null
+  const groups = sectioned ? groupByKind(rest) : []
   const selected = filtered.find((memory) => memory.id === selectedId) ?? filtered[0] ?? null
   const links = selected ? linkTargets(selected, memories) : []
   const topicList = selected ? selected.topics.split(',').map((topic) => topic.trim()).filter(Boolean) : []
@@ -363,6 +385,18 @@ export function Memory(): JSX.Element {
       ) : (
         <div className="md">
           <div>
+            <MemoryUpkeep />
+            {only !== null ? (
+              <div className="mem-only" role="status">
+                <Icon name="memory" size={16} />
+                <span>
+                  <b>From the last chat:</b> {scope.length} {scope.length === 1 ? 'page' : 'pages'} saved or updated
+                </span>
+                <Button variant="text" size="sm" onClick={() => showMemories(null)}>
+                  Show everything
+                </Button>
+              </div>
+            ) : null}
             <label className="search" htmlFor="memory-search">
               <Icon name="search" size={22} />
               <input
@@ -382,15 +416,16 @@ export function Memory(): JSX.Element {
               >
                 All
               </button>
-              {KIND_ORDER.map((kind) => (
+              {MEMORY_TYPES.filter((type) => (counts[type.kind] ?? 0) > 0 || filter === type.kind).map((type) => (
                 <button
-                  key={kind}
+                  key={type.kind}
                   type="button"
-                  className={`chip${filter === kind ? ' on' : ''}`}
-                  onClick={() => setFilter(kind as MemoryKindFilter)}
+                  className={`chip${filter === type.kind ? ' on' : ''}`}
+                  onClick={() => setFilter(type.kind as MemoryKindFilter)}
                 >
-                  <Icon name={KIND_ICONS[kind]} size={16} />
-                  {kindLabel(kind)}
+                  <Icon name={KIND_ICONS[type.kind]} size={16} />
+                  {type.label}
+                  <span className="chip-n">{(counts[type.kind] ?? 0).toLocaleString('en')}</span>
                 </button>
               ))}
             </div>
@@ -414,15 +449,43 @@ export function Memory(): JSX.Element {
                   </>
                 ) : null}
 
-                {rest.length > 0 ? (
-                  <>
-                    <div className="sec" style={{ margin: '16px 8px 6px' }}>
-                      <span className="eyebrow">EVERYTHING ELSE</span>
-                      <span className="sec-line">Newest first</span>
-                    </div>
-                    {rest.map(renderRow)}
-                  </>
-                ) : null}
+                {sectioned
+                  ? groups.map((group) => (
+                      <section key={group.kind}>
+                        <div className="sec" style={{ margin: '16px 8px 6px' }}>
+                          <span className="eyebrow">
+                            {group.label.toUpperCase()} · {group.rows.length.toLocaleString('en')}
+                          </span>
+                          <span className="sec-line">{group.line}</span>
+                        </div>
+                        {group.rows.slice(0, SECTION_ROWS).map(renderRow)}
+                        {group.rows.length > SECTION_ROWS ? (
+                          <div className="mem-more">
+                            <Button variant="text" size="sm" onClick={() => setFilter(group.kind as MemoryKindFilter)}>
+                              Show all {group.rows.length.toLocaleString('en')} {group.label.toLowerCase()}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </section>
+                    ))
+                  : rest.length > 0 ? (
+                      <>
+                        <div className="sec" style={{ margin: '16px 8px 6px' }}>
+                          <span className="eyebrow">
+                            {filter === 'all' ? 'MATCHES' : (MEMORY_TYPES.find((type) => type.kind === filter)?.label ?? kindLabel(filter)).toUpperCase()} · {rest.length.toLocaleString('en')}
+                          </span>
+                          <span className="sec-line">Newest first</span>
+                        </div>
+                        {rest.slice(0, shown).map(renderRow)}
+                        {rest.length > shown ? (
+                          <div className="mem-more">
+                            <Button variant="text" size="sm" onClick={() => setShown(shown + LIST_STEP)}>
+                              Show {Math.min(LIST_STEP, rest.length - shown)} more
+                            </Button>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
               </>
             )}
           </div>

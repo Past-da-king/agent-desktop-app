@@ -31,6 +31,8 @@ import {
 import type { DataStore } from './data'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
+import { runFinished, runStarted } from './run-detail'
+import { redactSecrets } from '../logger'
 import {
   describeCall,
   friendlyError,
@@ -173,6 +175,8 @@ export class HelperManager implements HelperHost {
   private readonly askWaiters = new Map<string, (answer: string | null) => void>()
   private readonly decisionWaiters = new Map<string, (approved: boolean) => void>()
   private readonly activityIds = new Map<number, string>()
+  /** When each tool call started, for how long a run took. */
+  private readonly runStarts = new Map<string, number>()
   private activitySeq = 0
 
   constructor(deps: HelperManagerDeps) {
@@ -639,6 +643,8 @@ export class HelperManager implements HelperHost {
       }
       case 'tool_started': {
         const summary = describeCall(event.call)
+        const started = runStarted(event.call)
+        this.runStarts.set(event.call.id, Date.now())
         const row = await this.store.upsert('chat_item', {
           kind: 'activity',
           text: summary,
@@ -646,6 +652,7 @@ export class HelperManager implements HelperHost {
             tool: event.call.name,
             status: 'running',
             summary,
+            ...(started === null ? {} : { run: started }),
             helper: run.id,
             by: run.label,
           }),
@@ -657,9 +664,12 @@ export class HelperManager implements HelperHost {
       case 'tool_finished': {
         const isError = event.isError
         const summary = isError
-          ? clip(event.result.split('\n')[0] ?? event.result, 160)
+          ? clip(redactSecrets(event.result.split('\n')[0] ?? event.result), 160)
           : describeCall(event.call)
         const existing = await this.findRunningActivity(run.id, event.call.name)
+        const started = this.runStarts.get(event.call.id) ?? Date.now()
+        this.runStarts.delete(event.call.id)
+        const record = runFinished(event.call, event.result, isError, started)
         if (existing !== null) {
           await this.store.upsert('chat_item', {
             id: existing,
@@ -671,6 +681,7 @@ export class HelperManager implements HelperHost {
               summary,
               helper: run.id,
               by: run.label,
+              ...(record === null ? {} : { run: record }),
             }),
           })
         }

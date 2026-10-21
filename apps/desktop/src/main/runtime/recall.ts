@@ -87,3 +87,50 @@ export function formatMemory(row: MemoryRow): string {
     tags === '' ? '' : ` (topics: ${tags})`
   }`
 }
+
+/** People, organisations and projects whose name appears in the text. Kept small so the prompt stays small. */
+export function namedPages(text: string, memories: MemoryRow[], limit = 6): MemoryRow[] {
+  const haystack = ` ${text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ')} `
+  const found: MemoryRow[] = []
+  for (const row of memories) {
+    if (row.kind !== 'person' && row.kind !== 'organisation' && row.kind !== 'project') continue
+    const name = nameKey(row.title)
+    if (name.length < 3) continue
+    // "GrowOS / GrowFactory" answers to either name; "Fretak (was Ember): swipe cards" to "Fretak".
+    const names = [name, ...row.title.split(/\s[/|:\u2013\u2014-]\s|[/|:\u2013\u2014]/).map(nameKey)].filter((part) => part.length >= 3)
+    if (names.some((part) => haystack.includes(` ${part} `))) {
+      found.push(row)
+      continue
+    }
+    // A person by first name, when that name is not a common word and was written with a capital.
+    if (row.kind === 'person') {
+      const first = name.split(' ')[0] ?? ''
+      if (first.length >= 3 && name.includes(' ') && new RegExp(`(^|[^\\p{L}])${capital(first)}([^\\p{L}]|$)`, 'u').test(text)) {
+        found.push(row)
+      }
+    }
+  }
+  return found.slice(0, limit)
+}
+
+function nameKey(title: string): string {
+  return title.toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+}
+
+function capital(word: string): string {
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return escaped.charAt(0).toUpperCase() + escaped.slice(1)
+}
+
+/** The memories to put in front of the model for a message: pages it names first, then the best matches. */
+export function recallFor(text: string, rows: MemoryRow[], limit: number): MemoryRow[] {
+  const named = namedPages(text, rows, 5)
+  const seen = new Set(named.map((row) => row.id))
+  return [...named, ...rank(text, rows.filter((row) => !seen.has(row.id)), limit)].slice(0, limit + named.length)
+}
+
+/** One memory for the prompt: long pages are cut, with the id to read the rest. */
+export function formatMemoryBrief(row: MemoryRow, limit = 700): string {
+  if (row.body.length <= limit) return formatMemory(row)
+  return formatMemory({ ...row, body: `${row.body.slice(0, limit).trimEnd()}... (memory_get #${row.id} for the rest)` })
+}

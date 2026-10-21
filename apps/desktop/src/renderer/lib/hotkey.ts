@@ -85,3 +85,13 @@ export function formatAccelerator(accelerator: string, platform: string): string
     })
     .filter((part) => part !== '')
 }
+
+/** The clean-up switch while dictating: the dictation shortcut's modifiers with C (Alt+Space gives Alt+C). Mirrors main. */
+export function cleanSwitchKeys(dictate: string, platform: string): string {
+  const parts = dictate
+    .split('+')
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+  if (parts.length < 2 || (parts.at(-1) ?? '').toUpperCase() === 'C') return ''
+  return formatAccelerator([...parts.slice(0, -1), 'C'].join('+'), platform).join('+')
+}
