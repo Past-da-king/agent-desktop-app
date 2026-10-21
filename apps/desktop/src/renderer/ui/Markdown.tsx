@@ -17,11 +17,23 @@ function CodeBlock({ code, lang }: { code: string; lang: string }): JSX.Element 
   )
 }
 
-/** Very small markdown: headings, bold, inline code, paragraphs, numbered and bulleted lists, and memory links. */
-function inline(text: string, keyPrefix: string, onWikiLink?: (name: string) => void): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[\[[^\]]+\]\])/g)
+/** Very small markdown: headings, bold, inline code, paragraphs, numbered and bulleted lists, rules, and links. */
+function inline(text: string, keyPrefix: string, onWikiLink?: (name: string) => void, onLink?: (url: string) => void): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[\[[^\]]+\]\]|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g)
   return parts.map((part, index) => {
     const key = `${keyPrefix}-${index}`
+    const web = /^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(part)
+    if (web) {
+      const label = web[1] ?? ''
+      const url = web[2] ?? ''
+      return onLink ? (
+        <button key={key} type="button" className="linkish" title={url} onClick={() => onLink(url)}>
+          {label}
+        </button>
+      ) : (
+        <Fragment key={key}>{label}</Fragment>
+      )
+    }
     if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
       return <b key={key}>{part.slice(2, -2)}</b>
     }
@@ -47,10 +59,13 @@ function inline(text: string, keyPrefix: string, onWikiLink?: (name: string) => 
 export function Markdown({
   text,
   onWikiLink,
+  onLink,
 }: {
   text: string
   /** When given, `[[Page]]` becomes a real button that navigates to (or creates) that memory page. */
   onWikiLink?: (name: string) => void
+  /** When given, `[words](https://...)` becomes a button that opens the address; otherwise only the words show. */
+  onLink?: (url: string) => void
 }): JSX.Element {
   const blocks: ReactNode[] = []
   let paragraph: string[] = []
@@ -65,7 +80,7 @@ export function Markdown({
         {paragraph.map((line, index) => (
           <Fragment key={`${key}-${index}`}>
             {index > 0 ? <br /> : null}
-            {inline(line, `${key}-${index}`, onWikiLink)}
+            {inline(line, `${key}-${index}`, onWikiLink, onLink)}
           </Fragment>
         ))}
       </p>,
@@ -79,7 +94,7 @@ export function Markdown({
     blocks.push(
       <ol key={key}>
         {numbered.map((item, index) => (
-          <li key={`${key}-${index}`}>{inline(item, `${key}-${index}`, onWikiLink)}</li>
+          <li key={`${key}-${index}`}>{inline(item, `${key}-${index}`, onWikiLink, onLink)}</li>
         ))}
       </ol>,
     )
@@ -92,7 +107,7 @@ export function Markdown({
     blocks.push(
       <ul key={key}>
         {bulleted.map((item, index) => (
-          <li key={`${key}-${index}`}>{inline(item, `${key}-${index}`, onWikiLink)}</li>
+          <li key={`${key}-${index}`}>{inline(item, `${key}-${index}`, onWikiLink, onLink)}</li>
         ))}
       </ul>,
     )
@@ -123,13 +138,18 @@ export function Markdown({
       fence = { lang: fenceLine[1] ?? '', lines: [] }
       continue
     }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushAll()
+      blocks.push(<hr className="md-hr" key={`hr-${blocks.length}`} />)
+      continue
+    }
     const heading = /^(#{1,4})\s+(.*)$/.exec(line)
     if (heading) {
       flushAll()
       const level = heading[1]?.length ?? 1
       blocks.push(
         <div className={level > 2 ? 'md-h sub' : 'md-h'} key={`h-${blocks.length}`}>
-          {inline(heading[2] ?? '', `h-${blocks.length}`, onWikiLink)}
+          {inline(heading[2] ?? '', `h-${blocks.length}`, onWikiLink, onLink)}
         </div>,
       )
       continue

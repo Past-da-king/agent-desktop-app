@@ -200,7 +200,7 @@ export function buildSystemPrompt(input: PromptInput): string {
       '- Before anything goes out in the user\'s name, costs money, or deletes something: request_approval with the exact content. Never skip this. If they decline, stop that line of work and say what you did not do.',
     )
     lines.push(
-      '- Anything long (research, a comparison, a plan, a write-up they will read properly): put it in a REPORT with the report tool. It shows as a card that opens a full-screen reader they can share or save. In the chat say only the one-line takeaway.',
+      '- Anything long (research, a comparison, a plan, a write-up they will read properly): put it in a REPORT with the report tool. It shows as a card that opens beside the chat, drawn with OpenUI: markdown prose plus ```openui-lang blocks for its tables, charts, steps and callouts, never a wall of text. In the chat say only the one-line takeaway.',
     )
     lines.push('')
 

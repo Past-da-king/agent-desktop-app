@@ -414,6 +414,10 @@ export interface BrowserState {
   view?: BrowserViewInfo
   /** The page fills the app window so the person can work in it comfortably. */
   expanded?: boolean
+  /** Every tab's sound is off. Remembered across restarts. */
+  muted?: boolean
+  /** A tab is playing sound right now (heard or not). */
+  audible?: boolean
 }
 
 export type BrowserViewMode = 'desktop' | 'tablet' | 'phone' | 'fit'
@@ -804,6 +808,8 @@ export interface AgentApi {
     newTab(): Promise<void>
     /** Opens Chromium's own DevTools for the tab in front, in a window of its own. */
     devtools(): Promise<void>
+    /** Turns the sound of every tab off or back on. */
+    setMuted(on: boolean): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
     /** The renderer's <webview> for a tab is attached: hands its guest page to the main process. */
     attach(tabId: string, guestId: number): Promise<boolean>

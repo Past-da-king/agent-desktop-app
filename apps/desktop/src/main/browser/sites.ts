@@ -36,6 +36,8 @@ interface SiteFile {
   version: 1
   defaultView: ViewSpec
   sites: Record<string, SiteProfile>
+  /** The person turned the browser's sound off. */
+  muted?: boolean
 }
 
 const MAX_SITES = 300
@@ -72,6 +74,16 @@ export class SiteStore {
 
   setDefaultView(view: ViewSpec): void {
     this.data.defaultView = { ...view }
+    this.save()
+  }
+
+  muted(): boolean {
+    return this.data.muted === true
+  }
+
+  setMuted(on: boolean): void {
+    if (on) this.data.muted = true
+    else delete this.data.muted
     this.save()
   }
 
@@ -175,7 +187,7 @@ export class SiteStore {
           if (profile !== null) sites[site] = profile
         }
       }
-      this.data = { version: 1, defaultView: defaultView ?? presetView('desktop'), sites }
+      this.data = { version: 1, defaultView: defaultView ?? presetView('desktop'), sites, ...(raw['muted'] === true ? { muted: true } : {}) }
     } catch {
       // No file yet, or a damaged one: start fresh rather than refuse to browse.
     }
