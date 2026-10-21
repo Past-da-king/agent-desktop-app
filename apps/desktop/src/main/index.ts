@@ -26,7 +26,10 @@ import { AgentBrowser } from './browser/browser'
 import { Store } from './db'
 import { Logger } from './logger'
 import { Notifier } from './notify'
-import { HotkeyBinder, QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
+import { QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
+import { HotkeyManager } from './hotkeys'
+import { createDictation, type DictationSetup } from './dictation/setup'
+import { registerDictationIpc } from './dictation/ipc'
 import { StepBudget } from './runtime/budget'
 import { hostEnvironment } from './runtime/environment-host'
 import { HelperManager } from './runtime/helpers'
@@ -114,7 +117,8 @@ let cliHost: CliHost | null = null
 let scheduler: Scheduler | null = null
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
-let hotkey: HotkeyBinder | null = null
+let hotkeys: HotkeyManager | null = null
+let dictation: DictationSetup | null = null
 let agentBrowser: AgentBrowser | null = null
 let disposeIpc: (() => void) | null = null
 let disposeStore: (() => void) | null = null
@@ -123,8 +127,7 @@ let disposeSettings: (() => void) | null = null
 let quitting = false
 let toldAboutTray = false
 let routinesPaused = false
-let appliedHotkey: string | null = null
-let lastHotkeyStatus: HotkeyStatus | null = null
+let lastHotkeyStatuses: HotkeyStatus[] = []
 const filePicks = new Set<string>()
 
 function broadcast(channel: string, payload?: unknown): void {
@@ -323,7 +326,7 @@ function createWindow(stateFile: string): BrowserWindow {
 
   // The shortcut is registered before the renderer is ready, so a fresh window is told the result.
   win.webContents.on('did-finish-load', () => {
-    if (lastHotkeyStatus !== null) win.webContents.send(EVENTS.hotkey, lastHotkeyStatus)
+    for (const status of lastHotkeyStatuses) win.webContents.send(EVENTS.hotkey, status)
   })
 
   win.on('page-title-updated', (event) => {
@@ -380,12 +383,12 @@ function applyLoginItem(settings: Settings): void {
 }
 
 function applyHotkey(settings: Settings): void {
-  if (hotkey === null) return
-  if (appliedHotkey === settings.quickAskHotkey) return
-  appliedHotkey = settings.quickAskHotkey
-  const status: HotkeyStatus = hotkey.apply(settings.quickAskHotkey)
-  lastHotkeyStatus = status
-  broadcast(EVENTS.hotkey, status)
+  // Unchanged shortcuts are left alone by the manager; a change reports every status again.
+  hotkeys?.apply({
+    quickAsk: settings.quickAskHotkey,
+    dictate: settings.dictateHotkey,
+    dictateClean: settings.dictateCleanHotkey,
+  })
 }
 
 function openQuickAsk(): void {
@@ -631,10 +634,20 @@ async function startServices(win: BrowserWindow): Promise<void> {
     ...paths,
     devUrl: process.env['ELECTRON_RENDERER_URL'],
   })
-  hotkey = new HotkeyBinder(globalShortcut, openQuickAsk, (status) => {
-    lastHotkeyStatus = status
-    broadcast(EVENTS.hotkey, status)
-  })
+  hotkeys = new HotkeyManager(
+    globalShortcut,
+    {
+      quickAsk: openQuickAsk,
+      dictate: () => dictation?.controller.toggle('plain'),
+      dictateClean: () => dictation?.controller.toggle('clean'),
+    },
+    (statuses) => {
+      lastHotkeyStatuses = statuses
+      for (const status of statuses) broadcast(EVENTS.hotkey, status)
+      const failed = statuses.filter((status) => !status.ok).map((status) => status.action ?? '')
+      if (failed.length > 0) logger.warn('Shortcuts not registered', { actions: failed.join(',') })
+    },
+  )
 
   let lastSettings = settings.get()
   disposeSettings = settings.onChange((next) => {
@@ -690,7 +703,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   })
 
   // Voice: the Gemini key and the live call stay here; the window only streams microphone audio.
-  allowMicrophone(win.webContents.session, (id) => id === win.webContents.id)
+  allowMicrophone(win.webContents.session, (id) => id === win.webContents.id || dictation?.pill.isPill(id) === true)
   voice = new VoiceService({
     secrets,
     settings,
@@ -702,6 +715,34 @@ async function startServices(win: BrowserWindow): Promise<void> {
     notesDir: join(app.getPath('userData'), 'voice-notes'),
   })
   registerVoiceIpc(voice, ipcMain)
+
+  // Dictation anywhere: the pill window holds the microphone, the words are typed into the app in front.
+  const voiceService = voice
+  dictation = createDictation({
+    voice: voiceService,
+    geminiKey: () => secrets.get('geminiKey'),
+    hotkeys: () => hotkeys,
+    pill: { ...quickAskPaths(__dirname), devUrl: process.env['ELECTRON_RENDERER_URL'] },
+    locale: app.getLocale(),
+    log: (message, fields) => logger.info(message, fields),
+  })
+  registerDictationIpc(
+    {
+      hotkeyStatus: () => hotkeys?.status() ?? [],
+      pauseHotkeys: (paused) => hotkeys?.pause(paused),
+      audio: (session, pcm) => dictation?.controller.audio(session, pcm),
+      micState: (session, ok, message) => dictation?.controller.micState(session, ok, message),
+      stop: () => dictation?.controller.stop(),
+      pillReady: () => dictation?.pill.rendererReady(),
+    },
+    ipcMain,
+  )
+  // Warm the pill and the paste helper a little after start, so the first dictation is quick.
+  setTimeout(() => {
+    if (settings.get().dictateHotkey.trim() === '' && settings.get().dictateCleanHotkey.trim() === '') return
+    dictation?.pill.prepare()
+    dictation?.keys?.warm()
+  }, 4000)
 
   applyLoginItem(settings.get())
 }
@@ -744,8 +785,10 @@ if (!app.requestSingleInstanceLock()) {
     tray = null
     quickAsk?.destroy()
     quickAsk = null
-    hotkey?.dispose()
-    hotkey = null
+    hotkeys?.dispose()
+    hotkeys = null
+    dictation?.dispose()
+    dictation = null
     globalShortcut.unregisterAll()
     void voice?.callEnd()
     voice = null

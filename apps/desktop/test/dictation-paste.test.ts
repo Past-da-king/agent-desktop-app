@@ -10,41 +10,34 @@ import {
   helperLine,
   keySenderFor,
   typeText,
+  electronClipboard,
   type ClipboardLike,
   type KeySender,
 } from '../src/main/dictation/paste'
 
-function clipboard(initial: { text?: string; html?: string; image?: boolean } = {}): ClipboardLike & { log: string[]; state: Record<string, unknown> } {
-  const state: Record<string, unknown> = { text: initial.text ?? '', html: initial.html ?? '', rtf: '', image: initial.image === true ? 'png' : null }
+/** A clipboard like Electron 44's (async, item based) behind the adapter, so the adapter is tested too. */
+function clipboard(initial: Record<string, string> = {}): ClipboardLike & { log: string[]; items: () => Array<Record<string, unknown>> } {
+  let items: Array<Record<string, unknown>> = Object.keys(initial).length === 0 ? [] : [{ ...initial }]
   const log: string[] = []
-  return {
-    log,
-    state,
-    readText: () => String(state['text']),
-    readHTML: () => String(state['html']),
-    readRTF: () => String(state['rtf']),
-    readImage: () => ({ isEmpty: () => state['image'] === null }),
-    write: (data) => {
-      log.push(`write:${Object.keys(data).sort().join(',')}`)
-      state['text'] = data.text ?? ''
-      state['html'] = data.html ?? ''
-      state['rtf'] = data.rtf ?? ''
-      state['image'] = data.image === undefined ? null : 'png'
+  const fake = {
+    read: async () => items.map((entries) => ({ types: Object.keys(entries), getType: async (type: string) => entries[type] })),
+    readText: async () => String(items[0]?.['text/plain'] ?? ''),
+    write: async (next: never[]) => {
+      const written = next as unknown as Array<{ entries: Record<string, unknown> }>
+      log.push(`write:${written.map((item) => Object.keys(item.entries).sort().join(',')).join('|')}`)
+      items = written.map((item) => ({ ...item.entries }))
     },
-    writeText: (text) => {
+    writeText: async (text: string) => {
       log.push(`writeText:${text}`)
-      state['text'] = text
-      state['html'] = ''
-      state['rtf'] = ''
-      state['image'] = null
+      items = [{ 'text/plain': text }]
     },
     clear: () => {
       log.push('clear')
-      state['text'] = ''
-      state['html'] = ''
-      state['image'] = null
+      items = []
     },
   }
+  const adapter = electronClipboard(fake, (entries) => ({ entries }))
+  return { ...adapter, log, items: () => items }
 }
 
 function keys(ok: boolean, during?: () => void): KeySender & { pastes: number } {
@@ -66,45 +59,46 @@ const noWait = async (): Promise<void> => undefined
 
 describe('typeText', () => {
   it('puts the words on the clipboard, pastes, then brings the old clipboard back', async () => {
-    const board = clipboard({ text: 'what I copied before', html: '<b>before</b>' })
+    const board = clipboard({ 'text/plain': 'what I copied before', 'text/html': '<b>before</b>' })
     let seen = ''
     const sender = keys(true, () => {
-      seen = board.readText()
+      void board.readText().then((text) => {
+        seen = text
+      })
     })
     expect(await typeText('Hello from dictation', { clipboard: board, keys: sender, wait: noWait })).toBe('pasted')
     expect(seen).toBe('Hello from dictation')
     expect(sender.pastes).toBe(1)
-    expect(board.readText()).toBe('what I copied before')
-    expect(board.readHTML()).toBe('<b>before</b>')
-    expect(board.log).toEqual(['writeText:Hello from dictation', 'write:html,text'])
+    expect(board.items()).toEqual([{ 'text/plain': 'what I copied before', 'text/html': '<b>before</b>' }])
+    expect(board.log).toEqual(['writeText:Hello from dictation', 'write:text/html,text/plain'])
   })
 
   it('restores an image and clears a clipboard that was empty', async () => {
-    const withImage = clipboard({ image: true })
+    const withImage = clipboard({ 'image/png': 'PNGDATA' })
     await typeText('words', { clipboard: withImage, keys: keys(true), wait: noWait })
-    expect(withImage.state['image']).toBe('png')
+    expect(withImage.items()).toEqual([{ 'image/png': 'PNGDATA' }])
 
     const empty = clipboard()
     await typeText('words', { clipboard: empty, keys: keys(true), wait: noWait })
     expect(empty.log.at(-1)).toBe('clear')
-    expect(empty.readText()).toBe('')
+    expect(await empty.readText()).toBe('')
   })
 
   it('leaves the words copied when the keys cannot be sent', async () => {
-    const board = clipboard({ text: 'before' })
+    const board = clipboard({ 'text/plain': 'before' })
     expect(await typeText('the words', { clipboard: board, keys: keys(false), wait: noWait })).toBe('copied')
-    expect(board.readText()).toBe('the words')
+    expect(await board.readText()).toBe('the words')
     expect(await typeText('again', { clipboard: board, keys: null, wait: noWait })).toBe('copied')
-    expect(board.readText()).toBe('again')
+    expect(await board.readText()).toBe('again')
   })
 
   it('does not overwrite something the person copied while the paste ran', async () => {
-    const board = clipboard({ text: 'before' })
+    const board = clipboard({ 'text/plain': 'before' })
     const wait = async (): Promise<void> => {
-      board.writeText('copied meanwhile')
+      await board.writeText('copied meanwhile')
     }
     await typeText('dictated', { clipboard: board, keys: keys(true), wait })
-    expect(board.readText()).toBe('copied meanwhile')
+    expect(await board.readText()).toBe('copied meanwhile')
   })
 })
 

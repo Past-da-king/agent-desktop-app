@@ -1,0 +1,42 @@
+/* ---------- the dictation pill (#/dictation): a transparent, never-focused window near the bottom of the screen ---------- */
+html.pill-window,html.pill-window body,html.pill-window #root{background:transparent;padding:0;overflow:hidden}
+.dpill-stage{height:100%;display:flex;align-items:flex-end;justify-content:center;padding:0 12px 14px}
+.dpill-stage.preview{background:var(--desk);min-height:100vh;padding-bottom:28px}
+/* An inverted surface: dark on a light theme, light on a dark one, so it reads over any app. */
+.dpill{
+  --pill-bg:var(--on-bg); --pill-fg:var(--bg); --pill-mute:color-mix(in srgb,var(--bg) 74%,var(--on-bg));
+  display:inline-flex;align-items:center;gap:12px;max-width:100%;min-width:0;height:52px;padding:0 18px 0 16px;
+  border-radius:999px;background:var(--pill-bg);color:var(--pill-fg);
+  box-shadow:0 8px 24px rgba(20,16,60,.28),0 0 0 1px color-mix(in srgb,var(--bg) 14%,transparent);
+  font:400 15px/1.2 var(--font);cursor:default;-webkit-user-select:none;user-select:none;
+  animation:dpill-in .32s var(--spatial) both;
+}
+.dpill.is-listening,.dpill.is-starting{cursor:pointer}
+@keyframes dpill-in{from{opacity:0;transform:translateY(10px) scale(.96)}to{opacity:1;transform:none}}
+
+.dpill-wave{--lvl:.2;display:inline-flex;align-items:center;gap:3px;height:28px;flex:none;color:var(--pc)}
+.dpill-wave i{width:4px;border-radius:2px;background:currentColor;height:calc(5px + var(--lvl) * 16px);transition:height .08s linear}
+.dpill-wave i:nth-child(2){height:calc(5px + var(--lvl) * 24px)}
+.dpill-wave i:nth-child(3){height:calc(5px + var(--lvl) * 20px)}
+.dpill-wave i:nth-child(4){height:calc(5px + var(--lvl) * 26px)}
+.dpill-wave i:nth-child(5){height:calc(5px + var(--lvl) * 12px)}
+
+.dpill-words,.dpill-hint,.dpill-message{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.dpill-words .guess,.dpill-hint{color:var(--pill-mute)}
+.dpill-words .said+.guess{margin-left:.3em}
+.dpill-sep{color:var(--pill-mute)}
+.dpill-message{font-weight:500}
+
+.dpill-badge{flex:none;height:26px;display:inline-flex;align-items:center;padding:0 10px;border-radius:999px;background:var(--primary);color:var(--on-primary);font:600 12px/1 var(--font);letter-spacing:.01em}
+.dpill-icon{flex:none;width:28px;height:28px;border-radius:50%;display:grid;place-items:center}
+.dpill-icon.ok{background:var(--okc);color:var(--ok)}
+.dpill-icon.error{background:var(--ec);color:var(--on-ec)}
+.dpill-icon.notice{background:var(--tc);color:var(--on-tc)}
+.dpill-spin{flex:none;width:20px;height:20px;border-radius:50%;border:3px solid color-mix(in srgb,var(--pc) 30%,transparent);border-top-color:var(--pc);animation:dpill-spin .8s linear infinite}
+@keyframes dpill-spin{to{transform:rotate(360deg)}}
+
+@media (prefers-reduced-motion:reduce){
+  .dpill{animation:none}
+  .dpill-spin{animation-duration:2.4s}
+}
+.hotkey-status.bad{color:var(--err)}

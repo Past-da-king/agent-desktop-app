@@ -62,14 +62,14 @@ export const useUi = create<UiState>((set) => ({
       }
     }
     set({ route })
-    if (route.page !== 'onboarding' && route.page !== 'quick-window') rememberLastView(route.page)
+    if (route.page !== 'onboarding' && route.page !== 'quick-window' && route.page !== 'dictation') rememberLastView(route.page)
   },
 
   applyHash: (hash) => {
     const route = parseHash(hash)
     if (!route) return
     set({ route })
-    if (route.page !== 'onboarding' && route.page !== 'quick-window') rememberLastView(route.page)
+    if (route.page !== 'onboarding' && route.page !== 'quick-window' && route.page !== 'dictation') rememberLastView(route.page)
   },
 
   setOverlay: (overlay) => set({ overlay }),

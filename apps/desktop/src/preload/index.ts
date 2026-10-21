@@ -214,6 +214,7 @@ const api: AgentApi = {
     },
     micState: (session, ok, message) => call<void>(CHANNELS.dictation.micState, session, ok, message),
     stop: () => call<void>(CHANNELS.dictation.stop),
+    ready: () => call<void>(CHANNELS.dictation.ready),
     onCommand: (callback) => on<DictationCommand>(EVENTS.dictationCommand, callback),
     onView: (callback) => on<DictationView>(EVENTS.dictationView, callback),
   },
