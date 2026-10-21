@@ -115,6 +115,7 @@ export interface BrowserControl {
   /** A <webview> in the main window is attached for a tab; `senderId` is the asking renderer's webContents id. */
   attachGuest?(tabId: string, guestId: number, senderId: number | null): boolean
   openDevTools?(): void
+  setMuted?(on: boolean): void
 }
 
 export interface IpcDeps {
@@ -399,6 +400,10 @@ export function registerIpc(deps: IpcDeps): () => void {
   })
   handle(CHANNELS.browser.devtools, async () => {
     deps.browser?.openDevTools?.()
+  })
+  handle(CHANNELS.browser.setMuted, async (_event, rawOn) => {
+    if (typeof rawOn !== 'boolean') throw new Error('muted must be true or false')
+    deps.browser?.setMuted?.(rawOn)
   })
   handle(CHANNELS.browser.setExpanded, async (_event, rawOn) => {
     if (typeof rawOn !== 'boolean') throw new Error('expanded must be true or false')

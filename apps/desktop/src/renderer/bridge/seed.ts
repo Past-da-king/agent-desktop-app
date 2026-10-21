@@ -431,8 +431,8 @@ export function demoRows(): SeedResult['rows'] {
       meta: JSON.stringify({
         title: 'Durban trip: what I found',
         markdown:
-          '# Durban trip: what I found\n\n## Morning flights\n\n- **SkyHop 06:05**, R 899, window seats left\n- **Breeze Air 07:30**, R 1,020\n- **SkyHop 09:40**, R 1,049\n\nPrices were checked just now. The 06:05 is the best value and gives you the whole morning.\n\n## Guesthouse\n\nOcean Breeze has a quiet room from R 1,150 a night, two minutes from the beach.',
-        words: 68,
+          '# Durban trip: what I found\n\n## Morning flights\n\nPrices were checked just now on [SkyHop](https://skyhop.example/flights).\n\n| Flight | Leaves | Fare (R) | Seats |\n|---|---|---|---|\n| SkyHop | 06:05 | 899 | Window seats left |\n| Breeze Air | 07:30 | 1,020 | Plenty |\n| SkyHop | 09:40 | 1,049 | Few left |\n\n```openui-lang\nroot = Stack([c])\nc = Card([k])\nk = Callout("success", "Best value: SkyHop 06:05", "R 899 and you have the whole morning in Durban.")\n```\n\n---\n\n## Guesthouse\n\nOcean Breeze has a quiet room from R 1,150 a night, two minutes from the beach.',
+        words: 74,
       }),
     },
     {

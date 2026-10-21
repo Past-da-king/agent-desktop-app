@@ -13,6 +13,7 @@ import { MAIN_CHAT } from '@agent/core'
 import { startChatTracking, useChatRunning, useChats } from '../state/useChats'
 import { CopyButton } from '../ui/CopyButton'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
+import { plainPreview, reportText } from '../lib/report'
 import { refreshEntity, useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -32,6 +33,9 @@ import { EmptyState } from '../ui/EmptyState'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
 import { AgentMessage, AskCard } from '../openui/AgentMessage'
+import { ReportBody } from '../openui/ReportBody'
+import { useNarrow } from '../shell/Panel'
+import { usePanel } from '../state/usePanel'
 import { withNo } from '../../shared/ask-options'
 import { ModelPicker } from '../ui/ModelPicker'
 import { Mascot } from '../ui/Mascot'
@@ -439,32 +443,6 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   )
 }
 
-function reportText(item: ChatItem): { title: string; markdown: string; words: number } {
-  const meta = parseMeta(item.meta)
-  const raw = metaText(meta, 'markdown') || item.text
-  const title = metaText(meta, 'title') || item.text || 'Report'
-  const trimmed = raw.replace(/^\s+/, '')
-  const heading = /^(#{1,6})\s+(.*)\r?\n?/.exec(trimmed)
-  const markdown =
-    heading !== null && (heading[2] ?? '').trim().toLowerCase() === title.trim().toLowerCase()
-      ? trimmed.slice(heading[0].length).replace(/^\s+/, '')
-      : raw
-  const words =
-    typeof meta['words'] === 'number' && Number.isFinite(meta['words'])
-      ? meta['words']
-      : markdown.split(/\s+/).filter(Boolean).length
-  return { title, markdown, words }
-}
-
-function plainPreview(markdown: string): string {
-  return markdown
-    .replace(/^#{1,6}\s*/gm, '')
-    .replace(/\*\*|__|`/g, '')
-    .replace(/^\s*[-*]\s+/gm, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 function ReportRow({ item, onOpen }: { item: ChatItem; onOpen: (item: ChatItem) => void }): JSX.Element {
   const report = reportText(item)
   const preview = plainPreview(report.markdown)
@@ -794,6 +772,8 @@ export function Chat(): JSX.Element {
   const [reading, setReading] = useState(false)
   const running = useChatRunning(openChat)
   const [reader, setReader] = useState<ChatItem | null>(null)
+  const openReport = usePanel((store) => store.openReport)
+  const narrow = useNarrow()
   const thread = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const stuck = useRef(true)
@@ -974,6 +954,20 @@ export function Chat(): JSX.Element {
   }
 
   const report = reader === null ? null : reportText(reader)
+  // A window made too narrow for the side panel moves an open report into the dialog.
+  const panelReport = usePanel((store) => store.report)
+  const closeReport = usePanel((store) => store.closeReport)
+  useEffect(() => {
+    if (!narrow || panelReport === null) return
+    const row = allItems.find((item) => item.id === panelReport)
+    closeReport()
+    if (row !== undefined) setReader(row)
+  }, [narrow, panelReport, allItems, closeReport])
+  // Beside the chat in the side panel; a window too narrow for the panel reads it in a dialog instead.
+  const openReader = (row: ChatItem): void => {
+    if (narrow) setReader(row)
+    else openReport(row.id)
+  }
   // While a card is waiting the run is suspended on the person, not thinking.
   const thinking = running && !needsYou
 
@@ -1079,7 +1073,7 @@ export function Chat(): JSX.Element {
                 <ToolSteps key={segment.id} items={segment.items} live={running && index === segments.length - 1} />
               ) : (
                 <div key={segment.item.id} style={{ display: 'contents' }}>
-                  {renderItem(segment.item, items, (row) => setReader(row), agentName)}
+                  {renderItem(segment.item, items, openReader, agentName)}
                 </div>
               ),
             )}
@@ -1210,7 +1204,7 @@ export function Chat(): JSX.Element {
           </div>
           <h2 className="h2">{report.title}</h2>
           <div className="reader">
-            <Markdown text={report.markdown} />
+            <ReportBody markdown={report.markdown} />
           </div>
           <div className="dialog-actions">
             <CopyButton text={report.markdown} label="Copy report" />

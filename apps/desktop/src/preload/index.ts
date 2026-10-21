@@ -123,6 +123,7 @@ const api: AgentApi = {
     go: (address) => call<void>(CHANNELS.browser.go, address),
     newTab: () => call<void>(CHANNELS.browser.newTab),
     devtools: () => call<void>(CHANNELS.browser.devtools),
+    setMuted: (on: boolean) => call<void>(CHANNELS.browser.setMuted, on),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
     attach: (tabId, guestId) => call<boolean>(CHANNELS.browser.attach, tabId, guestId),
   },

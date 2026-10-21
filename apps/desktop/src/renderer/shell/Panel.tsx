@@ -15,6 +15,7 @@ import { Chip } from '../ui/Chip'
 import { Icon, type IconName } from '../ui/Icon'
 import { BrowserHost } from './BrowserHost'
 import { HelperStage, HelpersPanel } from './HelpersPanel'
+import { ReportStage } from './ReportStage'
 import { setStageBox } from '../lib/browser-stage'
 
 const VIEW_CHOICES: Array<{ mode: Exclude<BrowserViewMode, 'fit'>; label: string; icon: IconName }> = [
@@ -138,6 +139,7 @@ function BrowserChrome({
   const shownAddress = address ?? (hasPage ? (state?.url ?? '') : '')
   const active = state?.agentActive !== false
   const needsUser = state?.needsUser === true
+  const muted = state?.muted === true
 
   return (
     <div className="browser br-live-browser">
@@ -159,6 +161,17 @@ function BrowserChrome({
           disabled={!hasPage}
           onClick={() => {
             void agent.browser.reload()
+          }}
+        />
+        <IconButton
+          icon={muted ? 'muted' : 'sound'}
+          label={muted ? 'Turn the sound back on' : 'Mute the browser'}
+          size={18}
+          tonal={muted}
+          className={`br-mute${!muted && state?.audible === true ? ' playing' : ''}`}
+          aria-pressed={muted}
+          onClick={() => {
+            void agent.browser.setMuted(!muted)
           }}
         />
         <form
@@ -294,7 +307,7 @@ function BrowserChrome({
 }
 
 /** True while the window is narrow enough that the shell hides the side panel (responsive.css). */
-function useNarrow(): boolean {
+export function useNarrow(): boolean {
   const query = '(max-width:1180px)'
   const [narrow, setNarrow] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia(query).matches)
   useEffect(() => {
@@ -550,11 +563,18 @@ export function ChatPanel({ parked = false }: { parked?: boolean }): JSX.Element
   const setCollapsed = usePanel((store) => store.setCollapsed)
   // A helper opened from the list fills this side panel (only the panel), until its X puts the panel back.
   const helperOpen = usePanel((store) => store.helper !== null)
+  // A report opened from the chat takes the panel's place too, even when the panel was collapsed.
+  const reportOpen = usePanel((store) => store.report !== null)
   const narrow = useNarrow()
 
   return (
     <>
-      {!parked && collapsed ? (
+      {!parked && reportOpen ? (
+        <aside className="panel-w panel-helper" aria-label="Report">
+          <ReportStage />
+        </aside>
+      ) : null}
+      {!parked && !reportOpen && collapsed ? (
         <aside className="panel-w panel-mini" aria-label="The agent's browser panel is collapsed">
           <button
             type="button"
@@ -570,12 +590,12 @@ export function ChatPanel({ parked = false }: { parked?: boolean }): JSX.Element
           </button>
         </aside>
       ) : null}
-      {!parked && !collapsed && helperOpen ? (
+      {!parked && !reportOpen && !collapsed && helperOpen ? (
         <aside className="panel-w panel-helper" aria-label="Helper">
           <HelperStage />
         </aside>
       ) : null}
-      <PanelBody parked={parked || collapsed || helperOpen || narrow} />
+      <PanelBody parked={parked || collapsed || helperOpen || reportOpen || narrow} />
     </>
   )
 }

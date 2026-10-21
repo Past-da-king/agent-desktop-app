@@ -900,6 +900,10 @@ export const mockAgent: AgentApi = {
     async devtools() {
       return undefined
     },
+    async setMuted(on: boolean) {
+      mockBrowser.muted = on
+      notifyBrowser()
+    },
     async setExpanded(on: boolean) {
       mockBrowser.expanded = on
       notifyBrowser()

@@ -30,6 +30,10 @@ interface PanelState {
   helper: string | null
   openHelper: (id: string) => void
   closeHelper: () => void
+  /** A report (its chat row id) open to read in the side panel, in the helper's place. */
+  report: string | null
+  openReport: (id: string) => void
+  closeReport: () => void
 }
 
 export const usePanel = create<PanelState>((set, get) => ({
@@ -43,8 +47,11 @@ export const usePanel = create<PanelState>((set, get) => ({
   },
   toggle: () => get().setCollapsed(!get().collapsed),
   helper: null,
-  openHelper: (id) => set({ helper: id }),
+  openHelper: (id) => set({ helper: id, report: null }),
   closeHelper: () => set({ helper: null }),
+  report: null,
+  openReport: (id) => set({ report: id, helper: null }),
+  closeReport: () => set({ report: null }),
   resetWidth: () => {
     set({ width: PANEL_DEFAULT_WIDTH })
     writePanelPrefs({ width: PANEL_DEFAULT_WIDTH, collapsed: get().collapsed }, prefStore())

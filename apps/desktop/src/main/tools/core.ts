@@ -127,10 +127,10 @@ function reportTool(store: DataStore): Tool {
     spec: {
       name: 'report',
       description:
-        'Put a long answer in a REPORT instead of the chat: research, comparisons, plans, write-ups. It shows as a card the user taps to read full screen, share or save. In the chat you then say only the one-line takeaway.',
+        'Put a long answer in a REPORT instead of the chat: research, comparisons, plans, write-ups. It shows as a card the user taps to read beside the chat, share or save. In the chat you then say only the one-line takeaway. The report is drawn with OpenUI like your chat replies: write the reasoning as markdown and draw its structured parts as ```openui-lang blocks between the paragraphs (a Table for a comparison, a BarChart or LineChart for numbers, Steps for a plan, a Callout for the key finding or risk, a ListBlock of sources with @OpenUrl). A markdown table is drawn as a table card too.',
       schema: schema(['title', 'markdown'], {
         title: str("Short title, e.g. 'Cyber tender readiness'"),
-        markdown: str('The full report in markdown: headings, bullets, tables, links to sources'),
+        markdown: str('The full report: markdown (headings, short paragraphs, [links](https://...) to sources) with ```openui-lang blocks for tables, charts, steps and callouts'),
       }),
     },
     run: async (input) => {

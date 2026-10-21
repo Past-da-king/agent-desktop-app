@@ -253,6 +253,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       needsUser: this.handoffReason !== '',
       handoffReason: this.handoffReason,
       expanded: this.expanded,
+      muted: this.sites.muted(),
+      audible: this.tabs.some((tab) => safeAudible(tab.wc)),
       view: {
         mode: this.currentView.mode,
         label: viewLabel(this.effectiveView()),
@@ -277,6 +279,19 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   setExpanded(on: boolean): void {
     if (this.expanded === on) return
     this.expanded = on
+    this.emit()
+  }
+
+  /** The person's mute: every tab now and every tab opened later, until they turn it back on. */
+  setMuted(on: boolean): void {
+    this.sites.setMuted(on)
+    for (const tab of this.tabs) {
+      try {
+        tab.wc.setAudioMuted(on)
+      } catch {
+        // A tab closing as this runs has nothing left to mute.
+      }
+    }
     this.emit()
   }
 
@@ -1547,6 +1562,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   private wireTab(tab: Tab): void {
     const wc = tab.wc
+    wc.setAudioMuted(this.sites.muted())
+    wc.on('audio-state-changed', () => this.emit())
 
     const guard = (event: Electron.Event, url: string): void => {
       const policy = checkBrowserUrl(url, { personTyped: tab.id === this.personTab })
@@ -1826,6 +1843,14 @@ function safeTitle(wc: WebContents): string {
     return wc.isDestroyed() ? '' : wc.getTitle()
   } catch {
     return ''
+  }
+}
+
+function safeAudible(wc: WebContents): boolean {
+  try {
+    return !wc.isDestroyed() && wc.isCurrentlyAudible()
+  } catch {
+    return false
   }
 }
 
