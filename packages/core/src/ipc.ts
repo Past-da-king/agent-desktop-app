@@ -126,7 +126,7 @@ export interface ProviderInfo {
 // The sync payload is the row minus `id`. Field names are the phone app's Room column names, camelCase.
 // ---------------------------------------------------------------------------------------------------------------
 
-export type EntityName = 'chat_item' | 'turn' | 'memory' | 'goal' | 'task' | 'trigger'
+export type EntityName = 'chat_item' | 'turn' | 'memory' | 'goal' | 'task' | 'trigger' | 'project'
 
 export interface RowBase {
   id: string
@@ -168,6 +168,8 @@ export interface MemoryRow extends RowBase {
   pinned: boolean
   source: 'agent' | 'user'
   updatedAt: number
+  /** The project this memory belongs to (a ProjectRow id); absent for the person's general memory. */
+  project?: string
 }
 
 export interface GoalRow extends RowBase {
@@ -201,6 +203,35 @@ export interface TriggerRow extends RowBase {
   builtin?: string
 }
 
+/** A project's icon, like an app icon: a glyph from the app's icon set or an emoji, on a coloured rounded tile. */
+export interface ProjectIcon {
+  /** An Icon name (renderer/ui/Icon.tsx) or one emoji. */
+  glyph: string
+  color: ProfileColor
+}
+
+/**
+ * A project: its own chats (each its own context, ids starting with "pc"), its own memories (MemoryRow.project), a
+ * folder its agents work in, and the profile whose accounts and sign-ins its helpers use. One main agent runs every
+ * chat; in a project chat it is told which project it is in.
+ */
+export interface ProjectRow extends RowBase {
+  name: string
+  description: string
+  icon: ProjectIcon
+  /** A folder on this computer the project's agents work in by default; '' for none. */
+  path: string
+  /** A profile id (apps/profiles.ts) whose accounts and sign-ins its helpers use; '' for General. */
+  profile: string
+  /** Kept, off the rail; still found by search and the Hidden projects list. */
+  hidden: boolean
+  /** Its chat ids, oldest first. */
+  chats: string[]
+}
+
+/** Where old chats from the days of several chats at once live, so nothing is lost. */
+export const EARLIER_CHATS_PROJECT = 'earlier-chats'
+
 /** The built-in End of day routine: the memory pass that writes "Where we are" and tidies memory. */
 export const MEMORY_DAILY_ROUTINE = 'memory-daily'
 
@@ -211,6 +242,7 @@ export interface EntityMap {
   goal: GoalRow
   task: TaskRow
   trigger: TriggerRow
+  project: ProjectRow
 }
 
 /** What a caller supplies to create or update: everything except what the store fills in. `id` present = update. */

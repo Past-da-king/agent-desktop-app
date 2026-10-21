@@ -24,6 +24,7 @@ const ENTITY_NAMES: readonly EntityName[] = [
   'goal',
   'task',
   'trigger',
+  'project',
 ]
 
 export function isEntityName(value: unknown): value is EntityName {
