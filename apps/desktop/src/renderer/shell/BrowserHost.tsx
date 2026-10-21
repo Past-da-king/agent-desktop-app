@@ -157,6 +157,8 @@ export function BrowserHost({ state, parked }: { state: BrowserState | null; par
       // Set before the element is connected: the partition can never change once the guest exists.
       view.setAttribute('partition', tab.partition ?? '')
       view.setAttribute('src', 'about:blank')
+      // Reached by clicking the page when it is the person's, never by tabbing through the app.
+      view.tabIndex = -1
       // The guest's id can be read once its first (blank) document is ready; hand it over once.
       let handed = false
       const handOver = (): void => {

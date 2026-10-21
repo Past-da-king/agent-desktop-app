@@ -312,7 +312,7 @@ function useNarrow(): boolean {
  * The browser card and the rest of the side panel. It stays mounted for as long as the main window does, because
  * the agent's pages live in it (BrowserHost) and a page ends if its <webview> is ever unmounted or moved. When
  * the panel is not on screen (another page, collapsed, a helper open, a narrow window) it is parked: laid out
- * the same, invisible and inert, while the pages carry on backstage.
+ * the same, invisible and out of reach, while the pages carry on backstage.
  */
 function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
   const settings = useSettings((store) => store.settings)
@@ -326,7 +326,6 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
   const focusComposer = useUi((store) => store.focusComposer)
   const memories = useEntity('memory')
   const state = useBrowserState()
-  const aside = useRef<HTMLElement>(null)
   const drag = useRef<{ x: number; width: number } | null>(null)
 
   const agentName = settings?.agentName.trim() || 'Your agent'
@@ -356,13 +355,6 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
     return () => window.clearInterval(timer)
   }, [offscreen, parked, expanded])
 
-  // A parked panel must not take focus or be read out; React 18 does not know the inert attribute yet.
-  useEffect(() => {
-    const element = aside.current
-    if (element === null) return
-    if (parked) element.setAttribute('inert', '')
-    else element.removeAttribute('inert')
-  }, [parked])
 
   const endDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (drag.current === null) return
@@ -376,12 +368,9 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
   }
 
   return (
-    <aside
-      ref={aside}
-      className={`panel-w${parked ? ' panel-parked' : ''}`}
-      aria-label="The agent's browser"
-      aria-hidden={parked ? true : undefined}
-    >
+    // Parked, the panel is visibility:hidden (so nothing in it takes focus or is read out) except the live page,
+    // which may still be shown full size over the window. `inert` would block that page too, so it is not used.
+    <aside className={`panel-w${parked ? ' panel-parked' : ''}`} aria-label="The agent's browser">
       <div
         className="panel-resize"
         role="separator"
