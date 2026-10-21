@@ -180,6 +180,20 @@ const PATHS = {
     </>
   ),
   stop: <rect x="7" y="7" width="10" height="10" rx="2.5" />,
+  branch: (
+    <>
+      <circle cx="6" cy="5.5" r="2" />
+      <circle cx="6" cy="18.5" r="2" />
+      <circle cx="18" cy="8.5" r="2" />
+      <path d="M6 7.5v9M18 10.5c0 4-6 3.5-11 6.5" />
+    </>
+  ),
+  file: (
+    <>
+      <path d="M14 3.5H7.5A2 2 0 0 0 5.5 5.5v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3.5V8h4.5M9 13h6M9 16.5h4" />
+    </>
+  ),
   bolt: <path d="M13 3 5 13.5h6L10 21l8-10.5h-6z" />,
   code: <path d="m8.5 7.5-4.5 4.5 4.5 4.5M15.5 7.5l4.5 4.5-4.5 4.5M13.5 5l-3 14" />,
   term: (

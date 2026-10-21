@@ -1,3 +1,4 @@
+import { multiChatDemo } from './chats-demo'
 import {
   DEFAULT_SETTINGS,
   type ChatItem,
@@ -554,6 +555,8 @@ export function demoRows(): SeedResult['rows'] {
     ...runsDemo(now),
     // Answers drawn as cards (OpenUI), the way the agent writes them.
     ...openUiDemo(now),
+    // Several chats at once (rail statuses, a message that joined, a job done alongside).
+    ...multiChatDemo(now),
   ]
 
   return {

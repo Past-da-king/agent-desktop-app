@@ -23,6 +23,8 @@ interface DataState {
 }
 
 let subscribed = false
+/** A change that arrived while that list was loading: read it again once the load ends, or the change is missed. */
+const again = new Set<EntityName>()
 
 function subscribeOnce(): void {
   if (subscribed) return
@@ -40,7 +42,10 @@ export const useData = create<DataState>((set, get) => ({
 
   load: async <E extends EntityName>(entity: E) => {
     subscribeOnce()
-    if (get().loading[entity]) return
+    if (get().loading[entity]) {
+      again.add(entity)
+      return
+    }
     set((state) => ({ loading: { ...state.loading, [entity]: true } }))
     try {
       const rows: Array<EntityMap[E]> = await agent.data.list(entity)
@@ -63,6 +68,7 @@ export const useData = create<DataState>((set, get) => ({
         },
       }))
     }
+    if (again.delete(entity)) void get().load(entity)
   },
 }))
 

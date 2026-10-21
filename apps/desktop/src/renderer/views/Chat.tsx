@@ -1,12 +1,17 @@
 import { VoiceNote } from '../voice/VoiceNote'
-import { attachmentProblem, type Attachment, type ChatEvent, type ChatItem } from '@agent/core'
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { attachmentKind, attachmentProblem, fileSizeLabel, type Attachment, type ChatEvent, type ChatItem } from '@agent/core'
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
+import { branchFrom } from '../lib/chat-actions'
+import { chatTitleOf, isSideRun, itemsOfChat, routeLine } from '../lib/chats'
+import { MAIN_CHAT } from '@agent/core'
+import { startChatTracking, useChatRunning, useChats } from '../state/useChats'
+import { CopyButton } from '../ui/CopyButton'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { refreshEntity, useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
@@ -104,14 +109,38 @@ function useThumbnail(file: Attachment): string | null {
   return src
 }
 
+/** What kind of file a chip shows, in a word. */
+function kindWord(file: Attachment): string {
+  const kind = attachmentKind(file.name, file.mime)
+  if (file.mime === 'inode/directory') return 'Folder'
+  if (kind === 'image') return 'Picture'
+  if (kind === 'text') return 'Text'
+  if (kind === 'document') return (file.name.split('.').pop() ?? 'Document').toUpperCase()
+  const ext = file.name.includes('.') ? (file.name.split('.').pop() ?? '') : ''
+  return ext === '' ? 'File' : ext.toUpperCase()
+}
+
+/** A file waiting to be sent: picture or file icon, name, size and kind, and a button that takes it off. */
 function AttachmentChip({ file, onRemove }: { file: Attachment; onRemove: () => void }): JSX.Element {
   const src = useThumbnail(file)
+  const size = file.size === undefined ? '' : fileSizeLabel(file.size)
   return (
-    <button type="button" className="chip on att" onClick={onRemove} aria-label={`Remove ${file.name}`}>
-      {src !== null ? <img className="thumb" src={src} alt="" /> : <Icon name="clip" size={14} />}
-      <span className="att-name">{file.name}</span>
-      <Icon name="x" size={14} />
-    </button>
+    <div className="att-chip" title={file.path}>
+      {src !== null ? (
+        <img className="att-thumb" src={src} alt="" />
+      ) : (
+        <span className="att-icon" aria-hidden="true">
+          <Icon name={file.mime === 'inode/directory' ? 'folder' : 'file'} size={20} />
+        </span>
+      )}
+      <span className="att-text">
+        <span className="att-name">{file.name}</span>
+        <span className="att-meta">{[kindWord(file), size].filter((part) => part !== '').join(', ')}</span>
+      </span>
+      <button type="button" className="att-x" onClick={onRemove} aria-label={`Remove ${file.name}`} title="Remove">
+        <Icon name="x" size={16} />
+      </button>
+    </div>
   )
 }
 
@@ -119,16 +148,17 @@ function MessageAttachment({ file }: { file: Attachment }): JSX.Element {
   const src = useThumbnail(file)
   if (isImageFile(file) && src !== null) {
     return (
-      <div className="u-file">
+      <div className="u-file pic" title={file.path}>
         <img src={src} alt={file.name} />
         <span>{file.name}</span>
       </div>
     )
   }
   return (
-    <div className="u-file plain">
-      <Icon name="clip" size={18} />
+    <div className="u-file plain" title={file.path}>
+      <Icon name={file.mime === 'inode/directory' ? 'folder' : 'file'} size={18} />
       <span>{file.name}</span>
+      {file.size !== undefined ? <span className="u-file-size">{fileSizeLabel(file.size)}</span> : null}
     </div>
   )
 }
@@ -457,8 +487,33 @@ function ReportRow({ item, onOpen }: { item: ChatItem; onOpen: (item: ChatItem) 
   )
 }
 
+/** Copy and Branch from here, under a message. */
+function MessageActions({ item, align }: { item: ChatItem; align: 'start' | 'end' }): JSX.Element {
+  const [branching, setBranching] = useState(false)
+  return (
+    <div className={`msg-acts ${align}`}>
+      {item.text.trim() !== '' ? <CopyButton text={item.text} /> : null}
+      <button
+        type="button"
+        className="copy-btn"
+        disabled={branching}
+        title="A new chat with everything up to here. This chat stays as it is."
+        onClick={() => {
+          setBranching(true)
+          void branchFrom(item.id).finally(() => setBranching(false))
+        }}
+      >
+        <Icon name="branch" size={16} />
+        <span>{branching ? 'Branching' : 'Branch from here'}</span>
+      </button>
+    </div>
+  )
+}
+
 function UserRow({ item }: { item: ChatItem }): JSX.Element {
   const files = attachmentsFromMeta(parseMeta(item.meta)['attachments'])
+  const route = routeLine(item)
+  const pending = parseMeta(item.meta)['route'] === 'pending'
   return (
     <div className="u-row">
       {item.text !== '' ? <div className="u-msg">{item.text}</div> : null}
@@ -469,7 +524,92 @@ function UserRow({ item }: { item: ChatItem }): JSX.Element {
           ))}
         </div>
       ) : null}
+      {route !== '' ? (
+        <div className={`u-route${pending ? ' pending' : ''}`} role="status">
+          <Icon name={pending ? 'clock' : parseMeta(item.meta)['route'] === 'join' ? 'check' : 'branch'} size={14} />
+          {route}
+        </div>
+      ) : null}
+      <MessageActions item={item} align="end" />
     </div>
+  )
+}
+
+/**
+ * A different job sent while the chat was busy, done as its own run. While it works it shows its latest step;
+ * when it is done it shows a short summary, and opens to the full transcript (what was asked, every step, the
+ * whole result).
+ */
+function SideRunRow({ helper, asked }: { helper: HelperView; asked: string }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [stopping, setStopping] = useState(false)
+  const live = helper.state === 'working'
+  const done = helper.state === 'done'
+  const label = live ? (helper.queued ? 'Waiting its turn' : 'Working') : done ? 'Done' : helper.state === 'failed' ? 'Failed' : 'Stopped'
+  const tone = live ? 'pri' : done ? 'ok' : 'warn'
+  const result = helper.result.trim()
+  const lines = result.split('\n').filter((line) => line.trim() !== '')
+  const preview = lines.slice(0, 4).join('\n')
+  const bodyId = `side-${helper.id.replace(/[^a-zA-Z0-9_-]/g, '')}`
+  return (
+    <section className={`side-run ${helper.state}`} aria-label={`Separate job: ${asked || helper.label}`}>
+      <div className="side-top">
+        <span className={`side-i${live ? ' work' : ''}`}>
+          <Icon name={live ? 'branch' : done ? 'check' : helper.state === 'failed' ? 'x' : 'stop'} size={18} />
+        </span>
+        <div className="side-head">
+          <span className="eyebrow">{live ? 'RUNNING ALONGSIDE' : 'DONE ALONGSIDE'}</span>
+          <b>{asked === '' ? helper.label : asked}</b>
+        </div>
+        <Pill tone={tone}>{label}</Pill>
+      </div>
+      {live ? (
+        <div className="side-now">{helper.summary || 'Thinking'}</div>
+      ) : result !== '' ? (
+        <div className="side-sum">
+          <Markdown text={open || lines.length <= 4 ? result : `${preview}...`} />
+        </div>
+      ) : (
+        <div className="side-now">{helper.summary || label}</div>
+      )}
+      <div className="side-acts">
+        <button type="button" className="copy-btn" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((value) => !value)}>
+          <Icon name={open ? 'chevd' : 'chev'} size={16} />
+          <span>{open ? 'Hide what it did' : `Show what it did (${helper.activity.length} ${helper.activity.length === 1 ? 'step' : 'steps'})`}</span>
+        </button>
+        {result !== '' && !live ? <CopyButton text={result} label="Copy summary" /> : null}
+        {live ? (
+          <button
+            type="button"
+            className="copy-btn"
+            disabled={stopping}
+            onClick={() => {
+              setStopping(true)
+              void agent.helpers.stop(helper.id).catch(() => setStopping(false))
+            }}
+          >
+            <Icon name="stop" size={16} />
+            <span>Stop this job</span>
+          </button>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="side-body" id={bodyId}>
+          <div className="side-label">What it was asked</div>
+          <div className="hbrief">{asked === '' ? helper.brief : asked}</div>
+          <div className="side-label">Steps</div>
+          {helper.activity.length === 0 ? (
+            <div className="hbrief">No steps yet.</div>
+          ) : (
+            <div className="hacts">
+              {helper.activity.map((activity) => (
+                <ActivityRow key={activity.id} item={activity} />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </section>
   )
 }
 
@@ -561,6 +701,7 @@ function renderItem(
       return visual === null ? (
         <div className="a-msg-wrap">
           <AgentMessage item={item} />
+          <MessageActions item={item} align="start" />
         </div>
       ) : (
         <div className="a-msg">
@@ -579,6 +720,10 @@ function renderItem(
     case 'approval':
       return <ApprovalRow item={item} />
     case 'helper':
+      if (isSideRun(item)) {
+        const ask = metaText(parseMeta(item.meta), 'ask')
+        return <SideRunRow helper={helperView(item, items)} asked={items.find((row) => row.id === ask)?.text ?? ''} />
+      }
       return <HelperRow helper={helperView(item, items)} />
     case 'report':
       return <ReportRow item={item} onOpen={onOpenReport} />
@@ -595,18 +740,59 @@ function renderItem(
   }
 }
 
+/** Pasted text longer than this goes along as a text file instead of filling the composer (and the message limit). */
+const LONG_PASTE_CHARS = 12_000
+
+/** Where a pasted or dropped File object without a path on disk ends up: saved by the main process first. */
+async function saveFileObject(file: File): Promise<Attachment> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const type = file.type === '' ? 'application/octet-stream' : file.type
+  const name = file.name !== '' && file.name !== 'image.png' ? file.name : `Pasted ${type.startsWith('image/') ? 'image' : 'file'} ${new Date().toTimeString().slice(0, 8).replace(/:/g, '.')}${type === 'image/png' ? '.png' : ''}`
+  return agent.files.savePasted(name, type, bytes)
+}
+
+/**
+ * Turn File objects (from a paste or a drop) into attachments: a file with a real path attaches by path, one
+ * without (a screenshot, an image copied from a page) is saved first. Too-big files are named in `problems`.
+ */
+async function filesToAttachments(files: File[]): Promise<{ allowed: Attachment[]; problems: string[] }> {
+  const allowed: Attachment[] = []
+  const problems: string[] = []
+  for (const file of files) {
+    const problem = attachmentProblem(file.name || 'That file', file.size)
+    if (problem !== null) {
+      problems.push(problem)
+      continue
+    }
+    const path = agent.files.pathsFor([file])[0] ?? ''
+    if (path !== '') {
+      allowed.push({ path, name: file.name, mime: file.type === '' ? 'application/octet-stream' : file.type, size: file.size })
+      continue
+    }
+    try {
+      allowed.push(await saveFileObject(file))
+    } catch (error) {
+      problems.push(error instanceof Error && error.message !== '' ? error.message : `${file.name || 'That file'} could not be attached.`)
+    }
+  }
+  return { allowed, problems }
+}
+
 export function Chat(): JSX.Element {
   const settings = useSettings((state) => state.settings)
-  const items = useEntity('chat_item')
+  const allItems = useEntity('chat_item')
   const loaded = useEntityLoaded('chat_item')
   const focusToken = useUi((state) => state.composerFocus)
   const scrollToken = useUi((state) => state.chatScroll)
-  const waiting = useWaiting()
+  const openChat = useChats((state) => state.open)
+  const markSeen = useChats((state) => state.markSeen)
+  const allWaiting = useWaiting()
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [attachProblem, setAttachProblem] = useState('')
   const [dragging, setDragging] = useState(false)
-  const [running, setRunning] = useState(false)
+  const [reading, setReading] = useState(false)
+  const running = useChatRunning(openChat)
   const [reader, setReader] = useState<ChatItem | null>(null)
   const thread = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -614,16 +800,26 @@ export function Chat(): JSX.Element {
   const dragDepth = useRef(0)
 
   const [showEarlier, setShowEarlier] = useState(false)
-  const all = useMemo(() => threadItems(items), [items])
-  // New chat clears the screen: older chats stay in the history, one tap away (views/ChatDivider.tsx).
+  // Only this chat's rows: every other chat keeps running on its own and shows in the rail.
+  const items = useMemo(() => itemsOfChat(allItems, openChat), [allItems, openChat])
+  const all = useMemo(
+    () => [...threadItems(items), ...items.filter(isSideRun)].sort((a, b) => a.createdAt - b.createdAt),
+    [items],
+  )
+  // New chat clears the screen: older stretches of this chat stay in the history, one tap away (views/ChatDivider.tsx).
   const shown = useMemo(() => visibleThread(all, showEarlier), [all, showEarlier])
   const messages = shown.rows
   const segments = useMemo(() => segmentsOf(messages), [messages])
-  const title = threadTitle(items)
+  // The same name the rail shows for it.
+  const title = chatTitleOf(items)
   const cards = openCards(items, true)
+  const chatIds = useMemo(() => new Set(items.map((item) => item.id)), [items])
+  const waiting = allWaiting.filter((item) => chatIds.has(item.id))
   const needsYou = waiting.length > 0 || cards.length > 0
   const agentName = settings?.agentName.trim() || 'Your agent'
   const startCall = useCall((state) => state.start)
+
+  useEffect(() => startChatTracking(), [])
 
   useEffect(() => {
     // The browser preview can open straight into a call (?demo=1&call=1), so the call view can be screenshotted.
@@ -631,23 +827,23 @@ export function Chat(): JSX.Element {
   }, [startCall])
 
   useEffect(() => {
-    let alive = true
-    void chat.state().then((state) => {
-      if (alive) setRunning(state.running)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  useEffect(() => {
     const off = chat.onEvent((event: ChatEvent) => {
-      if (event.type === 'run_started' || event.type === 'thinking') setRunning(true)
-      if (event.type === 'run_finished') setRunning(false)
       if (event.type === 'chat_changed' || event.type === 'needs_you') refreshEntity('chat_item')
     })
     return off
   }, [])
+
+  // Opening a chat (or reading the one on screen) marks it read, and starts at its newest message.
+  useEffect(() => {
+    setShowEarlier(false)
+  }, [openChat, scrollToken])
+
+  useEffect(() => {
+    markSeen(openChat)
+    stuck.current = true
+    const el = thread.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [openChat, items.length, markSeen])
 
   useEffect(() => {
     const el = thread.current
@@ -689,7 +885,7 @@ export function Chat(): JSX.Element {
     setText('')
     setAttachments([])
     setAttachProblem('')
-    void chat.send(value, attachments)
+    void chat.send(value, attachments, openChat)
   }
 
   const accept = (incoming: Attachment[]): void => {
@@ -714,6 +910,66 @@ export function Chat(): JSX.Element {
       setAttachProblem(problems[0] ?? '')
     } catch (error) {
       setAttachProblem(error instanceof Error ? error.message : 'Could not open the file picker.')
+    }
+  }
+
+  /** Files from a paste or a drop: attach them, and say plainly if one could not be. */
+  const takeFiles = async (files: File[]): Promise<void> => {
+    setReading(true)
+    try {
+      const { allowed, problems } = await filesToAttachments(files)
+      accept(allowed)
+      setAttachProblem(problems[0] ?? '')
+    } finally {
+      setReading(false)
+    }
+  }
+
+  /**
+   * Ctrl+V. Files (copied in Explorer, or a screenshot) become chips; plain text pastes as text, unless it is
+   * very long, then it goes along as a text file. When the paste brings neither (some Explorer copies reach
+   * the window with no File objects), the main process reads the files off the system clipboard.
+   */
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    const data = event.clipboardData
+    const files = Array.from(data.files)
+    const plain = data.getData('text/plain')
+    const html = data.getData('text/html')
+    const onlyPictures = files.length > 0 && files.every((file) => file.type.startsWith('image/'))
+    // A copied spreadsheet range or web text also carries a picture of itself: the words are what was meant.
+    if (plain.trim() !== '' && (files.length === 0 || onlyPictures)) {
+      if (plain.length <= LONG_PASTE_CHARS) return
+      event.preventDefault()
+      const bytes = new TextEncoder().encode(plain)
+      setReading(true)
+      void agent.files
+        .savePasted('Pasted text.txt', 'text/plain', bytes)
+        .then((saved) => {
+          accept([saved])
+          setAttachProblem('')
+        })
+        .catch(() => setAttachProblem('That text is too long to paste. Save it as a file and attach it.'))
+        .finally(() => setReading(false))
+      return
+    }
+    if (files.length > 0) {
+      event.preventDefault()
+      void takeFiles(files)
+      return
+    }
+    if (plain.trim() === '' && html.trim() === '') {
+      event.preventDefault()
+      setReading(true)
+      void agent.files
+        .clipboardFiles()
+        .then((found) => {
+          const allowed = found.filter((file) => file.size === undefined || attachmentProblem(file.name, file.size) === null)
+          const tooBig = found.find((file) => file.size !== undefined && attachmentProblem(file.name, file.size) !== null)
+          accept(allowed)
+          setAttachProblem(tooBig !== undefined && tooBig.size !== undefined ? (attachmentProblem(tooBig.name, tooBig.size) ?? '') : '')
+        })
+        .catch(() => setAttachProblem('Nothing on the clipboard could be attached.'))
+        .finally(() => setReading(false))
     }
   }
 
@@ -748,29 +1004,9 @@ export function Chat(): JSX.Element {
     event.preventDefault()
     dragDepth.current = 0
     setDragging(false)
-
     const dropped = Array.from(event.dataTransfer.files)
     if (dropped.length === 0) return
-    const paths = agent.files.pathsFor(dropped)
-    const problems: string[] = []
-    const allowed: Attachment[] = []
-    dropped.forEach((file, index) => {
-      const problem = attachmentProblem(file.name, file.size)
-      if (problem !== null) {
-        problems.push(problem)
-        return
-      }
-      const path = paths[index]
-      if (path === undefined || path === '') return
-      allowed.push({
-        path,
-        name: file.name,
-        mime: file.type === '' ? 'application/octet-stream' : file.type,
-        size: file.size,
-      })
-    })
-    accept(allowed)
-    setAttachProblem(problems[0] ?? '')
+    void takeFiles(dropped)
   }
 
   return (
@@ -821,7 +1057,7 @@ export function Chat(): JSX.Element {
             <EmptyState
               mascot={settings?.mascot ?? 'scout'}
               title={`Say something to ${agentName}`}
-              line="Ask a question, give it a job, or paste a link. Anything that spends money or changes a file asks first."
+              line="Ask a question, give it a job, or paste a link, a screenshot or a file. Anything that spends money or changes a file asks first."
               action={
                 <Button
                   variant="tonal"
@@ -868,8 +1104,8 @@ export function Chat(): JSX.Element {
             {attachProblem}
           </div>
         ) : null}
-        {attachments.length > 0 ? (
-          <div className="attach-row">
+        {attachments.length > 0 || reading ? (
+          <div className="attach-row" aria-label="Files to send">
             {attachments.map((file) => (
               <AttachmentChip
                 key={file.path}
@@ -879,6 +1115,16 @@ export function Chat(): JSX.Element {
                 }}
               />
             ))}
+            {reading ? (
+              <div className="att-chip reading" role="status">
+                <span className="att-icon" aria-hidden="true">
+                  <Icon name="clip" size={20} />
+                </span>
+                <span className="att-text">
+                  <span className="att-name">Adding files</span>
+                </span>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="compose-in">
@@ -893,10 +1139,11 @@ export function Chat(): JSX.Element {
           <textarea
             ref={composer}
             rows={1}
-            placeholder="Ask anything"
+            placeholder={running ? 'Add to this, or ask for something else' : 'Ask anything'}
             aria-label="Message"
             value={text}
             onChange={(event) => setText(event.target.value)}
+            onPaste={onPaste}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault()
@@ -915,13 +1162,14 @@ export function Chat(): JSX.Element {
               else toast(message, { actionLabel: action.label, onAction: action.run })
             }}
           />
-          {running ? (
+          {running && text.trim() === '' && attachments.length === 0 ? (
             <button
               type="button"
               className="send"
               aria-label="Stop"
+              title="Stop this chat's work"
               onClick={() => {
-                void chat.stop()
+                void chat.stop(openChat)
               }}
             >
               <Icon name="stop" size={22} />
@@ -931,7 +1179,8 @@ export function Chat(): JSX.Element {
               type="button"
               className="send"
               onClick={send}
-              aria-label="Send"
+              aria-label={running ? 'Send while it works' : 'Send'}
+              title={running ? 'Send. About this job, it joins in; something else, it runs alongside.' : 'Send'}
               disabled={text.trim() === '' && attachments.length === 0}
             >
               <Icon name="arrow" size={22} />
@@ -946,7 +1195,7 @@ export function Chat(): JSX.Element {
             <Kbd>Shift</Kbd> <Kbd>Enter</Kbd> new line
           </span>
           <span>
-            <Kbd>Ctrl</Kbd> <Kbd>V</Kbd> paste an image
+            <Kbd>Ctrl</Kbd> <Kbd>V</Kbd> paste files or pictures
           </span>
         </div>
       </div>
@@ -964,6 +1213,7 @@ export function Chat(): JSX.Element {
             <Markdown text={report.markdown} />
           </div>
           <div className="dialog-actions">
+            <CopyButton text={report.markdown} label="Copy report" />
             <Button onClick={() => setReader(null)}>Close</Button>
           </div>
         </Dialog>
@@ -977,7 +1227,7 @@ export function Chat(): JSX.Element {
             <Icon name="clip" size={28} />
           </span>
           <div className="drop-t">Drop to attach</div>
-          <div className="drop-s">Images show as thumbnails. Files up to 20 MB.</div>
+          <div className="drop-s">Pictures, documents, code, zips, anything up to 20 MB.</div>
         </div>
       ) : null}
     </div>

@@ -50,7 +50,8 @@ export class MemoryService {
    * A fresh chat at once. The chat before it stays in the history and leaves the model's context (the runner reads
    * turns after the newest divider only). If it had substance it is filed into memory in the background.
    */
-  async newChat(): Promise<{ dividerId: string | null; saving: boolean }> {
+  async newChat(target?: { chat: string; from: string }): Promise<{ dividerId: string | null; saving: boolean }> {
+    if (target !== undefined && target.chat !== target.from) return this.newSeparateChat(target.chat, target.from)
     const items = await this.deps.store.list('chat_item')
     const latest = items.filter((item) => item.kind !== 'branch').sort((a, b) => b.createdAt - a.createdAt)[0]
     if (latest !== undefined && isDividerRow(latest)) return { dividerId: latest.id, saving: false }
@@ -66,6 +67,29 @@ export class MemoryService {
     } catch {
       // Losing the session id only means the next turn starts a fresh conversation, which is what we want.
     }
+    this.deps.emitChat?.()
+    if (saving) this.enqueue(divider.id)
+    return { dividerId: divider.id, saving }
+  }
+
+  /**
+   * Several chats at once: New chat opened `chat`, a fresh chat of its own, and left `from`, which keeps running and
+   * keeps its context. The new chat starts with a divider that files what `from` said so far into memory in the
+   * background, and shows the note ("Saved 3 memories from the last chat") where the person is now looking.
+   */
+  private async newSeparateChat(chat: string, from: string): Promise<{ dividerId: string | null; saving: boolean }> {
+    const items = await this.deps.store.list('chat_item')
+    const already = items.find((item) => isDividerRow(item) && chatOf(item) === chat)
+    if (already !== undefined) return { dividerId: already.id, saving: false }
+    const closing = chatSegments(items)
+      .filter((segment) => segment.chat === from)
+      .at(-1)
+    // A stretch already filed once is not filed again.
+    const filed = closing !== undefined && items.some((item) => isDividerRow(item) && memoryNote(item)?.chat === closing.id)
+    const saving = closing !== undefined && !filed && hasSubstance(closing)
+    const meta: Record<string, unknown> = { divider: true, at: this.now(), ...(chat === 'main' ? {} : { chat }) }
+    if (saving && closing !== undefined) meta['memory'] = { chat: closing.id, status: 'saving' } satisfies ChatMemoryNote
+    const divider = await this.deps.store.upsert('chat_item', { kind: 'notice', text: 'New chat', meta: JSON.stringify(meta) })
     this.deps.emitChat?.()
     if (saving) this.enqueue(divider.id)
     return { dividerId: divider.id, saving }
@@ -229,4 +253,10 @@ export class MemoryService {
 function plainError(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error)
   return text.trim() === '' ? 'Something went wrong.' : text.split('\n')[0]?.slice(0, 200) ?? text
+}
+
+/** The chat a row belongs to: `meta.chat`, else the first chat ('main'). */
+function chatOf(item: ChatItem): string {
+  const value = parseMeta(item.meta)['chat']
+  return typeof value === 'string' && value !== '' ? value : 'main'
 }

@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   AgentLoop,
+  MAIN_CHAT,
   PROVIDERS,
   msgFromJson,
   msgToJson,
@@ -60,8 +61,27 @@ export interface ProfileLookup {
 }
 
 /** What the main agent's tools need from the manager. */
+/** Where a helper was started from: the chat its result and cards go back to. */
+export interface HelperOrigin {
+  chat?: string
+}
+
+/** A different job the person sent while a chat was busy: it runs on its own and leaves a summary block. */
+export interface AlongsideJob {
+  chat: string
+  /** The person's message as the model should read it (attached file text included). */
+  text: string
+  images: string[]
+  /** What the chat was busy with, so the run knows not to touch it. */
+  goal: string
+  /** The person's chat row this run answers. */
+  userItem: string
+}
+
 export interface HelperHost {
-  delegate(tasks: HelperTask[], together?: boolean): Promise<string>
+  delegate(tasks: HelperTask[], together?: boolean, origin?: HelperOrigin): Promise<string>
+  /** Start a separate run for a different job sent while a chat was busy. The helper id, or null when none can start. */
+  alongside?(job: AlongsideJob): Promise<string | null>
   steer(id: string, message: string): Promise<string>
   push(id: string, message: string): Promise<string>
   status(): Promise<string>
@@ -84,6 +104,10 @@ export interface HelperLive {
   startedAt: number
   /** The name of the profile it works in. */
   profile?: string
+  /** The chat it was started from (absent for the first chat). */
+  chat?: string
+  /** True for a separate run started from a message sent while the chat was busy. */
+  side?: boolean
 }
 
 export interface HelperManagerDeps {
@@ -93,8 +117,10 @@ export interface HelperManagerDeps {
   providerFactory: ProviderFactory
   /** Everything that acts: the worker toolset, without delegate and helper_*. */
   workerTools: Tool[]
-  /** A finished helper's result, handed to the main agent as a new turn. */
-  deliver: (text: string) => Promise<void> | void
+  /** A finished helper's result, handed to the main agent of the chat that started it as a new turn. */
+  deliver: (text: string, chat?: string) => Promise<void> | void
+  /** A separate run (alongside) finished: its summary block is in the chat; the chat's agent hears it next turn. */
+  alongsideDone?: (chat: string, helperId: string) => Promise<void> | void
   /** `process.platform`, so the helper prompt names the computer's system. */
   platform?: string
   timeZone?: string
@@ -132,6 +158,12 @@ interface HelperRun {
   initialHistory: Msg[] | null
   /** On a plan: the message a pushed helper carries on with (its SDK session holds the history). */
   pushMessage?: string
+  /** The chat it belongs to. */
+  chat: string
+  /** A separate run for a message sent while the chat was busy: its result is a summary block, not a new turn. */
+  side?: boolean
+  /** Pictures for its first message. */
+  images?: string[]
 }
 
 interface Batch {
@@ -157,7 +189,8 @@ export class HelperManager implements HelperHost {
   private readonly profiles: ProfileLookup | null
   private readonly learnedNames: () => Record<string, string>
   private readonly workerTools: Tool[]
-  private readonly deliver: (text: string) => Promise<void> | void
+  private readonly deliver: (text: string, chat?: string) => Promise<void> | void
+  private readonly alongsideDone: (chat: string, helperId: string) => Promise<void> | void
   private readonly platform: string
   private readonly timeZone: string | undefined
   private readonly now: () => number
@@ -189,6 +222,7 @@ export class HelperManager implements HelperHost {
     this.learnedNames = deps.learnedNames ?? (() => ({}))
     this.workerTools = deps.workerTools
     this.deliver = deps.deliver
+    this.alongsideDone = deps.alongsideDone ?? (() => undefined)
     this.platform = deps.platform ?? process.platform
     this.timeZone = deps.timeZone
     this.now = deps.now ?? Date.now
@@ -200,7 +234,8 @@ export class HelperManager implements HelperHost {
 
   // ---- the main agent's side ---------------------------------------------------------------
 
-  async delegate(tasks: HelperTask[], together = false): Promise<string> {
+  async delegate(tasks: HelperTask[], together = false, origin: HelperOrigin = {}): Promise<string> {
+    const chat = origin.chat ?? MAIN_CHAT
     // On the person's plan every helper is its own SDK session: no API key or provider is needed.
     const ready = this.onPlan() ? { model: this.settings.get().cliModel.trim() } : this.ready()
     if (typeof ready === 'string') return ready
@@ -228,8 +263,9 @@ export class HelperManager implements HelperHost {
     for (const [index, task] of clean.entries()) {
       const label = (task.label.trim() || labelFromBrief(task.brief)).slice(0, 40)
       const profile = chosen[index] ?? this.generalProfile()
-      const id = await this.createHelperRow(label, task.brief, ready.model, batch, profile)
+      const id = await this.createHelperRow(label, task.brief, ready.model, batch, profile, chat)
       this.runs.set(id, {
+        chat,
         id,
         label,
         profileId: profile.id,
@@ -285,10 +321,14 @@ export class HelperManager implements HelperHost {
 
     const meta = parseMeta(row.meta)
     const label = stringField(meta['label']) || 'Helper'
+    const chat = stringField(meta['chat']) || MAIN_CHAT
+    const side = meta['side'] === true
     const pushes = numberField(meta['pushes']) + 1
     if (this.onPlan()) {
       await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now() })
       this.runs.set(id, {
+        chat,
+        side,
         id,
         label,
         profileId: this.profileIdFrom(meta),
@@ -317,6 +357,8 @@ export class HelperManager implements HelperHost {
       startedAt: this.now(),
     })
     this.runs.set(id, {
+      chat,
+      side,
       id,
       label,
       profileId: this.profileIdFrom(meta),
@@ -420,7 +462,44 @@ export class HelperManager implements HelperHost {
         state: 'working',
         startedAt: run.startedAt,
         profile: this.profiles?.find(run.profileId)?.name ?? this.generalProfile().name,
+        ...(run.chat === MAIN_CHAT ? {} : { chat: run.chat }),
+        ...(run.side === true ? { side: true } : {}),
       }))
+  }
+
+  /**
+   * A different job the person sent while the chat was busy, as its own run. It uses the helper machinery (its
+   * own loop, transcript, cards and Stop), but its result is not handed to the chat's agent as a new turn: the
+   * helper row itself is the summary block in the chat, and the chat's agent hears about it on its next turn.
+   */
+  async alongside(job: AlongsideJob): Promise<string | null> {
+    const ready = this.onPlan() ? { model: this.settings.get().cliModel.trim() } : this.ready()
+    if (typeof ready === 'string') return null
+    const brief = job.text
+    const label = labelFromBrief(job.text.split('\n').filter((line) => !line.startsWith('[')).join(' ') || job.text).slice(0, 40)
+    const profile = this.generalProfile()
+    const id = await this.createHelperRow(label, brief, ready.model, null, profile, job.chat, {
+      side: true,
+      ask: job.userItem,
+      goal: clip(job.goal, 200),
+    })
+    this.runs.set(id, {
+      chat: job.chat,
+      side: true,
+      images: job.images,
+      id,
+      label,
+      profileId: profile.id,
+      brief,
+      model: this.modelFor(ready.model, undefined),
+      pushes: 0,
+      startedAt: this.now(),
+      controller: null,
+      initialHistory: null,
+    })
+    this.queue.push(id)
+    this.pump()
+    return id
   }
 
   // ---- cards -------------------------------------------------------------------------------
@@ -512,7 +591,7 @@ export class HelperManager implements HelperHost {
     const controller = new AbortController()
     run.controller = controller
     const starting = run.initialHistory
-    const history: Msg[] = starting ?? [userMsg(run.brief)]
+    const history: Msg[] = starting ?? [userMsg(run.brief, run.images ?? [])]
     if (starting === null) await this.appendTurn(run.id, history[0] as Msg)
     await this.updateMeta(run.id, { state: 'working', summary: 'Thinking', queued: false })
 
@@ -576,17 +655,26 @@ export class HelperManager implements HelperHost {
       return
     }
 
+    if (run.side === true) {
+      try {
+        await this.alongsideDone(run.chat, run.id)
+      } catch {
+        // The summary block is already in the chat; the agent hearing about it is a nicety.
+      }
+      return
+    }
+
     const note = this.resultNote(run, state, result)
     const batch = this.batchOf.get(run.id)
     if (batch === undefined) {
-      await this.handOver(note)
+      await this.handOver(note, run.chat)
       return
     }
 
     this.batchOf.delete(run.id)
     const group = this.batches.get(batch)
     if (group === undefined) {
-      await this.handOver(note)
+      await this.handOver(note, run.chat)
       return
     }
     group.results.set(run.id, note)
@@ -596,13 +684,14 @@ export class HelperManager implements HelperHost {
     const all = [...group.results.values()]
     await this.handOver(
       `[Helpers finished: all ${all.length} you started together are done. Give the user ONE packed answer.]\n\n${all.join('\n\n')}`,
+      run.chat,
     )
   }
 
   /** A delivery failing must not take the manager down with it. */
-  private async handOver(note: string): Promise<void> {
+  private async handOver(note: string, chat: string = MAIN_CHAT): Promise<void> {
     try {
-      await this.deliver(note)
+      await this.deliver(note, chat)
     } catch {
       // The result is already saved on the helper's card; the person can read it there.
     }
@@ -655,6 +744,7 @@ export class HelperManager implements HelperHost {
             ...(started === null ? {} : { run: started }),
             helper: run.id,
             by: run.label,
+            ...chatTag(run.chat),
           }),
         })
         await this.updateMeta(run.id, { summary })
@@ -681,6 +771,7 @@ export class HelperManager implements HelperHost {
               summary,
               helper: run.id,
               by: run.label,
+              ...chatTag(run.chat),
               ...(record === null ? {} : { run: record }),
             }),
           })
@@ -710,6 +801,7 @@ export class HelperManager implements HelperHost {
     return {
       agentLabel: run.label,
       owner: `helper:${run.id}`,
+      chat: run.chat,
       profile: run.profileId,
       activity: async (text, meta) => {
         const id = ++this.activitySeq
@@ -721,6 +813,7 @@ export class HelperManager implements HelperHost {
             status: 'running',
             helper: run.id,
             by: run.label,
+            ...chatTag(run.chat),
           }),
         })
         this.activityIds.set(id, row.id)
@@ -739,6 +832,7 @@ export class HelperManager implements HelperHost {
             status: 'done',
             helper: run.id,
             by: run.label,
+            ...chatTag(run.chat),
           }),
         })
         this.emit({ type: 'chat_changed' })
@@ -771,6 +865,7 @@ export class HelperManager implements HelperHost {
         answer: '',
         helper: run.id,
         by: run.label,
+        ...chatTag(run.chat),
       }),
     })
     return new Promise<string | null>((resolve) => {
@@ -789,8 +884,8 @@ export class HelperManager implements HelperHost {
       }
       this.askWaiters.set(row.id, finish)
       signal.addEventListener('abort', onAbort, { once: true })
-      this.emit({ type: 'chat_changed' })
-      this.emit({ type: 'needs_you', itemId: row.id })
+      this.emit({ type: 'chat_changed', ...chatTag(run.chat) })
+      this.emit({ type: 'needs_you', itemId: row.id, ...chatTag(run.chat) })
     })
   }
 
@@ -811,6 +906,7 @@ export class HelperManager implements HelperHost {
         ...(scope === undefined ? {} : { scope }),
         helper: run.id,
         by: run.label,
+        ...chatTag(run.chat),
       }),
     })
     return new Promise<boolean>((resolve) => {
@@ -829,16 +925,17 @@ export class HelperManager implements HelperHost {
       }
       this.decisionWaiters.set(row.id, finish)
       signal.addEventListener('abort', onAbort, { once: true })
-      this.emit({ type: 'chat_changed' })
-      this.emit({ type: 'needs_you', itemId: row.id })
+      this.emit({ type: 'chat_changed', ...chatTag(run.chat) })
+      this.emit({ type: 'needs_you', itemId: row.id, ...chatTag(run.chat) })
     })
   }
 
   private async addActivity(helperId: string, label: string, text: string): Promise<void> {
+    const chat = this.runs.get(helperId)?.chat ?? MAIN_CHAT
     await this.store.upsert('chat_item', {
       kind: 'activity',
       text,
-      meta: JSON.stringify({ tool: 'agent', by: label, helper: helperId, status: 'done', summary: text }),
+      meta: JSON.stringify({ tool: 'agent', by: label, helper: helperId, status: 'done', summary: text, ...chatTag(chat) }),
     })
     this.emit({ type: 'chat_changed' })
   }
@@ -851,6 +948,8 @@ export class HelperManager implements HelperHost {
     model: string,
     batch: string | null,
     profile: AgentProfileInfo,
+    chat: string = MAIN_CHAT,
+    extra: Record<string, unknown> = {},
   ): Promise<string> {
     const row = await this.store.upsert('chat_item', {
       kind: 'helper',
@@ -867,6 +966,8 @@ export class HelperManager implements HelperHost {
         profileId: profile.id,
         profileColor: profile.color,
         ...(batch === null ? {} : { batch }),
+        ...chatTag(chat),
+        ...extra,
       }),
     })
     await this.updateMeta(row.id, { id: row.id })
@@ -974,6 +1075,7 @@ export class HelperManager implements HelperHost {
         tools: this.workerTools,
         system: await this.buildHelperPrompt(run),
         prompt: run.pushMessage ?? run.brief,
+        ...(run.pushMessage === undefined && (run.images ?? []).length > 0 ? { images: run.images } : {}),
         ...(current.cliModel.trim() === '' ? {} : { model: current.cliModel.trim() }),
         context: this.context(run, controller.signal),
         signal: controller.signal,
@@ -1046,6 +1148,11 @@ export class HelperManager implements HelperHost {
 // ---------------------------------------------------------------------------------------------------------------
 // Small shapes
 // ---------------------------------------------------------------------------------------------------------------
+
+/** The chat field a row carries: nothing for the first chat, so its rows look as they always did. */
+function chatTag(chat: string): { chat?: string } {
+  return chat === MAIN_CHAT ? {} : { chat }
+}
 
 function labelFromBrief(brief: string): string {
   const first = brief.trim().split(/\s+/).slice(0, 4).join(' ')
