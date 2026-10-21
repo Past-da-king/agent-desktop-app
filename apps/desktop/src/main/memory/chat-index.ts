@@ -53,7 +53,8 @@ export class ChatIndex {
   readonly fts: boolean
   private readonly db: DatabaseSync
 
-  constructor(file: string) {
+  /** `useFts: false` forces the plain fallback (tests prove it works on a build without FTS5). */
+  constructor(file: string, options: { useFts?: boolean } = {}) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
     this.db = new DatabaseSync(file)
     this.db.exec('PRAGMA journal_mode = WAL')
@@ -64,8 +65,8 @@ export class ChatIndex {
       CREATE TABLE IF NOT EXISTS chat(rid INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT UNIQUE NOT NULL, title TEXT NOT NULL,
         summary TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL, hash TEXT NOT NULL);
     `)
-    let fts = true
-    try {
+    let fts = options.useFts !== false
+    if (fts) try {
       this.db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS msg_fts USING fts5(text, tokenize = 'porter unicode61');
         CREATE VIRTUAL TABLE IF NOT EXISTS chat_fts USING fts5(title, summary, tokenize = 'porter unicode61');

@@ -31,7 +31,7 @@ const RULES: Rule[] = [
     label: 'labelled-secret',
     // "password: hunter2", "api_key=abc...", "client secret is xyz", "token -> abc": keep the label, drop the value.
     pattern:
-      /\b((?:pass(?:word|wd|code)?|pwd|pin|api[ _-]?key|secret(?:[ _-]?key)?|client[ _-]?secret|access[ _-]?token|refresh[ _-]?token|auth[ _-]?token|token|otp|2fa(?:[ _-]?code)?|totp(?:[ _-]?seed)?|seed phrase|recovery code)s?)(\s*(?:is|was|=|:|->|=>)\s*)(["'`]?)([^\s"'`,;]{4,})\3/gi,
+      /\b((?:pass(?:word|wd|code)|pwd|pin|api[ _-]?key|secret(?:[ _-]?key)?|client[ _-]?secret|access[ _-]?token|refresh[ _-]?token|auth[ _-]?token|token|otp|2fa(?:[ _-]?code)?|totp(?:[ _-]?seed)?|seed phrase|recovery code)s?)(\s*(?:is|was|=|:|->|=>)\s*)(["'`]?)([^\s"'`,;]{4,})\3/gi,
     replace: `$1$2${REDACTED}`,
   },
 ]
@@ -55,8 +55,10 @@ export function redactSecrets(input: string): Redaction {
     text = text.replace(rule.pattern, (...args: unknown[]) => {
       const match = String(args[0])
       if (rule.label === 'labelled-secret') {
-        const value = String(args[4] ?? '')
-        if (NOT_A_VALUE.test(value) || !looksLikeSecretValue(value)) return match
+        const label = String(args[1] ?? '').toLowerCase()
+        const separator = String(args[2] ?? '').trim().toLowerCase()
+        const value = String(args[4] ?? '').replace(/[.,:;!?)\]}]+$/, '')
+        if (NOT_A_VALUE.test(value) || !looksLikeSecretValue(value, label, separator)) return match
       }
       hits[rule.label] = (hits[rule.label] ?? 0) + 1
       total += 1
@@ -66,9 +68,20 @@ export function redactSecrets(input: string): Redaction {
   return { text, hits, total }
 }
 
-/** A labelled value counts when it is not a plain English word: it has a digit, a symbol or mixed case. */
-function looksLikeSecretValue(value: string): boolean {
-  if (/^[a-z]+$/.test(value) && value.length < 16) return false
+/**
+ * Whether the value after a label like "password:" is really a secret. In prose ("the token is short-lived") only a
+ * value that looks generated counts; after ":" or "=" anything but a plain word does. A PIN is digits.
+ */
+function looksLikeSecretValue(value: string, label: string, separator: string): boolean {
+  if (label.startsWith('pin')) return /^\d{4,8}$/.test(value)
+  const generated =
+    (value.length >= 6 && /\d/.test(value) && /[A-Za-z]/.test(value)) ||
+    (value.length >= 20 && /^[A-Za-z0-9_\-./+=]+$/.test(value) && /[A-Z]/.test(value) && /[a-z]/.test(value))
+  if (separator === 'is' || separator === 'was') return generated
+  if (generated) return true
+  if (value.length < 6) return false
+  // A plain word, a placeholder or a path is not a secret: "password: required", "token: {{name}}".
+  if (/^[A-Za-z][a-z]*$/.test(value) || /[{}<>$]/.test(value) || value.startsWith('/')) return false
   return true
 }
 
