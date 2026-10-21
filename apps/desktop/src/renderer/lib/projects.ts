@@ -12,9 +12,30 @@ export function projectOfChat(projects: ProjectRow[], chat: string): ProjectRow 
   return chat === MAIN_CHAT ? null : (projects.find((project) => project.chats.includes(chat)) ?? null)
 }
 
-/** The projects the rail shows: not hidden, oldest first, so their places do not jump around. */
+/** How many projects the rail holds; the rest are one tap away in All projects. */
+export const RAIL_PROJECTS = 5
+
+/** A project the person put on the rail. */
+export function onRail(project: ProjectRow): boolean {
+  return typeof project.railAt === 'number' && !project.hidden
+}
+
+/**
+ * The projects the rail shows: the ones the person put there, in the order they did, at most RAIL_PROJECTS. Until
+ * they choose any, the oldest few, so the rail is never empty and nothing jumps around.
+ */
 export function railProjects(projects: ProjectRow[]): ProjectRow[] {
-  return projects.filter((project) => !project.hidden).sort((a, b) => a.createdAt - b.createdAt)
+  const chosen = projects.filter(onRail).sort((a, b) => (a.railAt ?? 0) - (b.railAt ?? 0))
+  if (chosen.length > 0) return chosen.slice(0, RAIL_PROJECTS)
+  return projects
+    .filter((project) => !project.hidden)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(0, RAIL_PROJECTS)
+}
+
+/** Whether one more project can go on the rail. */
+export function railHasRoom(projects: ProjectRow[]): boolean {
+  return projects.filter(onRail).length < RAIL_PROJECTS
 }
 
 /** A fresh project chat id, the same shape the main process makes ("pc" + 16 letters and digits). */

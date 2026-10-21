@@ -362,6 +362,8 @@ export interface ProjectRow extends RowBase {
   profile: string
   /** Kept, off the rail; still found by search and the Hidden projects list. */
   hidden: boolean
+  /** On the rail (the person's chosen few, at most RAIL_PROJECTS): when it was put there, which sets its place. */
+  railAt?: number | null
   /** Its chat ids, oldest first. */
   chats: string[]
   /** What its chats think with: the agent in each chat, and the helpers it starts. '' = the main thread's choice. */
