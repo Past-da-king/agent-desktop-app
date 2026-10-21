@@ -1,5 +1,7 @@
 import { createServer, type Server } from 'node:http'
 
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -211,6 +213,35 @@ describe('HelperManager', () => {
 
     const helperTurns = turns.filter((row) => row.thread === helper?.id)
     expect(helperTurns.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('a helper tool call is a few writes, not a storm: the window hears each row once', async () => {
+    const quick: Tool = {
+      spec: { name: 'quick_tool', description: 'Answers at once.', schema: { type: 'object', properties: {} } },
+      run: async () => 'done',
+    }
+    fake = await startFakeAi((body) => {
+      if (isHelperRequest(body)) return hasToolResult(body) ? { text: 'Finished.' } : { toolCalls: [{ name: 'quick_tool', input: {} }] }
+      const last = lastMessage(body)
+      if (last?.['role'] === 'tool') return { text: 'On it.' }
+      if (JSON.stringify(last ?? {}).includes('[Helper #')) return { text: 'All done.' }
+      return { toolCalls: [{ name: 'delegate', input: { tasks: [{ label: 'Quick', brief: 'Do the quick thing.' }] } }] }
+    })
+    const { runner, store: db } = makeRunner({ extraWorkerTools: [quick] })
+    const writes: string[] = []
+    db.onChange((change) => {
+      if (change.entity === 'chat_item' && change.row !== undefined) writes.push((change.row as ChatItem).kind)
+    })
+    await runner.send('Do the quick thing')
+    await waitFor(async () => ((await db.list('chat_item')).some((row) => row.kind === 'agent' && row.text === 'All done.') ? true : null))
+    await sleep(250)
+    const helperWrites = writes.filter((kind) => kind === 'helper').length
+    const activityWrites = writes.filter((kind) => kind === 'activity').length
+    // The helper's row: made, working, then done (its passing summaries fold into those); its one step: started, finished.
+    mkdirSync(join(process.cwd(), '.night'), { recursive: true })
+    writeFileSync(join(process.cwd(), '.night', 'helper-writes.json'), JSON.stringify({ helper: helperWrites, activity: activityWrites, all: writes.length, kinds: writes }))
+    expect(helperWrites).toBeLessThanOrEqual(5)
+    expect(activityWrites).toBeLessThanOrEqual(5)
   })
 
   it("keeps each helper tool call's input and result on its step, so the row opens like the main agent's", async () => {

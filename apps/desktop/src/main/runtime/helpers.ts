@@ -30,7 +30,7 @@ import {
   type AiPick,
 } from '@agent/core'
 
-import type { DataStore } from './data'
+import { listWhere, type DataStore } from './data'
 import type { CliHost } from './cli-host'
 import { brainFor, isBrain, pickFor, type Brain, type BrainDeps } from './brains'
 import { buildSystemPrompt } from './prompt'
@@ -180,6 +180,8 @@ export const GAVE_UP =
 
 const MAX_CONCURRENT = 4
 const MAX_HELPER_STEPS = 120
+/** How long a helper's passing summary may wait before it is written. */
+const META_FLUSH_MS = 150
 const MAX_TASKS = 5
 const MAX_RESULT_CHARS = 12_000
 const MAX_META_RESULT_CHARS = 6_000
@@ -195,6 +197,8 @@ export class HelperManager implements HelperHost {
   private readonly workerTools: Tool[]
   private readonly deliver: (text: string, chat?: string) => Promise<void> | void
   private readonly alongsideDone: (chat: string, helperId: string) => Promise<void> | void
+  /** Passing changes to a helper's row waiting to be written (updateMeta). */
+  private readonly pendingMeta = new Map<string, { patch: Record<string, unknown>; timer: NodeJS.Timeout | null }>()
   private readonly platform: string
   private readonly timeZone: string | undefined
   private readonly now: () => number
@@ -801,7 +805,8 @@ export class HelperManager implements HelperHost {
   }
 
   private async findRunningActivity(helperId: string, tool: string): Promise<string | null> {
-    const rows = await this.store.list('chat_item')
+    const since = this.runs.get(helperId)?.startedAt ?? 0
+    const rows = await listWhere(this.store, 'chat_item', { kind: 'activity', since: since > 0 ? since - 1 : 0 })
     for (let i = rows.length - 1; i >= 0; i--) {
       const row = rows[i]
       if (row === undefined || row.kind !== 'activity') continue
@@ -992,14 +997,39 @@ export class HelperManager implements HelperHost {
     return row.id
   }
 
+  /**
+   * Changes to a helper's row. Its passing state (a summary per step, "Thinking") is written at most every
+   * META_FLUSH_MS, so a tool call is two writes and not six; anything that matters (its state, its result, a
+   * push) goes straight through, with whatever was pending folded in.
+   */
   private async updateMeta(id: string, patch: Record<string, unknown>): Promise<void> {
+    const pending = this.pendingMeta.get(id) ?? { patch: {}, timer: null }
+    Object.assign(pending.patch, patch)
+    this.pendingMeta.set(id, pending)
+    const urgent = Object.keys(patch).some((key) => key !== 'summary')
+    if (urgent) {
+      await this.flushMeta(id)
+      return
+    }
+    if (pending.timer === null) {
+      pending.timer = setTimeout(() => {
+        void this.flushMeta(id)
+      }, META_FLUSH_MS)
+    }
+  }
+
+  private async flushMeta(id: string): Promise<void> {
+    const pending = this.pendingMeta.get(id)
+    if (pending === undefined) return
+    this.pendingMeta.delete(id)
+    if (pending.timer !== null) clearTimeout(pending.timer)
     const row = await this.store.get('chat_item', id)
     if (row === null) return
     await this.store.upsert('chat_item', {
       id: row.id,
       kind: row.kind,
       text: row.text,
-      meta: JSON.stringify({ ...parseMeta(row.meta), ...patch }),
+      meta: JSON.stringify({ ...parseMeta(row.meta), ...pending.patch }),
     })
   }
 
@@ -1008,7 +1038,7 @@ export class HelperManager implements HelperHost {
   }
 
   private async loadHistory(thread: string): Promise<Msg[]> {
-    const rows = await this.store.list('turn')
+    const rows = await listWhere(this.store, 'turn', { thread })
     const messages: Msg[] = []
     for (const row of rows) {
       if (row.thread !== thread) continue
