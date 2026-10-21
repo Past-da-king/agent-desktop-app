@@ -122,3 +122,18 @@ describe('the thread window', () => {
     expect(windowThread(rows, Number.POSITIVE_INFINITY).above).toBe(0)
   })
 })
+
+describe('the boot hint', () => {
+  it('remembers the look for the next start and survives junk', async () => {
+    const { readBootHint, writeBootHint } = await import('../src/renderer/lib/boot-hint')
+    const box = new Map<string, string>()
+    const storage = { getItem: (k: string) => box.get(k) ?? null, setItem: (k: string, v: string) => void box.set(k, v) }
+    expect(readBootHint(storage)).toBeNull()
+    writeBootHint({ mascot: 'bloom', agentName: 'Hina', accent: 'violet', theme: 'dark' }, storage)
+    expect(readBootHint(storage)).toEqual({ mascot: 'bloom', agentName: 'Hina', accent: 'violet', theme: 'dark' })
+    box.set('agent.boot', '{not json')
+    expect(readBootHint(storage)).toBeNull()
+    box.set('agent.boot', JSON.stringify({ mascot: 'scout', agentName: 'Nova', theme: 'odd' }))
+    expect(readBootHint(storage)).toEqual({ mascot: 'scout', agentName: 'Nova', accent: 'iris', theme: 'system' })
+  })
+})

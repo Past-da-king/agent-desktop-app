@@ -982,7 +982,7 @@ export function Chat(): JSX.Element {
             }}
           />
         )}
-        <ModelPicker />
+        <ModelPicker chat={openChat} project={project} />
         <button
           type="button"
           className="ib talk-btn"

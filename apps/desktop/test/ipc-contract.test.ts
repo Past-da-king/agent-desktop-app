@@ -210,6 +210,9 @@ describe('registerIpc', () => {
         expect(handlers.has(channel!), `${group}.${method} has no handler`).toBe(true)
       }
     }
+    for (const [method, channel] of Object.entries(CHANNELS.settings.accounts)) {
+      expect(handlers.has(channel), `settings.accounts.${method} has no handler`).toBe(true)
+    }
   })
 
   it('answers profiles plainly without connected apps, and rejects bad input', async () => {

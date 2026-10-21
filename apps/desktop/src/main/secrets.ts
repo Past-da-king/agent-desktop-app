@@ -14,7 +14,8 @@ export interface SafeStorageLike {
   decryptString(encrypted: Buffer): string
 }
 
-export type SecretName = 'apiKey' | 'syncToken' | 'composioKey' | 'geminiKey'
+/** The well-known names; an account's key is `apiKey-<account id>` (core accounts.ts keyNameFor). */
+export type SecretName = 'apiKey' | 'syncToken' | 'composioKey' | 'geminiKey' | `apiKey-${string}`
 
 export class Secrets {
   private readonly dir: string
