@@ -180,6 +180,26 @@ const PATHS = {
     </>
   ),
   stop: <rect x="7" y="7" width="10" height="10" rx="2.5" />,
+  copy: (
+    <>
+      <rect x="8" y="8" width="12" height="12" rx="2.5" />
+      <path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8" />
+    </>
+  ),
+  branch: (
+    <>
+      <circle cx="6" cy="5.5" r="2" />
+      <circle cx="6" cy="18.5" r="2" />
+      <circle cx="18" cy="8.5" r="2" />
+      <path d="M6 7.5v9M18 10.5c0 4-6 3.5-11 6.5" />
+    </>
+  ),
+  file: (
+    <>
+      <path d="M14 3.5H7.5A2 2 0 0 0 5.5 5.5v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3.5V8h4.5M9 13h6M9 16.5h4" />
+    </>
+  ),
   bolt: <path d="M13 3 5 13.5h6L10 21l8-10.5h-6z" />,
 } satisfies Record<string, ReactNode>
 
