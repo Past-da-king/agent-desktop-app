@@ -17,7 +17,7 @@ import {
   type TriggerRow,
 } from '@agent/core'
 
-import { BUILTIN_DELETE_REFUSED, isBuiltinRoutine } from '../memory/routine'
+import { isBuiltinRoutine } from '../memory/routine'
 import type { DataStore } from '../runtime/data'
 import { parseWhen } from './tasks'
 
@@ -90,7 +90,7 @@ function routineList(store: DataStore): Tool {
       return rows
         .map((row) => {
           const paused = row.enabled ? '' : ' (paused)'
-          const builtin = isBuiltinRoutine(row) ? ' (built in: the app runs it; only its time and on/off change)' : ''
+          const builtin = isBuiltinRoutine(row) ? ' (the app runs this memory pass itself; its prompt only describes it, so change its name, time or on/off)' : ''
           const last =
             row.lastRunAt === null
               ? ''
@@ -150,7 +150,6 @@ function routineDelete(store: DataStore): Tool {
       const id = text(input['id']).trim()
       const row = await store.get('trigger', id)
       if (row === null) return `No routine #${id}.`
-      if (isBuiltinRoutine(row)) return BUILTIN_DELETE_REFUSED
       await store.remove('trigger', row.id)
       await ctx.activity(`Removed routine: ${row.name}`, { tool: 'routine_delete' })
       return 'Deleted.'
