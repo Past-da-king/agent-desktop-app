@@ -1,0 +1,24 @@
+/* Tidying a memory bank with the agent (Settings > Memory > Import): the choice, the progress, the undo. */
+.import-modes{display:flex;flex-direction:column;gap:10px}
+.import-mode{display:flex;flex-direction:column;gap:6px;width:100%;padding:14px 16px;border-radius:var(--r-md);border:1.5px solid var(--outline-v);background:var(--s-lowest);color:var(--on-sv);text-align:left;font-size:13.5px;line-height:1.5;cursor:pointer}
+.import-mode:hover{background:var(--s-low)}
+.import-mode.on{border-color:var(--primary);background:color-mix(in srgb,var(--pc) 45%,var(--s-lowest))}
+.import-mode[disabled]{cursor:progress}
+.import-mode:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.import-mode-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.import-mode-h b{font:500 15px/1.3 var(--font);color:var(--on-bg)}
+.tidy{display:flex;flex-direction:column;gap:12px}
+.tidy-top{display:flex;align-items:baseline;gap:12px;min-width:0}
+.tidy-pct{font:600 28px/1 var(--font);color:var(--on-bg);font-variant-numeric:tabular-nums}
+.tidy-line{font-size:14px;color:var(--on-sv);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tidy-bar{height:8px;border-radius:999px;background:var(--s-high);overflow:hidden}
+.tidy-bar>span{display:block;height:100%;border-radius:inherit;background:var(--primary);transition:width .4s var(--effects)}
+.tidy-of{font:500 14px/1 var(--font);color:var(--on-sv)}
+.tidy-errs{display:flex;flex-direction:column;gap:4px;padding:12px 14px;border-radius:var(--r-sm);background:var(--tc);color:var(--on-tc);font-size:13px;line-height:1.45}
+.tidy-errs b{font:500 14px/1.3 var(--font)}
+.tidy-confirm{display:flex;flex-direction:column;gap:4px;padding:12px 14px;border-radius:var(--r-sm);background:var(--ec);color:var(--on-ec);font-size:13.5px;line-height:1.45}
+.tidy-confirm b{font:500 15px/1.3 var(--font)}
+.btn.fill.danger{background:var(--err);color:var(--on-primary)}
+.btn.fill.danger:hover{background:color-mix(in srgb,var(--err) 88%,var(--on-primary))}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .btn.fill.danger{color:var(--ec)}}
+:root[data-theme="dark"] .btn.fill.danger{color:var(--ec)}
