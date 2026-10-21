@@ -34,3 +34,37 @@
 .bp-manage{display:flex;align-items:center;gap:8px;margin-top:4px;padding:10px 12px;border-top:1px solid var(--outline-v);color:var(--on-sv);font:500 13px/1 var(--font);border-radius:0 0 12px 12px}
 .bp-manage:hover{color:var(--on-bg)}
 .br-tab-who{width:8px;height:8px;border-radius:50%;background:var(--pf-solid);flex:none;margin-left:10px}
+
+/* Waiting on the person, from any chat or project (shell/NeedsYou.tsx), first in the side panel. */
+.ny{display:flex;flex-direction:column;gap:8px}
+.ny-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ny-card{display:flex;flex-direction:column;gap:8px;padding:12px 12px 10px;border-radius:var(--r-md);background:var(--tc);color:var(--on-tc)}
+.ny-card.appr-k{background:var(--pc);color:var(--on-pc)}
+.ny-top{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.ny-src{display:flex;align-items:center;gap:6px;min-width:0;font:500 12.5px/1.2 var(--font)}
+.ny-src-ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;flex:none;background:color-mix(in srgb,currentColor 14%,transparent);font-size:13px;line-height:1}
+.ny-src-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ny-kind{margin-left:auto;font:600 11px/1 var(--font);letter-spacing:.08em;text-transform:uppercase;opacity:.8;flex:none}
+.ny-t{font:500 14.5px/1.4 var(--font);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.ny-acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.ny-acts .ny-go{height:36px;padding:0 14px;font-size:13.5px}
+.ny-ans{height:36px;padding:0 12px;border-radius:999px;font:500 13.5px/1 var(--font);color:inherit;background:color-mix(in srgb,currentColor 10%,transparent)}
+.ny-ans:hover{background:color-mix(in srgb,currentColor 16%,transparent)}
+.ny-ans:disabled,.ny-go:disabled{opacity:.6}
+.ny-open{width:28px;height:28px;margin:-6px -4px -6px 0;border-radius:50%;display:grid;place-items:center;color:inherit;flex:none}
+.ny-more{align-self:flex-start;font:500 13px/1 var(--font);color:var(--primary);padding:8px 10px;border-radius:10px}
+.ny-more:hover{background:var(--s-low)}
+.ny-open:hover{background:color-mix(in srgb,currentColor 12%,transparent)}
+
+/* The browser folded to one line (Panel.tsx BrowserLine). Its card stays laid out, out of sight, so pages keep running. */
+.br-line{display:flex;align-items:center;gap:4px;padding:4px 4px 4px 6px;border-radius:var(--r-md);background:var(--s-low)}
+.br-line-open{flex:1;min-width:0;display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:14px;text-align:left;color:var(--on-bg)}
+.br-line-open:hover{background:var(--s-mid)}
+.br-line-ic{position:relative;width:32px;height:32px;border-radius:12px;display:grid;place-items:center;flex:none;background:var(--s-high);color:var(--on-sv)}
+.br-line.live .br-line-ic{background:var(--pc);color:var(--on-pc)}
+.br-line.needs .br-line-ic{background:var(--tc);color:var(--on-tc)}
+.br-line-dot{position:absolute;right:-1px;top:-1px;width:10px;height:10px;border-radius:50%;background:var(--ok);border:2px solid var(--s-low)}
+.br-line-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.br-line-t b{font:500 14px/1.3 var(--font)}
+.br-line-t span{font-size:12.5px;line-height:1.3;color:var(--on-sv);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.panel-browser.tucked{position:absolute;left:0;top:0;width:var(--panel-w,380px);height:0;overflow:hidden;visibility:hidden;pointer-events:none;margin:0;padding:0}

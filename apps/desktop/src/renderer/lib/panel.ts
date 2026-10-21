@@ -68,3 +68,13 @@ export function boundsFor(
 export function displayUrl(url: string): string {
   return url.trim().replace(/^https?:\/\//i, '')
 }
+
+/** The browser card folds to one line when the person minimized it, or when nothing is open and they did not open it. */
+export function browserTucked(mode: 'auto' | 'min' | 'open', hasPage: boolean): boolean {
+  return mode === 'min' || (mode === 'auto' && !hasPage)
+}
+
+/** What opening the folded card means: follow the pages from now on, or show the empty card on purpose. */
+export function openedMode(hasPage: boolean): 'auto' | 'open' {
+  return hasPage ? 'auto' : 'open'
+}
