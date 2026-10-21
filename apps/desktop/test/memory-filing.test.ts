@@ -112,6 +112,21 @@ describe('New Chat filing', () => {
     expect(meta['title']).toBe('Acme invoices')
   })
 
+  it('asks once more when the first reply cannot be read, and files the second', async () => {
+    await seedChat()
+    const prompts: string[] = []
+    const memory = service(async (_system, text) => {
+      prompts.push(text)
+      return prompts.length === 1 ? 'Here is the summary of the chat about invoices.' : reply([{ kind: 'person', title: 'Lerato Dlamini', body: 'Runs the books at Acme.' }])
+    })
+    await memory.newChat()
+    await memory.idle()
+    expect(prompts).toHaveLength(2)
+    expect(prompts[1]).toContain('could not be read as JSON')
+    expect(memoryNote(await divider())?.status).toBe('done')
+    expect((await store.list('memory')).map((row) => row.title)).toEqual(['Lerato Dlamini'])
+  })
+
   it('updates the existing page on the same subject instead of adding a near-duplicate', async () => {
     const lerato = await store.upsert('memory', { title: 'Lerato Dlamini', body: "Sam's sister.\nLives in Durban.", kind: 'person', topics: 'family', pinned: true, source: 'user' })
     await seedChat()

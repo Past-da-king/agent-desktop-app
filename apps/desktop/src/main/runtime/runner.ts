@@ -1007,7 +1007,7 @@ export class Runner {
     const resolved = this.resolveModel()
     if (!resolved.ok) throw new Error(resolved.message)
     try {
-      const completion = await resolved.provider.complete(system, [userMsg(prompt)], [], resolved.model, 4096)
+      const completion = await resolved.provider.complete(system, [userMsg(prompt)], [], resolved.model, 8192)
       return msgText(completion.message)
     } catch (error) {
       throw new Error(friendlyError(error))

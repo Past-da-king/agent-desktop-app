@@ -9,7 +9,7 @@ import type { DataStore } from '../runtime/data'
 import type { ChatIndex } from './chat-index'
 import { chatSegments, hasSubstance, isDividerRow, memoryNote, parseMeta, transcript } from './chats'
 import { DEFAULT_DAILY_AT, dayKey, dueDay, runDaily, undoChange } from './daily'
-import { FILE_SYSTEM, candidatesFor, fileEntries, filePrompt, parseDigest, type Complete } from './summarise'
+import { FILE_SYSTEM, candidatesFor, fileEntries, filePrompt, parseDigest, type ChatDigest, type Complete } from './summarise'
 import type { UpkeepFile, UpkeepReport, UpkeepState } from './upkeep-log'
 
 export interface MemoryServiceDeps {
@@ -148,7 +148,7 @@ export class MemoryService {
       const chat = transcript(segment)
       const memories = await this.deps.store.list('memory')
       const prompt = filePrompt(chat, candidatesFor(chat, memories), dayKey(this.now()))
-      const digest = parseDigest(await this.deps.complete(FILE_SYSTEM, prompt))
+      const digest = await this.digestOf(prompt)
       const result = await fileEntries(this.deps.store, digest.entries)
       const fresh = (await this.deps.store.get('chat_item', dividerId)) ?? divider
       await this.writeNote(
@@ -173,6 +173,18 @@ export class MemoryService {
       const fresh = (await this.deps.store.get('chat_item', dividerId)) ?? divider
       await this.writeNote(fresh, { chat: note.chat, status: 'failed', error: plainError(error) })
       this.deps.log?.('Chat could not be filed', { error: plainError(error) })
+    }
+  }
+
+  /** The model's summary of a chat. A reply that cannot be read is asked for once more, plainly. */
+  private async digestOf(prompt: string): Promise<ChatDigest> {
+    const first = await this.deps.complete(FILE_SYSTEM, prompt)
+    try {
+      return parseDigest(first)
+    } catch (error) {
+      this.deps.log?.('Chat summary unreadable, asking again', { chars: first.length, error: plainError(error) })
+      const again = `${prompt}\n\nYour last reply could not be read as JSON. Reply again with ONLY the JSON object: no prose, no code fence, every line break inside a string written as \\n, and short bodies so it fits.`
+      return parseDigest(await this.deps.complete(FILE_SYSTEM, again))
     }
   }
 
