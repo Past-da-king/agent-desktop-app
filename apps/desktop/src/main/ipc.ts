@@ -37,7 +37,7 @@ import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
 import { isRule } from './apps/store'
 import type { Store } from './db'
-import { guardRoutineRemove, guardRoutineWrite } from './memory/routine'
+import { guardRoutineWrite } from './memory/routine'
 import { listModels } from './models'
 import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
@@ -277,7 +277,6 @@ export function registerIpc(deps: IpcDeps): () => void {
   handle(CHANNELS.data.remove, async (_event, rawEntity, rawId) => {
     const entity = entityArg(rawEntity)
     const id = requireString(rawId, 'id', MAX_STRING)
-    if (entity === 'trigger') await guardRoutineRemove(store, id)
     await store.remove(entity, id)
     account.nudge()
   })

@@ -682,9 +682,13 @@ async function startServices(win: BrowserWindow): Promise<void> {
   chatIndex = new ChatIndex(join(dir, 'chat-search.db'))
   const memoryStore = store
   const upkeep = new UpkeepFile(join(dir, 'memory-upkeep.json'))
-  // End of day lives on the Routines page as a built-in routine; the old Memory setting only seeds it once.
+  // End of day is a routine on the Routines page, created once from the old Memory setting; deleted stays deleted.
   try {
-    await ensureDailyRoutine(memoryStore, { dailyAt: settings.get().dailyMemoryAt, lastReport: upkeep.read().report })
+    await ensureDailyRoutine(memoryStore, {
+      dailyAt: settings.get().dailyMemoryAt,
+      lastReport: upkeep.read().report,
+      deleted: store.deletedIds('trigger').has(MEMORY_DAILY_ROUTINE),
+    })
   } catch {
     // Without the row the pass simply does not run on its own; the app must still open.
   }

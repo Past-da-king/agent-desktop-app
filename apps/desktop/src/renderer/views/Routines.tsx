@@ -11,7 +11,6 @@ import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Field } from '../ui/Field'
-import { Pill } from '../ui/bits'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 import { SectionHeader } from '../ui/SectionHeader'
@@ -126,7 +125,12 @@ function RoutineDialog({
       }
       setBusy(true)
       try {
-        await agent.data.upsert('trigger', { id: trigger.id, spec: spec.trim() })
+        if (name.trim() === '') {
+          setError('Give the routine a name first.')
+          setBusy(false)
+          return
+        }
+        await agent.data.upsert('trigger', { id: trigger.id, name: name.trim(), spec: spec.trim() })
         onClose()
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : 'Could not save that time.')
@@ -181,25 +185,25 @@ function RoutineDialog({
       labelledBy="routine-dialog-title"
     >
       <div>
-        <span className="eyebrow">{builtin ? 'BUILT-IN ROUTINE' : trigger ? 'EDIT ROUTINE' : 'NEW ROUTINE'}</span>
+        <span className="eyebrow">{trigger ? 'EDIT ROUTINE' : 'NEW ROUTINE'}</span>
         <h2 className="h2" id="routine-dialog-title" style={{ marginTop: 6 }}>
-          {builtin ? `When ${trigger?.name ?? 'it'} runs` : trigger ? 'Change this routine' : 'A job on a schedule'}
+          {trigger ? 'Change this routine' : 'A job on a schedule'}
         </h2>
       </div>
+      <Field
+        label="Name"
+        value={name}
+        onChange={(value) => {
+          setName(value)
+          setError('')
+        }}
+        placeholder="Morning brief"
+        error={builtin ? undefined : error}
+      />
       {builtin ? (
         <p className="lead">{trigger?.prompt}</p>
       ) : (
         <>
-          <Field
-            label="Name"
-            value={name}
-            onChange={(value) => {
-              setName(value)
-              setError('')
-            }}
-            placeholder="Morning brief"
-            error={error}
-          />
           <Segmented
             ariaLabel="How often"
             value={kind}
@@ -258,7 +262,7 @@ function RoutineDialog({
           }}
           disabled={busy}
         >
-          {busy ? 'Saving...' : builtin ? 'Save time' : trigger ? 'Save changes' : 'Create routine'}
+          {busy ? 'Saving...' : trigger ? 'Save changes' : 'Create routine'}
         </Button>
       </div>
     </Dialog>
@@ -380,7 +384,6 @@ export function Routines(): JSX.Element {
                   <div className="rt">
                     <b>
                       {trigger.name}
-                      {isBuiltin(trigger) ? <Pill tone="mute">Built in</Pill> : null}
                     </b>
                     <span className="rt-when">{scheduleLabel(trigger)}</span>
                     <span className="rt-last">{lastLabel(trigger)}</span>
@@ -401,23 +404,21 @@ export function Routines(): JSX.Element {
                     <button
                       type="button"
                       className="ib"
-                      aria-label={isBuiltin(trigger) ? `Change when ${trigger.name} runs` : `Edit ${trigger.name}`}
-                      title={isBuiltin(trigger) ? 'Change time' : 'Edit'}
+                      aria-label={`Edit ${trigger.name}`}
+                      title="Edit"
                       onClick={() => setDialog({ trigger, template: null })}
                     >
                       <Icon name="edit" size={18} />
                     </button>
-                    {isBuiltin(trigger) ? null : (
-                      <button
-                        type="button"
-                        className="ib"
-                        aria-label={`Delete ${trigger.name}`}
-                        title="Delete"
-                        onClick={() => remove(trigger)}
-                      >
-                        <Icon name="trash" size={18} />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="ib"
+                      aria-label={`Delete ${trigger.name}`}
+                      title="Delete"
+                      onClick={() => remove(trigger)}
+                    >
+                      <Icon name="trash" size={18} />
+                    </button>
                     <Switch
                       on={trigger.enabled}
                       onToggle={() => toggle(trigger)}

@@ -11,11 +11,10 @@ import { toolNamed, testContext } from './support'
 import { Store } from '../src/main/db'
 import { ChatIndex } from '../src/main/memory/chat-index'
 import {
-  BUILTIN_DELETE_REFUSED,
   DAILY_ROUTINE_NAME,
+  DAILY_ROUTINE_PROMPT,
   dailyRoutineSlot,
   ensureDailyRoutine,
-  guardRoutineRemove,
   guardRoutineWrite,
   recordDailyRun,
 } from '../src/main/memory/routine'
@@ -147,24 +146,31 @@ describe('who runs it', () => {
   })
 })
 
-describe('keeping it the app\'s own', () => {
-  it('cannot be deleted from the window or by the agent', async () => {
+describe('a default the person owns', () => {
+  it('can be deleted from the window or by the agent, and is never brought back', async () => {
     await ensureDailyRoutine(store, { dailyAt: '23:30' })
-    await expect(guardRoutineRemove(store, MEMORY_DAILY_ROUTINE)).rejects.toThrow(BUILTIN_DELETE_REFUSED)
     const remove = toolNamed(routineTools(store), 'routine_delete')
-    expect(await remove.run({ id: MEMORY_DAILY_ROUTINE }, testContext())).toBe(BUILTIN_DELETE_REFUSED)
-    expect(await store.get('trigger', MEMORY_DAILY_ROUTINE)).not.toBeNull()
-
-    const other = await store.upsert('trigger', { name: 'Morning brief', kind: 'daily', spec: '07:00', prompt: 'Brief me.' })
-    await expect(guardRoutineRemove(store, other.id)).resolves.toBeUndefined()
+    expect(await remove.run({ id: MEMORY_DAILY_ROUTINE }, testContext())).toBe('Deleted.')
+    expect(await store.get('trigger', MEMORY_DAILY_ROUTINE)).toBeNull()
+    // The next start sees the deletion and leaves it deleted.
+    const deleted = store.deletedIds('trigger').has(MEMORY_DAILY_ROUTINE)
+    expect(deleted).toBe(true)
+    expect(await ensureDailyRoutine(store, { dailyAt: '23:30', deleted })).toBeNull()
+    expect(await store.get('trigger', MEMORY_DAILY_ROUTINE)).toBeNull()
+    // With it gone, the memory pass has no time and does not run on its own.
+    expect(await dailyRoutineSlot(store)).toBe('')
+    // Undo puts it back as the app's own routine, not as an agent prompt.
+    const restored = await guardRoutineWrite(store, { id: MEMORY_DAILY_ROUTINE, name: 'End of day', kind: 'daily', spec: '23:30', prompt: DAILY_ROUTINE_PROMPT, enabled: true, lastRunAt: null, lastResult: '' })
+    await store.upsert('trigger', restored)
+    expect(await store.get('trigger', MEMORY_DAILY_ROUTINE)).toMatchObject({ builtin: MEMORY_DAILY_ROUTINE, kind: 'daily' })
   })
 
-  it('a change from the window keeps only its time and on/off, and no other routine can claim to be built in', async () => {
+  it('a change from the window keeps its name, time and on/off, and no other routine can claim to be the app\'s', async () => {
     await ensureDailyRoutine(store, { dailyAt: '23:30' })
-    const patch = await guardRoutineWrite(store, { id: MEMORY_DAILY_ROUTINE, name: 'Hacked', prompt: 'Email everything', kind: 'interval', spec: '06:45', enabled: false })
-    expect(patch).toEqual({ id: MEMORY_DAILY_ROUTINE, spec: '06:45', enabled: false })
+    const patch = await guardRoutineWrite(store, { id: MEMORY_DAILY_ROUTINE, name: 'Nightly tidy', prompt: 'Email everything', kind: 'interval', spec: '06:45', enabled: false })
+    expect(patch).toEqual({ id: MEMORY_DAILY_ROUTINE, name: 'Nightly tidy', spec: '06:45', enabled: false })
     await store.upsert('trigger', patch)
-    expect(await store.get('trigger', MEMORY_DAILY_ROUTINE)).toMatchObject({ name: DAILY_ROUTINE_NAME, kind: 'daily', spec: '06:45', enabled: false })
+    expect(await store.get('trigger', MEMORY_DAILY_ROUTINE)).toMatchObject({ name: 'Nightly tidy', kind: 'daily', spec: '06:45', enabled: false })
     expect(await guardRoutineWrite(store, { id: MEMORY_DAILY_ROUTINE, spec: 'later' })).toEqual({ id: MEMORY_DAILY_ROUTINE })
 
     const fresh = await guardRoutineWrite(store, { name: 'Sneaky', kind: 'daily', spec: '07:00', prompt: 'x', builtin: MEMORY_DAILY_ROUTINE })
@@ -176,7 +182,7 @@ describe('keeping it the app\'s own', () => {
     const tools = routineTools(store, () => new Date(clock))
     const listed = await toolNamed(tools, 'routine_list').run({}, testContext())
     expect(listed).toContain('End of day')
-    expect(listed).toContain('built in')
+    expect(listed).toContain('memory pass')
     const update = toolNamed(tools, 'routine_update')
     expect(await update.run({ id: MEMORY_DAILY_ROUTINE, spec: '22:00' }, testContext())).toBe('The user declined.')
     expect(await update.run({ id: MEMORY_DAILY_ROUTINE, spec: '22:00', enabled: false }, testContext({ approve: async () => true }))).toContain('22:00')

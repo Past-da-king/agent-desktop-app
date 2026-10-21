@@ -230,7 +230,7 @@ export function MemorySettings(): JSX.Element {
           </div>
           <div className="rt">
             <b>End of day</b>
-            <span>End of day runs as a routine. Change its time in Routines.</span>
+            <span>End of day runs as a routine. Change it or remove it in Routines.</span>
           </div>
           <Button variant="tonal" size="sm" onClick={() => navigate({ page: 'routines' })}>
             Open Routines

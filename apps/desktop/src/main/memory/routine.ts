@@ -1,8 +1,8 @@
 /**
- * End of day as a routine: the memory pass shows on the Routines page like any other routine (time, on/off, Run now,
- * last run), but the app runs it, not the agent. One row with a fixed id, so restarts and other synced devices never
- * make a second one. MemoryService still owns the timing, including catching up a day the app was closed for; this
- * file only keeps the row and reads its time.
+ * End of day as a routine: the memory pass shows on the Routines page like any other routine (name, time, on/off,
+ * Run now, last run, delete), but the app runs it, not the agent. It is a default, not a fixture: created once, and
+ * once the person deletes it, it stays deleted (on every synced device too). One row with a fixed id, so restarts
+ * never make a second one. MemoryService still owns the timing, including catching up a day the app was closed for.
  */
 import { MEMORY_DAILY_ROUTINE, type TriggerRow, type UpkeepReport } from '@agent/core'
 
@@ -13,7 +13,7 @@ export const DAILY_ROUTINE_NAME = 'End of day'
 export const DAILY_ROUTINE_PROMPT =
   'Today\'s chats become one "Where we are" page, and memory is tidied: duplicates merged, stale notes rewritten or dropped.'
 
-/** A routine the app runs itself, which only changes its time and on/off. */
+/** A routine the app runs itself rather than the agent (its prompt only describes it). */
 export function isBuiltinRoutine(row: Pick<TriggerRow, 'builtin'> | null | undefined): boolean {
   return typeof row?.builtin === 'string' && row.builtin !== ''
 }
@@ -24,13 +24,15 @@ function validClock(value: string): boolean {
 }
 
 /**
- * Make sure the End of day routine exists. A new one takes the old Memory setting: its time, or off when the person
- * had turned it off, and the last report as its last run. An existing one is left as the person set it.
+ * Create the End of day routine the first time the app runs. A new one takes the old Memory setting: its time, or off
+ * when the person had turned it off, and the last report as its last run. An existing one is left as the person set
+ * it, and one the person deleted is never brought back (null).
  */
 export async function ensureDailyRoutine(
   store: DataStore,
-  options: { dailyAt: string; lastReport?: UpkeepReport | null },
-): Promise<TriggerRow> {
+  options: { dailyAt: string; lastReport?: UpkeepReport | null; deleted?: boolean },
+): Promise<TriggerRow | null> {
+  if (options.deleted === true) return null
   const existing = await store.get('trigger', MEMORY_DAILY_ROUTINE)
   if (existing !== null && existing.builtin === MEMORY_DAILY_ROUTINE) return existing
   const setting = options.dailyAt.trim()
@@ -67,28 +69,26 @@ export async function recordDailyRun(store: DataStore, report: UpkeepReport): Pr
 }
 
 /**
- * What a change to a built-in routine may touch: its time (a real HH:mm) and on/off. Everything else is dropped, so
- * the routine stays the app's own.
+ * What a change to the app's own routine may touch: its name, its time (a real HH:mm) and on/off. It always runs
+ * daily and does the memory pass, so its kind and prompt stay.
  */
 export function builtinPatch(row: Record<string, unknown>): Record<string, unknown> {
   const patch: Record<string, unknown> = { id: row['id'] }
+  if (typeof row['name'] === 'string' && row['name'].trim() !== '') patch['name'] = row['name'].trim()
   if (typeof row['spec'] === 'string' && validClock(row['spec'])) patch['spec'] = row['spec'].trim()
   if (typeof row['enabled'] === 'boolean') patch['enabled'] = row['enabled']
   return patch
 }
 
-export const BUILTIN_DELETE_REFUSED = 'End of day is built in, so it cannot be deleted. Switch it off instead.'
-
-/** A write from the window: a built-in routine keeps all but its time and on/off, and no other row can claim to be one. */
+/**
+ * A write from the window: the app's own routine changes only its name, time and on/off; putting a deleted one back
+ * (Undo) keeps it the app's own; no other row can claim to be one.
+ */
 export async function guardRoutineWrite(store: DataStore, row: Record<string, unknown>): Promise<Record<string, unknown>> {
   const id = typeof row['id'] === 'string' ? row['id'] : ''
   const existing = id === '' ? null : await store.get('trigger', id)
   if (isBuiltinRoutine(existing)) return builtinPatch(row)
   const { builtin: _builtin, ...rest } = row
+  if (existing === null && id === MEMORY_DAILY_ROUTINE) return { ...rest, builtin: MEMORY_DAILY_ROUTINE, kind: 'daily' }
   return rest
-}
-
-/** A delete from the window: refused for a built-in routine. */
-export async function guardRoutineRemove(store: DataStore, id: string): Promise<void> {
-  if (isBuiltinRoutine(await store.get('trigger', id))) throw new Error(BUILTIN_DELETE_REFUSED)
 }
