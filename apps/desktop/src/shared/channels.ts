@@ -58,6 +58,9 @@ export const CHANNELS = {
     attach: 'agent:browser.attach',
     devtools: 'agent:browser.devtools',
     setMuted: 'agent:browser.setMuted',
+    people: 'agent:browser.people',
+    usePerson: 'agent:browser.usePerson',
+    signOut: 'agent:browser.signOut',
   },
   helpers: {
     stop: 'agent:helpers.stop',

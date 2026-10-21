@@ -416,8 +416,30 @@ export interface BrowserState {
   expanded?: boolean
   /** Every tab's sound is off. Remembered across restarts. */
   muted?: boolean
+  /** The partition of the browser profile the person's own tabs open in. */
+  personPartition?: string
   /** A tab is playing sound right now (heard or not). */
   audible?: boolean
+}
+
+/**
+ * One browser profile, as in Chrome: a set of sign-ins of its own. The person's own (Mine) is never used by an
+ * agent unless a profile borrows it; the agents share General; a profile may have its own.
+ */
+export interface BrowserPerson {
+  /** 'mine', 'general' or a profile id. */
+  id: string
+  name: string
+  color: ProfileColor
+  kind: 'mine' | 'shared' | 'profile'
+  /** The session partition; a tab with the same partition belongs to this profile. */
+  partition: string
+  /** Google accounts signed in here, e.g. "ap@example.com". */
+  google: string[]
+  /** The tabs the person opens go here. */
+  current: boolean
+  /** Who browses with these sign-ins: profile names, or the main agent and routines. */
+  usedBy: string[]
 }
 
 export type BrowserViewMode = 'desktop' | 'tablet' | 'phone' | 'fit'
@@ -810,6 +832,12 @@ export interface AgentApi {
     devtools(): Promise<void>
     /** Turns the sound of every tab off or back on. */
     setMuted(on: boolean): Promise<void>
+    /** The browser profiles: Mine, the agents' shared one, and each profile with sign-ins of its own. */
+    people(): Promise<BrowserPerson[]>
+    /** The person's next tabs open in this profile ('mine', 'general' or a profile id). */
+    usePerson(id: string): Promise<void>
+    /** Signs one browser profile out of every site. */
+    signOut(id: string): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
     /** The renderer's <webview> for a tab is attached: hands its guest page to the main process. */
     attach(tabId: string, guestId: number): Promise<boolean>

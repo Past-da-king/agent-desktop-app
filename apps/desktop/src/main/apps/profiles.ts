@@ -27,6 +27,9 @@ import {
 export const GENERAL_ID = 'general'
 /** The agent browser's original partition: General (and the main agent) keep browsing in it. */
 export const BASE_PARTITION = 'persist:agent-browser'
+/** The person's own browser sign-ins: no agent browses with them unless a profile borrows them. */
+export const MINE_ID = 'mine'
+export const MINE_PARTITION = `${BASE_PARTITION}-${MINE_ID}`
 export const MAX_PROFILES = 24
 export const MAX_NAME = 40
 
@@ -228,6 +231,8 @@ export class ProfileStore {
   partitionOf(profileId: string | null | undefined): string {
     let profile = this.find(profileId)
     if (profile === null) return BASE_PARTITION
+    // Lent the person's own sign-ins on purpose.
+    if (profile.browser === MINE_ID) return MINE_PARTITION
     // Follow borrowed sign-ins a few steps at most, so a chain made by later edits still ends somewhere.
     for (let hop = 0; hop < 4 && profile.browser !== ''; hop += 1) {
       const lender = this.find(profile.browser)
@@ -246,6 +251,7 @@ export class ProfileStore {
   private validBrowser(browser: string, self: string | null): string {
     const wanted = browser.trim()
     if (wanted === '' || wanted === self) return ''
+    if (wanted === MINE_ID) return MINE_ID
     const lender = this.list.find((p) => p.id === wanted)
     if (lender === undefined) return ''
     // Borrowing from a profile that itself borrows means the sign-ins it uses: one step, never a loop.
