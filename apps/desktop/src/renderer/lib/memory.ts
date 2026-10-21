@@ -14,7 +14,11 @@ export function linkedNames(body: string): string[] {
 
 /** The body with the brackets removed, for list previews. */
 export function plainBody(body: string): string {
-  return body.replace(/\[\[([^\]]+)\]\]/g, '$1')
+  return body
+    .replace(/\[\[([^\]]+)\]\]/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/\s*\n+\s*/g, ' ')
 }
 
 /** A page linked by name, case-insensitively. The first page with that title wins. */

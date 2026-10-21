@@ -11,7 +11,7 @@ import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
 
 const ACTION_LABEL: Record<UpkeepChange['action'], string> = {
-  where: 'Where we are',
+  where: 'Compiled',
   filed: 'Filed',
   merged: 'Merged',
   rewritten: 'Rewritten',

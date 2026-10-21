@@ -147,8 +147,8 @@ export function ImportDialog({ onClose }: { onClose: () => void }): JSX.Element 
       ) : null}
 
       {step.at === 'preview' || step.at === 'importing' ? (
-        <div className="rowc import-toggle">
-          <div className="rt">
+        <div className="import-toggle">
+          <div className="import-toggle-t">
             <b>Include retired and short-lived notes</b>
             <span>Old, replaced memories and day-to-day state. Usually best left out.</span>
           </div>

@@ -1247,16 +1247,16 @@ const upkeepListeners = new Set<(report: UpkeepReport | null) => void>()
 
 function mockImportPreview(includeAll: boolean): MemoryImportPreview {
   const byKind: MemoryImportPreview['byKind'] = includeAll
-    ? { decision: 721, fact: 840, 'how-to': 565, person: 29, project: 24, organisation: 6, event: 2348 }
-    : { decision: 464, fact: 553, 'how-to': 464, person: 28, project: 24, organisation: 6 }
+    ? { decision: 721, fact: 865, 'how-to': 566, person: 29, project: 24, organisation: 5, event: 2352 }
+    : { decision: 464, fact: 553, 'how-to': 465, person: 28, project: 24, organisation: 5 }
   return {
     ok: true,
     message: 'From the A.O.S Memory Bank.',
     source: 'A.O.S Memory Bank',
-    total: 4553,
+    total: 4562,
     byKind,
-    skippedRetired: includeAll ? 0 : 2088,
-    skippedTransient: includeAll ? 0 : 930,
+    skippedRetired: includeAll ? 0 : 2091,
+    skippedTransient: includeAll ? 0 : 932,
     invalid: 0,
   }
 }
