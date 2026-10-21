@@ -10,11 +10,13 @@ import {
   dialog,
   globalShortcut,
   ipcMain,
+  nativeImage,
   powerMonitor,
   safeStorage,
   shell,
   type OpenDialogOptions,
 } from 'electron'
+import { ICON_IMAGE_PX } from '../shared/project-icon'
 
 import type { AppPlatform } from '@agent/core'
 
@@ -657,6 +659,15 @@ async function startServices(win: BrowserWindow): Promise<void> {
       state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
       agentName: () => settings.get().agentName,
       profiles: () => apps.profiles.all(),
+      imageIcon: async (path) => {
+        const picture = nativeImage.createFromPath(path)
+        if (picture.isEmpty()) return null
+        const { width, height } = picture.getSize()
+        // Square from the middle, then down to icon size.
+        const side = Math.min(width, height)
+        const square = picture.crop({ x: Math.floor((width - side) / 2), y: Math.floor((height - side) / 2), width: side, height: side })
+        return square.resize({ width: ICON_IMAGE_PX, height: ICON_IMAGE_PX, quality: 'best' }).toDataURL()
+      },
     },
   })
   runner = new Runner({

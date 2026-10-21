@@ -1,7 +1,8 @@
 import { PROFILE_COLORS, type ProfileColor, type ProjectRow } from '@agent/core'
-import { useState, type CSSProperties } from 'react'
+import { useRef, useState, type CSSProperties } from 'react'
 
 import { agent } from '../bridge'
+import { iconFromFile } from '../lib/icon-image'
 import { toneStyle } from '../lib/profiles'
 import { PROJECT_GLYPHS, singleEmoji } from '../lib/projects'
 import { Button } from '../ui/Button'
@@ -24,6 +25,9 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
   const [glyph, setGlyph] = useState(project?.icon.glyph ?? 'folder')
   const [color, setColor] = useState<ProfileColor>(project?.icon.color ?? 'iris')
   const [emoji, setEmoji] = useState(project !== undefined && singleEmoji(project.icon.glyph) !== '' ? project.icon.glyph : '')
+  const [image, setImage] = useState(project?.icon.image ?? '')
+  const [pictureError, setPictureError] = useState('')
+  const pictureInput = useRef<HTMLInputElement>(null)
   const [path, setPath] = useState(project?.path ?? '')
   const [profile, setProfile] = useState(project?.profile ?? '')
   const [hidden, setHidden] = useState(project?.hidden ?? false)
@@ -31,7 +35,7 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
   const [busy, setBusy] = useState(false)
 
   const picked = singleEmoji(emoji)
-  const icon = { glyph: picked !== '' ? picked : glyph, color }
+  const icon = { glyph: picked !== '' ? picked : glyph, color, ...(image === '' ? {} : { image }) }
 
   const save = async (): Promise<void> => {
     const clean = name.trim().replace(/\s+/g, ' ').slice(0, 60)
@@ -88,12 +92,13 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
               key={each}
               type="button"
               role="radio"
-              aria-checked={picked === '' && glyph === each}
+              aria-checked={image === '' && picked === '' && glyph === each}
               aria-label={each}
-              className={`pj-glyph${picked === '' && glyph === each ? ' on' : ''}`}
+              className={`pj-glyph${image === '' && picked === '' && glyph === each ? ' on' : ''}`}
               onClick={() => {
                 setGlyph(each)
                 setEmoji('')
+                setImage('')
               }}
             >
               <Icon name={each} size={20} />
@@ -105,8 +110,38 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
             placeholder="Emoji"
             value={emoji}
             maxLength={8}
-            onChange={(event) => setEmoji(event.target.value)}
+            onChange={(event) => {
+              setEmoji(event.target.value)
+              if (event.target.value.trim() !== '') setImage('')
+            }}
           />
+        </div>
+        <div className="pj-pic">
+          <input
+            ref={pictureInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/x-icon,image/svg+xml"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              event.target.value = ''
+              if (file === undefined) return
+              setPictureError('')
+              void iconFromFile(file)
+                .then(setImage)
+                .catch((cause: unknown) => setPictureError(cause instanceof Error ? cause.message : 'That picture could not be used.'))
+            }}
+          />
+          <Button variant="tonal" size="sm" onClick={() => pictureInput.current?.click()}>
+            <Icon name="shot" size={16} />
+            {image === '' ? 'Use my own picture' : 'Choose another picture'}
+          </Button>
+          {image !== '' ? (
+            <Button variant="text" size="sm" onClick={() => setImage('')}>
+              Use the icon instead
+            </Button>
+          ) : null}
+          <span className="pj-pic-note">{pictureError !== '' ? pictureError : 'A logo or any picture; it is cut square.'}</span>
         </div>
         <div className="pj-colors" role="radiogroup" aria-label="Colour">
           {PROFILE_COLORS.map((each) => (

@@ -10,6 +10,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 
 import { MAIN_CHAT, PROFILE_COLORS, bool, schema, str, type AgentProfileInfo, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext } from '@agent/core'
 
+import { isIconImage } from '../../shared/project-icon'
 import type { DataStore } from '../runtime/data'
 import { chatOf, chatTitle, newProjectChatId, parseMeta } from '../runtime/chat-lines'
 
@@ -33,6 +34,18 @@ export interface ProjectToolDeps {
   agentName(): string
   /** The person's profiles, so a project can name the one its helpers use. */
   profiles?(): AgentProfileInfo[]
+  /** A picture file on this computer as a small square icon (shared/project-icon.ts), or null when it is not one. */
+  imageIcon?(path: string): Promise<string | null>
+}
+
+/** The picture the agent named for a project's icon: '' for none asked, or an error line for the agent. */
+async function pictureFor(deps: ProjectToolDeps, raw: string): Promise<{ image: string } | { error: string } | null> {
+  if (raw === '') return null
+  if (raw.toLowerCase() === 'none') return { image: '' }
+  const path = folderPath(raw)
+  const image = deps.imageIcon === undefined ? null : await deps.imageIcon(path).catch(() => null)
+  if (image === null || !isIconImage(image)) return { error: `${path} is not a picture this app can use (a PNG, JPG, WebP or ICO file). Find the right file with files_find and call again.` }
+  return { image }
 }
 
 function text(value: unknown): string {
@@ -245,6 +258,7 @@ function projectCreate(deps: ProjectToolDeps): Tool {
         description: str('One or two lines: what it is for'),
         profile: str("The profile whose accounts and logins its helpers use, by name. Leave out for General."),
         icon: str('An icon: one of folder, building, code, term, globe, doc, mail, cal, chat, tasks, heart, bolt, shield, key, palette, monitor, phone, person, server, shot; or one emoji'),
+        icon_image: str("A picture to use as its icon instead: the full path of an image file on this computer (PNG, JPG, WebP or ICO), e.g. the website's logo or favicon in the project folder. Only when the user asks for their own picture."),
         color: str(`Tile colour: ${PROFILE_COLORS.join(', ')}`),
         create_folder: bool('True to make the folder when it does not exist yet'),
       }),
@@ -262,7 +276,9 @@ function projectCreate(deps: ProjectToolDeps): Tool {
       const profile = profileByName(deps, text(input['profile']))
       if (profile === null) return `No profile called "${text(input['profile'])}". The user's profiles: ${profileNames(deps)}. Leave profile out for General.`
       const description = text(input['description']).slice(0, 600)
-      const icon = { glyph: iconGlyph(text(input['icon'])), color: colorOf(text(input['color']), projects) }
+      const picture = await pictureFor(deps, text(input['icon_image']))
+      if (picture !== null && 'error' in picture) return picture.error
+      const icon = { glyph: iconGlyph(text(input['icon'])), color: colorOf(text(input['color']), projects), ...(picture !== null && picture.image !== '' ? { image: picture.image } : {}) }
       const profileName = profile === 'general' ? 'General' : profile.name
       const card: JsonObject = { kind: 'project', name, description, path, folderNew: !exists, profile: profileName, icon }
       const answer = await ctx.ask(`Make the project ${name}?`, ['Create', 'Change'], card)
@@ -289,6 +305,7 @@ function projectUpdate(deps: ProjectToolDeps): Tool {
         description: str('New description'),
         profile: str('New profile by name, or "General"'),
         icon: str('New icon (a glyph name or one emoji)'),
+        icon_image: str('Use a picture as its icon: the full path of an image file on this computer (PNG, JPG, WebP or ICO); "none" goes back to the glyph'),
         color: str('New tile colour'),
         hidden: bool('True hides it from the rail, false shows it again'),
       }),
@@ -321,12 +338,16 @@ function projectUpdate(deps: ProjectToolDeps): Tool {
         patch.profile = profile === 'general' ? '' : profile.id
         changed.push(`profile ${profile === 'general' ? 'General' : profile.name}`)
       }
-      if (typeof input['icon'] === 'string' || typeof input['color'] === 'string') {
+      const picture = await pictureFor(deps, text(input['icon_image']))
+      if (picture !== null && 'error' in picture) return picture.error
+      if (typeof input['icon'] === 'string' || typeof input['color'] === 'string' || picture !== null) {
+        const image = picture !== null ? picture.image : typeof input['icon'] === 'string' ? '' : (project.icon.image ?? '')
         patch.icon = {
           glyph: typeof input['icon'] === 'string' ? iconGlyph(text(input['icon'])) : project.icon.glyph,
           color: typeof input['color'] === 'string' ? colorOf(text(input['color']), projects) : project.icon.color,
+          ...(image === '' ? {} : { image }),
         }
-        changed.push('icon')
+        changed.push(picture !== null ? (picture.image === '' ? 'icon back to its glyph' : 'its own picture as the icon') : 'icon')
       }
       if (typeof input['hidden'] === 'boolean' && input['hidden'] !== project.hidden) {
         patch.hidden = input['hidden']

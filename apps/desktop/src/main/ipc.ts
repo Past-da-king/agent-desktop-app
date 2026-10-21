@@ -36,6 +36,7 @@ import { POPULAR_APPS } from './apps/catalog'
 import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
 import { asWriter } from './memory/history'
+import { isIconImage } from '../shared/project-icon'
 import { listPeople, type PeopleSource } from './browser/people'
 import { isRule } from './apps/store'
 import type { Store } from './db'
@@ -277,6 +278,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     const entity = entityArg(rawEntity)
     let row = requireObject(rawRow, 'row')
     if (entity === 'trigger') row = await guardRoutineWrite(store, row)
+    if (entity === 'project') row = withSafeIcon(row)
     // A memory page changed in the window is the person's own edit (memory/history.ts).
     const saved = await asWriter('you', undefined, () => store.upsert(entity, row as RowInput<EntityName>))
     account.nudge()
@@ -848,3 +850,11 @@ function parseHttpUrl(value: string): string {
 
 /** Kept exported for callers that want the concrete row type behind an entity name. */
 export type RowFor<E extends EntityName> = EntityMap[E]
+
+/** A project's own picture is kept only when it is a small icon image (shared/project-icon.ts); anything else is dropped. */
+function withSafeIcon(row: Record<string, unknown>): Record<string, unknown> {
+  const icon = row['icon']
+  if (typeof icon !== 'object' || icon === null || Array.isArray(icon)) return row
+  const { image, ...rest } = icon as Record<string, unknown>
+  return { ...row, icon: image !== undefined && isIconImage(image) ? { ...rest, image } : rest }
+}

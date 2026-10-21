@@ -240,6 +240,8 @@ export interface ProjectIcon {
   /** An Icon name (renderer/ui/Icon.tsx) or one emoji. */
   glyph: string
   color: ProfileColor
+  /** The project's own picture instead of the glyph: a small square data URL (shared/project-icon.ts). */
+  image?: string
 }
 
 /**
