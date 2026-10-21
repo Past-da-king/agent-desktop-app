@@ -5,11 +5,12 @@
 import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 
-import type { MemoryImportPreview, UpkeepSummary } from '@agent/core'
+import type { MemoryImportPreview, MemoryTidyPlan, UpkeepSummary } from '@agent/core'
 
 import { MEMORY_CHANNELS } from '../../shared/memory-channels'
 import type { IpcMainLike } from '../ipc'
 import { parseExport, planImport, runImport, type BatchingStore } from './importer'
+import { planTidy, type MemoryTidy } from './tidy'
 import type { MemoryService } from './service'
 import { newChatId } from '../runtime/chat-lines'
 
@@ -20,6 +21,8 @@ export interface MemoryIpcDeps {
   /** The OS file picker for a .json export. */
   pickFile?: () => Promise<string | null>
   log?: (message: string, detail?: Record<string, string | number>) => void
+  /** Tidying a bank with the agent. Absent in tests that only import. */
+  tidy?: MemoryTidy
 }
 
 const MAX_IMPORT_BYTES = 200 * 1024 * 1024
@@ -75,6 +78,32 @@ export function registerMemoryIpc(deps: MemoryIpcDeps): void {
     } catch (error) {
       return { ...failedPreview(error), added: 0, updated: 0, unchanged: 0, deletedHere: 0, redacted: 0, ms: 0 }
     }
+  })
+
+  ipcMain.handle(MEMORY_CHANNELS.previewTidy, async (_event, path, includeAll): Promise<MemoryTidyPlan> => {
+    try {
+      return planTidy(parseExport(await readPicked(path)), { includeAll: includeAll === true }).plan
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not read that file.'
+      return { ok: false, message, source: '', notes: 0, projects: 0, steps: 0, chars: 0, olderState: 0, retired: 0 }
+    }
+  })
+
+  ipcMain.handle(MEMORY_CHANNELS.startTidy, async (_event, path, includeAll) => {
+    if (deps.tidy === undefined) throw new Error('Tidying is not available.')
+    return deps.tidy.start(parseExport(await readPicked(path)), includeAll === true)
+  })
+
+  ipcMain.handle(MEMORY_CHANNELS.stopTidy, async () => {
+    if (deps.tidy === undefined) throw new Error('Tidying is not available.')
+    return deps.tidy.stop()
+  })
+
+  ipcMain.handle(MEMORY_CHANNELS.tidyState, async () => deps.tidy?.state() ?? null)
+
+  ipcMain.handle(MEMORY_CHANNELS.undoTidy, async () => {
+    if (deps.tidy === undefined) return { removed: 0, restored: 0 }
+    return deps.tidy.undo()
   })
 
   ipcMain.handle(MEMORY_CHANNELS.searchChats, async (_event, query, limit) => {
