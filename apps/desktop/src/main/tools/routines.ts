@@ -10,7 +10,10 @@
  */
 import {
   bool,
+  describeEventFilter,
   enumOf,
+  int,
+  parseEventFilter,
   schema,
   str,
   type Tool,
@@ -21,7 +24,8 @@ import { isBuiltinRoutine } from '../memory/routine'
 import type { DataStore } from '../runtime/data'
 import { parseWhen } from './tasks'
 
-const KINDS: Array<TriggerRow['kind']> = ['at', 'daily', 'interval']
+const KINDS: Array<TriggerRow['kind']> = ['at', 'daily', 'interval', 'event']
+export const DEFAULT_GATHER_SECONDS = 20
 const MIN_INTERVAL_MINUTES = 15
 
 export function routineTools(store: DataStore, now: () => Date = () => new Date()): Tool[] {
@@ -33,14 +37,16 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
     spec: {
       name: 'routine_create',
       description:
-        "Create a routine: a prompt you will run later by yourself. kind 'at' = once at a time (spec an ISO date-time like 2026-10-06T07:30); 'daily' = every day (spec HH:mm); 'interval' = every N minutes (spec minutes, at least 15). Suggest routines before creating one.",
+        "Create a routine: a prompt you will run later by yourself. kind 'at' = once at a time (spec an ISO date-time like 2026-10-06T07:30); 'daily' = every day (spec HH:mm); 'interval' = every N minutes (spec minutes, at least 15); 'event' = whenever a worker emits a matching event (spec a JSON filter like {\"worker\":\"w_ab12\",\"event\":\"message.*\"}; worker_list names the workers). An event routine runs in its own standing helper, its desk, which remembers earlier runs, works in `profile`, hands the work out to helpers and reports to the main agent. Suggest routines before creating one.",
       schema: schema(
         ['name', 'kind', 'spec', 'prompt'],
         {
           name: str('Short name, e.g. Morning brief'),
           kind: enumOf('When it runs', ...KINDS),
-          spec: str("Time or interval: ISO for 'at', HH:mm for 'daily', minutes for 'interval'"),
-          prompt: str('What you will do each time, written as an instruction to yourself'),
+          spec: str("ISO for 'at', HH:mm for 'daily', minutes for 'interval', a JSON filter for 'event': worker and/or source, event (* as a wildcard), match {field: text}"),
+          prompt: str('What you will do each time, written as an instruction to yourself. For an event routine: the standing brief of its desk (what matters, who owns what, what to hand out)'),
+          gather_seconds: int('event only: gather matching events for this many seconds into one run (default 20)'),
+          profile: str('event only: the profile its desk works in, by name. Leave out for General'),
         },
       ),
     },
@@ -50,15 +56,19 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
       const prompt = text(input['prompt']).trim()
       if (name === '') return 'A routine needs a name.'
       if (prompt === '') return 'A routine needs a prompt: what you will do each time.'
-      if (kind === null) return 'Not created: kind must be at, daily or interval.'
+      if (kind === null) return 'Not created: kind must be at, daily, interval or event.'
 
       const spec = text(input['spec']).trim()
       const problem = specProblem(kind, spec, now().getTime())
       if (problem !== null) return `Not created: ${problem}`
+      const gather = gatherOf(input['gather_seconds'])
+      const profile = kind === 'event' ? text(input['profile']).trim() : ''
 
       const approved = await ctx.approve(
         `Create a routine: ${name}`,
-        `Runs ${plainSchedule(kind, spec)}.\n\nEach time it will: ${prompt}`,
+        `Runs ${plainSchedule(kind, spec)}.${
+          kind === 'event' ? ` Events are gathered for ${gather} seconds, and one standing helper${profile === '' ? '' : ` in ${profile}`} handles every run.` : ''
+        }\n\nEach time it will: ${prompt}`,
       )
       if (!approved) return 'The user declined.'
 
@@ -70,6 +80,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
         enabled: true,
         lastRunAt: null,
         lastResult: '',
+        ...(kind === 'event' ? { gatherSeconds: gather, profile, deskId: '' } : {}),
       })
       await ctx.activity(`New routine: ${name}`, { tool: 'routine_create' })
       return `Routine #${row.id} created.`
@@ -166,6 +177,10 @@ export function specProblem(kind: TriggerRow['kind'], spec: string, now: number)
     return null
   }
   if (kind === 'daily') return clockProblem(spec)
+  if (kind === 'event') {
+    const filter = parseEventFilter(spec)
+    return typeof filter === 'string' ? filter : null
+  }
   const minutes = Number(spec)
   if (!Number.isInteger(minutes) || minutes < MIN_INTERVAL_MINUTES) {
     return `spec must be whole minutes, at least ${MIN_INTERVAL_MINUTES}`
@@ -184,7 +199,14 @@ function clockProblem(spec: string): string | null {
 function plainSchedule(kind: TriggerRow['kind'], spec: string): string {
   if (kind === 'at') return `once at ${spec.replace('T', ' ')}`
   if (kind === 'daily') return `every day at ${spec}`
+  if (kind === 'event') return describeEventFilter(spec).replace(/^When/, 'when')
   return `every ${spec} minutes`
+}
+
+function gatherOf(value: unknown): number {
+  const seconds = typeof value === 'number' ? value : Number(value)
+  if (value === undefined || value === null || value === '' || !Number.isFinite(seconds) || seconds < 0) return DEFAULT_GATHER_SECONDS
+  return Math.min(600, Math.round(seconds))
 }
 
 function kindOf(value: unknown): TriggerRow['kind'] | null {

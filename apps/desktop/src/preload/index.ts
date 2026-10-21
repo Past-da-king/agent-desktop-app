@@ -38,12 +38,16 @@ import type {
   SystemInfo,
   Unsubscribe,
   VoiceResult,
+  WorkerEvent,
+  WorkerInfo,
+  WorkerLogLine,
 } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
 import { CHANNELS, EVENTS } from '../shared/channels'
 import { MEMORY_CHANNELS, MEMORY_EVENTS } from '../shared/memory-channels'
 import { MEMORY_HISTORY_CHANNELS } from '../shared/memory-history-channels'
+import { WORKER_CHANNELS, WORKER_EVENTS } from '../shared/workers-channels'
 
 const platform: AgentApi['platform'] =
   process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
@@ -276,6 +280,19 @@ const api: AgentApi = {
     tidyState: () => call<MemoryTidyProgress | null>(MEMORY_CHANNELS.tidyState),
     undoTidy: () => call<{ removed: number; restored: number }>(MEMORY_CHANNELS.undoTidy),
     onTidy: (callback) => on<MemoryTidyProgress>(MEMORY_EVENTS.tidy, callback),
+  },
+
+  workers: {
+    list: () => call<WorkerInfo[]>(WORKER_CHANNELS.list),
+    events: (worker, limit) => call<WorkerEvent[]>(WORKER_CHANNELS.events, worker ?? '', limit ?? 100),
+    logs: (id, limit) => call<WorkerLogLine[]>(WORKER_CHANNELS.logs, id, limit ?? 200),
+    start: (id) => call<void>(WORKER_CHANNELS.start, id),
+    stop: (id) => call<void>(WORKER_CHANNELS.stop, id),
+    restart: (id) => call<void>(WORKER_CHANNELS.restart, id),
+    remove: (id) => call<void>(WORKER_CHANNELS.remove, id),
+    setSecret: (id, name, value) => call<void>(WORKER_CHANNELS.setSecret, id, name, value),
+    openFolder: (id) => call<void>(WORKER_CHANNELS.openFolder, id),
+    onChange: (callback) => on<null>(WORKER_EVENTS.changed, () => callback()),
   },
 }
 
