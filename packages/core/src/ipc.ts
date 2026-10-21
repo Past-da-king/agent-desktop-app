@@ -314,6 +314,21 @@ export interface BrowserTab {
   title: string
   url: string
   active: boolean
+  /** The tab's session partition: the renderer's <webview> for it must use exactly this one. */
+  partition?: string
+  /** True when the renderer hosts this tab's page in a <webview> inside its card. */
+  embed?: boolean
+  /** How this tab's page is laid out (each tab keeps the view it was opened with). */
+  view?: BrowserPageSpec
+}
+
+/** The size and kind of page a tab lays out, for placing its <webview> (shared/page-place.ts). */
+export interface BrowserPageSpec {
+  mode: BrowserViewMode
+  width: number
+  height: number
+  zoom?: number
+  fixed?: boolean
 }
 
 /** What the panel shows. `agentActive` is false while the person has control. */
@@ -709,6 +724,8 @@ export interface AgentApi {
     /** A new empty tab for the person. */
     newTab(): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
+    /** The renderer's <webview> for a tab is attached: hands its guest page to the main process. */
+    attach(tabId: string, guestId: number): Promise<boolean>
   }
   helpers: HelpersApi
   apps: AppsApi

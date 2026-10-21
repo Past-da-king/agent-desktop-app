@@ -105,6 +105,8 @@ export interface BrowserControl {
   frame?(): Promise<string | null>
   personOpen?(address: string): Promise<void>
   personNewTab?(): void
+  /** A <webview> in the main window is attached for a tab; `senderId` is the asking renderer's webContents id. */
+  attachGuest?(tabId: string, guestId: number, senderId: number | null): boolean
 }
 
 export interface IpcDeps {
@@ -369,6 +371,12 @@ export function registerIpc(deps: IpcDeps): () => void {
   })
   handle(CHANNELS.browser.openInSystem, async () => {
     await deps.browser?.openInSystem()
+  })
+  handle(CHANNELS.browser.attach, async (event, rawTab, rawGuest) => {
+    const tabId = requireString(rawTab, 'tab id', MAX_STRING)
+    if (typeof rawGuest !== 'number' || !Number.isInteger(rawGuest) || rawGuest <= 0) throw new Error('guest must be a webContents id')
+    const sender = (event as { sender?: { id?: unknown } } | null)?.sender?.id
+    return deps.browser?.attachGuest?.(tabId, rawGuest, typeof sender === 'number' ? sender : null) ?? false
   })
 
   // ---- files ----
