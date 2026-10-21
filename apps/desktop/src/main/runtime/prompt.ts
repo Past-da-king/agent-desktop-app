@@ -11,7 +11,7 @@ import { appName } from '../apps/catalog'
 
 import { OPENUI_PROMPT } from './openui-prompt'
 import { VOICE_NOTE_GUIDE } from '../tools/voice-note'
-import { formatMemory, formatMemoryBrief, recallFor } from './recall'
+import { formatMemory, formatMemoryBrief, isOpen, recallFor } from './recall'
 import { formatDateTime, localTimeZone } from './time'
 
 export interface PromptInput {
@@ -98,6 +98,14 @@ export const ASSUME_YOU_KNOW = [
   '- Each new chat starts fresh. The pinned "Where we are" page is where things stood at the end of the last day: pick up from it.',
 ]
 
+/** Keeping memory honest, for every agent that can write it (the main agent, routines and helpers). */
+export const MEMORY_CARE = [
+  'KEEPING MEMORY',
+  '- Every change to a memory page is kept as a version with who made it and why. Give memory_save and memory_update a short reason; the result names the new version, so you know it really changed. memory_history shows how a page got to where it is.',
+  '- When something is done and ticked off (a task finished, a question answered, a plan carried out), close its page: memory_update with status closed. It stays searchable but stops coming up. Open it again if it comes back.',
+  '- The user dictates, and dictation mis-hears names. When a word they used is a mis-hearing or another spelling of a known person, organisation or project (e.g. "Londercorp" for LondaCorp), add that spelling to the page with memory_update add_alias, so it is recognised straight away next time.',
+]
+
 export const NO_NAME = 'Your agent'
 export const MEMORY_LIMIT = 8
 export const TASK_LIMIT = 25
@@ -105,7 +113,8 @@ export const TASK_LIMIT = 25
 export function buildSystemPrompt(input: PromptInput): string {
   const { settings, memories, latestUserText } = input
   const zone = input.timeZone ?? localTimeZone()
-  const pinned = memories.filter((memory) => memory.pinned)
+  // A closed page is done: kept and searchable, never pushed in front of the model.
+  const pinned = memories.filter((memory) => memory.pinned && isOpen(memory))
   const pinnedIds = new Set(pinned.map((memory) => memory.id))
   // People, organisations and projects the message names come first, then the best word matches.
   const recalled = recallFor(
@@ -304,6 +313,9 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push('POSSIBLY RELEVANT MEMORIES')
     recalled.forEach((memory) => lines.push(`- ${formatMemoryBrief(memory)}`))
   }
+
+  lines.push('')
+  lines.push(...MEMORY_CARE)
 
   if (goals.length > 0 || tasks.length > 0) {
     lines.push('')

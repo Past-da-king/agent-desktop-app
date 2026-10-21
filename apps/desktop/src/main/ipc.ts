@@ -35,6 +35,7 @@ import type { AccountService, SignInArgs } from './account'
 import { POPULAR_APPS } from './apps/catalog'
 import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
+import { asWriter } from './memory/history'
 import { listPeople, type PeopleSource } from './browser/people'
 import { isRule } from './apps/store'
 import type { Store } from './db'
@@ -276,7 +277,8 @@ export function registerIpc(deps: IpcDeps): () => void {
     const entity = entityArg(rawEntity)
     let row = requireObject(rawRow, 'row')
     if (entity === 'trigger') row = await guardRoutineWrite(store, row)
-    const saved = await store.upsert(entity, row as RowInput<EntityName>)
+    // A memory page changed in the window is the person's own edit (memory/history.ts).
+    const saved = await asWriter('you', undefined, () => store.upsert(entity, row as RowInput<EntityName>))
     account.nudge()
     return saved
   })
@@ -284,7 +286,7 @@ export function registerIpc(deps: IpcDeps): () => void {
   handle(CHANNELS.data.remove, async (_event, rawEntity, rawId) => {
     const entity = entityArg(rawEntity)
     const id = requireString(rawId, 'id', MAX_STRING)
-    await store.remove(entity, id)
+    await asWriter('you', undefined, () => store.remove(entity, id))
     account.nudge()
   })
 

@@ -21,9 +21,12 @@ import {
   type Change,
   type EntityMap,
   type EntityName,
+  type MemoryVersion,
   type RowInput,
   type SyncStore,
 } from '@agent/core'
+
+import { changedFields, currentWriter, versionFields, type MemoryWriter } from './memory/history'
 
 interface StoredRow {
   cid: string
@@ -35,6 +38,9 @@ interface StoredRow {
 export type StoreChangeListener = (entity: EntityName) => void
 
 const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger']
+
+/** Versions kept per memory page; the oldest go first. */
+const MAX_VERSIONS = 300
 
 const UPDATED_AT_ENTITIES: ReadonlySet<EntityName> = new Set(['memory', 'task'])
 
@@ -65,6 +71,17 @@ export class Store implements SyncStore {
       );
       CREATE INDEX IF NOT EXISTS rows_stamp ON rows(stamp);
       CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS memory_versions(
+        memory_id TEXT NOT NULL,
+        n INTEGER NOT NULL,
+        at INTEGER NOT NULL,
+        by TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        changed TEXT NOT NULL,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        payload TEXT NOT NULL,
+        PRIMARY KEY(memory_id, n)
+      );
     `)
 
     const existing = this.kv('device_id')
@@ -125,6 +142,7 @@ export class Store implements SyncStore {
     if (existing === null && typeof payload.createdAt !== 'number') payload.createdAt = timestamp
     if (UPDATED_AT_ENTITIES.has(entity)) payload.updatedAt = timestamp
 
+    if (entity === 'memory') this.keepVersion(id, existing === null || existing.deleted ? null : existing.payload, payload, currentWriter())
     const stamp = encodeStamp(this.hlc.now())
     this.db
       .prepare(
@@ -146,6 +164,7 @@ export class Store implements SyncStore {
     this.assertEntity(entity)
     const existing = this.readRow(entity, id)
     if (existing === null) return
+    if (entity === 'memory' && !existing.deleted) this.keepVersion(id, existing.payload, null, currentWriter())
     const stamp = encodeStamp(this.hlc.now())
     this.db
       .prepare('UPDATE rows SET stamp = ?, deleted = 1, local = 1 WHERE entity = ? AND cid = ?')
@@ -156,6 +175,7 @@ export class Store implements SyncStore {
   /** Wipe the synced rows and the watermarks. The device id is kept so HLC stamps stay stable. */
   async clearAll(): Promise<void> {
     this.db.exec('DELETE FROM rows')
+    this.db.exec('DELETE FROM memory_versions')
     this.db.prepare("DELETE FROM kv WHERE k IN ('push_mark', 'cursor')").run()
     for (const entity of ENTITY_NAMES) this.emit(entity)
   }
@@ -186,6 +206,68 @@ export class Store implements SyncStore {
     if (this.closed) return
     this.closed = true
     this.db.close()
+  }
+
+  // ---- memory versions ----
+
+  /** Every kept version of one memory page, newest first. Kept on this device (each device keeps what it saw). */
+  memoryHistory(memoryId: string): MemoryVersion[] {
+    return this.db
+      .prepare('SELECT memory_id, n, at, by, reason, changed, deleted, payload FROM memory_versions WHERE memory_id = ? ORDER BY n DESC')
+      .all(memoryId)
+      .map((row) => {
+        let payload: Record<string, unknown> = {}
+        let changed: string[] = []
+        try {
+          payload = JSON.parse(stringField(row['payload'])) as Record<string, unknown>
+          changed = JSON.parse(stringField(row['changed'])) as string[]
+        } catch {
+          // A damaged entry still shows when and who.
+        }
+        return {
+          memoryId: stringField(row['memory_id']),
+          n: numberField(row['n']),
+          at: numberField(row['at']),
+          by: stringField(row['by']),
+          reason: stringField(row['reason']),
+          changed,
+          deleted: numberField(row['deleted']) === 1,
+          ...versionFields(payload),
+        }
+      })
+  }
+
+  /** The newest version number of a page (0 when it has none yet). */
+  memoryVersionCount(memoryId: string): number {
+    const row = this.db.prepare('SELECT MAX(n) AS n FROM memory_versions WHERE memory_id = ?').get(memoryId)
+    return row === undefined ? 0 : numberField(row['n'])
+  }
+
+  /**
+   * Keeps a version of a memory page as it is written: `after` null means deleted. A page written before
+   * versions existed first gets its old text kept as version 1, so its first change is never lost. A write that
+   * changes none of the kept fields (only a timestamp) keeps nothing.
+   */
+  private keepVersion(memoryId: string, before: Record<string, unknown> | null, after: Record<string, unknown> | null, who: MemoryWriter): void {
+    let n = this.memoryVersionCount(memoryId)
+    const at = this.now()
+    const insert = this.db.prepare(
+      'INSERT OR REPLACE INTO memory_versions(memory_id, n, at, by, reason, changed, deleted, payload) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+    )
+    if (n === 0 && before !== null) {
+      n = 1
+      const when = numberField(before['updatedAt']) || numberField(before['createdAt']) || at
+      insert.run(memoryId, n, when, 'earlier', '', JSON.stringify(['created']), 0, JSON.stringify(versionFields(before)))
+    }
+    let changed: string[]
+    if (after === null) changed = ['deleted']
+    else if (before === null) changed = ['created']
+    else changed = changedFields(versionFields(before), versionFields(after))
+    if (changed.length === 0) return
+    n += 1
+    const fields = versionFields(after ?? before ?? {})
+    insert.run(memoryId, n, at, who.by.slice(0, 80), who.reason ?? '', JSON.stringify(changed), after === null ? 1 : 0, JSON.stringify(fields))
+    if (n > MAX_VERSIONS) this.db.prepare('DELETE FROM memory_versions WHERE memory_id = ? AND n <= ?').run(memoryId, n - MAX_VERSIONS)
   }
 
   // ---- SyncStore ----
@@ -232,6 +314,10 @@ export class Store implements SyncStore {
       }
       const payload = { ...change.payload }
       if (typeof payload.createdAt !== 'number') payload.createdAt = this.now()
+      if (change.entity === 'memory') {
+        const before = existing === null || existing.deleted ? null : existing.payload
+        if (!(before === null && change.deleted)) this.keepVersion(change.id, before, change.deleted ? null : payload, { by: 'another device' })
+      }
 
       this.db
         .prepare(

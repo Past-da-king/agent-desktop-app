@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { applyAliases } from '../src/main/memory/vocabulary'
 import type { DictationCommand, DictationView } from '@agent/core'
 
 import { DictationController, loudness, type DictationDeps, type TranscriberLike } from '../src/main/dictation/controller'
@@ -198,6 +199,23 @@ describe('DictationController', () => {
     await vi.advanceTimersByTimeAsync(1500)
     expect(h.pill.at(-1)).toBe('hide')
     expect(h.controller.phase).toBe('idle')
+  })
+
+  it('puts names memory knows were mis-heard right, in a plain dictation and before clean-up', async () => {
+    const fixNames = async (text: string): Promise<string> => applyAliases(text, { names: ['LondaCorp'], aliases: [{ heard: 'Londercorp', name: 'LondaCorp' }] })
+    const plain = harness({ fixNames })
+    await listening(plain)
+    plain.transcriber().say('Send the estimate to Londercorp.')
+    plain.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(plain.typed).toEqual(['Send the estimate to LondaCorp.'])
+
+    const clean = harness({ fixNames })
+    await listening(clean, 'clean')
+    clean.transcriber().say('so um send it to londercorp')
+    clean.controller.toggle('clean')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(clean.cleaned).toEqual(['so um send it to LondaCorp'])
   })
 
   it('the clean-up shortcut sends the words through the clean-up model first', async () => {

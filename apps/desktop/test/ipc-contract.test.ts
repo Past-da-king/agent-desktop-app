@@ -243,6 +243,11 @@ describe('registerIpc', () => {
 
     await invoke(CHANNELS.data.remove, 'memory', created.id)
     expect(await invoke(CHANNELS.data.list, 'memory')).toEqual([])
+    // The person's own edits from the window are kept in the page's history, as theirs.
+    expect(store.memoryHistory(created.id).map((v) => [v.n, v.by, v.changed])).toEqual([
+      [2, 'you', ['deleted']],
+      [1, 'you', ['created']],
+    ])
     expect(sent.filter((event) => event.channel === EVENTS.data)).toHaveLength(2)
   })
 

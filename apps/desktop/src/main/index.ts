@@ -52,6 +52,8 @@ import { startUpdates } from './updates'
 import { EVENTS } from '../shared/channels'
 import { registerVoiceIpc } from './voice/ipc'
 import { ChatIndex } from './memory/chat-index'
+import { EMPTY_VOCABULARY, vocabularyFrom } from './memory/vocabulary'
+import { registerMemoryHistoryIpc } from './memory/history-ipc'
 import { registerMemoryIpc } from './memory/ipc'
 import { MemoryService } from './memory/service'
 import { UpkeepFile } from './memory/upkeep-log'
@@ -716,6 +718,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     pickFile: pickImportFile,
     log: (message, detail) => logger.info(message, detail),
   })
+  registerMemoryHistoryIpc(ipcMain, memoryStore)
   void memory.restore().catch(() => undefined)
   memory.start()
 
@@ -839,6 +842,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     pill: { ...quickAskPaths(__dirname), devUrl: process.env['ELECTRON_RENDERER_URL'] },
     locale: app.getLocale(),
     log: (message, fields) => logger.info(message, fields),
+    vocabulary: async () => (store === null ? EMPTY_VOCABULARY : vocabularyFrom(await store.list('memory'))),
   })
   registerDictationIpc(
     {

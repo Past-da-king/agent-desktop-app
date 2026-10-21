@@ -168,6 +168,38 @@ export interface MemoryRow extends RowBase {
   pinned: boolean
   source: 'agent' | 'user'
   updatedAt: number
+  /** 'closed' = done and ticked off: kept and searchable, left out of what the agent is reminded of. Open when absent. */
+  status?: MemoryStatus
+  /** When it was closed (ms), or null. */
+  closedAt?: number | null
+  /** Other names or spellings it answers to, comma separated (a dictation that mis-hears "LondaCorp" as "Londercorp"). */
+  aliases?: string
+}
+
+export type MemoryStatus = 'open' | 'closed'
+
+/**
+ * One version of a memory page, kept every time the page changes: what it said after that change, who changed it,
+ * why, and which fields changed. Numbered from 1 per page; the highest number is the page as it is now.
+ */
+export interface MemoryVersion {
+  memoryId: string
+  n: number
+  at: number
+  /** Who: "you", "agent", "helper <label>", "chat filing", "end of day", "import", "another device", "app". */
+  by: string
+  /** Why, when the writer said (empty otherwise). */
+  reason: string
+  /** Fields that changed from the version before: title, body, kind, topics, status, aliases, pinned; "created" or "deleted". */
+  changed: string[]
+  deleted: boolean
+  title: string
+  body: string
+  kind: MemoryKind
+  topics: string
+  status: MemoryStatus
+  aliases: string
+  pinned: boolean
 }
 
 export interface GoalRow extends RowBase {
@@ -1045,5 +1077,9 @@ export interface MemoryApi {
   upkeep(): Promise<UpkeepSummary>
   /** Puts one logged change back. */
   undoChange(changeId: string): Promise<boolean>
+  /** Every kept version of one memory page, newest first. */
+  history(memoryId: string): Promise<MemoryVersion[]>
+  /** Makes a page say what an earlier version said again (a new version, so nothing is lost). */
+  restoreVersion(memoryId: string, n: number): Promise<boolean>
   onUpkeep(cb: (report: UpkeepReport | null) => void): Unsubscribe
 }

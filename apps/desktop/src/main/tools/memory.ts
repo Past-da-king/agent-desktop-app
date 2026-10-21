@@ -13,6 +13,7 @@ import {
   type Tool,
 } from '@agent/core'
 
+import { agentWriter, aliasList, asWriter } from '../memory/history'
 import type { DataStore } from '../runtime/data'
 import { formatMemory, rank } from '../runtime/recall'
 
@@ -42,7 +43,23 @@ export function linksIn(body: string): string[] {
 }
 
 export function memoryTools(store: DataStore): Tool[] {
-  return [memorySearch(store), memoryGet(store), memorySave(store), memoryUpdate(store)]
+  return [memorySearch(store), memoryGet(store), memorySave(store), memoryUpdate(store), memoryHistory(store)]
+}
+
+/** The newest version number of a page, or null when the store keeps none. */
+function versionNow(store: DataStore, id: string): number | null {
+  const history = store.memoryHistory?.(id)
+  return history === undefined ? null : (history[0]?.n ?? 0)
+}
+
+/** What a write did, said plainly so the agent (and the person reading the step) can tell it really happened. */
+function writeReceipt(store: DataStore, id: string, title: string, before: number | null, verb: string): string {
+  const after = versionNow(store, id)
+  if (after === null) return `${verb} #${id} '${title}'`
+  if (before !== null && after === before) return `Nothing changed on #${id} '${title}' (still version ${after}).`
+  const latest = store.memoryHistory?.(id)[0]
+  const changed = latest === undefined ? '' : `: ${latest.changed.join(', ')}`
+  return `${verb} #${id} '${title}', now version ${after}${changed}.`
 }
 
 function memorySearch(store: DataStore): Tool {
@@ -111,10 +128,12 @@ function memorySave(store: DataStore): Tool {
           kind: enumOf('What it is', ...MEMORY_KINDS),
           topics: str("Comma-separated tags for search, e.g. 'family, durban, birthday'"),
           pinned: bool("Pin it (core facts, like the user's own page)"),
+          aliases: str('Other names or spellings it answers to, comma separated'),
+          reason: str('Why you are writing it, in a few words (kept in its history)'),
         },
       ),
     },
-    run: async (input) => {
+    run: (input, ctx) => asWriter(agentWriter(ctx.agentLabel), text(input['reason']), async () => {
       const title = text(input['title']).trim()
       if (title === '') return 'A memory page needs a title.'
       const rows = await store.list('memory')
@@ -123,7 +142,9 @@ function memorySave(store: DataStore): Tool {
       const topics = text(input['topics']) || text(input['tags'])
       const kind = memoryKind(input['kind'])
 
+      const aliases = text(input['aliases'])
       if (existing !== undefined) {
+        const before = versionNow(store, existing.id)
         await store.upsert('memory', {
           id: existing.id,
           title,
@@ -131,9 +152,10 @@ function memorySave(store: DataStore): Tool {
           kind: kind ?? existing.kind,
           topics: topics === '' ? existing.topics : topics,
           pinned: existing.pinned || truthy(input['pinned']),
+          ...(aliases === '' ? {} : { aliases: aliasList(`${existing.aliases ?? ''},${aliases}`).join(', ') }),
           source: 'agent',
         })
-        return `Updated page #${existing.id} '${title}'`
+        return writeReceipt(store, existing.id, title, before, 'Updated page')
       }
 
       const saved = await store.upsert('memory', {
@@ -142,10 +164,11 @@ function memorySave(store: DataStore): Tool {
         kind: kind ?? 'fact',
         topics,
         pinned: truthy(input['pinned']),
+        ...(aliases === '' ? {} : { aliases: aliasList(aliases).join(', ') }),
         source: 'agent',
       })
-      return `Saved page #${saved.id} '${title}'`
-    },
+      return writeReceipt(store, saved.id, title, null, 'Saved page')
+    }),
   }
 }
 
@@ -154,21 +177,25 @@ function memoryUpdate(store: DataStore): Tool {
     spec: {
       name: 'memory_update',
       description:
-        'Correct or delete a memory page by id when it turns out to be wrong or out of date.',
+        'Change a memory page by id: correct it, bring it up to date, CLOSE it when the thing is done (status closed keeps it, searchable, but stops reminding you of it; open again with status open), add other names it answers to, or delete it. Every change is kept as a version with your reason; the result says the new version number, so you know it really changed.',
       schema: schema(
         ['id'],
         {
           id: str('Memory id'),
           title: str('New title'),
-          body: str('New text'),
+          body: str('New text (the whole page)'),
           kind: enumOf('New kind', ...MEMORY_KINDS),
           topics: str('New comma-separated tags'),
           pinned: bool('Pin or unpin it'),
+          status: enumOf('open, or closed when it is done and ticked off', 'open', 'closed'),
+          aliases: str('The full list of other names or spellings it answers to, comma separated (replaces the list)'),
+          add_alias: str("One more name or spelling it answers to, e.g. how dictation mis-heard it ('Londercorp' for LondaCorp)"),
+          reason: str('Why, in a few words (kept in its history)'),
           delete: bool('Delete it instead'),
         },
       ),
     },
-    run: async (input) => {
+    run: (input, ctx) => asWriter(agentWriter(ctx.agentLabel), text(input['reason']), async () => {
       const id = text(input['id']).trim()
       const rows = await store.list('memory')
       const page = rows.find((row) => row.id === id)
@@ -176,11 +203,17 @@ function memoryUpdate(store: DataStore): Tool {
 
       if (truthy(input['delete'])) {
         await store.remove('memory', page.id)
-        return `Deleted #${page.id} '${page.title}'`
+        return `Deleted #${page.id} '${page.title}'${versionNow(store, page.id) === null ? '' : ' (its history is kept)'}`
       }
 
       const kind = memoryKind(input['kind'])
       const pinned = input['pinned']
+      const status = input['status'] === 'closed' || input['status'] === 'open' ? input['status'] : null
+      const wasClosed = page.status === 'closed'
+      const aliasesIn = typeof input['aliases'] === 'string' ? input['aliases'] : null
+      const addAlias = text(input['add_alias']).trim()
+      const aliases = aliasesIn !== null || addAlias !== '' ? aliasList(`${aliasesIn ?? page.aliases ?? ''},${addAlias}`).join(', ') : undefined
+      const before = versionNow(store, page.id)
       await store.upsert('memory', {
         id: page.id,
         title: text(input['title']).trim() || page.title,
@@ -188,15 +221,47 @@ function memoryUpdate(store: DataStore): Tool {
         kind: kind ?? page.kind,
         topics: text(input['topics']).trim() || page.topics,
         pinned: typeof pinned === 'boolean' ? pinned : page.pinned,
+        ...(status === null ? {} : { status, closedAt: status === 'closed' ? (wasClosed ? (page.closedAt ?? Date.now()) : Date.now()) : null }),
+        ...(aliases === undefined ? {} : { aliases }),
         source: page.source,
       })
-      return `Updated #${page.id} '${page.title}'`
+      return writeReceipt(store, page.id, page.title, before, status === 'closed' && !wasClosed ? 'Closed' : 'Updated')
+    }),
+  }
+}
+
+function memoryHistory(store: DataStore): Tool {
+  return {
+    spec: {
+      name: 'memory_history',
+      description:
+        "How one memory page changed over time, newest first: each version's number, date, who changed it and why, what changed, and what it said. Use it to see how a decision got to where it is, or what a page said before.",
+      schema: schema(['id'], { id: str('Memory id'), limit: int('How many versions, default 10') }),
+    },
+    run: async (input) => {
+      const id = text(input['id']).trim()
+      const history = store.memoryHistory?.(id)
+      if (history === undefined) return 'This memory keeps no history.'
+      if (history.length === 0) return `#${id} has no earlier versions yet.`
+      const limit = clamp(Math.trunc(number(input['limit'], 10)), 1, 50)
+      return history
+        .slice(0, limit)
+        .map((v) => {
+          const when = new Date(v.at).toISOString().slice(0, 16).replace('T', ' ')
+          const why = v.reason === '' ? '' : ` (${v.reason})`
+          const what = v.deleted ? 'deleted' : `${v.changed.join(', ')}${v.status === 'closed' ? ' [closed]' : ''}`
+          const said = v.deleted ? '' : `\n  ${v.title}: ${v.body.length > 400 ? `${v.body.slice(0, 400)}...` : v.body}`
+          return `v${v.n} ${when} by ${v.by}${why}: ${what}${said}`
+        })
+        .join('\n')
     },
   }
 }
 
 function formatPage(page: MemoryRow): string {
-  return `# ${page.title} (#${page.id}, ${page.kind}; topics: ${page.topics})\n${page.body}`
+  const closed = page.status === 'closed' ? ', closed' : ''
+  const aliases = (page.aliases ?? '').trim() === '' ? '' : `; also called: ${page.aliases}`
+  return `# ${page.title} (#${page.id}, ${page.kind}${closed}; topics: ${page.topics}${aliases})\n${page.body}`
 }
 
 function memoryKind(value: unknown): MemoryKind | null {
