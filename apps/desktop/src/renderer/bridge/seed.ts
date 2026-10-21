@@ -66,6 +66,12 @@ export function demoSettings(): Settings {
     provider: 'anthropic',
     model: 'claude-sonnet-5-5',
     hasKey: true,
+    accounts: [
+      { id: 'acc_claude', label: 'Claude plan', kind: 'claude', model: 'opus', hasKey: false },
+      { id: 'acc_anthropic', label: 'Anthropic', kind: 'api', provider: 'anthropic', model: 'claude-sonnet-5-5', hasKey: true },
+      { id: 'acc_go', label: 'OpenCode Go', kind: 'api', provider: 'opencode_go', model: 'deepseek-v4.1-flash', hasKey: true },
+    ],
+    ai: { main: { account: 'acc_claude', model: 'fable' }, helpers: { account: 'acc_go', model: '' } },
     hasVoiceKey: true,
     userName: 'Sam',
     agentName: 'Nova',

@@ -1,0 +1,30 @@
+/* AI accounts (Settings) and the two-row AI chooser (chat header, project dialog, Settings default). */
+.ai-accounts .ai-row{align-items:center;flex-wrap:wrap;row-gap:6px}
+.ai-accounts .ai-row .rt{flex:1 1 220px;min-width:0}
+.ai-accounts .ai-row .rt span{overflow-wrap:anywhere}
+.ai-row-acts{display:flex;align-items:center;gap:2px;flex:none;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}
+.ai-default-h{display:flex;flex-direction:column;gap:2px;margin-bottom:10px}
+.ai-default-h b{font:500 15px/1.3 var(--font)}
+.aipicks{display:flex;flex-direction:column;gap:8px}
+.aipick{display:grid;grid-template-columns:32px minmax(90px,120px) minmax(0,1fr) minmax(0,1fr);grid-template-areas:"ic t sel model" "ic note note note";align-items:center;column-gap:10px;row-gap:4px;padding:10px 12px;border-radius:var(--r-md);background:var(--s-low)}
+.aipick-ic{grid-area:ic;width:32px;height:32px;border-radius:12px;display:grid;place-items:center;background:var(--pc);color:var(--on-pc)}
+.aipick-t{grid-area:t;display:flex;flex-direction:column;gap:2px;min-width:0}
+.aipick-t b{font:500 14px/1.3 var(--font)}
+.aipick-t span{font-size:12.5px;color:var(--on-sv);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aipick-sel{grid-area:sel;display:flex;flex-direction:column;gap:3px;min-width:0}
+.aipick-model{grid-area:model;display:flex;flex-direction:column;gap:3px;min-width:0;position:relative}
+.aipick .input{height:36px;padding:0 10px;font-size:13.5px;width:100%;min-width:0}
+.aipick-model-btn{display:flex;align-items:center;justify-content:space-between;gap:6px;text-align:left;color:var(--on-bg);cursor:pointer}
+.aipick-model-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aipick-model-btn:disabled{color:var(--on-sv);cursor:default}
+.aipick.same .aipick-model-btn{font-style:italic}
+.aipick-menu{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:30;background:var(--s-lowest);border:1px solid var(--outline-v);border-radius:var(--r-md);box-shadow:var(--shadow);padding:8px;max-height:280px;overflow:auto}
+.aipick-note{grid-area:note;font-size:12.5px;color:var(--tert)}
+.ai-menu{width:min(560px,calc(100vw - 48px))}
+.ai-menu .aipick{background:var(--s-mid)}
+.ai-menu-note{padding:8px 10px 2px;margin:0}
+.model-wait-dot{width:8px;height:8px;border-radius:50%;background:var(--tert);flex:none}
+.ai-dialog{display:flex;flex-direction:column;gap:12px}
+.ai-dialog .prov{display:flex;flex-wrap:wrap;gap:8px}
+.ai-plan{display:flex;flex-direction:column;gap:10px}
+@media (max-width:720px){.aipick{grid-template-columns:32px minmax(0,1fr);grid-template-areas:"ic t" "sel sel" "model model" "note note"}}

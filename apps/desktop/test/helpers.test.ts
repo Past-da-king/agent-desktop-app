@@ -15,7 +15,6 @@ import {
 import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { sleep, waitFor } from '../../../packages/core/test/helpers'
 import { Store } from '../src/main/db'
-import { StepBudget } from '../src/main/runtime/budget'
 import { HelperManager } from '../src/main/runtime/helpers'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset, buildWorkerToolset } from '../src/main/runtime/toolset'
@@ -95,7 +94,6 @@ interface RunnerHarness {
 
 function makeRunner(options: { extraWorkerTools?: Tool[] } = {}): RunnerHarness {
   const db = database()
-  const budget = new StepBudget()
   const events: ChatEvent[] = []
   let runner: Runner | null = null
   const manager = new HelperManager({
@@ -115,9 +113,8 @@ function makeRunner(options: { extraWorkerTools?: Tool[] } = {}): RunnerHarness 
     store: db,
     settings: settingsView(READY),
     secrets: secretsView('test-key'),
-    tools: buildToolset({ store: db, helpers: manager, mainBudget: budget }),
+    tools: buildToolset({ store: db, helpers: manager }),
     helpers: manager,
-    budget,
     providerFactory: () => providerFactory(),
     emit: (event) => events.push(event),
     isFocused: () => false,
@@ -487,32 +484,3 @@ describe('HelperManager', () => {
   })
 })
 
-describe('the main agent action budget', () => {
-  it('stops the main agent at five action steps and tells it to delegate', async () => {
-    server = createServer((_request, response) => {
-      response.writeHead(200, { 'content-type': 'text/plain' })
-      response.end('A fetched page.')
-    })
-    await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', () => resolve()))
-    const address = server.address()
-    if (address === null || typeof address === 'string') throw new Error('test server did not bind')
-
-    fake = await startFakeAi((body) => {
-      if (hasToolResult(body)) return { text: 'Hit the limit.' }
-      return {
-        toolCalls: Array.from({ length: 6 }, () => ({
-          name: 'web_fetch',
-          input: { url: `http://127.0.0.1:${address.port}/page` },
-        })),
-      }
-    })
-    const { runner } = makeRunner()
-
-    await runner.send('Fetch six pages')
-
-    const second = JSON.stringify(fake.requests[1]?.body ?? {})
-    expect(second).toContain('A fetched page.')
-    expect(second).toContain('Step limit')
-    expect(second).toContain('hand it to a helper with delegate')
-  })
-})

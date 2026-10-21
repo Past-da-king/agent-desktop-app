@@ -1,7 +1,8 @@
-import { PROFILE_COLORS, type ProfileColor, type ProjectRow } from '@agent/core'
+import { PROFILE_COLORS, type AiPicks, type ProfileColor, type ProjectRow } from '@agent/core'
 import { useRef, useState, type CSSProperties } from 'react'
 
 import { agent } from '../bridge'
+import { hasAccounts } from '../lib/ai'
 import { iconFromFile } from '../lib/icon-image'
 import { toneStyle } from '../lib/profiles'
 import { PROJECT_GLYPHS, singleEmoji } from '../lib/projects'
@@ -11,6 +12,8 @@ import { Field } from '../ui/Field'
 import { Icon } from '../ui/Icon'
 import { ProjectTile } from '../ui/ProjectTile'
 import { Switch } from '../ui/Switch'
+import { useSettings } from '../state/useSettings'
+import { AiPickRows } from '../ui/AiPickRows'
 import { useProfiles } from './Profiles'
 
 /**
@@ -30,6 +33,8 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
   const pictureInput = useRef<HTMLInputElement>(null)
   const [path, setPath] = useState(project?.path ?? '')
   const [profile, setProfile] = useState(project?.profile ?? '')
+  const [ai, setAi] = useState<AiPicks>(project?.ai ?? { main: { account: '', model: '' }, helpers: { account: '', model: '' } })
+  const settings = useSettings((state) => state.settings)
   const [hidden, setHidden] = useState(project?.hidden ?? false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -53,6 +58,7 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
         path,
         profile,
         hidden,
+        ai,
       })
       onClose(row.id)
     } catch (cause) {
@@ -200,6 +206,14 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
         </select>
         <span className="small muted pj-hint">Its helpers use this profile's accounts and logins.</span>
       </div>
+
+      {settings !== null && hasAccounts(settings) ? (
+        <div className="field">
+          <label>AI</label>
+          <AiPickRows settings={settings} picks={ai} inherit={settings.ai} onChange={setAi} />
+          <span className="small muted pj-hint">What the agent in its chats thinks with, and what its helpers think with.</span>
+        </div>
+      ) : null}
 
       <div className="field">
         <label htmlFor="project-description">What it is for</label>
