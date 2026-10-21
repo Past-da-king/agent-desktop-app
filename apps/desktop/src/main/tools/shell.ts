@@ -6,6 +6,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { accessSync, constants, existsSync, promises as fs, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 
 import { int, schema, str, type Tool } from '@agent/core'
 
@@ -67,6 +68,8 @@ export interface ShellToolDeps {
   environment?: ShellEnvironment
   /** Tests can say whether an absolute `$SHELL` exists. */
   exists?: (path: string) => boolean
+  /** The folder a command runs in when the agent names none. Defaults to the person's home folder. */
+  home?: () => string
 }
 
 export function shellTools(deps: ShellToolDeps): Tool[] {
@@ -315,6 +318,8 @@ async function runCommand(request: RunRequest): Promise<string> {
   const platform = request.deps.platform ?? process.platform
   const env = sanitiseEnv({ ...(request.deps.env ?? process.env) })
 
+  // No folder named means the person's home folder, as the tool tells the model, never the app's install folder.
+  const cwd = request.cwd ?? (request.deps.home ?? homedir)()
   const sink = new OutputSink(MAX_OUTPUT_CHARS)
   // The person's copy: stdout and stderr apart, longer than the model's, start and end kept.
   const out = new StreamCapture()
@@ -326,8 +331,7 @@ async function runCommand(request: RunRequest): Promise<string> {
       kind: 'shell',
       input: request.command,
       label: request.plan.label,
-      // No folder given means the app's own working folder, which is where it really ran.
-      cwd: request.cwd ?? process.cwd(),
+      cwd,
       stdout: out.text(),
       stderr: err.text(),
       exitCode,
@@ -340,7 +344,7 @@ async function runCommand(request: RunRequest): Promise<string> {
   let child: ChildProcess
   try {
     const spawnOptions: SpawnResolvedOptions = {
-      cwd: request.cwd,
+      cwd,
       env,
       platform,
       resolve: { platform, env, fs: realProbe },

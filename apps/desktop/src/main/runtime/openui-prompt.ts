@@ -45,7 +45,7 @@ Card(children: Component[], sources?: {title: string, sourceName: string, url: s
 Product(image?: string, name: string, price?: string, rating?: number, reviews?: number, seller?: string, was?: string, tag?: string, actions?: Buttons): One thing for sale or to compare, drawn as a tall card: photo, seller, name, price (the old price struck through in was), star rating out of 5 with the review count, an optional tag such as "Best value", then its Buttons. Put several in Stack([...], "row").
 
 ### Text
-CardHeader(title: string, subtitle?: string): The card's title line. A title that starts with an amount ("R7,200 a month") is drawn big.
+CardHeader(title: string, subtitle?: string, icon?: string): The card's title line. A title that starts with an amount ("R7,200 a month") is drawn big. icon is a Lucide icon name such as "briefcase", "calendar" or "plane"; leave it off and the card's kind picks one.
 InlineHeader(heading: string, description?: string): A small heading for a section inside a card.
 TextContent(text: string, size?: "small" | "default" | "large" | "small-heavy" | "large-heavy"): A short paragraph. Markdown works.
 MarkDownRenderer(textMarkdown: string, variant?: "clear" | "card" | "sunk"): A longer piece of markdown, such as a drafted email or a note.
@@ -135,7 +135,7 @@ Status of several things and progress (EntityList, Tag, Icon):
 \`\`\`openui-lang
 root = Stack([card])
 card = Card([head, rows, late])
-head = CardHeader("Your projects", "3 active, 1 late")
+head = CardHeader("Your projects", "3 active, 1 late", "briefcase")
 rows = EntityList([r1, r2, r3], "default", {left: "Project", right: "Status"})
 r1 = {left: "Shop rebuild", right: "On track, 7 of 10 done"}
 r2 = {left: "Tax return", right: "Waiting on you"}
