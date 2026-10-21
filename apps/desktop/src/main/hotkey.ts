@@ -122,6 +122,8 @@ export interface QuickAskOptions {
   rendererFile: string
   /** The dev server, when running under `electron-vite dev`. */
   devUrl?: string
+  /** While true a lost focus does not close the box (a dictation is typing into it). */
+  keepOpen?: () => boolean
 }
 
 export class QuickAskWindow {
@@ -170,7 +172,11 @@ export class QuickAskWindow {
       window.focus()
       window.webContents.send(EVENTS.quickAsk)
     })
-    window.on('blur', () => this.hide())
+    window.on('blur', () => {
+      // Some window managers move focus for a moment when the dictation pill appears; the box stays for that.
+      if (this.options.keepOpen?.() === true) return
+      this.hide()
+    })
     window.on('closed', () => {
       if (this.window === window) this.window = null
     })

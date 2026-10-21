@@ -633,6 +633,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   quickAsk = new QuickAskWindow({
     ...paths,
     devUrl: process.env['ELECTRON_RENDERER_URL'],
+    keepOpen: () => dictation !== null && dictation.controller.phase !== 'idle',
   })
   hotkeys = new HotkeyManager(
     globalShortcut,
