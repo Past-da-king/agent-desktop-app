@@ -136,6 +136,7 @@ export class QuickAskWindow {
     if (existing !== null && !existing.isDestroyed()) {
       this.place(existing)
       existing.show()
+      existing.setAlwaysOnTop(true, 'floating')
       existing.focus()
       existing.webContents.send(EVENTS.quickAsk)
       return
@@ -169,6 +170,7 @@ export class QuickAskWindow {
 
     window.once('ready-to-show', () => {
       window.show()
+      window.setAlwaysOnTop(true, 'floating')
       window.focus()
       window.webContents.send(EVENTS.quickAsk)
     })
