@@ -68,3 +68,9 @@
 .br-line-t b{font:500 14px/1.3 var(--font)}
 .br-line-t span{font-size:12.5px;line-height:1.3;color:var(--on-sv);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .panel-browser.tucked{position:absolute;left:0;top:0;width:var(--panel-w,380px);height:0;overflow:hidden;visibility:hidden;pointer-events:none;margin:0;padding:0}
+
+/* A question or approval waiting in the side panel: one line in the chat pointing there. */
+.wait-line{display:flex;align-items:center;gap:10px;min-height:40px;padding:6px 14px;border-radius:var(--r-md);background:var(--tc);color:var(--on-tc);font-size:13.5px;line-height:1.4;min-width:0}
+.wait-line i{display:grid;place-items:center;flex:none}
+.wait-line>span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wait-where{display:flex;align-items:center;gap:2px;flex:none;font-weight:500}
