@@ -151,6 +151,15 @@ describe.skipIf(!linux)('shell_run keeps the whole story', () => {
     expect(takeRun(input)).toBeUndefined()
   })
 
+  it('runs in the home folder when the agent names no folder', async () => {
+    const home = temp()
+    const tool = toolNamed(shellTools({ settings: settingsView({ shell: 'always' }), platform: 'linux', env: { PATH: process.env['PATH'] ?? '' }, home: () => home }), 'shell_run')
+    const input = { command: 'pwd' }
+    const result = await tool.run(input, testContext())
+    expect(result).toContain(home)
+    expect(takeRun(input)?.cwd).toBe(home)
+  })
+
   it('keeps more than the model gets and says when it trimmed', async () => {
     const input = { command: 'i=0; while [ $i -lt 6000 ]; do echo "line number $i of the long build log"; i=$((i+1)); done' }
     const result = await shell().run(input, testContext())

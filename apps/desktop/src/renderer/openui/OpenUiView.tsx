@@ -22,6 +22,7 @@ import {
   fmtCount,
   fmtRating,
   GENERIC_HEADS,
+  headerIcon,
   heroSplit,
   isNode,
   messageFor,
@@ -56,11 +57,12 @@ export function OpenUiProvider({ value, children }: { value: OpenUiHandlers; chi
 interface Cx {
   scope: Scope
   hero: string | null
-  hint: string
+  /** The card header's icon, from what the card is (see headerIcon). */
+  kindIcon: UiIcon
   firstFacts: UiNode | null
 }
 
-const ROOT_CX: Cx = { scope: {}, hero: null, hint: '', firstFacts: null }
+const ROOT_CX: Cx = { scope: {}, hero: null, kindIcon: 'insights', firstFacts: null }
 
 const str = (n: UiNode, k: string): string | null => {
   const v = n.props[k]
@@ -237,15 +239,9 @@ function CardComp({ n, cx }: { n: UiNode; cx: Cx }): JSX.Element {
   const first = kids[0]
   const lead = first !== undefined && (first.type === 'ImageBlock' || first.type === 'Image') ? first : null
   const firstFacts = kids.find((k) => k.type === 'EntityList') ?? null
-  const hint = kids
-    .flatMap((k) => {
-      if (k.type === 'EntityList') return factRows(k).map((r) => r.left)
-      if (k.type === 'Buttons') return nodes(k, 'buttons').map((b) => str(b, 'label') ?? '')
-      if (k.type === 'ListBlock' || k.type === 'Steps') return nodes(k, 'items').map((i) => str(i, 'title') ?? '')
-      return []
-    })
-    .join(' ')
   const hero = header === null ? null : (heroSplit(str(header, 'title'))?.[0] ?? null)
+  const named = header === null ? null : str(header, 'icon')
+  const kindIcon = headerIcon(named === null ? null : iconForText(named), hero !== null, kids)
   const sources = list(n, 'sources').filter((s): s is Record<string, unknown> => typeof s === 'object' && s !== null && !isNode(s))
   let section: string | null = null
   const leadSrc = lead === null ? null : str(lead, 'src')
@@ -258,7 +254,7 @@ function CardComp({ n, cx }: { n: UiNode; cx: Cx }): JSX.Element {
         {kids.map((k, i) => {
           if (k === lead) return null
           if (k.type === 'InlineHeader' && header !== null) section = str(k, 'heading')
-          const child: Cx = { scope: { card: title, item: section }, hero, hint, firstFacts }
+          const child: Cx = { scope: { card: title, item: section }, hero, kindIcon, firstFacts }
           return <Comp key={i} n={k} cx={child} />
         })}
         {sources.length > 0 ? <Sources sources={sources} /> : null}
@@ -271,7 +267,7 @@ function CardHeaderComp({ n, cx }: { n: UiNode; cx: Cx }): JSX.Element {
   const title = str(n, 'title') ?? ''
   const sub = str(n, 'subtitle')
   const hero = heroSplit(title)
-  const icon: UiIcon = iconForText(`${title} ${sub ?? ''}`) ?? (hero !== null ? 'payments' : iconForText(cx.hint)) ?? 'insights'
+  const icon: UiIcon = cx.kindIcon
   return (
     <header className="oui-head">
       <IconChip icon={icon} size={48} />
@@ -676,8 +672,10 @@ function TableComp({ cols }: { cols: UiNode[] }): JSX.Element | null {
             <tr key={r}>
               {cols.map((_, c) => {
                 const cell = fmt(data[c]?.[r])
+                // Words wrap only between words; a long unbroken token (a link, an id) may break anywhere.
+                const long = /\S{28,}/.test(cell) ? ' long' : ''
                 return (
-                  <td key={c} className={`${numeric[c] ? 'num' : ''}${signClass(cell)}`}>
+                  <td key={c} className={`${numeric[c] ? 'num' : ''}${signClass(cell)}${long}`}>
                     {cell}
                   </td>
                 )

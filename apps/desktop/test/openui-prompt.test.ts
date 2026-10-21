@@ -12,7 +12,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { OPENUI_PROMPT } from '../src/main/runtime/openui-prompt'
-import { hasOpenUi, isAction, isNode, LIBRARY, parse, render, splitMessage, type UiNode, type V } from '../src/renderer/openui/lang'
+import { hasOpenUi, headerIcon, heroSplit, isAction, isNode, LIBRARY, parse, render, splitMessage, type UiNode, type V } from '../src/renderer/openui/lang'
+import { iconForText } from '../src/renderer/openui/icon-words'
 import { OpenUiBlock, OpenUiProvider } from '../src/renderer/openui/OpenUiView'
 
 const examples = [...OPENUI_PROMPT.matchAll(/```openui-lang\n([\s\S]*?)```/g)].map((match) => match[1] ?? '')
@@ -219,5 +220,42 @@ describe('real replies written with the new prompt', () => {
     const reply = read('hello')
     expect(hasOpenUi(reply)).toBe(false)
     expect(reply.trim().split('\n')).toHaveLength(1)
+  })
+})
+
+describe('card header icons and table cells', () => {
+  const header = (source: string): string => {
+    const html = renderToStaticMarkup(createElement(OpenUiProvider, { value: {} }, createElement(OpenUiBlock, { source })))
+    return /<header class="oui-head">([\s\S]*?)<\/header>/.exec(html)?.[1] ?? ''
+  }
+  const iconOf = (source: string): string | null => {
+    const root = render(parse(source)).root
+    const card = root?.type === 'Stack' ? (root.props['children'] as UiNode[])[0] : root
+    if (card === undefined || card === null) return null
+    const kids = (card.props['children'] as unknown[]).filter(isNode)
+    const head = kids.find((k) => k.type === 'CardHeader')
+    const title = typeof head?.props['title'] === 'string' ? head.props['title'] : ''
+    const named = typeof head?.props['icon'] === 'string' ? iconForText(head.props['icon']) : null
+    return headerIcon(named, heroSplit(title) !== null, kids)
+  }
+
+  it('comes from what the card is, not from words in its title', () => {
+    const status = 'root = Stack([c])\nc = Card([h, rows])\nh = CardHeader("Your projects", "4 total, 1 done, 1 late")\nrows = EntityList([{left: "Shop", right: "Done"}])'
+    expect(iconOf(status)).toBe('info')
+    expect(iconOf('root = Stack([c])\nc = Card([h, s])\nh = CardHeader("Pay the rent and fees", "Friday")\ns = Steps([StepsItem("One", "x")])')).toBe('checklist')
+    expect(iconOf('root = Stack([c])\nc = Card([h, t])\nh = CardHeader("Total cost compared")\nt = Table([Col("A", [1])])')).toBe('insights')
+    expect(iconOf('root = Stack([c])\nc = Card([h])\nh = CardHeader("R1,240.50 available")')).toBe('payments')
+    expect(iconOf('root = Stack([c])\nc = Card([h, l])\nh = CardHeader("Reading")\nl = ListBlock([ListItem("Eskom", "site", null, "Open", @OpenUrl("https://eskom.co.za"))])')).toBe('link')
+    expect(iconOf('root = Stack([c])\nc = Card([h, rows])\nh = CardHeader("Your projects", "4 total", "briefcase")\nrows = EntityList([{left: "a", right: "b"}])')).toBe('work')
+    expect(iconOf('root = Stack([c])\nc = Card([h])\nh = CardHeader("Hello there")')).toBe('insights')
+    expect(header(status)).not.toBe('')
+  })
+
+  it('table cells break between words; only a long unbroken token gets the anywhere class', () => {
+    const html = renderToStaticMarkup(
+      createElement(OpenUiProvider, { value: {} }, createElement(OpenUiBlock, { source: 'root = Stack([c])\nc = Card([t])\nt = Table([Col("Place", ["Magaliesberg", "https://example.com/a/very/long/path/that/never/stops"])])' })),
+    )
+    expect(html).toMatch(/<td class="">Magaliesberg<\/td>/)
+    expect(html).toMatch(/<td class=" long">https:\/\/example.com/)
   })
 })
