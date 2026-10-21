@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as R
 
 import { agent, chat } from '../bridge'
 import { skyHopDemo } from '../bridge/seed'
-import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, displayUrl } from '../lib/panel'
+import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, browserTucked, displayUrl, openedMode } from '../lib/panel'
 import { parseMeta, metaStrings } from '../lib/meta'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -16,6 +16,7 @@ import { Icon, type IconName } from '../ui/Icon'
 import { BrowserHost } from './BrowserHost'
 import { HelperStage, HelpersPanel } from './HelpersPanel'
 import { ReportStage } from './ReportStage'
+import { NeedsYou } from './NeedsYou'
 import { BrowserPeople, personOfTab, usePeople } from './BrowserPeople'
 import { toneStyle } from '../lib/profiles'
 import { setStageBox } from '../lib/browser-stage'
@@ -314,6 +315,44 @@ function BrowserChrome({
   )
 }
 
+/**
+ * The browser folded to one line: nothing is open, or the person folded it for room. The pages keep running
+ * behind the window; the line shows what the agent is on, and opening it brings the card back.
+ */
+function BrowserLine({
+  state,
+  agentName,
+  onOpen,
+  onCollapsePanel,
+}: {
+  state: BrowserState | null
+  agentName: string
+  onOpen: () => void
+  onCollapsePanel: () => void
+}): JSX.Element {
+  const tabs = state?.tabs ?? []
+  const shown = tabs.find((tab) => tab.active) ?? tabs[0]
+  const needsUser = state?.needsUser === true
+  const page = shown === undefined ? '' : shown.title.trim() || displayUrl(shown.url) || 'A page'
+  const line = needsUser ? `${agentName} needs you on ${page}` : shown === undefined ? 'Nothing open' : tabs.length > 1 ? `${page} and ${tabs.length - 1} more` : page
+  return (
+    <section className={`br-line${shown !== undefined ? ' live' : ''}${needsUser ? ' needs' : ''}`} aria-label="The agent's browser, folded">
+      <button type="button" className="br-line-open" onClick={onOpen} aria-label="Open the agent's browser" title={shown?.url || undefined}>
+        <span className="br-line-ic" aria-hidden="true">
+          <Icon name="globe" size={16} />
+          {shown !== undefined ? <span className="br-line-dot" /> : null}
+        </span>
+        <span className="br-line-t">
+          <b>Agent&apos;s browser</b>
+          <span>{line}</span>
+        </span>
+        <Icon name="chevd" size={16} />
+      </button>
+      <IconButton icon="chev" label="Collapse the browser panel" size={18} onClick={onCollapsePanel} />
+    </section>
+  )
+}
+
 /** True while the window is narrow enough that the shell hides the side panel (responsive.css). */
 export function useNarrow(): boolean {
   const query = '(max-width:1180px)'
@@ -347,11 +386,15 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
   const focusComposer = useUi((store) => store.focusComposer)
   const memories = useEntity('memory')
   const state = useBrowserState()
+  const browserMode = usePanel((store) => store.browserMode)
+  const setBrowserMode = usePanel((store) => store.setBrowserMode)
   const drag = useRef<{ x: number; width: number } | null>(null)
 
   const agentName = settings?.agentName.trim() || 'Your agent'
   const hasPage = state !== null && state.tabs.length > 0
   const expanded = state?.expanded === true
+  // Folded to one line: the card's page area stays laid out behind the window, so every page keeps working.
+  const tucked = browserTucked(browserMode, hasPage)
   const shownTab = state?.tabs.find((tab) => tab.active) ?? state?.tabs[0]
   // A tab no window could host (it opened while the app was still setting up) is shown as a still picture.
   const offscreen = hasPage && shownTab !== undefined && shownTab.embed !== true
@@ -434,7 +477,20 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
         }}
       />
 
-      <section className="panel-browser">
+      <NeedsYou />
+
+      <HelpersPanel />
+
+      {tucked ? (
+        <BrowserLine
+          state={state}
+          agentName={agentName}
+          onOpen={() => setBrowserMode(openedMode(hasPage))}
+          onCollapsePanel={() => setCollapsed(true)}
+        />
+      ) : null}
+
+      <section className={`panel-browser${tucked ? ' tucked' : ''}`} aria-hidden={tucked ? true : undefined}>
         <div className="panel-h">
           <div className="sec" style={{ margin: 0 }}>
             <span className="eyebrow">AGENT&apos;S BROWSER</span>
@@ -470,6 +526,7 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
                 </Button>
               )
             ) : null}
+            <IconButton icon="min" label="Fold the browser to one line" size={18} onClick={() => setBrowserMode('min')} />
             <IconButton
               icon="chev"
               label="Collapse the browser panel"
@@ -518,7 +575,7 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
               </Button>
             </div>
           )}
-          {agent.platform === 'web' ? null : <BrowserHost state={state} parked={parked} />}
+          {agent.platform === 'web' ? null : <BrowserHost state={state} parked={parked || tucked} />}
         </div>
 
         {state?.needsUser === true && state.handoffReason !== '' ? (
@@ -527,8 +584,6 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
           </p>
         ) : null}
       </section>
-
-      <HelpersPanel />
 
       <section>
         <div className="sec">
