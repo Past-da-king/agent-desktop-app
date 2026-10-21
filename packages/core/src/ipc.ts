@@ -226,11 +226,30 @@ export interface Attachment {
 
 /** What the main process pushes while the agent works. The renderer re-reads `data.list('chat_item')` on `chat_changed`. */
 export type ChatEvent =
-  | { type: 'run_started' }
-  | { type: 'thinking'; step: number }
-  | { type: 'chat_changed' }
-  | { type: 'run_finished'; error?: string }
-  | { type: 'needs_you'; itemId: string }
+  | { type: 'run_started'; chat?: string }
+  | { type: 'thinking'; step: number; chat?: string }
+  | { type: 'chat_changed'; chat?: string }
+  | { type: 'run_finished'; error?: string; chat?: string }
+  | { type: 'needs_you'; itemId: string; chat?: string }
+
+/**
+ * Several chats at once. Every chat row carries `meta.chat`, the id of the chat it belongs to; a row without one
+ * belongs to the first chat, MAIN_CHAT. Events name their chat in `chat` (absent means MAIN_CHAT).
+ */
+export const MAIN_CHAT = 'main'
+
+/** One chat's run as the rail and the chat header need it. */
+export interface ChatRunInfo {
+  chat: string
+  running: boolean
+  /** Card ids in this chat that wait for the person. */
+  waiting: string[]
+  /** Separate runs started from this chat (a different job sent while it was busy) that are still working. */
+  alongside: number
+}
+
+/** Which way a message sent while the agent was busy went. */
+export type BusyRoute = 'join' | 'alongside'
 
 export interface RunState {
   running: boolean
@@ -665,9 +684,19 @@ export interface AgentApi {
   }
 
   chat: {
-    send(text: string, attachments?: Attachment[]): Promise<void>
-    stop(): Promise<void>
-    state(): Promise<RunState>
+    /** `chat` is the chat it goes to; MAIN_CHAT when left out. */
+    send(text: string, attachments?: Attachment[], chat?: string): Promise<void>
+    /** Stops that chat's run (MAIN_CHAT when left out). */
+    stop(chat?: string): Promise<void>
+    /** One chat's run and cards; with no chat, whether any chat is running and every waiting card. */
+    state(chat?: string): Promise<RunState>
+    /** Every chat that is running, waiting or has work going alongside. */
+    states(): Promise<ChatRunInfo[]>
+    /**
+     * A new chat holding the history of `itemId`'s chat up to and including that message. Returns the new chat id.
+     * The old chat is left as it was.
+     */
+    branch(itemId: string): Promise<string>
     /** Answer a `question` card. */
     answer(itemId: string, answer: string): Promise<void>
     /** Approve or decline an `approval` card. */
@@ -736,6 +765,16 @@ export interface AgentApi {
     pickFolder(): Promise<string | null>
     /** A small data URL for an image attachment, or null when no preview is available. */
     thumbnail(path: string): Promise<string | null>
+    /**
+     * Saves something pasted that has no file on disk (a screenshot, an image copied from a page, a long text) into
+     * the app's attachments folder and returns it as an attachment.
+     */
+    savePasted(name: string, mime: string, bytes: Uint8Array): Promise<Attachment>
+    /**
+     * The files on the system clipboard (copied in Explorer, Finder or a Linux file manager), read by the main
+     * process because a paste event often has no File objects for them. Empty when there are none.
+     */
+    clipboardFiles(): Promise<Attachment[]>
   }
 
   /** About the computer the app is running on. */
