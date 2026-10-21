@@ -117,13 +117,7 @@ export class Store implements SyncStore {
   async list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
     this.assertEntity(entity)
     const rows = this.readEntity(entity).filter((row) => !row.deleted)
-    rows.sort((a, b) => {
-      const left = numberField(a.payload.createdAt)
-      const right = numberField(b.payload.createdAt)
-      if (left !== right) return left < right ? -1 : 1
-      return compareStampStrings(a.stamp, b.stamp)
-    })
-    return rows.map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+    return sortedRows(rows, false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
   }
 
   /**
@@ -160,13 +154,7 @@ export class Store implements SyncStore {
       args.push(Math.floor(where.limit))
     }
     const rows = this.db.prepare(sql).all(...args).map(rowFromSql)
-    rows.sort((a, b) => {
-      const left = numberField(a.payload.createdAt)
-      const right = numberField(b.payload.createdAt)
-      const byTime = left === right ? compareStampStrings(a.stamp, b.stamp) : left < right ? -1 : 1
-      return where.newestFirst === true ? -byTime : byTime
-    })
-    return rows.map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+    return sortedRows(rows, where.newestFirst === true).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
   }
 
   async get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null> {
@@ -512,6 +500,27 @@ function parsePayload(value: SQLOutputValue | undefined): Record<string, unknown
   } catch {
     return {}
   }
+}
+
+/** Rows in store order (createdAt, then stamp), each stamp decoded once rather than on every comparison. */
+function sortedRows(rows: StoredRow[], newestFirst: boolean): StoredRow[] {
+  const keyed = rows.map((row) => ({ row, at: numberField(row.payload.createdAt), stamp: decodeStamp(row.stamp) }))
+  keyed.sort((a, b) => {
+    const byTime =
+      a.at === b.at
+        ? a.stamp === null || b.stamp === null
+          ? a.row.stamp < b.row.stamp
+            ? -1
+            : a.row.stamp > b.row.stamp
+              ? 1
+              : 0
+          : compareStamps(a.stamp, b.stamp)
+        : a.at < b.at
+          ? -1
+          : 1
+    return newestFirst ? -byTime : byTime
+  })
+  return keyed.map((entry) => entry.row)
 }
 
 function compareStampStrings(a: string, b: string): number {

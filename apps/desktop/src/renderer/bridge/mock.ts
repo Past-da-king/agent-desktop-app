@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS } from '@agent/core'
+import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS, pickModel, resolvePick } from '@agent/core'
 import type {
   AccountRules,
   AgentApi,
@@ -32,6 +32,7 @@ import type {
   SystemInfo,
   Unsubscribe,
   MemoryImportPreview,
+  AiAccount,
   MemoryRow,
   MemoryTidyPlan,
   MemoryTidyProgress,
@@ -641,6 +642,51 @@ export const mockAgent: AgentApi = {
     async checkCli() {
       await delay(900)
       return { ok: true, message: 'Claude Code is signed in and working on your plan.' }
+    },
+    accounts: {
+      async add(draft) {
+        const id = `acc_${Math.random().toString(16).slice(2, 8)}`
+        const kind = draft.kind ?? 'api'
+        const account: AiAccount = { id, label: draft.label?.trim() || (kind === 'api' ? 'API key' : kind === 'codex' ? 'ChatGPT plan' : 'Claude plan'), kind, model: draft.model ?? '', hasKey: false, ...(kind === 'api' ? { provider: draft.provider ?? 'anthropic' } : {}) }
+        saveSettings({ accounts: [...settings.accounts, account] })
+        return account
+      },
+      async update(id, patch) {
+        const found = settings.accounts.find((a) => a.id === id)
+        if (found === undefined) throw new Error('No such account')
+        const next: AiAccount = { ...found, ...(patch.label === undefined ? {} : { label: patch.label }), ...(patch.model === undefined ? {} : { model: patch.model }), ...(patch.provider === undefined ? {} : { provider: patch.provider }) }
+        saveSettings({ accounts: settings.accounts.map((a) => (a.id === id ? next : a)) })
+        return next
+      },
+      async remove(id) {
+        const clear = (pick: { account: string; model: string }): { account: string; model: string } => (pick.account === id ? { account: '', model: '' } : pick)
+        saveSettings({ accounts: settings.accounts.filter((a) => a.id !== id), ai: { main: clear(settings.ai.main), helpers: clear(settings.ai.helpers) } })
+      },
+      async setKey(id, key) {
+        saveSettings({ accounts: settings.accounts.map((a) => (a.id === id ? { ...a, hasKey: key.trim() !== '' } : a)) })
+      },
+      async check(id) {
+        await delay(600)
+        const found = settings.accounts.find((a) => a.id === id)
+        return found === undefined ? { ok: false, message: 'No such account.' } : { ok: true, message: found.kind === 'api' ? 'That key works.' : 'Signed in and working on your plan.' }
+      },
+      async listModels(id) {
+        await delay(400)
+        const found = settings.accounts.find((a) => a.id === id)
+        const ids = found?.kind === 'api' ? (found.provider === 'anthropic' ? ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] : ['deepseek-v4.1-flash', 'deepseek-v4.1-pro', 'kimi-k3', 'glm-5.2']) : ['opus', 'sonnet', 'haiku', 'fable']
+        return { ok: true, models: ids.map((m) => ({ id: m, label: m, line: '' })), message: `${ids.length} models to choose from.` }
+      },
+      async signIn() {
+        await delay(1000)
+        return { ok: true, message: 'Signed in.' }
+      },
+      async chatBrain(chat) {
+        const project = rows.project.find((p) => p.chats.includes(chat))
+        const main = resolvePick(settings, project?.ai, 'main')
+        const helpers = resolvePick(settings, project?.ai, 'helpers')
+        const full = (pick: { account: string; model: string }): { account: string; model: string } => ({ account: pick.account, model: pickModel(settings, pick) })
+        return { main: { wanted: full(main), using: full(main), deferred: false }, helpers: { wanted: full(helpers), using: full(helpers), deferred: false } }
+      },
     },
     async reset() {
       rows = {

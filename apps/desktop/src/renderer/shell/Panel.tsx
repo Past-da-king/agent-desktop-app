@@ -9,12 +9,13 @@ import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
+import { useWaiting } from '../state/useWaiting'
 import { Button } from '../ui/Button'
 import { IconButton } from '../ui/bits'
 import { Chip } from '../ui/Chip'
 import { Icon, type IconName } from '../ui/Icon'
 import { BrowserHost } from './BrowserHost'
-import { HelperStage, HelpersPanel } from './HelpersPanel'
+import { HelperAvatar, HelperStage, HelpersPanel, useWorkingHelpers } from './HelpersPanel'
 import { ReportStage } from './ReportStage'
 import { NeedsYou } from './NeedsYou'
 import { BrowserPeople, personOfTab, usePeople } from './BrowserPeople'
@@ -323,12 +324,10 @@ function BrowserLine({
   state,
   agentName,
   onOpen,
-  onCollapsePanel,
 }: {
   state: BrowserState | null
   agentName: string
   onOpen: () => void
-  onCollapsePanel: () => void
 }): JSX.Element {
   const tabs = state?.tabs ?? []
   const shown = tabs.find((tab) => tab.active) ?? tabs[0]
@@ -348,7 +347,6 @@ function BrowserLine({
         </span>
         <Icon name="chevd" size={16} />
       </button>
-      <IconButton icon="chev" label="Collapse the browser panel" size={18} onClick={onCollapsePanel} />
     </section>
   )
 }
@@ -482,7 +480,6 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
           state={state}
           agentName={agentName}
           onOpen={() => setBrowserMode(openedMode(hasPage))}
-          onCollapsePanel={() => setCollapsed(true)}
         />
       ) : null}
 
@@ -523,12 +520,6 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
               )
             ) : null}
             <IconButton icon="min" label="Fold the browser to one line" size={18} onClick={() => setBrowserMode('min')} />
-            <IconButton
-              icon="chev"
-              label="Collapse the browser panel"
-              size={18}
-              onClick={() => setCollapsed(true)}
-            />
           </div>
         </div>
 
@@ -618,6 +609,52 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
 }
 
 /**
+ * What the collapsed side panel still shows: what waits on the person, the faces of the helpers working now
+ * (a tap opens that helper), and the agent's browser when a page is open.
+ */
+function MiniStrip({ onOpen }: { onOpen: () => void }): JSX.Element {
+  const helpers = useWorkingHelpers()
+  const openHelper = usePanel((store) => store.openHelper)
+  const waiting = useWaiting()
+  const state = useBrowserState()
+  const page = state?.tabs.find((tab) => tab.active) ?? state?.tabs[0]
+  return (
+    <div className="mini-strip">
+      {waiting.length > 0 ? (
+        <button type="button" className="mini-needs" title={`${waiting.length} waiting for you`} aria-label={`${waiting.length} waiting for you, open the side panel`} onClick={onOpen}>
+          {waiting.length}
+        </button>
+      ) : null}
+      {helpers.slice(0, 6).map((helper) => (
+        <button
+          key={helper.id}
+          type="button"
+          className="mini-helper"
+          title={`${helper.label}: working`}
+          aria-label={`Open ${helper.label}, working`}
+          onClick={() => {
+            onOpen()
+            openHelper(helper.id)
+          }}
+        >
+          <HelperAvatar row={helper.row} helper={helper} size={30} />
+          <i className="mini-dot" aria-hidden="true" />
+        </button>
+      ))}
+      {helpers.length > 6 ? <span className="small muted">+{helpers.length - 6}</span> : null}
+      {page !== undefined ? (
+        <button type="button" className="mini-helper" title={page.title.trim() || displayUrl(page.url) || "The agent's browser"} aria-label="Open the side panel to the agent's browser" onClick={onOpen}>
+          <span className="mini-globe">
+            <Icon name="globe" size={16} />
+          </span>
+          {state?.needsUser === true ? <i className="mini-dot needs" aria-hidden="true" /> : null}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
  * The side panel. `parked` (the shell is showing another page) keeps the browser card mounted but out of
  * sight, so the agent's pages survive moving around the app. The collapsed strip and an open helper take the
  * panel's place on screen while the card stays parked behind them.
@@ -639,12 +676,12 @@ export function ChatPanel({ parked = false }: { parked?: boolean }): JSX.Element
         </aside>
       ) : null}
       {!parked && !reportOpen && collapsed ? (
-        <aside className="panel-w panel-mini" aria-label="The agent's browser panel is collapsed">
+        <aside className="panel-w panel-mini" aria-label="The side panel is collapsed">
           <button
             type="button"
             className="panel-mini-open"
-            aria-label="Open the agent's browser panel"
-            title="Open the agent's browser panel"
+            aria-label="Open the side panel"
+            title="Open the side panel"
             onClick={() => setCollapsed(false)}
           >
             <Icon name="panel" size={22} />
@@ -652,6 +689,7 @@ export function ChatPanel({ parked = false }: { parked?: boolean }): JSX.Element
               <Icon name="chev" size={13} />
             </span>
           </button>
+          <MiniStrip onOpen={() => setCollapsed(false)} />
         </aside>
       ) : null}
       {!parked && !reportOpen && !collapsed && helperOpen ? (
@@ -688,6 +726,28 @@ export function BrowserStage(): JSX.Element | null {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [expanded])
+
+  // A page no <webview> could host (it opened while the window was busy) is shown as a still, as the card does.
+  const shownTab = state?.tabs.find((tab) => tab.active) ?? state?.tabs[0]
+  const offscreen = expanded && shownTab !== undefined && shownTab.embed !== true
+  const [still, setStill] = useState<string | null>(null)
+  useEffect(() => {
+    if (!offscreen) {
+      setStill(null)
+      return
+    }
+    const grab = (): void => {
+      void agent.browser
+        .frame()
+        .then((url) => {
+          if (url !== null) setStill(url)
+        })
+        .catch(() => undefined)
+    }
+    grab()
+    const timer = window.setInterval(grab, 1000)
+    return () => window.clearInterval(timer)
+  }, [offscreen])
 
   if (!expanded || state === null) return null
   const agentName = settings?.agentName.trim() || 'Your agent'
@@ -746,6 +806,8 @@ export function BrowserStage(): JSX.Element | null {
           <div className="br-stage-mock">
             <MockPage agentName={agentName} />
           </div>
+        ) : offscreen && still !== null ? (
+          <img className="br-stage-still" src={still} alt="" />
         ) : null}
       </div>
     </div>
