@@ -138,6 +138,8 @@ export interface ChatItem extends RowBase {
 export interface TurnRow extends RowBase {
   thread: string
   json: string
+  /** The New chat divider time the run that wrote it started under (0 = before any divider). Older rows have none. */
+  epoch?: number
 }
 
 export type MemoryKind =
@@ -833,6 +835,8 @@ export interface MemoryImportResult extends MemoryImportPreview {
   added: number
   updated: number
   unchanged: number
+  /** Entries whose page the person deleted here: left alone, never brought back. */
+  deletedHere: number
   redacted: number
   ms: number
 }

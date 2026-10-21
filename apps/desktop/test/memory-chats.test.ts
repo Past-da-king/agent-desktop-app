@@ -1,12 +1,17 @@
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { DEFAULT_SETTINGS, providerFor } from '@agent/core'
+import { DEFAULT_SETTINGS, providerFor, schema, type Tool } from '@agent/core'
 
 import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { Store } from '../src/main/db'
 import { ChatIndex } from '../src/main/memory/chat-index'
 import { MemoryService } from '../src/main/memory/service'
 import { UpkeepFile } from '../src/main/memory/upkeep-log'
+import { CliHost } from '../src/main/runtime/cli-host'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset } from '../src/main/runtime/toolset'
 import { chatTools } from '../src/main/tools/chats'
@@ -154,5 +159,71 @@ describe('New Chat and the model context', () => {
     } finally {
       runner.dispose()
     }
+  })
+
+  it('keeps a run that was still going when New chat was pressed in the old chat', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    let entered: () => void = () => undefined
+    const inTool = new Promise<void>((resolve) => (entered = resolve))
+    const slowTool: Tool = {
+      spec: { name: 'slow_lookup', description: 'Looks something up slowly.', schema: schema([], {}) },
+      run: async () => {
+        entered()
+        await gate
+        return 'OLD-TOOL-RESULT'
+      },
+    }
+    let late: (() => void) | null = null
+    fake = await startFakeAi((_body, index) => {
+      if (index === 0) return { toolCalls: [{ name: 'slow_lookup', input: {} }] }
+      if (index === 1) {
+        // A helper's result lands while the old run is finishing: it becomes one more turn of that run.
+        late?.()
+        return { text: 'OLD-FINAL-ANSWER' }
+      }
+      return { text: index === 2 ? 'OLD-ACK' : 'fresh' }
+    })
+    const fakeUrl = fake.url
+    const runner = new Runner({
+      store,
+      settings: settingsView({ ...DEFAULT_SETTINGS, hasKey: true, mode: 'api_key', provider: 'openai', model: 'fake', allowHttp: true }),
+      secrets: secretsView('test-key'),
+      tools: [...buildToolset({ store }), slowTool],
+      providerFactory: (_current, key) => providerFor({ provider: 'openai', key, baseUrl: fakeUrl, allowHttp: true }),
+      timeZone: 'UTC',
+    })
+    try {
+      const running = runner.send('The old question about apricots')
+      await inTool
+      await memory.newChat()
+      late = () => void runner.deliver('[Helper #1] OLD-HELPER-NOTE')
+      release()
+      await running
+      while (runner.state().running) await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(fake.requests).toHaveLength(3)
+      await memory.idle()
+      // The old run finished after the divider, but its turns belong to the old chat.
+      expect((await store.list('chat_item')).some((row) => row.text === 'OLD-FINAL-ANSWER')).toBe(true)
+      await runner.send('A brand new question')
+      const last = JSON.stringify(fake.requests.at(-1)?.body ?? {})
+      expect(last).toContain('A brand new question')
+      expect(last).not.toContain('apricots')
+      expect(last).not.toContain('OLD-TOOL-RESULT')
+      expect(last).not.toContain('OLD-FINAL-ANSWER')
+      expect(last).not.toContain('OLD-HELPER-NOTE')
+    } finally {
+      runner.dispose()
+    }
+  })
+})
+
+describe('the plan session after New chat', () => {
+  it('forgetting main clears it on every engine and keeps helpers', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-cli-forget-'))
+    const host = new CliHost(dir, () => DEFAULT_SETTINGS, dir)
+    writeFileSync(join(dir, 'sessions.json'), JSON.stringify({ 'claude:main': 's1', 'claude:main#rev': '2', 'codex:main': 's2', 'claude:helper:x': 's3' }))
+    host.forget('main')
+    expect(JSON.parse(readFileSync(join(dir, 'sessions.json'), 'utf8'))).toEqual({ 'claude:helper:x': 's3' })
   })
 })

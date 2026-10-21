@@ -91,9 +91,17 @@ describe('memory import', () => {
     expect(third).toMatchObject({ added: 0, updated: 1, unchanged: 6 })
     expect(await store.get('memory', rowIdFor('m_1'))).toMatchObject({ pinned: true, body: 'CEO of Guavas. Final sign-off on positioning and pricing.' })
 
+    // A page the person deleted here stays deleted on the next import.
+    await store.remove('memory', rowIdFor('m_5'))
+    const fourth = await runImport(store, exportFile, false)
+    expect(fourth).toMatchObject({ added: 0, deletedHere: 1 })
+    expect(fourth.message).toContain('1 deleted here, left alone')
+    expect(await store.get('memory', rowIdFor('m_5'))).toBeNull()
+
     const everything = await runImport(store, exportFile, true)
     expect(everything.added).toBe(3)
-    expect(await store.list('memory')).toHaveLength(10)
+    expect(everything.deletedHere).toBe(1)
+    expect(await store.list('memory')).toHaveLength(9)
   })
 
   it('says plainly when a file is not an export', () => {
