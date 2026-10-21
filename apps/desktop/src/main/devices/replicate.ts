@@ -85,7 +85,7 @@ export async function pullFrom(store: ReplicaStore, since: number, wait: number,
     // Everything read was the caller's own: keep reading until the log is drained.
     if (moved && store.logSeq() > cursor) continue
     const left = deadline - Date.now()
-    if (left <= 0 || signal?.aborted === true) return { changes: [], cursor }
+    if (left <= 0) return { changes: [], cursor }
     await changedOrTimeout(store, left, signal)
   }
 }
