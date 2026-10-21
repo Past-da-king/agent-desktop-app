@@ -102,12 +102,49 @@ function asText(value: unknown): string {
   return typeof value === 'string' && value !== 'null' ? value : ''
 }
 
-function parse(text: string): unknown {
-  try {
-    return JSON.parse(text) as unknown
-  } catch {
-    return null
+/** Reads a Composio reply as JSON, tolerating a trailing note block and raw control characters. Exported for tests. */
+export function parse(text: string): unknown {
+  const attempt = (body: string): unknown => {
+    try {
+      return JSON.parse(body) as unknown
+    } catch (error) {
+      // A reply can be the JSON answer followed by a plain note in a second block ("No exact fit? ..."): read the
+      // JSON and leave the note.
+      const at = /after JSON at position (\d+)/.exec(String(error))
+      if (at === null) throw error
+      return JSON.parse(body.slice(0, Number(at[1]))) as unknown
+    }
   }
+  try {
+    return attempt(text)
+  } catch {
+    // Raw line breaks or tabs inside strings, which strict JSON refuses.
+    try {
+      return attempt(escapeControlsInStrings(text))
+    } catch {
+      return null
+    }
+  }
+}
+
+/** Escapes control characters that sit inside JSON strings, leaving the structure alone. Exported for tests. */
+export function escapeControlsInStrings(text: string): string {
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      else if (ch < ' ') {
+        out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t' : `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
+        continue
+      }
+    } else if (ch === '"') inString = true
+    out += ch
+  }
+  return out
 }
 
 function errorMessage(code: number, text: string): string {
