@@ -197,6 +197,29 @@ describe('the record on the activity row', () => {
     expect(runStarted({ t: 'call', id: '3', name: 'memory_search', input: {} })).toBeNull()
   })
 
+  it("reads Claude Code's own Bash, Write and Edit calls on the person's plan", () => {
+    // The tool_result texts are exactly what Claude Code 2.1 returned on this box.
+    const failing = { t: 'call' as const, id: 'a', name: 'Bash', input: { command: 'echo out-line; echo err-line 1>&2; exit 3', description: 'x' } }
+    expect(describeRun(failing)).toBe('Ran echo out-line; echo err-line 1>&2; exit 3')
+    expect(runFinished(failing, 'Exit code 3\nout-line\nerr-line', true, 0, 80)).toMatchObject({
+      kind: 'shell',
+      label: 'Bash',
+      exitCode: 3,
+      state: 'failed',
+      stdout: 'out-line\nerr-line',
+      merged: true,
+      ms: 80,
+    })
+    const passing = { ...failing, id: 'b', input: { command: 'echo out-line; echo err-line 1>&2' } }
+    expect(runFinished(passing, 'out-line\nerr-line', false, 0, 5)).toMatchObject({ exitCode: 0, state: 'ok', stdout: 'out-line\nerr-line' })
+    expect(runFinished(passing, 'The user declined this command. Do not run it; find another way or ask.', true, 0, 5)?.state).toBe('declined')
+    const write = { t: 'call' as const, id: 'c', name: 'Write', input: { file_path: '/home/sam/a.txt', content: 'hello' } }
+    expect(runFinished(write, 'File created successfully at: /home/sam/a.txt', false, 0, 2)).toMatchObject({ kind: 'file', label: 'Write', stdout: 'hello', state: 'ok' })
+    const edit = { t: 'call' as const, id: 'd', name: 'Edit', input: { file_path: '/home/sam/a.txt', old_string: 'hello', new_string: 'hi' } }
+    expect(runFinished(edit, 'The file has been updated.', false, 0, 2)?.stdout).toBe('Replaced:\nhello\n\nWith:\nhi')
+    expect(describeRun(edit)).toBe('Edited a.txt')
+  })
+
   it('redacts a secret in the command line on the row text', () => {
     const call = { t: 'call' as const, id: '1', name: 'shell_run', input: { command: 'curl -H "Authorization: Bearer abcdefghijklmnop" https://api.example.com' } }
     expect(describeRun(call)).not.toContain('abcdefghijklmnop')

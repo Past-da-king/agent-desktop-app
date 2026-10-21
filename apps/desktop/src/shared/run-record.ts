@@ -33,6 +33,8 @@ export interface RunRecord {
   trimmed: boolean
   /** One plain line when it did not run normally ("Timed out after 60 seconds"). */
   note?: string
+  /** True when stdout and stderr came back as one stream (Claude Code's own shell), so stdout holds both. */
+  merged?: boolean
 }
 
 /** The most the record keeps of any one stream: the first and last halves of this, the middle cut. */
@@ -67,6 +69,7 @@ export function runFromMeta(meta: Record<string, unknown>): RunRecord | null {
   if (text('cwd') !== '') record.cwd = text('cwd')
   if (text('target') !== '') record.target = text('target')
   if (text('note') !== '') record.note = text('note')
+  if (r['merged'] === true) record.merged = true
   return record
 }
 
