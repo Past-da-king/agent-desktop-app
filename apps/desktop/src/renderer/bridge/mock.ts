@@ -765,7 +765,8 @@ export const mockAgent: AgentApi = {
     async upsert<E extends EntityName>(entity: E, row: RowInput<E>): Promise<EntityMap[E]> {
       const raw = row as { id?: string }
       const before = entity === 'memory' ? (copy(rows.memory.find((each) => each.id === raw.id) ?? null) as MemoryRow | null) : null
-      const saved = upsertRow(entity, row)
+      // The real Store stamps every memory write; so does the mock, so the window sees the change.
+      const saved = upsertRow(entity, entity === 'memory' ? ({ ...row, updatedAt: Date.now() } as RowInput<E>) : row)
       if (entity === 'memory') keepMockVersion(before, saved as unknown as MemoryRow, 'you')
       return saved
     },
@@ -1421,7 +1422,7 @@ export const mockAgent: AgentApi = {
       const current = rows.memory.find((row) => row.id === memoryId)
       if (version === undefined || version.deleted || current === undefined) return false
       const before = copy(current)
-      const after = upsertRow('memory', { id: memoryId, title: version.title, body: version.body, kind: version.kind, topics: version.topics, status: version.status, aliases: version.aliases, pinned: version.pinned })
+      const after = upsertRow('memory', { id: memoryId, title: version.title, body: version.body, kind: version.kind, topics: version.topics, status: version.status, aliases: version.aliases, pinned: version.pinned, updatedAt: Date.now() })
       keepMockVersion(before, after, 'you', `restored version ${n}`)
       return true
     },

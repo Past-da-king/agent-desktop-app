@@ -188,3 +188,16 @@ describe('other names a page answers to', () => {
     expect(vocabularyBrief({ names: [], aliases: [] })).toBe('')
   })
 })
+
+describe('the Memory page search', () => {
+  it('finds a page by its other names, and is:closed narrows to closed pages', async () => {
+    const { searchMemories } = await import('../src/renderer/lib/memory')
+    const rows = [
+      { id: 'a', title: 'LondaCorp', body: 'Client.', kind: 'organisation', topics: '', pinned: false, source: 'agent', createdAt: 1, updatedAt: 2, aliases: 'Londercorp' },
+      { id: 'b', title: 'Receipts', body: 'Done.', kind: 'decision', topics: '', pinned: false, source: 'agent', createdAt: 1, updatedAt: 1, status: 'closed' },
+    ] as MemoryRow[]
+    expect(searchMemories(rows, 'londercorp').map((row) => row.id)).toEqual(['a'])
+    expect(searchMemories(rows, 'is:closed').map((row) => row.id)).toEqual(['b'])
+    expect(searchMemories(rows, 'is:open client').map((row) => row.id)).toEqual(['a'])
+  })
+})
