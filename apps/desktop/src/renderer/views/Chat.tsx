@@ -31,6 +31,8 @@ import { withNo } from '../../shared/ask-options'
 import { ModelPicker } from '../ui/ModelPicker'
 import { Mascot } from '../ui/Mascot'
 import { Skeleton } from '../ui/Skeleton'
+import { runFromMeta, snippetOf } from '../../shared/run-record'
+import { RunStep } from './RunStep'
 
 const TOOL_ICONS: Record<string, IconName> = {
   memory_search: 'memory',
@@ -134,6 +136,9 @@ function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
   const tool = metaText(meta, 'tool')
   const status = metaText(meta, 'status') || 'done'
   const summary = metaText(meta, 'summary') || item.text
+  // A command, program or file step shows what it actually ran, and opens to the full record.
+  const run = runFromMeta(meta)
+  if (run !== null) return <RunStep run={run} status={status} by={metaText(meta, 'by') || undefined} />
   const icon: IconName = status === 'error' ? 'x' : status === 'running' ? toolIcon(tool) : 'check'
   return (
     <div className={`tool ${status}`} title={tool === '' ? undefined : tool}>
@@ -196,7 +201,10 @@ function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.E
   const [open, setOpen] = useState(false)
   const statuses = items.map((item) => (item.kind === 'approval' ? 'done' : metaText(parseMeta(item.meta), 'status') || 'done'))
   const running = live && statuses.includes('running')
-  const failed = statuses.filter((status) => status === 'error').length
+  // A command that ran but exited non-zero failed too, even though the tool itself worked.
+  const failed = items.filter(
+    (item, index) => statuses[index] === 'error' || runFromMeta(parseMeta(item.meta))?.state === 'failed',
+  ).length
   const approvals = items.filter((item) => item.kind === 'approval')
   const tools = items.length - approvals.length
   const approvedCount = approvals.filter((item) => metaText(parseMeta(item.meta), 'decision') === 'approve').length
@@ -207,6 +215,9 @@ function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.E
     declined > 0 ? `${declined} declined` : '',
     failed > 0 ? `${failed} failed` : '',
   ].filter((part) => part !== '')
+  // The folded line still shows a snippet of what was run: a failed run first, else the last command or program.
+  const runs = items.map((item) => runFromMeta(parseMeta(item.meta))).filter((run) => run !== null).reverse()
+  const lastRun = runs.find((run) => run.state === 'failed') ?? runs.find((run) => run.kind !== 'file') ?? runs[0] ?? null
   const current = [...items].reverse().find((_, index) => statuses[items.length - 1 - index] === 'running') ?? items[items.length - 1]
   if (running && current !== undefined) {
     return (
@@ -224,6 +235,7 @@ function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.E
           <Icon name={failed > 0 ? 'x' : 'check'} size={16} />
         </i>
         <span>{parts.join(', ')}</span>
+        {lastRun !== null ? <code className="run-snip in-sum">{snippetOf(lastRun.input)}</code> : null}
         <Icon name={open ? 'chevd' : 'chev'} size={16} />
       </button>
       {open ? (
