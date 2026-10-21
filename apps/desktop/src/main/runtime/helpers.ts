@@ -32,6 +32,7 @@ import type { DataStore } from './data'
 import type { CliHost } from './cli-host'
 import { buildSystemPrompt } from './prompt'
 import { runFinished, runStarted } from './run-detail'
+import { redactSecrets } from '../logger'
 import {
   describeCall,
   friendlyError,
@@ -663,7 +664,7 @@ export class HelperManager implements HelperHost {
       case 'tool_finished': {
         const isError = event.isError
         const summary = isError
-          ? clip(event.result.split('\n')[0] ?? event.result, 160)
+          ? clip(redactSecrets(event.result.split('\n')[0] ?? event.result), 160)
           : describeCall(event.call)
         const existing = await this.findRunningActivity(run.id, event.call.name)
         const started = this.runStarts.get(event.call.id) ?? Date.now()
