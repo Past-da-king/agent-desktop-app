@@ -135,7 +135,7 @@ export function HotkeySettings(): JSX.Element {
   }, [])
 
   return (
-    <>
+    <div id="shortcuts">
       {ROWS.map((row) => {
         const status = statuses[row.action]
         const value = settings?.[row.field] ?? ''
@@ -173,6 +173,6 @@ export function HotkeySettings(): JSX.Element {
           </div>
         )
       })}
-    </>
+    </div>
   )
 }
