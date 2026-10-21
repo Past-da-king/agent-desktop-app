@@ -31,6 +31,7 @@ import type {
 } from '@agent/core'
 
 import { mockVoice } from '../voice/mock-voice'
+import { DEMO_CHATS } from './chats-demo'
 import { readMode, seedFor, type DemoMode } from './seed'
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
@@ -213,6 +214,13 @@ const mockRuns = new Map<string, Array<ReturnType<typeof setTimeout>>>()
 
 function chatEvent(chat: string, event: ChatEvent): ChatEvent {
   return chat === MAIN_CHAT ? event : ({ ...event, chat } as ChatEvent)
+}
+
+// ?busy=1 shows two chats working at once (the first chat and the Acme one), for screenshots.
+if ((mode === 'demo' || mode === 'big') && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('busy') === '1') {
+  mockRuns.set(MAIN_CHAT, [])
+  mockRuns.set(DEMO_CHATS.acme, [])
+  running = true
 }
 
 /** A short pretend run in one chat: a tool step, then a reply. */

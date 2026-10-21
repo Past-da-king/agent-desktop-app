@@ -1,8 +1,8 @@
-import type { ChatEvent, ChatItem } from '@agent/core'
-import { useEffect, useState } from 'react'
+import type { ChatItem } from '@agent/core'
+import { useEffect } from 'react'
 
-import { chat } from '../bridge'
 import { metaText, parseMeta } from '../lib/meta'
+import { startChatTracking, useAnyRunning } from './useChats'
 
 export interface RunInfo {
   running: boolean
@@ -15,22 +15,9 @@ export interface RunInfo {
  * the thread; Home needs the same truth to say "working now" instead of the last completed thing.
  */
 export function useRunInfo(items: ChatItem[]): RunInfo {
-  const [running, setRunning] = useState(false)
-
-  useEffect(() => {
-    let alive = true
-    void chat.state().then((state) => {
-      if (alive) setRunning(state.running)
-    })
-    const off = chat.onEvent((event: ChatEvent) => {
-      if (event.type === 'run_started') setRunning(true)
-      if (event.type === 'run_finished') setRunning(false)
-    })
-    return () => {
-      alive = false
-      off()
-    }
-  }, [])
+  // Any chat working counts: several chats run at once now (state/useChats.ts tracks them all).
+  useEffect(() => startChatTracking(), [])
+  const running = useAnyRunning()
 
   const activity =
     [...items]
