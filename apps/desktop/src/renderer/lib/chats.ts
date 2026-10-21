@@ -31,11 +31,18 @@ export interface ChatEntry {
 const LISTED = new Set(['user', 'agent', 'report', 'call', 'voice_note', 'question', 'approval', 'helper'])
 
 function titleOf(rows: ChatItem[]): string {
+  // A New chat divider also carries a title (of the stretch it filed); only a branch's own title names the chat.
+  let start = 0
+  rows.forEach((row, index) => {
+    const meta = parseMeta(row.meta)
+    if (row.kind === 'notice' && meta['divider'] === true) start = index + 1
+  })
   for (const row of rows) {
-    const title = metaText(parseMeta(row.meta), 'title')
-    if (row.kind === 'notice' && title !== '') return short(title, 60)
+    const meta = parseMeta(row.meta)
+    const title = metaText(meta, 'title')
+    if (row.kind === 'notice' && meta['branch'] === true && title !== '') return short(title, 60)
   }
-  const first = rows.find((row) => row.kind === 'user' && row.text.trim() !== '')
+  const first = rows.slice(start).find((row) => row.kind === 'user' && row.text.trim() !== '') ?? rows.find((row) => row.kind === 'user' && row.text.trim() !== '')
   return first === undefined ? 'New chat' : short(first.text, 60)
 }
 

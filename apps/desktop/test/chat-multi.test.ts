@@ -243,6 +243,21 @@ describe('several chats at once', () => {
   })
 })
 
+describe('New chat dividers, per chat', () => {
+  it('a divider takes earlier turns out of its own chat only', async () => {
+    fake = await startFakeAi(script())
+    const { runner, store: db } = make()
+    await runner.send('remember the colour teal', [], OTHER)
+    await runner.send('remember the number 7')
+    await db.upsert('chat_item', { kind: 'notice', text: 'New chat', meta: JSON.stringify({ divider: true }) })
+    await sleep(5)
+    await runner.send('what colour did I say?', [], OTHER)
+    expect(JSON.stringify(fake.requests.at(-1)?.body)).toContain('remember the colour teal')
+    await runner.send('what number did I say?')
+    expect(JSON.stringify(fake.requests.at(-1)?.body)).not.toContain('remember the number 7')
+  })
+})
+
 describe('a message sent while the chat is busy', () => {
   it('joins the running work when it is about the same task, and says so', async () => {
     fake = await startFakeAi(script())

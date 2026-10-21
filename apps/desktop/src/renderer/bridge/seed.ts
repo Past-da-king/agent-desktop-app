@@ -11,6 +11,7 @@ import {
 } from '@agent/core'
 
 import { openUiDemo } from './openui-demo'
+import { runsDemo } from './runs-demo'
 
 export type DemoMode = 'fresh' | 'demo' | 'empty' | 'big'
 
@@ -74,7 +75,9 @@ export function demoSettings(): Settings {
     signedIn: true,
     syncEmail: 'sam@example.com',
     deviceName: 'Windows 11',
-    quickAskHotkey: 'CommandOrControl+Shift+Space',
+    quickAskHotkey: 'CommandOrControl+Alt+Left',
+    dictateHotkey: 'Alt+Space',
+    dictateCleanHotkey: 'CommandOrControl+Alt+C',
     launchAtLogin: true,
     closeToTray: true,
     notifications: true,
@@ -193,7 +196,7 @@ export function demoRows(): SeedResult['rows'] {
       createdAt: now - 8 * DAY,
       title: 'Acme',
       body: 'A fintech company where [[Sam]] works. Office in Rosebank. Invoices are handled by [[Lerato]].',
-      kind: 'fact',
+      kind: 'organisation',
       topics: 'work, acme',
       pinned: false,
       source: 'agent',
@@ -231,6 +234,61 @@ export function demoRows(): SeedResult['rows'] {
       pinned: false,
       source: 'user',
       updatedAt: now - 7 * DAY,
+    },
+    {
+      id: 'where-we-are',
+      createdAt: now - 9 * HOUR,
+      title: 'Where we are',
+      body: '**Goals**\n- Lisbon trip in March for [[Sam]], under R18,000.\n- Masters applications in by the end of March.\n\n**Done today**\n- Flights compared; TAP direct is the front runner.\n\n**Open threads**\n- [[Lerato]] still owes the February receipts.\n\n**Next steps**\n- Book the TAP flight once Sam approves.\n- Ask for the two academic references.',
+      kind: 'project',
+      topics: 'continuation, daily',
+      pinned: true,
+      source: 'agent',
+      updatedAt: now - 9 * HOUR,
+    },
+    {
+      id: 'm7',
+      createdAt: now - 6 * DAY,
+      title: 'Lisbon trip',
+      body: "[[Sam]]'s week in Lisbon in March. Budget R18,000 all in. Window seats, no red-eyes (see [[Seat preference]]). Stays near Alfama.",
+      kind: 'project',
+      topics: 'travel, lisbon',
+      pinned: false,
+      source: 'agent',
+      updatedAt: now - 5 * HOUR,
+    },
+    {
+      id: 'm8',
+      createdAt: now - 12 * DAY,
+      title: 'Send the monthly invoices',
+      body: '1. On the 25th, export the invoices from the Acme billing page as PDF.\n2. Copy [[Sam]] on every email.\n3. Send them from the finance inbox, then tell [[Lerato]] they went out.',
+      kind: 'how-to',
+      topics: 'finance, invoices',
+      pinned: false,
+      source: 'agent',
+      updatedAt: now - 3 * DAY,
+    },
+    {
+      id: 'm9',
+      createdAt: now - 2 * DAY,
+      title: 'Fly TAP direct to Lisbon',
+      body: 'Decided on 19 October: book the TAP direct flight rather than the cheaper one-stop, because Sam will not take red-eyes and the saving was under R900.',
+      kind: 'decision',
+      topics: 'travel, lisbon',
+      pinned: false,
+      source: 'agent',
+      updatedAt: now - 2 * DAY,
+    },
+    {
+      id: 'm10',
+      createdAt: now - 15 * DAY,
+      title: 'Thabo Nkosi',
+      body: 'Accountant at [[Acme]]. Signs off expenses over R5,000. Prefers email to calls.',
+      kind: 'person',
+      topics: 'acme, finance',
+      pinned: false,
+      source: 'user',
+      updatedAt: now - 6 * DAY,
     },
   ]
 
@@ -493,6 +551,8 @@ export function demoRows(): SeedResult['rows'] {
         by: 'Airline comparison',
       }),
     },
+    // Commands, code and files the agent ran, each opening to what it wrote and what came back.
+    ...runsDemo(now),
     // Answers drawn as cards (OpenUI), the way the agent writes them.
     ...openUiDemo(now),
     // Several chats at once (rail statuses, a message that joined, a job done alongside).

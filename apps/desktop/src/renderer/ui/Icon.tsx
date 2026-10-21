@@ -180,12 +180,6 @@ const PATHS = {
     </>
   ),
   stop: <rect x="7" y="7" width="10" height="10" rx="2.5" />,
-  copy: (
-    <>
-      <rect x="8" y="8" width="12" height="12" rx="2.5" />
-      <path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8" />
-    </>
-  ),
   branch: (
     <>
       <circle cx="6" cy="5.5" r="2" />
@@ -201,6 +195,25 @@ const PATHS = {
     </>
   ),
   bolt: <path d="M13 3 5 13.5h6L10 21l8-10.5h-6z" />,
+  code: <path d="m8.5 7.5-4.5 4.5 4.5 4.5M15.5 7.5l4.5 4.5-4.5 4.5M13.5 5l-3 14" />,
+  term: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <path d="m7.5 9.5 3 2.5-3 2.5M12.5 15h4" />
+    </>
+  ),
+  doc: (
+    <>
+      <path d="M6.5 3.5h7l4 4v13h-11z" />
+      <path d="M13.5 3.5v4h4M9 12.5h6M9 16h6" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="8.5" y="8.5" width="11" height="11" rx="2" />
+      <path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>
 
 export type IconName = keyof typeof PATHS

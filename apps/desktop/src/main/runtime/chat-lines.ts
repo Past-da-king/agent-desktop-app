@@ -57,8 +57,9 @@ function short(text: string, limit: number): string {
 /** A chat's name: a title a branch was given, else its first message. */
 export function chatTitle(rows: ChatItem[]): string {
   for (const row of rows) {
-    const title = parseMeta(row.meta)['title']
-    if (row.kind === 'notice' && typeof title === 'string' && title !== '') return title
+    const meta = parseMeta(row.meta)
+    const title = meta['title']
+    if (row.kind === 'notice' && meta['branch'] === true && typeof title === 'string' && title !== '') return title
   }
   const first = rows.find((row) => row.kind === 'user' && row.text.trim() !== '')
   return first === undefined ? 'New chat' : short(first.text, 60)
