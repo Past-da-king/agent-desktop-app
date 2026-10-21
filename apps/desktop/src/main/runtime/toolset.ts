@@ -103,6 +103,7 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   'project_update',
   'project_chat_start',
   'project_chat_send',
+  'project_open',
   'message_main',
 ])
 
@@ -177,10 +178,10 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
     tools.push(...helperTools(deps.helpers)) // delegate, helper_steer, helper_push, helpers_status, helper_stop
     tools.push(...profileTools(deps.apps, deps.learned)) // profile_create
   }
-  if (deps.projects !== undefined) tools.push(...projectTools({ store: deps.store, ...deps.projects })) // project_list, project_create, project_update, project_chat_start, project_chat_send, message_main
+  if (deps.projects !== undefined) tools.push(...projectTools({ store: deps.store, ...deps.projects })) // project_list, project_create, project_update, project_chat_start, project_chat_send, message_main, project_open
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
-  // No step counter any more (Ayanda, 21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.
+  // No step counter any more (21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.
   return tools
 }
 

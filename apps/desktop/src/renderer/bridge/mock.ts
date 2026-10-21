@@ -862,12 +862,12 @@ export const mockAgent: AgentApi = {
         insertChat({ kind: 'agent', text: 'Found the folder on your Desktop. Here is the project; tap Create when it looks right.', meta: JSON.stringify(tag) })
         insertChat({
           kind: 'question',
-          text: 'Make the project Guavas relaunch?',
+          text: 'Make the project Acme relaunch?',
           meta: JSON.stringify({
             ...tag,
             options: ['Create', 'Change'],
             answer: '',
-            card: { kind: 'project', name: 'Guavas relaunch', description: 'The new guavas.co.uk: copy, lender pages and the launch on 14 November.', path: 'C:\\Users\\You\\Desktop\\projects\\guavas-site', folderNew: false, profile: 'Work', icon: { glyph: 'globe', color: 'teal' } },
+            card: { kind: 'project', name: 'Acme relaunch', description: 'The new acme shop site: copy, lender pages and the launch on 14 November.', path: 'C:\\Users\\You\\Desktop\\projects\\acme-site', folderNew: false, profile: 'Work', icon: { glyph: 'globe', color: 'teal' } },
           }),
         })
         return
@@ -1636,7 +1636,7 @@ let mockUpkeep: UpkeepReport | null = null
 const upkeepListeners = new Set<(report: UpkeepReport | null) => void>()
 
 // Tidying a bank with the agent, simulated: the real export's numbers, a few steps a tick so the states show.
-const TIDY_PROJECTS = ['aos', 'crm-1', 'creek', 'growos', 'applications', 'guavas-ls', 'impetix', 'studycvns', 'rmblr', 'guavas-website', 'londacorp-erp']
+const TIDY_PROJECTS = ['aos', 'crm-1', 'creek', 'growos', 'applications', 'lender-ls', 'agency', 'studycvns', 'rmblr', 'shop-website', 'londacorp-erp']
 let mockTidy: MemoryTidyProgress | null = null
 let mockTidyTimer: ReturnType<typeof setInterval> | null = null
 const tidyListeners = new Set<(progress: MemoryTidyProgress) => void>()

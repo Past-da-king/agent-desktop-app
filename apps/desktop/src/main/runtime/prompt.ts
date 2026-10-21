@@ -64,7 +64,7 @@ export interface ProjectContext {
   profile: string
 }
 
-/** The rule that keeps every reply on what the person is doing now (Ayanda, 21 Oct 2026). */
+/** The rule that keeps every reply on what the person is doing now (21 Oct 2026). */
 export const FOCUS_LINE =
   '- STAY ON WHAT THE USER IS DOING NOW. Answer the message in front of you. Do not bring up older topics, past memories, other projects or open tasks unless the user asks, or it directly blocks or changes what they are doing now (a clash, something due today, an approval only they can give). The memories below are background for you, not things to mention.'
 
@@ -80,7 +80,7 @@ export function projectLines(project: ProjectContext): string[] {
 }
 
 /**
- * Keeping the project's own memory (Ayanda, 21 Oct 2026): it is what every agent in the project reads first, so it
+ * Keeping the project's own memory (21 Oct 2026): it is what every agent in the project reads first, so it
  * holds the whole picture and every decision, kept up to date as the work goes, never deleted, its changes traceable.
  */
 export function projectMemoryLines(name: string): string[] {
@@ -94,12 +94,13 @@ export function projectMemoryLines(name: string): string[] {
   ]
 }
 
-/** How the main thread hands work to projects (Ayanda, 21 Oct 2026). */
+/** How the main thread hands work to projects (21 Oct 2026). */
 export function projectsMainLines(names: string[]): string[] {
   return [
     `PROJECTS: ${names.length === 0 ? 'none yet' : names.join(', ')}. Each has its own chats (agents), its own memory, a folder and a profile.`,
     '- Work that belongs to a project goes there: project_chat_start opens a chat in it with your brief and runs it; project_chat_send sends a message into one of its chats; project_list shows every project, its chats and what each is doing.',
     '- "Create a project in this folder, call it X, it is for Y": find the folder on this computer yourself with your file tools (a fuzzy "my Desktop projects folder" too), then project_create with its full path, a fitting icon and the profile whose accounts fit. The user confirms on a card before it exists. project_update renames it, moves its folder, changes its profile, icon or description, or hides it.',
+    '- "Show me X", "open X", "take me to X" about a project: project_open with X as they said it (it forgives filler, cut-off words and dictation slips) puts its page on screen. If it returns two close ones, ask which with ask_user and open the one they pick. A name they use that search missed: add it with project_update aliases.',
     '- A message starting "[From project" is a project chat writing to you. Act on it, pass it on, or tell the user, in one short line.',
   ]
 }
@@ -240,7 +241,7 @@ export function buildSystemPrompt(input: PromptInput): string {
       '- Split independent work across helpers so it runs at once (one per site, person or option).',
     )
     lines.push(
-      '- BIG ASKS ("start this project", "handle this for Guavas"): stay at the level of ideas. Break it into a few parts, delegate each part to a helper in the profile whose accounts and logins fit the work (a Guavas profile for Guavas work; make one with profile_create if none fits), and say in one line what you set going. When results come in, report where everything is at in one short status (done, in progress, blocked and why), never a wall.',
+      '- BIG ASKS ("start this project", "handle this for Acme"): stay at the level of ideas. Break it into a few parts, delegate each part to a helper in the profile whose accounts and logins fit the work (an Acme profile for Acme work; make one with profile_create if none fits), and say in one line what you set going. When results come in, report where everything is at in one short status (done, in progress, blocked and why), never a wall.',
     )
     lines.push(
       '- After delegating, tell the user in one short line what you set going, then end your turn. Never wait for helpers. The user can keep talking to you while they work, and anything new they ask for goes to another helper.',
@@ -499,7 +500,7 @@ function clip(text: string, limit: number): string {
 }
 
 /**
- * Which models the helpers may run on. One model: every helper uses it. Several (Ayanda, 21 Oct 2026): the agent
+ * Which models the helpers may run on. One model: every helper uses it. Several (21 Oct 2026): the agent
  * picks one per job by what the job needs, and does not talk about it unless asked.
  */
 export function helperModelLines(models: Array<{ name: string; goodFor: string }>, single: string): string[] {

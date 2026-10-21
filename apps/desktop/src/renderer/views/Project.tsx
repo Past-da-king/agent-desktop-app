@@ -191,6 +191,12 @@ export function Project({ id }: { id: string }): JSX.Element {
                   {pickLine(settings, pickOfChat(settings, project, 'main'))}
                 </span>
               ) : null}
+              {(project.aliases ?? []).length > 0 ? (
+                <span className="pj-fact" title="Other names search finds it by. Edit to change them.">
+                  <Icon name="search" size={15} />
+                  {short(`Also: ${(project.aliases ?? []).join(', ')}`, 60)}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { MAIN_CHAT, type TaskRow } from '@agent/core'
+import { MAIN_CHAT, findMatches, projectFields, type FindField, type TaskRow } from '@agent/core'
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 
@@ -17,6 +17,8 @@ interface Action {
   icon: IconName
   shortcut?: string
   run: () => void
+  /** What search matches it by; the label when absent. A project adds its other names, description and folder. */
+  fields?: FindField[]
 }
 
 interface Entry {
@@ -129,6 +131,8 @@ export function Palette(): JSX.Element | null {
       id: `jump-project-${project.id}`,
       label: project.hidden ? `${project.name} (hidden project)` : `${project.name} (project)`,
       icon: 'folder',
+      // The label last and light, so "project" or "hidden" alone still lists them.
+      fields: [...projectFields(project), { text: project.hidden ? 'hidden project' : 'project', weight: 0.3, fuzzy: false }],
       run: closeAnd(() => navigate({ page: 'project', id: project.id })),
     })),
   ]
@@ -174,20 +178,36 @@ export function Palette(): JSX.Element | null {
   ]
 
   const q = query.trim().toLowerCase()
-  const match = (action: Action): boolean => q === '' || action.label.toLowerCase().includes(q)
-  const jumpShown = jump.filter(match)
-  const doShown = doItems.filter(match)
+  // The same forgiving matcher the agent's project_open uses (@agent/core find.ts): filler words dropped, every
+  // other word matched by prefix or a small typo, best hit first so Enter opens it.
+  const shown = (actions: Action[]): { actions: Action[]; best: number } => {
+    if (q === '') return { actions, best: 0 }
+    const hits = findMatches(
+      query,
+      actions.map((action) => ({ item: action, fields: action.fields ?? [{ text: action.label, weight: 1 }] })),
+    )
+    return { actions: hits.map((hit) => hit.item), best: hits[0]?.score ?? 0 }
+  }
+  const jumpShown = shown(jump)
+  const doShown = shown(doItems)
+  // The group holding the best hit comes first, so the first row, the one Enter opens, is the best hit.
+  const doFirst = doShown.best > jumpShown.best
   const entries: Entry[] = []
-  const jumpEntries = jumpShown.map((action) => {
-    const entry = { action, index: entries.length }
-    entries.push(entry)
-    return entry
-  })
-  const doEntries = doShown.map((action) => {
-    const entry = { action, index: entries.length }
-    entries.push(entry)
-    return entry
-  })
+  const place = (actions: Action[]): Entry[] =>
+    actions.map((action) => {
+      const entry = { action, index: entries.length }
+      entries.push(entry)
+      return entry
+    })
+  let jumpEntries: Entry[]
+  let doEntries: Entry[]
+  if (doFirst) {
+    doEntries = place(doShown.actions)
+    jumpEntries = place(jumpShown.actions)
+  } else {
+    jumpEntries = place(jumpShown.actions)
+    doEntries = place(doShown.actions)
+  }
 
   if (q !== '') {
     entries.push({
@@ -234,14 +254,12 @@ export function Palette(): JSX.Element | null {
       </p>
     )
   } else {
+    const jumpGroup = jumpEntries.length > 0 ? <Group label="Jump to" entries={jumpEntries} selected={selected} onHover={setSelected} /> : null
+    const doGroup = doEntries.length > 0 ? <Group label="Do something" entries={doEntries} selected={selected} onHover={setSelected} /> : null
     body = (
       <>
-        {jumpEntries.length > 0 ? (
-          <Group label="Jump to" entries={jumpEntries} selected={selected} onHover={setSelected} />
-        ) : null}
-        {doEntries.length > 0 ? (
-          <Group label="Do something" entries={doEntries} selected={selected} onHover={setSelected} />
-        ) : null}
+        {doFirst ? doGroup : jumpGroup}
+        {doFirst ? jumpGroup : doGroup}
         {askEntry ? (
           <Group label="Ask" entries={[askEntry]} selected={selected} onHover={setSelected} />
         ) : null}

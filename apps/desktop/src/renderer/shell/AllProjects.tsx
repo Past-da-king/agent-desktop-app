@@ -1,4 +1,4 @@
-import type { ProjectRow } from '@agent/core'
+import { findProjects, type ProjectRow } from '@agent/core'
 import { useMemo, useState } from 'react'
 
 import { agent } from '../bridge'
@@ -27,15 +27,19 @@ export function AllProjects({
   const navigate = useUi((store) => store.navigate)
   const [query, setQuery] = useState('')
   const q = query.trim().toLowerCase()
-  const match = (project: ProjectRow): boolean => q === '' || `${project.name} ${project.description}`.toLowerCase().includes(q)
+  // The palette's forgiving matcher (@agent/core find.ts): "lender select" finds Acme Lender Selector.
+  const scores = useMemo(() => (q === '' ? null : new Map(findProjects(query, projects).map((hit) => [hit.item.id, hit.score]))), [q, query, projects])
+  const match = (project: ProjectRow): boolean => scores === null || scores.has(project.id)
+  // Searching, the best hit first; otherwise by name.
+  const order = (a: ProjectRow, b: ProjectRow): number => (scores === null ? 0 : (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0)) || a.name.localeCompare(b.name)
   const chosen = projects.some(onRail)
   // Until the person pins any, the rail shows the oldest few; pinning starts from what they already see.
   const onRailNow = useMemo(() => new Set(railProjects(projects).map((project) => project.id)), [projects])
   const room = chosen ? railHasRoom(projects) : true
   // The rail's five first, in rail order, then the rest by name.
   const railed = railProjects(projects).filter(match)
-  const visible = projects.filter((project) => !project.hidden && !onRailNow.has(project.id) && match(project)).sort((a, b) => a.name.localeCompare(b.name))
-  const hidden = projects.filter((project) => project.hidden && match(project)).sort((a, b) => a.name.localeCompare(b.name))
+  const visible = projects.filter((project) => !project.hidden && !onRailNow.has(project.id) && match(project)).sort(order)
+  const hidden = projects.filter((project) => project.hidden && match(project)).sort(order)
 
   const togglePin = async (project: ProjectRow): Promise<void> => {
     const now = Date.now()

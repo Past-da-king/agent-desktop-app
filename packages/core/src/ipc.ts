@@ -355,6 +355,11 @@ export interface ProjectIcon {
 export interface ProjectRow extends RowBase {
   name: string
   description: string
+  /**
+   * Other names it is called by, so search finds it the way the person says it ("Rumbler" for RMBLR). Optional:
+   * rows from older builds have none, and an older build keeps the field when it syncs the row back.
+   */
+  aliases?: string[]
   icon: ProjectIcon
   /** A folder on this computer the project's agents work in by default; '' for none. */
   path: string
@@ -484,9 +489,9 @@ export interface RunState {
 
 export type Decision = 'approve' | 'decline'
 
-/** Where a notification click should take the person. */
+/** Where a notification click, or the agent's project_open, should take the person. */
 export interface RouteTarget {
-  view: 'home' | 'chat' | 'tasks' | 'memory' | 'routines'
+  view: 'home' | 'chat' | 'tasks' | 'memory' | 'routines' | 'project'
   /** The row to show, when there is one. */
   id: string
 }
@@ -633,7 +638,7 @@ export interface BrowserPerson {
   kind: 'mine' | 'shared' | 'profile'
   /** The session partition; a tab with the same partition belongs to this profile. */
   partition: string
-  /** Google accounts signed in here, e.g. "ap@example.com". */
+  /** Google accounts signed in here, e.g. "me@example.com". */
   google: string[]
   /** The tabs the person opens go here. */
   current: boolean
