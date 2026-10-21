@@ -294,6 +294,9 @@ function createWindow(stateFile: string): BrowserWindow {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      // The agent's browser pages are <webview>s inside the browser card, so they move with it. Only this window
+      // may host them, and browser/embed.ts locks every one down before it attaches.
+      webviewTag: true,
     },
   })
 

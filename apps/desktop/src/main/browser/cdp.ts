@@ -90,6 +90,13 @@ export class Cdp {
    * expects taps anyway, so input goes out as touch events instead.
    */
   touch = false
+  /**
+   * The page is a <webview> guest. Chromium turns touches into a tap (and its click) only in the window's own
+   * view, so touches sent here reach the page's touch handlers but never click; mouse events, on the other
+   * hand, do not hang for a guest (measured on Electron 44). A tap then also sends the mouse half that follows
+   * a real finger tap.
+   */
+  guest = false
 
   constructor(dbg: DebuggerLike, timeoutMs = 10_000) {
     this.dbg = dbg
@@ -145,6 +152,10 @@ export class Cdp {
     await this.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p.x, y: p.y }] })
     await sleep(40)
     await this.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    if (this.guest) {
+      await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 })
+      await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1 })
+    }
   }
 
   async hover(at: Point, scale: number): Promise<void> {

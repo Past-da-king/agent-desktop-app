@@ -55,6 +55,7 @@ export const CHANNELS = {
     frame: 'agent:browser.frame',
     go: 'agent:browser.go',
     newTab: 'agent:browser.newTab',
+    attach: 'agent:browser.attach',
     devtools: 'agent:browser.devtools',
   },
   helpers: {

@@ -124,6 +124,7 @@ const api: AgentApi = {
     newTab: () => call<void>(CHANNELS.browser.newTab),
     devtools: () => call<void>(CHANNELS.browser.devtools),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
+    attach: (tabId, guestId) => call<boolean>(CHANNELS.browser.attach, tabId, guestId),
   },
 
   helpers: {

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 
 import { agent, chat } from '../bridge'
 import { skyHopDemo } from '../bridge/seed'
-import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, boundsFor, displayUrl } from '../lib/panel'
+import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, displayUrl } from '../lib/panel'
 import { parseMeta, metaStrings } from '../lib/meta'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -13,26 +13,15 @@ import { Button } from '../ui/Button'
 import { IconButton } from '../ui/bits'
 import { Chip } from '../ui/Chip'
 import { Icon, type IconName } from '../ui/Icon'
+import { BrowserHost } from './BrowserHost'
 import { HelperStage, HelpersPanel } from './HelpersPanel'
+import { setStageBox } from '../lib/browser-stage'
 
 const VIEW_CHOICES: Array<{ mode: Exclude<BrowserViewMode, 'fit'>; label: string; icon: IconName }> = [
   { mode: 'desktop', label: 'Desktop', icon: 'monitor' },
   { mode: 'tablet', label: 'Tablet', icon: 'apps' },
   { mode: 'phone', label: 'Phone', icon: 'phone' },
 ]
-
-/** Where the page sits inside a slot: laid out at its own size, scaled down to fit, centred. */
-export function fittedRect(
-  slot: { width: number; height: number },
-  view: BrowserState['view'],
-): { left: number; top: number; width: number; height: number } | null {
-  if (view === undefined || view.mode === 'fit' || view.width <= 0 || view.height <= 0) return null
-  if (slot.width <= 0 || slot.height <= 0) return null
-  const scale = Math.min(1, slot.width / view.width, slot.height / view.height)
-  const width = Math.max(1, Math.round(view.width * scale))
-  const height = Math.max(1, Math.round(view.height * scale))
-  return { left: Math.floor((slot.width - width) / 2), top: Math.floor((slot.height - height) / 2), width, height }
-}
 
 /** The compact device switch: shows the mode and size the page is laid out at, and changes it. */
 function ViewSwitch({ state, disabled }: { state: BrowserState | null; disabled: boolean }): JSX.Element {
@@ -304,7 +293,28 @@ function BrowserChrome({
   )
 }
 
-function PanelBody(): JSX.Element {
+/** True while the window is narrow enough that the shell hides the side panel (responsive.css). */
+function useNarrow(): boolean {
+  const query = '(max-width:1180px)'
+  const [narrow, setNarrow] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia(query).matches)
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const list = window.matchMedia(query)
+    const change = (): void => setNarrow(list.matches)
+    change()
+    list.addEventListener('change', change)
+    return () => list.removeEventListener('change', change)
+  }, [])
+  return narrow
+}
+
+/**
+ * The browser card and the rest of the side panel. It stays mounted for as long as the main window does, because
+ * the agent's pages live in it (BrowserHost) and a page ends if its <webview> is ever unmounted or moved. When
+ * the panel is not on screen (another page, collapsed, a helper open, a narrow window) it is parked: laid out
+ * the same, invisible and out of reach, while the pages carry on backstage.
+ */
+function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
   const settings = useSettings((store) => store.settings)
   const width = usePanel((store) => store.width)
   const setWidth = usePanel((store) => store.setWidth)
@@ -316,92 +326,35 @@ function PanelBody(): JSX.Element {
   const focusComposer = useUi((store) => store.focusComposer)
   const memories = useEntity('memory')
   const state = useBrowserState()
-  const slot = useRef<HTMLDivElement>(null)
   const drag = useRef<{ x: number; width: number } | null>(null)
 
   const agentName = settings?.agentName.trim() || 'Your agent'
   const hasPage = state !== null && state.tabs.length > 0
   const expanded = state?.expanded === true
-  // A helper open full size covers the window, so the native page steps out of the way until it closes.
-  const helperOpen = usePanel((store) => store.helper !== null)
-  const [slotSize, setSlotSize] = useState({ width: 0, height: 0 })
-  const [live, setLive] = useState(true)
+  const shownTab = state?.tabs.find((tab) => tab.active) ?? state?.tabs[0]
+  // A tab no window could host (it opened while the app was still setting up) is shown as a still picture.
+  const offscreen = hasPage && shownTab !== undefined && shownTab.embed !== true
   const [still, setStill] = useState<string | null>(null)
   const used = [...memories]
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
     .slice(0, 3)
 
-  // The live page is a native view. Report the reserved rectangle, debounced while the layout settles.
+  // Only an offscreen tab needs pictures; an embedded page is the real thing, drawn in the card.
   useEffect(() => {
-    const element = slot.current
-    if (!element) return
-    // While the page is expanded, the full-window stage owns the native view.
-    if (expanded) return
-    if (helperOpen) {
-      void agent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false })
-      return
-    }
-    let timer = 0
-    let frame = 0
-    let sent = ''
-    let shownLive = true
-    // Keep a fresh still of the page, so it is ready the moment the live page has to step aside.
-    const still = window.setInterval(() => {
-      if (!hasPage || !shownLive) return
+    if (!offscreen || parked || expanded) return
+    const grab = (): void => {
       void agent.browser
         .frame()
         .then((url) => {
           if (url !== null) setStill(url)
         })
         .catch(() => undefined)
-    }, 1500)
-    // The native page sits on top of everything, so it must never be anywhere its slot is not: it follows
-    // the slot every frame, and steps out of sight whenever any part of the slot is scrolled or covered.
-    const send = (): void => {
-      const rect = element.getBoundingClientRect()
-      const box = element.closest('.panel-w')?.getBoundingClientRect()
-      // Live only while the whole card is in view; any part scrolled away and the still picture stands in.
-      const inside =
-        box === undefined ||
-        (rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5)
-      if (inside !== shownLive) {
-        shownLive = inside
-        setLive(inside)
-      }
-      const next = boundsFor(rect, hasPage && inside)
-      const key = `${next.x},${next.y},${next.width},${next.height},${next.visible}`
-      if (key === sent) return
-      sent = key
-      void agent.browser.setBounds(next)
     }
-    const follow = (): void => {
-      send()
-      frame = window.requestAnimationFrame(follow)
-    }
-    const report = (): void => {
-      window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
-        const rect = element.getBoundingClientRect()
-        setSlotSize({ width: Math.round(rect.width), height: Math.round(rect.height) })
-        send()
-      }, 80)
-    }
-    report()
-    frame = window.requestAnimationFrame(follow)
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(report)
-    observer?.observe(element)
-    window.addEventListener('resize', report)
-    return () => {
-      window.clearTimeout(timer)
-      window.clearInterval(still)
-      window.cancelAnimationFrame(frame)
-      observer?.disconnect()
-      window.removeEventListener('resize', report)
-      // Leaving Chat (or collapsing the panel) hides the native view.
-      void agent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false })
-    }
-  }, [hasPage, width, expanded, helperOpen])
-  const frame = fittedRect(slotSize, state?.view)
+    grab()
+    const timer = window.setInterval(grab, 1500)
+    return () => window.clearInterval(timer)
+  }, [offscreen, parked, expanded])
+
 
   const endDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (drag.current === null) return
@@ -414,17 +367,10 @@ function PanelBody(): JSX.Element {
     }
   }
 
-  // A helper opened from the list fills this side panel (only the panel), until its X puts the panel back.
-  if (helperOpen) {
-    return (
-      <aside className="panel-w panel-helper" aria-label="Helper">
-        <HelperStage />
-      </aside>
-    )
-  }
-
   return (
-    <aside className="panel-w" aria-label="The agent's browser">
+    // Parked, the panel is visibility:hidden (so nothing in it takes focus or is read out) except the live page,
+    // which may still be shown full size over the window. `inert` would block that page too, so it is not used.
+    <aside className={`panel-w${parked ? ' panel-parked' : ''}`} aria-label="The agent's browser">
       <div
         className="panel-resize"
         role="separator"
@@ -476,7 +422,7 @@ function PanelBody(): JSX.Element {
                 ? 'Waiting for you'
                 : state?.agentActive === false
                   ? 'You have control'
-                  : 'Live, in its own window'}
+                  : 'Live, right here in the card'}
             </span>
           </div>
           <div className="panel-h-actions">
@@ -516,7 +462,7 @@ function PanelBody(): JSX.Element {
           <BrowserChrome state={state} agentName={agentName} />
         </div>
 
-        <div className="br-view" ref={slot}>
+        <div className="br-view">
           {hasPage ? (
             agent.platform === 'web' ? (
               <MockPage agentName={agentName} />
@@ -527,16 +473,9 @@ function PanelBody(): JSX.Element {
                     <Icon name="max" size={18} />
                     Open full size
                   </span>
-                ) : !live && still !== null ? (
+                ) : offscreen && still !== null ? (
                   <img className="br-still" src={still} alt="" />
-                ) : frame !== null ? (
-                  <span
-                    className="br-frame"
-                    style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }}
-                  />
-                ) : (
-                  <span className="br-frame fill" />
-                )}
+                ) : null}
               </div>
             )
           ) : (
@@ -558,6 +497,7 @@ function PanelBody(): JSX.Element {
               </Button>
             </div>
           )}
+          {agent.platform === 'web' ? null : <BrowserHost state={state} parked={parked} />}
         </div>
 
         {state?.needsUser === true && state.handoffReason !== '' ? (
@@ -600,63 +540,61 @@ function PanelBody(): JSX.Element {
   )
 }
 
-export function ChatPanel(): JSX.Element {
+/**
+ * The side panel. `parked` (the shell is showing another page) keeps the browser card mounted but out of
+ * sight, so the agent's pages survive moving around the app. The collapsed strip and an open helper take the
+ * panel's place on screen while the card stays parked behind them.
+ */
+export function ChatPanel({ parked = false }: { parked?: boolean }): JSX.Element {
   const collapsed = usePanel((store) => store.collapsed)
   const setCollapsed = usePanel((store) => store.setCollapsed)
+  // A helper opened from the list fills this side panel (only the panel), until its X puts the panel back.
+  const helperOpen = usePanel((store) => store.helper !== null)
+  const narrow = useNarrow()
 
-  if (collapsed) {
-    return (
-      <aside className="panel-w panel-mini" aria-label="The agent's browser panel is collapsed">
-        <button
-          type="button"
-          className="panel-mini-open"
-          aria-label="Open the agent's browser panel"
-          title="Open the agent's browser panel"
-          onClick={() => setCollapsed(false)}
-        >
-          <Icon name="panel" size={22} />
-          <span className="panel-mini-chev">
-            <Icon name="chev" size={13} />
-          </span>
-        </button>
-      </aside>
-    )
-  }
-
-  return <PanelBody />
+  return (
+    <>
+      {!parked && collapsed ? (
+        <aside className="panel-w panel-mini" aria-label="The agent's browser panel is collapsed">
+          <button
+            type="button"
+            className="panel-mini-open"
+            aria-label="Open the agent's browser panel"
+            title="Open the agent's browser panel"
+            onClick={() => setCollapsed(false)}
+          >
+            <Icon name="panel" size={22} />
+            <span className="panel-mini-chev">
+              <Icon name="chev" size={13} />
+            </span>
+          </button>
+        </aside>
+      ) : null}
+      {!parked && !collapsed && helperOpen ? (
+        <aside className="panel-w panel-helper" aria-label="Helper">
+          <HelperStage />
+        </aside>
+      ) : null}
+      <PanelBody parked={parked || collapsed || helperOpen || narrow} />
+    </>
+  )
 }
 
 /**
  * The page over the whole app window, for when the person helps out: a sign-in, a captcha, a fiddly
- * page. The same native view, just given a much bigger rectangle, so nothing reloads. While the person
- * has control the agent's own actions wait; Done, carry on hands the page back.
+ * page. This draws the chrome and an empty page area; the card's own BrowserHost lays the same live page
+ * over that area (nothing reloads, and the page is only ever in one place). While the person has control the
+ * agent's own actions wait; Done, carry on hands the page back.
  */
 export function BrowserStage(): JSX.Element | null {
   const state = useBrowserState()
   const settings = useSettings((store) => store.settings)
   const navigate = useUi((store) => store.navigate)
   const handBack = useHandBack()
-  const slot = useRef<HTMLDivElement>(null)
-  const [slotSize, setSlotSize] = useState({ width: 0, height: 0 })
   const expanded = state?.expanded === true && state.tabs.length > 0
 
   useEffect(() => {
     if (!expanded) return
-    const element = slot.current
-    if (!element) return
-    let timer = 0
-    const report = (): void => {
-      window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
-        const rect = element.getBoundingClientRect()
-        setSlotSize({ width: Math.round(rect.width), height: Math.round(rect.height) })
-        void agent.browser.setBounds(boundsFor(rect, true))
-      }, 40)
-    }
-    report()
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(report)
-    observer?.observe(element)
-    window.addEventListener('resize', report)
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -664,21 +602,13 @@ export function BrowserStage(): JSX.Element | null {
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => {
-      window.clearTimeout(timer)
-      observer?.disconnect()
-      window.removeEventListener('resize', report)
-      window.removeEventListener('keydown', onKey)
-      // The chat panel reports its own rectangle again once it sees the page is back.
-      void agent.browser.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false })
-    }
+    return () => window.removeEventListener('keydown', onKey)
   }, [expanded])
 
   if (!expanded || state === null) return null
   const agentName = settings?.agentName.trim() || 'Your agent'
   const needsUser = state.needsUser
   const personDriving = state.agentActive === false
-  const frame = fittedRect(slotSize, state.view)
 
   return (
     <div className="br-stage" role="dialog" aria-modal="true" aria-label="The agent's browser, full size">
@@ -726,16 +656,13 @@ export function BrowserStage(): JSX.Element | null {
         />
         {needsUser && state.handoffReason !== '' ? <p className="br-stage-reason">{state.handoffReason}</p> : null}
       </div>
-      <div className="br-stage-view" ref={slot}>
+      {/* Registered in the commit itself (a ref callback), so the live page lands here in the same frame. */}
+      <div className="br-stage-view" ref={setStageBox}>
         {agent.platform === 'web' ? (
           <div className="br-stage-mock">
             <MockPage agentName={agentName} />
           </div>
-        ) : frame !== null ? (
-          <span className="br-frame" style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }} />
-        ) : (
-          <span className="br-frame fill" />
-        )}
+        ) : null}
       </div>
     </div>
   )
