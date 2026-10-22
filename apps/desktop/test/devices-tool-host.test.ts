@@ -12,7 +12,7 @@ import type { Tool, ToolContext } from '@agent/core'
 
 import { Store } from '../src/main/db'
 import { DEFAULT_SHARE, DeviceToolHost, groupOf, resultValue, toolCommand, type ShareGroup } from '../src/main/devices/device-tool-host'
-import { RULE_NAME, WindowsFirewall, allowScript, elevateArgs, firewallState, parseFirewallRules } from '../src/main/devices/firewall'
+import { RULE_NAME, VPN_REMOTE, WindowsFirewall, allowScript, elevateArgs, firewallState, parseFirewallRules } from '../src/main/devices/firewall'
 import { HandlerRegistry } from '../src/main/devices/registry'
 import { DevicesService } from '../src/main/devices/service'
 import type { DeviceToolResult } from '../src/main/devices/types'
@@ -93,14 +93,20 @@ describe('Windows Firewall step', () => {
     expect(firewallState(rules, program.toLowerCase(), 7787)).toBe('blocked')
   })
 
-  it('says missing with no rule, allowed with an Allow rule for the program or the port', () => {
+  it('says allowed only when Private, Domain AND Public are covered (a VPN adapter is often Public)', () => {
+    const rule = (name: string, profiles: string, extra = `Program: ${program}`): string =>
+      `Rule Name: ${name}\nEnabled: Yes\nDirection: In\nProfiles: ${profiles}\n${extra}\nRemoteIP: Any\nAction: Allow\n\n`
     expect(firewallState([], program, 7787)).toBe('missing')
-    const allowProgram = parseFirewallRules(`Rule Name: ${RULE_NAME}\nEnabled: Yes\nDirection: In\nProgram: ${program}\nAction: Allow\n`)
-    expect(firewallState(allowProgram, program, 7787)).toBe('allowed')
-    const allowPort = parseFirewallRules(`Rule Name: ${RULE_NAME} (port 7787)\nEnabled: Yes\nDirection: In\nLocalPort: 7787\nProgram: Any\nAction: Allow\n`)
-    expect(firewallState(allowPort, program, 7787)).toBe('allowed')
-    expect(firewallState(allowPort, program, 7797)).toBe('missing')
-    const disabled = parseFirewallRules(`Rule Name: x\nEnabled: No\nDirection: In\nProgram: ${program}\nAction: Allow\n`)
+    // An older Private-only rule (or the one Windows makes when Allow is clicked on a private network) is not enough.
+    expect(firewallState(parseFirewallRules(rule(RULE_NAME, 'Domain,Private')), program, 7787)).toBe('missing')
+    const both = parseFirewallRules(rule(RULE_NAME, 'Domain,Private') + rule(`${RULE_NAME} (VPN)`, 'Public'))
+    expect(firewallState(both, program, 7787)).toBe('allowed')
+    expect(both[1]?.remoteIp).toBe('Any')
+    expect(firewallState(parseFirewallRules(rule('x', 'Any')), program, 7787)).toBe('allowed')
+    const ports = parseFirewallRules(rule(`${RULE_NAME} (port 7787)`, 'Domain,Private', 'LocalPort: 7787\nProgram: Any') + rule(`${RULE_NAME} (port 7787, VPN)`, 'Public', 'LocalPort: 7787\nProgram: Any'))
+    expect(firewallState(ports, program, 7787)).toBe('allowed')
+    expect(firewallState(ports, program, 7797)).toBe('missing')
+    const disabled = parseFirewallRules(`Rule Name: x\nEnabled: No\nDirection: In\nProfiles: Any\nProgram: ${program}\nAction: Allow\n`)
     expect(firewallState(disabled, program, 7787)).toBe('missing')
   })
 
@@ -109,8 +115,22 @@ describe('Windows Firewall step', () => {
     const script = allowScript(path, 7787)
     expect(script).toContain("Get-NetFirewallApplicationFilter -Program 'C:\\Users\\Sam O''Neil\\Apps\\Agent.exe'")
     expect(script).toContain("Remove-NetFirewallRule")
-    expect(script).toContain(`netsh advfirewall firewall add rule name='${RULE_NAME}' dir=in action=allow program='C:\\Users\\Sam O''Neil\\Apps\\Agent.exe' enable=yes profile=private,domain`)
-    expect(script).toContain(`netsh advfirewall firewall add rule name='${RULE_NAME} (port 7787)' dir=in action=allow protocol=TCP localport=7787 enable=yes profile=private,domain`)
+    const exe = "'C:\\Users\\Sam O''Neil\\Apps\\Agent.exe'"
+    // Private and Domain from anywhere; Public only from this subnet and the VPN ranges, never the whole internet.
+    expect(VPN_REMOTE).toBe('LocalSubnet,100.64.0.0/10,fd7a:115c:a1e0::/48')
+    const adds = script.split('\n').filter((line) => line.startsWith('netsh advfirewall firewall add rule'))
+    expect(adds).toEqual([
+      `netsh advfirewall firewall add rule name='${RULE_NAME}' dir=in action=allow program=${exe} enable=yes profile=private,domain`,
+      `netsh advfirewall firewall add rule name='${RULE_NAME} (VPN)' dir=in action=allow program=${exe} enable=yes profile=public remoteip=LocalSubnet,100.64.0.0/10,fd7a:115c:a1e0::/48`,
+      `netsh advfirewall firewall add rule name='${RULE_NAME} (port 7787)' dir=in action=allow protocol=TCP localport=7787 enable=yes profile=private,domain`,
+      `netsh advfirewall firewall add rule name='${RULE_NAME} (port 7787, VPN)' dir=in action=allow protocol=TCP localport=7787 enable=yes profile=public remoteip=LocalSubnet,100.64.0.0/10,fd7a:115c:a1e0::/48`,
+    ])
+    // Every rule it adds is deleted first, so running it twice leaves one of each.
+    for (const name of [RULE_NAME, `${RULE_NAME} (VPN)`, `${RULE_NAME} (port 7787)`, `${RULE_NAME} (port 7787, VPN)`]) {
+      expect(script).toContain(`netsh advfirewall firewall delete rule name='${name}' | Out-Null`)
+    }
+    // No rule anywhere opens Public to any address.
+    expect(adds.filter((line) => line.includes('profile=public') && !line.includes('remoteip='))).toEqual([])
     const args = elevateArgs(path, 7787)
     expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command'])
     const outer = args[3] ?? ''
