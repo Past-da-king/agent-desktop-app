@@ -57,6 +57,7 @@ function rpc(base, fp, pass) {
       const pending = new Map()
       const events = []
       let next = 1
+      let closeCode = 1006
       socket.on('data', (chunk) => {
         buf = Buffer.concat([buf, chunk])
         for (;;) {
@@ -69,6 +70,7 @@ function rpc(base, fp, pass) {
           const payload = buf.subarray(off, off + len)
           buf = buf.subarray(off + len)
           if (op === 9) socket.write(frame(10, payload))
+          if (op === 8) closeCode = payload.length >= 2 ? payload.readUInt16BE(0) : 1005
           if (op !== 1) continue
           const msg = JSON.parse(payload.toString())
           if (msg.type === 'result') { const p = pending.get(msg.id); pending.delete(msg.id); if (msg.ok) p?.resolve(msg.value); else p?.reject(new Error(msg.error)) }
@@ -78,6 +80,7 @@ function rpc(base, fp, pass) {
       socket.write(frame(1, Buffer.from(JSON.stringify({ type: 'hello', device: PHONE }))))
       resolve({
         events,
+        closed: new Promise((done) => socket.on('close', () => done(closeCode))),
         call: (method, ...args) => new Promise((ok, fail) => { const id = String(next++); pending.set(id, { resolve: ok, reject: fail }); socket.write(frame(1, Buffer.from(JSON.stringify({ type: 'call', id, method, args })))) }),
         close: () => { socket.write(frame(8, Buffer.from([3, 232]))); socket.end() },
       })
@@ -136,4 +139,16 @@ if (mode === 'pair') {
   console.log(`GET /v1/file outside the shared places: HTTP ${refused.status}`)
   await client.call('data.remove', 'task', task.id)
   client.close()
+} else if (mode === 'watch') {
+  // Stays connected until the node closes the line (a revoke), then checks the pass is refused.
+  const saved = JSON.parse(fs.readFileSync(a, 'utf8'))
+  const base = b ?? saved.base
+  const client = await rpc(base, saved.fp, saved.pass)
+  await client.call('settings.get')
+  console.log('connected; waiting for the node to close the line')
+  const code = await client.closed
+  console.log(`line closed by the node with code ${code}`)
+  const after = await https(`${base}/v1/devices`, saved.fp, { headers: { Authorization: `Bearer ${saved.pass}` } })
+  console.log(`GET /v1/devices with the old pass: HTTP ${after.status}`)
+  try { await rpc(base, saved.fp, saved.pass) } catch (e) { console.log(`new RPC connection with the old pass: ${e.message}`) }
 }

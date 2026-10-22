@@ -83,6 +83,22 @@ if (mode === 'settings') {
   await sleep(500)
   await cdp.shot(`live-settings-devices-${width}`)
   await cdp.send('Emulation.clearDeviceMetricsOverride')
+} else if (mode === 'revoke') {
+  // Takes out the device named in rest[0] (its nth row, rest[1], default 1) through the real confirm dialog.
+  const [name, nth = '1'] = rest
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false })
+  await cdp.evaluate(`document.querySelector('.scrim') && document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  await cdp.evaluate(`location.hash = '#/settings'`)
+  await sleep(1200)
+  const clicked = await cdp.evaluate(`(() => { const rows = [...document.querySelectorAll('.dv-row')].filter((r) => r.querySelector('.rt b')?.textContent === ${JSON.stringify(name)}); const row = rows[${Number(nth) - 1}]; if (!row) return false; row.scrollIntoView({ block: 'center' }); [...row.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Take out').click(); return true })()`)
+  await sleep(700)
+  await cdp.shot(`live-revoke-confirm-${nth}`)
+  await cdp.evaluate(`[...document.querySelectorAll('.dialog button')].find((b) => b.textContent.trim() === 'Take it out').click()`)
+  await sleep(1500)
+  await cdp.evaluate(`document.querySelector('section.dv').scrollIntoView({ block: 'start' })`)
+  await sleep(400)
+  await cdp.shot(`live-after-revoke-${nth}`)
+  console.log(JSON.stringify({ clicked, list: await cdp.evaluate(`document.querySelector('section.dv').innerText`) }))
 } else if (mode === 'shoot') {
   const [name, width, height, mobile, url] = rest
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: Number(width), height: Number(height), deviceScaleFactor: 1, mobile: mobile === 'mobile' })
