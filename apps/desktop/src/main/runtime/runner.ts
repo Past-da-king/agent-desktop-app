@@ -768,6 +768,15 @@ export class Runner {
     void this.begin(line, note, [], null, leaseId)
   }
 
+  /**
+   * How a tool another brain runs on this node reaches the person here (devices/device-tools.ts, s11): its question
+   * and approval cards show in the same chat on this node and wait for an answer; a notification shows here.
+   */
+  deviceContext(chat: string, signal: AbortSignal): Pick<ToolContext, 'ask' | 'approve' | 'notify'> {
+    const context = this.toolContext(signal, 'main', chat)
+    return { ask: context.ask, approve: context.approve, notify: context.notify }
+  }
+
   /** meta.origin for a message: the device it came from (the node server says), else this node itself. */
   private originMeta(origin: JsonObject | undefined): JsonObject {
     const value = origin ?? (this.devices?.selfOrigin?.() as JsonObject | null | undefined) ?? null
