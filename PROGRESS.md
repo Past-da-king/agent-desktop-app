@@ -96,6 +96,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 07:40 LIVE 7/7 PASS (A, harness-3.log): Windows desktop copy (brain 1) + temp server node 7790 (brain 2) + harness phone: a-g incl. failover and crash resume (kill mid-turn, restart, exactly one reply). Pair POST via a temporary tunnel only (firewall). A now: firewall rule scope, then final build after C merges into devices. C deployed 0.2.42 from devices-headless-int via one-command deploy.sh; told to merge into devices and redeploy.
 
+- 07:55 C merged its line into devices 9bd42d0 (fixes deduped, 0.2.42, CLI stop/status fixed), full suite 1250, harness 7/7. Real server redeployed from 9bd42d0, unpaired, crontab identical. A builds final installer from devices.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
