@@ -40,7 +40,19 @@ export function helperVisible(item: ChatItem, items: ChatItem[]): boolean {
   if (state === 'working') return true
   if (state === 'stopped') return false
   const endedAt = metaNumber(meta, 'endedAt') ?? item.createdAt
-  return !items.some((other) => other.kind === 'agent' && other.createdAt >= endedAt)
+  return newestAgentAt(items) < endedAt
+}
+
+const newestAgentCache = new WeakMap<readonly ChatItem[], number>()
+
+/** When the newest agent reply in a list was made (-Infinity for none), read once per list rather than per helper. */
+function newestAgentAt(items: readonly ChatItem[]): number {
+  const hit = newestAgentCache.get(items)
+  if (hit !== undefined) return hit
+  let newest = Number.NEGATIVE_INFINITY
+  for (const item of items) if (item.kind === 'agent' && item.createdAt > newest) newest = item.createdAt
+  newestAgentCache.set(items, newest)
+  return newest
 }
 
 /** Helpers the thread or Home should show, oldest first. */
