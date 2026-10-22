@@ -51,7 +51,8 @@ const NOTE_FILE = 'update-pending.json'
 
 /** "0.2.53" from "Agent-0.2.53-setup.exe" (and pre-release tags like 0.3.0-beta.1), or null. */
 export function versionOfInstaller(file: string, productName: string): string | null {
-  const name = basename(file)
+  // Either slash: a Windows path read anywhere (tests, a server checking a path it was given).
+  const name = file.split(/[\\/]/).pop() ?? file
   const escaped = productName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const match = new RegExp(`^${escaped}-(\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.]+)?)-setup\\.exe$`, 'i').exec(name)
   return match?.[1] ?? null
