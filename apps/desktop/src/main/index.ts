@@ -44,6 +44,11 @@ import { HelperManager } from './runtime/helpers'
 import { clipboardAttachments } from './clipboard-files'
 import { savePastedFile } from './pasted'
 import { Runner } from './runtime/runner'
+import { TurnLeases } from './runtime/turns'
+import { ProjectAgentRows } from './runtime/project-agents'
+import { devicesState, ownBrainIds, type DevicesSyncDeps } from './devices/sync'
+import { attachDevicesSync } from './devices/attach'
+import { registerRelay, rolesFromStore } from './devices/relay'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
@@ -68,9 +73,17 @@ import { dailyRoutineSlot, ensureDailyRoutine, recordDailyRun, resultLine } from
 import { MEMORY_EVENTS } from '../shared/memory-channels'
 import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
+import { EventRouter } from './workers/router'
+import { registerWorkersIpc } from './workers/ipc'
+import { killLeftover, killTree, spawnWorker } from './workers/spawn'
+import { WorkerStore } from './workers/store'
+import { Supervisor } from './workers/supervisor'
+import { WORKER_EVENTS } from '../shared/workers-channels'
 import { recordHandlers, handlerRegistry } from './devices/registry'
 import { DevicesService, setDevicesService } from './devices/service'
 import { findSidecar } from './devices/net'
+import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tool-host'
+import { WindowsFirewall } from './devices/firewall'
 
 // Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
 const ipcMain = recordHandlers(electronIpcMain)
@@ -142,11 +155,29 @@ let store: Store | null = null
 let settingsStore: SettingsStore | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+/** Turn leases: a turn or helper cut off by a crash resumes on the next start (runtime/turns.ts). */
+let leases: TurnLeases | null = null
+/** The app's side of registerDevicesSync (set once the runtime is built). */
+let disposeDevicesSync: (() => void) | null = null
+let devicesAppHooks: Pick<DevicesSyncDeps, 'leases' | 'localTools' | 'shareGroups' | 'preferred' | 'noteBack' | 'context'> | null = null
 let memory: MemoryService | null = null
 let chatIndex: ChatIndex | null = null
 let voice: VoiceService | null = null
 let cliHost: CliHost | null = null
 let scheduler: Scheduler | null = null
+let workerStore: WorkerStore | null = null
+let supervisor: Supervisor | null = null
+let eventRouter: EventRouter | null = null
+let workersChangedTimer: NodeJS.Timeout | null = null
+
+/** The Workers page reads again; a burst of events tells it once. */
+function workersChanged(): void {
+  if (workersChangedTimer !== null) return
+  workersChangedTimer = setTimeout(() => {
+    workersChangedTimer = null
+    broadcast(WORKER_EVENTS.changed, null)
+  }, 300)
+}
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
 let hotkeys: HotkeyManager | null = null
@@ -632,9 +663,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
   }
 
   const learned = new LearnedStore(join(dir, 'learned-apps.json'))
+  // Named, so the devices bundle can carry the per-account rules too (devices/bundle.ts).
+  const connectedApps = new ConnectedAppsFile(join(dir, 'connected-apps.json'))
   const apps = new AppsService({
     secrets,
-    file: new ConnectedAppsFile(join(dir, 'connected-apps.json')),
+    file: connectedApps,
     learned,
     // Profiles stay on this computer (not a synced entity yet).
     profiles: new ProfileStore(join(dir, 'profiles.json')),
@@ -650,23 +683,89 @@ async function startServices(win: BrowserWindow): Promise<void> {
       allowHttp: current.allowHttp,
     })
   const budget = new StepBudget()
+  // Background workers (docs/workers-and-triggers.md): agent-written scripts the app keeps running. Their events
+  // go to the router, which hands them to the desk of each event routine; it is created once the helpers exist.
+  const workers = new WorkerStore(join(dir, 'workers'))
+  workerStore = workers
+  const workerNotice = async (text: string): Promise<void> => {
+    try {
+      await store?.upsert('chat_item', { kind: 'notice', text, meta: JSON.stringify({ workers: true }) })
+      broadcast(EVENTS.chat, { type: 'chat_changed' })
+    } catch {
+      // The Workers page and the notification still show it.
+    }
+  }
+  supervisor = new Supervisor({
+    store: workers,
+    spawn: spawnWorker,
+    secrets,
+    killTree,
+    killLeftover,
+    onEvent: (event) => {
+      void eventRouter?.offer(event)
+    },
+    onFailing: (worker) => {
+      logger.warn('Worker failing', { id: worker.id })
+      showNotification(`${worker.name} keeps failing`, `${worker.lastError || 'It stopped too often.'} Open Routines, Workers to restart it.`)
+      void workerNotice(`Worker "${worker.name}" keeps failing and was stopped: ${worker.lastError || 'it exited too often'}. Restart it on the Routines page, Workers.`)
+    },
+    onChange: workersChanged,
+  })
+  const workerTools = { store: workers, supervisor }
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
   cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
+  const leaseStore = store
+  leases = new TurnLeases({
+    store: leaseStore,
+    selfId: () => devicesState.sync?.selfId() ?? leaseStore.deviceId,
+    ownIds: () => ownBrainIds(leaseStore),
+    resumeTurn: (chat, id, note) => runner?.resumeTurn(chat, id, note),
+    resumeJob: async (id, note) => {
+      await helpers.push(id, note)
+    },
+    lost: (lease) => {
+      if (lease.kind === 'job') void helpers.stop(lease.messageId)
+      else runner?.stop(lease.chatId)
+    },
+  })
+  // A project agent the main agent hands work to shows as a helper row in the main chat, with the project's icon.
+  const projectAgents = new ProjectAgentRows({
+    store,
+    state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
+    changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
+  })
+  const helperToolset = buildWorkerToolset({
+    deviceHub: () => devicesState.sync?.tools ?? null,
+    store,
+    settings,
+    browser: agentBrowser,
+    agentName: () => settings.get().agentName,
+    environment,
+    apps,
+    learned,
+    workers: workerTools,
+  })
+  // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
+  // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
+  devicesAppHooks = {
+    leases,
+    localTools: () => helperToolset,
+    shareGroups: () => settings.get().devicesShareGroups,
+    preferred: () => settings.get().devicesPreferred,
+    noteBack: async (chat, text) => {
+      if (runner !== null) await runner.deliver(text, chat)
+    },
+    // ask_user / request_approval another brain runs here show as cards in that chat on this computer.
+    context: (chat, signal) => runner?.deviceContext(chat, signal) ?? {},
+  }
   const helpers = new HelperManager({
+    leases,
     store,
     cli: cliHost,
     settings,
     secrets,
     providerFactory: factory,
-    workerTools: buildWorkerToolset({
-      store,
-      settings,
-      browser: agentBrowser,
-      agentName: () => settings.get().agentName,
-      environment,
-      apps,
-      learned,
-    }),
+    workerTools: helperToolset,
     deliver: async (note, chat) => {
       if (runner !== null) await runner.deliver(note, chat)
     },
@@ -692,8 +791,18 @@ async function startServices(win: BrowserWindow): Promise<void> {
     apps,
     learned,
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
+    workers: workerTools,
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
+    deviceHub: () => devicesState.sync?.tools ?? null,
+    devices: {
+      selfId: () => devicesState.sync?.selfId() ?? '',
+      commands: () => devicesState.sync?.commands ?? null,
+      openLocal: (url) => {
+        if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+      },
+    },
     projects: {
+      agents: projectAgents,
       post: async (chat, text, via) => {
         if (runner !== null) await runner.receive(chat, text, via)
       },
@@ -714,7 +823,29 @@ async function startServices(win: BrowserWindow): Promise<void> {
       },
     },
   })
+  eventRouter = new EventRouter({
+    store,
+    workers,
+    desk: helpers,
+    onChange: workersChanged,
+    workerName: (id) => {
+      try {
+        return workers.manifest(id)?.name ?? id
+      } catch {
+        return id
+      }
+    },
+    onFailed: (trigger, why) => {
+      showNotification(`Routine could not run: ${trigger.name}`, why.slice(0, 200))
+      void workerNotice(`Routine "${trigger.name}" could not hand its events to its desk: ${why.slice(0, 300)}. Its events are kept as failed; Run now on the Routines page tries them again.`)
+    },
+  })
   runner = new Runner({
+    devices: {
+      leases,
+      selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
+      originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
+    },
     store,
     settings,
     secrets,
@@ -754,6 +885,16 @@ async function startServices(win: BrowserWindow): Promise<void> {
       await runner.restore()
     } catch {
       // Startup repair is best effort: the app must still open if a row cannot be rewritten.
+    }
+    void projectAgents.restore().catch(() => undefined)
+    // After the repairs: what a crash cut off runs again, once (runtime/turns.ts).
+    void leases?.recover().catch(() => 0)
+    // Helpers left working are now marked interrupted, so desks can start: anything that arrived meanwhile,
+    // or was cut short when the app closed, goes to its routine now.
+    try {
+      await eventRouter?.start()
+    } catch (error) {
+      logger.warn('Event router did not start', { message: error instanceof Error ? error.message : String(error) })
     }
   }
   if (isSmoke) await repairs()
@@ -821,8 +962,15 @@ async function startServices(win: BrowserWindow): Promise<void> {
       if (trigger.builtin !== MEMORY_DAILY_ROUTINE || memory === null) throw new Error('That routine cannot run here.')
       return { text: resultLine(await memory.runNow()), waiting: false }
     },
+    runEvent: async (trigger) => {
+      if (eventRouter === null) throw new Error('Event routines are not ready yet.')
+      return eventRouter.runNow(trigger)
+    },
   })
   scheduler.start()
+  // Workers come back on every start; each one catches up from its cursor on what it missed while closed.
+  supervisor.start()
+  registerWorkersIpc(ipcMain, { store: workers, supervisor, openPath: (path) => shell.openPath(path) })
 
   const paths = quickAskPaths(__dirname)
   quickAsk = new QuickAskWindow({
@@ -973,9 +1121,45 @@ async function startServices(win: BrowserWindow): Promise<void> {
       log: (message, detail) => logger.info(message, detail),
       // The optional overlay helper (devices/net.ts): packaged next to the app, or the repo's build in development.
       sidecar: () => findSidecar({ resourcesPath: app.isPackaged ? process.resourcesPath : undefined, dirs: app.isPackaged ? [] : [join(app.getAppPath(), '..', '..')] }),
+      // This computer lends its own tools to the agents on other devices (protocol s11), group by group.
+      deviceTools: new DeviceToolHost({
+        tools: () => tools,
+        context: (signal) => {
+          if (runner === null) throw new Error('The agent is not running.')
+          return runner.deviceToolContext(signal)
+        },
+        shared: () => devices?.shareGroups() ?? DEFAULT_SHARE,
+        inbox: join(dir, 'attachments', 'received'),
+        log: (message, detail) => logger.info(message, detail),
+      }),
+      firewall: new WindowsFirewall({ platform: process.platform, program: process.execPath }),
+      openUrl: (url) => shell.openExternal(url),
+      notify: showNotification,
     })
     devices.registerIpc(ipcMain)
     setDevicesService(devices)
+    // While Devices is on: replication, the bundle, device commands, shared tools, turn failover (devices/attach.ts).
+    if (devicesAppHooks !== null) {
+      const hooks = devicesAppHooks
+      const ready = devices
+      disposeDevicesSync = attachDevicesSync(ready, {
+        store,
+        bundle: {
+          settings,
+          secrets,
+          profiles: apps.profiles,
+          learned,
+          connected: connectedApps,
+          passes: ready.passTable(),
+          projects: () => store === null ? Promise.resolve([]) : store.list('project'),
+        },
+        ...hooks,
+        imageDir: join(dir, 'attachments', 'from-devices'),
+        log: (line) => logger.info(line),
+      })
+    }
+    // A page this computer fetches for the person's other nodes (a server a site blocks): relay.fetch.
+    registerRelay(devices.host(), { store, rolesOf: rolesFromStore(store) })
     await devices.start()
   } catch (error) {
     logger.error('Devices could not start', { message: error instanceof Error ? error.message : String(error) })
@@ -995,6 +1179,7 @@ if (!app.requestSingleInstanceLock()) {
     loadWindow(win)
     powerMonitor.on('resume', () => {
       void scheduler?.resume()
+      supervisor?.resume()
       retryHotkeys()
     })
     powerMonitor.on('unlock-screen', retryHotkeys)
@@ -1018,6 +1203,13 @@ if (!app.requestSingleInstanceLock()) {
     disposeStore = null
     scheduler?.stop()
     scheduler = null
+    eventRouter?.stop()
+    eventRouter = null
+    // Every worker is told to stop and its process tree ended; its stop time is saved so it catches up next start.
+    supervisor?.stopAll()
+    supervisor = null
+    workerStore?.close()
+    workerStore = null
     memory?.stop()
     memory = null
     chatIndex?.close()
@@ -1039,6 +1231,10 @@ if (!app.requestSingleInstanceLock()) {
     devices = null
     setDevicesService(null)
     runner?.dispose()
+    leases?.stop()
+    disposeDevicesSync?.()
+    disposeDevicesSync = null
+    devicesState.sync?.stop()
     runner = null
     agentBrowser?.destroy()
     agentBrowser = null

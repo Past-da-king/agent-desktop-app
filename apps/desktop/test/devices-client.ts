@@ -61,7 +61,7 @@ export interface RpcClient {
   send(frame: unknown): void
 }
 
-export function connectRpc(base: string, fp: string, pass: string, hello: unknown): Promise<RpcClient> {
+export function connectRpc(base: string, fp: string, pass: string, hello: unknown, tools?: unknown[]): Promise<RpcClient> {
   return new Promise((resolve, reject) => {
     const req = request(`${base}/v1/rpc`, {
       agent: false,
@@ -113,7 +113,8 @@ export function connectRpc(base: string, fp: string, pass: string, hello: unknow
           }
         }
       })
-      conn.sendText(JSON.stringify({ type: 'hello', device: hello }))
+      // The phone's own frame: tools at the top level, beside the facts (protocol s11).
+      conn.sendText(JSON.stringify(tools === undefined ? { type: 'hello', device: hello } : { type: 'hello', device: hello, tools }))
       resolve({
         call: (method, ...args) =>
           new Promise((ok, fail) => {

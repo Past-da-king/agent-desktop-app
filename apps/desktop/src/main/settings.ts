@@ -160,6 +160,15 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     const picks = picksFrom(value)
     return picks === null ? INVALID : picks
   }
+  if (key === 'devicesPreferred' || key === 'devicesShareGroups') {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return INVALID
+    const want = key === 'devicesPreferred' ? 'string' : 'boolean'
+    const out: Record<string, unknown> = {}
+    for (const [group, item] of Object.entries(value as Record<string, unknown>).slice(0, 20)) {
+      if (/^[a-z]{1,20}$/.test(group) && typeof item === want) out[group] = typeof item === 'string' ? clamp(item) : item
+    }
+    return out
+  }
 
   const expected = DEFAULT_SETTINGS[key]
   if (typeof expected === 'boolean') return typeof value === 'boolean' ? value : INVALID

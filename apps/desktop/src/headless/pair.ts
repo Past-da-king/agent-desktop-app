@@ -8,7 +8,6 @@ import { join } from 'node:path'
 import { joinMesh, loadIdentity } from '../main/devices/identity'
 import type { BrainRef, DeviceFacts } from '../main/devices/types'
 import type { Secrets } from '../main/secrets'
-import { applyBundle, type ApplyResult, type BundleTargets } from './bundle'
 import { writeConfig, type NodeConfig } from './node-config'
 import { pinnedJson } from './pinned'
 
@@ -85,31 +84,58 @@ export interface PairOutcome {
   fp: string
   deviceId: string
   meshId: string
-  bundle: ApplyResult | null
-  bundleError: string
+}
+
+export interface PairTargets {
+  dataDir: string
+  secrets: Secrets
 }
 
 /** Secret names the devices work adds (B extends SecretName when merged). */
 export const PASS_SECRET = 'devicePass'
+/** devices/service.ts SELF_PASS. */
+const OWN_PASS_SECRET = 'devicesSelfPass'
+
+/** How long one address gets to answer /v1/health before the next is preferred. */
+const PROBE_MS = 3000
+
+/**
+ * The addresses in the order to try them: those that answer /v1/health (pinned, all at once, a few seconds each)
+ * first, in the advertised order, then the rest. An unreachable LAN or virtual-switch address never stalls pairing.
+ */
+export async function reachableFirst(urls: string[], fp: string, probeMs: number = PROBE_MS): Promise<string[]> {
+  const answers = await Promise.all(
+    urls.map(async (url) => {
+      try {
+        const reply = await pinnedJson(`${url.replace(/\/+$/, '')}/v1/health`, { fp, timeoutMs: probeMs })
+        return reply.status === 200
+      } catch {
+        return false
+      }
+    }),
+  )
+  return [...urls.filter((_, i) => answers[i] === true), ...urls.filter((_, i) => answers[i] !== true)]
+}
 
 export async function pair(
   target: PairTarget,
   facts: DeviceFacts,
   config: NodeConfig,
   dataDir: string,
-  targets: BundleTargets & { secrets: Secrets },
+  targets: PairTargets,
 ): Promise<PairOutcome> {
-  let lastError = ''
-  for (const url of target.urls) {
+  const failures: string[] = []
+  for (const url of await reachableFirst(target.urls, target.fp)) {
     let reply
     try {
       reply = await pinnedJson(`${url.replace(/\/+$/, '')}/v1/pair`, {
         method: 'POST',
         fp: target.fp,
-        body: { code: target.code, device: facts, wantRoles: ['brain', 'hands'] },
+        // Our own id, so the other node registers this node under the id it already uses (docs s3).
+        body: { code: target.code, device: facts, wantRoles: ['brain', 'hands'], nodeId: loadIdentity(join(dataDir, 'devices')).nodeId },
       })
     } catch (error) {
-      lastError = `${url}: ${error instanceof Error ? error.message : String(error)}`
+      failures.push(`${url}: ${error instanceof Error ? error.message : String(error)}`)
       continue
     }
     if (reply.status !== 200) {
@@ -118,26 +144,21 @@ export async function pair(
     }
     const answer = readAnswer(reply.json)
     targets.secrets.set(PASS_SECRET as Parameters<Secrets['set']>[0], answer.pass)
+    // The same pass is this node's own pass in the mesh (devices/service.ts selfPass), so the pass table holds one
+    // hash for it and every link (replication, serving tools) signs in with the pass the other node knows.
+    targets.secrets.set(OWN_PASS_SECRET as Parameters<Secrets['set']>[0], answer.pass)
     const brains = answer.brains.length > 0
       ? answer.brains
       : [{ id: answer.node.id || target.nodeId, name: answer.node.name || target.name, urls: target.urls, fp: reply.fp, priority: 0 }]
-    const next: NodeConfig = { ...config, meshId: answer.meshId, deviceId: answer.deviceId, brains }
+    // Its settings, accounts and keys come with the bundle, taken by the running node (devices/sync.ts joinFrom).
+    const next: NodeConfig = { ...config, meshId: answer.meshId, deviceId: answer.deviceId, brains, join: { url: url.replace(/\/+$/, ''), fp: reply.fp } }
     writeConfig(dataDir, next)
     Object.assign(config, next)
     // This node now belongs to that mesh; it keeps its own id and certificate.
     const devicesDir = join(dataDir, 'devices')
     if (answer.meshId !== '') joinMesh(devicesDir, loadIdentity(devicesDir), answer.meshId)
 
-    let bundle: ApplyResult | null = null
-    let bundleError = ''
-    try {
-      const pulled = await pinnedJson(`${url.replace(/\/+$/, '')}/v1/bundle`, { fp: reply.fp, pass: answer.pass })
-      if (pulled.status !== 200) throw new Error(`the bundle answered ${pulled.status}`)
-      bundle = await applyBundle(targets, pulled.json)
-    } catch (error) {
-      bundleError = error instanceof Error ? error.message : String(error)
-    }
-    return { url, fp: reply.fp, deviceId: answer.deviceId, meshId: answer.meshId, bundle, bundleError }
+    return { url, fp: reply.fp, deviceId: answer.deviceId, meshId: answer.meshId }
   }
-  throw new Error(`Could not reach the other device. ${lastError}`)
+  throw new Error(`Could not reach the other device. ${failures.join('; ')}`)
 }

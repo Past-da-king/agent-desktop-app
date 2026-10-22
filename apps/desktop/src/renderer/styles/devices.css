@@ -48,3 +48,6 @@
 .remote .talk-btn{display:none}
 @media (pointer:coarse){.remote .cmdbar kbd{display:none}}
 .br-remote{display:flex;gap:12px;align-items:flex-start;padding:18px;color:var(--on-sv);font-size:14px;line-height:1.45}
+.dv .dv-firewall .ri.warn{background:var(--tc);color:var(--on-tc)}
+.dv .dv-share{padding:12px 18px 8px;display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--outline-v);margin-top:6px}
+.dv .dv-share-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;font-size:14px;color:var(--on-bg)}

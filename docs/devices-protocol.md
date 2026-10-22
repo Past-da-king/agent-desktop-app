@@ -37,7 +37,14 @@ names or keys in source or defaults.
   (then it stops advertising IPv6 addresses) where the system has no IPv6.
 - Windows: the first time the node listens, Windows Firewall asks whether the app may use the network. Unanswered
   or refused, Windows adds a Block rule and other devices on the LAN cannot connect (loopback still works).
-  Settings > Devices says so on Windows. A per-user installer cannot add an Allow rule without admin rights.
+  A per-user installer cannot add an Allow rule without admin rights, so Settings > Devices shows "Allow
+  connections" when the check (`netsh advfirewall firewall show rule name=all dir=in verbose`, no elevation) finds
+  a Block rule for the app or no Allow rule for the app or the port. It runs ONE elevated PowerShell (one UAC
+  prompt) that removes the app's inbound rules and adds "Agent devices" (program) and "Agent devices (port N)"
+  (TCP) for Private and Domain from any address, plus "Agent devices (VPN)" and "Agent devices (port N, VPN)" for
+  Public limited to `remoteip=LocalSubnet,100.64.0.0/10,fd7a:115c:a1e0::/48` (a VPN adapter is often classed Public;
+  the app is never opened to the whole internet). "Allowed" means every profile is covered, so an older
+  Private-only rule brings the step back (`main/devices/firewall.ts`).
 
 ## 3. Pairing (QR + short code)
 
@@ -53,7 +60,8 @@ agent://pair?v=1&mesh=<meshId>&node=<nodeId>&name=<url-encoded node name>&u=<url
   plus any node address works the same as the QR; with the short code the client accepts the certificate on first
   use and shows its fingerprint words.
 
-`POST /v1/pair` (no auth) body:
+`POST /v1/pair` (no auth) body (a node joining another node also sends `"nodeId": "<its own dev_ id>"`, and the
+pairing node registers it under that id, so every node knows it by one id; a screen gets a new id):
 
 ```json
 { "code": "<c or short code>", "device": DeviceFacts, "wantRoles": ["screen"] }
@@ -106,7 +114,7 @@ Entity `device` rows (they sync like every other row, HLC last-writer-wins):
 | GET | `/v1/file?path=<abs>` | pass | a local file named in a chat (images in cards, attachments). Only paths that appear in a chat row, the user's attachments folder, or project folders. `Content-Type` by extension. Range requests for big files. |
 | GET | `/v1/bundle` | pass | section 6 |
 | POST | `/v1/sync/push` | pass (node) | same body/answer as `packages/core/src/sync/client.ts` |
-| GET | `/v1/sync/pull?cursor=&wait=` | pass (node) | same as above (long-poll up to 55 s) |
+| GET | `/v1/sync/pull?since=&wait=` | pass (node) | same as above (long-poll up to 55 s); `cursor=` is accepted for `since=`; the answer also carries `bundle` (the node's bundle version, section 6) |
 | GET | `/v1/devices` | pass | the device rows plus which brain is answering |
 | POST | `/v1/devices/:id/revoke` | pass (node) | revoke |
 
@@ -146,6 +154,12 @@ If the target is not connected, the command waits in a `device_command` row (syn
 connects, or expires after 10 minutes with a note back to the agent.
 `send_file` gives `url: /v1/file?path=...` for the client to download with its pass.
 
+The row (entity `device_command`, synced): `{ id, target, kind, url?, path?, name?, title?, body?, status, note, chat,
+brainId, expiresAt, updatedAt }`, `status` = `queued` (target offline) | `sent` (delivered, no ack yet) | `done` |
+`failed` (the ack said so) | `expired`. Any brain the target is connected to delivers a `queued` row (checked every
+3 s); only the brain that made it (`brainId`) writes the expiry note into `chat`. Only the target device may ack.
+`/v1/file` must also serve a path named in a `device_command` row whose `target` is the caller.
+
 ## 6. State bundle
 
 `GET /v1/bundle` returns what a new device needs that is not in synced rows:
@@ -162,6 +176,17 @@ connects, or expires after 10 minutes with a note back to the agent.
 its own secrets store (Electron safeStorage, or a 0600 key file on the headless node). Bundle changes are pushed to
 connected brains as event `devices.bundle` so a key added on one brain reaches the others.
 
+As built (apps/desktop/src/main/devices/bundle.ts):
+- The bundle also has `version` and `changedAt`. `secrets` = `{ keys: { "apiKey-<account>": key }, composioKey?,
+  composioUserId?, geminiKey?, passes }`. `settings` is only the person's settings (names, theme, AI picks...), never
+  per-machine ones (hotkeys, folders, start-up, sync account). `projects` are the project rows (they also replicate).
+- The `devices.bundle` event payload is `{ version }` only, never the bundle: the brain reads `GET /v1/bundle` again.
+  Brains that are not on RPC to each other see the version on every replication pull answer (`bundle` field) and
+  read the bundle when it changes, and on the first pull after connecting.
+- The newest `changedAt` wins; the receiver keeps the sender's `changedAt`, so two brains never bounce a bundle. A
+  fresh install starts at `changedAt` 0. Right after pairing a node takes the brain's bundle regardless (join).
+- An account missing from a newer bundle takes its key with it on the receiver.
+
 ## 7. Replication between brains
 
 All brains hold the full row set. Each node keeps a change log (every applied row change gets a local sequence
@@ -169,6 +194,13 @@ number, with the originating device). A node replicates with every other reachab
 push/pull protocol: it pushes changes the peer has not seen (per-peer cursor) and pulls the peer's log from its
 cursor. Applying a change is idempotent (HLC). Changes are relayed, so A <-> B <-> C converges even if A cannot
 reach C. Replication is initiated by whichever side can reach the other, so a node behind a firewall still syncs.
+
+As built (db.ts `change_log`, devices/replicate.ts): the log holds one entry per row (its newest change) with a local
+`seq` and `via` (the node that handed it over, '' for local writes and the sync service). A pull or push never hands
+a change back to the node it came from (`via`). Per-peer cursors (`peer_push:<id>`, `peer_pull:<id>`) live in the
+local kv. A peer whose cursor is ahead of our log (our database was reset) is started again from 0. A link pushes
+first, then long-polls; a local write cuts the long poll short so it goes out within about 200 ms. The existing
+single sync service (`syncUrl`) is unchanged and runs beside it; what it brings in is relayed to peers too.
 
 ## 8. Turns, origin, failover, crash resume
 
@@ -181,15 +213,19 @@ reach C. Replication is initiated by whichever side can reach the other, so a no
   revoked, by `priority`). It probes `/v1/health` (3 s timeout) in order and connects to the first `ready` one;
   re-probes every 15 s and on any failure, and moves back up when a higher brain returns, between turns only. The UI
   always shows "Answered by <name>". Only when every brain fails: "No agents available" with Retry.
-- **Turn lease** (note: the entity name `turn` is already taken by the model transcript rows, `TurnRow`; the lease
-  rows need their own entity, e.g. `turn_lease`): when a brain starts a turn it writes a `turn` row
-  `{ id, chatId, messageId, brainId, status: "running|done|failed|interrupted", attempt, heartbeatAt, startedAt }`
-  and updates `heartbeatAt` every 10 s. Helper jobs do the same with `kind: "job"`.
+- **Turn lease**: when a brain starts a turn it writes a `turn_lease` row (entity `turn` is already the model
+  transcript) `{ id, kind: "turn|job", chatId, messageId, brainId, status: "running|done|failed|interrupted",
+  attempt, heartbeatAt, startedAt, prompt }` and updates `heartbeatAt` every 10 s. Helper jobs do the same with
+  `kind: "job"` and id `job-<helper id>`. A quit mid-turn leaves the lease `running` (resumed on the next start), like
+  a crash. Before resuming its own leases a node with Devices on waits for one replication pass (up to 10 s), so a
+  turn a peer took over while it was down is seen as the peer's.
 - **Crash resume**: on start, a brain marks its own `running` turns `interrupted` and resumes them (re-runs the turn
   from the persisted chat history, telling the model it was interrupted and to continue without repeating finished
   side effects). A different brain claims a `running` turn whose `heartbeatAt` is older than 45 s and whose brain
   fails `/v1/health`, but only if it is the highest-ranked healthy brain it knows of; it bumps `attempt` and sets
-  `brainId` to itself. Max 3 attempts, then `failed` with a visible note in the chat.
+  `brainId` to itself. Max 3 attempts, then `failed` with a visible note in the chat. "Fails" = no answer from any
+  of its addresses within 3 s (pinned); "healthy" when ranking = answers with `ready: true`. A brain whose lease was
+  taken (it was cut off, not dead) stops beating it, stops its own run of it, and does not end it.
 
 ## 9. Phone (screen) app
 
@@ -205,6 +241,27 @@ Revised 01:45 (owner's correction): both apps stay standalone; linking is option
   Downloads, notify) and `hello` with DeviceFacts. Local images in chat load from `/v1/file` with the pass.
 - The `/app/` web UI route is optional and not part of v1.
 
+### 11.1 As built on the desktop node (workstream A)
+
+- **Hello**: `{"type":"hello","device":DeviceFacts,"tools":DeviceTool[]}` (tools may also sit inside `device`). The
+  node keeps them on the device row as `tools` (names `^[a-z][a-z0-9_]{1,63}$`, at most 80, schema up to 8 KB).
+- **device.result(id, ok, valueOrError)** is answered by the node server itself (`DevicesHost.onDeviceResult`
+  hears every one, with the calling deviceId); with `ok:false` the third argument is the error text.
+- **What this desktop shares** (`main/devices/device-tools.ts`): its `browser_*` tools (the agent browser, its own
+  tab), `notify_user`, `ask_user` and `request_approval` (the card shows in this app's main chat, the answer is
+  returned), `files_list/read/find/write`, `file_send {path}` (bytes back inline, up to 16 MB) and
+  `file_receive {name, data}` (saved under `<userData>/attachments/received`), and `shell_run` (group shell, off by
+  default). Groups switch in Settings > Devices (`devices/config.json` `shareGroups`).
+- **Value shape**: `{ text }`, plus `images: [{ type: "image", mime, data }]` when the tool showed pictures;
+  file_send and file_receive answer `{ type: "file", name, mime, size, data }` and `{ type: "file", path, size }`.
+  Deadline: `deadlineMs` clamped to 1 s .. 120 s (browser 600 s), default 120 s.
+- **Linking out**: with Devices on, when the first brain in the order is another device, this node opens
+  `/v1/rpc` to it as a device (its cert pinned from the brain's row, the node's own pass `devicesSelfPass` whose hash
+  is in the pass table under the node's id, so the bundle carries it to the brains), says hello with its tools,
+  runs `device.command` kind `tool` and answers `device.result`; `open_url` and `notify` commands act here and
+  answer `device.ack(id, ok, note)`. It re-checks every 15 s and when device rows change. A brain-side router that
+  targets the answering brain itself can call `DevicesService.runTool(command)`.
+- **Devices off**: no identity files, no device row, no origin on messages, nothing listens or links out.
 ## 11. Shared device tools (added 01:50)
 
 Any agent on any brain can use a tool that lives on another linked device (browser, notifications, files, shell,
@@ -235,6 +292,23 @@ approvals). General for any devices; nothing assumes a phone or a particular mac
   the brain.
 - **Safety**: only paired, non-revoked devices; each device may turn groups off ("Let other devices use my
   browser/notifications/files/shell"), default ON for browser, files, notifications, approval and OFF for shell.
+
+As built (apps/desktop/src/main/devices/device-tools.ts, brain side):
+- `tools` rides in hello inside the device facts (`device.tools`, DeviceFacts.tools in devices/types.ts); the node
+  server must keep that field when it cleans facts. The hub copies it onto the device row (`tools`) every 3 s and
+  before each call, so it replicates to every brain. A node lists its own tools on its own row.
+- Phones (on RPC) get event `device.command` `{ id, kind: "tool", tool, args, chatId, deadlineMs }` and answer
+  `device.result(id, ok, value | error)`; only the target may answer. Another NODE gets the same command through the
+  synced `device_command` row (its DeviceToolRunner runs it and writes `result` into the row, which replicates back),
+  so no node needs an RPC socket to another. Row fields added: `tool`, `args` (JSON), `result` (JSON), `deadlineMs`.
+- The agent waits up to the deadline; a result that comes later is posted to the chat once as
+  `[Device result: ...]`. Pictures `{ type: "image", mime, data }` are saved to files and shown to the model.
+- Tool names: a device's own names; `notify_user` also matches `notify`/`notification_post`, `send_file` matches
+  `file_send`, `open_url` matches `url_open`.
+- Settings: `devicesPreferred` ({ group: deviceId }, shared through the bundle) and `devicesShareGroups`
+  ({ group: boolean }, this device only). Defaults as above, plus `phone` on and `other` off.
+- The runner on a node runs tools with no person to answer unless the app wires `context` (ask_user /
+  request_approval on a NODE then answer "nobody could answer"); phones answer them natively.
 
 ## 10. Overlay network (optional, pluggable)
 

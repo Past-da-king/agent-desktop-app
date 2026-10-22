@@ -22,6 +22,8 @@ const ALLOWED: ReadonlySet<string> = new Set([
   DEVICES_CHANNELS.setExtraUrls,
   // The overlay network (agent-node net); the key arrives over this owner-only local socket, never argv.
   DEVICES_CHANNELS.setNetwork,
+  // headless/devices.ts JOIN_CHANNEL: take a freshly paired brain's bundle.
+  'agent:devices.join',
 ])
 
 export function controlPath(dataDir: string): string {

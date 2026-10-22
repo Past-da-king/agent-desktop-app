@@ -40,6 +40,8 @@ export interface ProjectToolDeps {
   accounts?(): AiAccount[]
   /** Puts a project's page on screen in the app window (project_open). Without it there is no project_open. */
   open?(projectId: string): void
+  /** The main agent handed work to a project chat: show that project's agent as a helper row in the main chat. */
+  agents?: { delegated(chat: string, project: ProjectRow, brief: string): Promise<void> }
 }
 
 /** An account by name or id; 'main' / 'same as main' / '' means the main agent's. */
@@ -95,7 +97,21 @@ export function projectOfChat(projects: ProjectRow[], chat: string): ProjectRow 
   return chat === MAIN_CHAT ? null : (projects.find((p) => p.chats.includes(chat)) ?? null)
 }
 
-export function projectTools(deps: ProjectToolDeps): Tool[] {
+export function projectTools(given: ProjectToolDeps): Tool[] {
+  // Work the main agent hands to a project chat also shows in the main chat as that project's agent (runtime/project-agents.ts).
+  const agents = given.agents
+  const deps: ProjectToolDeps =
+    agents === undefined
+      ? given
+      : {
+          ...given,
+          post: async (chat, text, via) => {
+            await given.post(chat, text, via)
+            if (via.from !== 'main' || chat === MAIN_CHAT) return
+            const project = projectOfChat(await given.store.list('project'), chat)
+            if (project !== null) await agents.delegated(chat, project, text)
+          },
+        }
   const tools = [projectsList(deps), projectCreate(deps), projectUpdate(deps), projectChatStart(deps), projectChatSend(deps), messageMain(deps)]
   const open = deps.open
   if (open !== undefined) tools.push(projectOpen(deps, open))

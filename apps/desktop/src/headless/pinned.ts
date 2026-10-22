@@ -8,6 +8,12 @@ import { request } from 'node:http'
 import { connect, type TLSSocket } from 'node:tls'
 
 import { fingerprintOf } from '../main/devices/cert'
+import { devicesProxy, isLoopbackHost, setDevicesProxy, socksConnect, type SocksProxy } from '../main/devices/socks'
+
+/** Node-to-node connections go through this SOCKS5 proxy when set (agent-node config --proxy, or AGENT_NODE_PROXY). */
+export function setNodeProxy(next: SocksProxy | null): void {
+  setDevicesProxy(next)
+}
 
 export interface PinnedReply {
   status: number
@@ -25,16 +31,24 @@ export interface PinnedOptions {
   timeoutMs?: number
 }
 
-export async function pinnedJson(url: string, options: PinnedOptions = {}): Promise<PinnedReply> {
-  const target = new URL(url)
+/**
+ * A TLS connection to a node whose certificate has been checked: the peer's fingerprint must equal `fp` (or, with
+ * fp '', anything: trust on first use). Nothing has been written to it yet. `peerFp` says what the peer showed.
+ */
+export async function pinnedSocket(target: URL, fp: string, timeoutMs = 15_000): Promise<TLSSocket & { peerFp: string }> {
   if (target.protocol !== 'https:') throw new Error('Nodes only talk over https.')
   const port = target.port === '' ? 443 : Number(target.port)
   const host = target.hostname.replace(/^\[|\]$/g, '')
-  const timeoutMs = options.timeoutMs ?? 15_000
-
+  // Never through the proxy to this machine itself (the CLI's own health check).
+  const proxy = isLoopbackHost(host) ? null : devicesProxy()
+  const tunnel = proxy === null ? null : await socksConnect(proxy, host, port, timeoutMs)
   const socket = await new Promise<TLSSocket>((resolve, reject) => {
     const isName = !/^[\d.]+$/.test(host) && !host.includes(':')
-    const tls = connect({ host, port, rejectUnauthorized: false, ...(isName ? { servername: host } : {}) })
+    const tls = connect({
+      ...(tunnel === null ? { host, port } : { socket: tunnel }),
+      rejectUnauthorized: false,
+      ...(isName ? { servername: host } : {}),
+    })
     const timer = setTimeout(() => {
       tls.destroy()
       reject(new Error(`No answer from ${target.host} in ${Math.round(timeoutMs / 1000)} s.`))
@@ -48,14 +62,22 @@ export async function pinnedJson(url: string, options: PinnedOptions = {}): Prom
       reject(error)
     })
   })
-
   const peer = socket.getPeerCertificate(false)
-  const fp = peer.raw === undefined ? '' : fingerprintOf(peer.raw)
-  const expected = options.fp ?? ''
-  if (fp === '' || (expected !== '' && fp !== expected)) {
+  const seen = peer.raw === undefined ? '' : fingerprintOf(peer.raw)
+  if (seen === '' || (fp !== '' && seen !== fp)) {
     socket.destroy()
     throw new Error('The other device showed a different certificate than the one in the pairing code. Nothing was sent.')
   }
+  return Object.assign(socket, { peerFp: seen })
+}
+
+export async function pinnedJson(url: string, options: PinnedOptions = {}): Promise<PinnedReply> {
+  const target = new URL(url)
+  const host = target.hostname.replace(/^\[|\]$/g, '')
+  const port = target.port === '' ? 443 : Number(target.port)
+  const timeoutMs = options.timeoutMs ?? 15_000
+  const socket = await pinnedSocket(target, options.fp ?? '', timeoutMs)
+  const fp = socket.peerFp
 
   const payload = options.body === undefined ? undefined : Buffer.from(JSON.stringify(options.body), 'utf8')
   return new Promise<PinnedReply>((resolve, reject) => {

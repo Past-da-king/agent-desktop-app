@@ -9,6 +9,8 @@
  * Extending it: a milestone that adds a feature may ADD members here (never rename or remove one), and must update
  * the mock bridge and the preload in the same commit.
  */
+// Type-only: erased at build time, so this file still imports nothing at run time.
+import type { WorkersApi } from './workers'
 
 // ---------------------------------------------------------------------------------------------------------------
 // Settings
@@ -124,6 +126,10 @@ export interface Settings {
   accounts: AiAccount[]
   /** What the main thread thinks with: its agent, and its helpers. Routines and the memory pass use `main`. */
   ai: AiPicks
+  /** Devices (s11): the device to use first for a group of shared tools ({ browser: deviceId }). Shared by brains. */
+  devicesPreferred: Record<string, string>
+  /** Devices (s11): which groups of this computer's tools other devices may use. Missing = the default. */
+  devicesShareGroups: Record<string, boolean>
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -159,6 +165,8 @@ export const DEFAULT_SETTINGS: Settings = {
   dailyMemoryAt: '23:30',
   accounts: [],
   ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
+  devicesPreferred: {},
+  devicesShareGroups: {},
 }
 
 export interface ModelOption {
@@ -229,7 +237,18 @@ export interface ProviderInfo {
 // The sync payload is the row minus `id`. Field names are the phone app's Room column names, camelCase.
 // ---------------------------------------------------------------------------------------------------------------
 
-export type EntityName = 'chat_item' | 'turn' | 'memory' | 'goal' | 'task' | 'trigger' | 'project' | 'device'
+export type EntityName =
+  | 'chat_item'
+  | 'turn'
+  | 'memory'
+  | 'goal'
+  | 'task'
+  | 'trigger'
+  | 'project'
+  // Devices (docs/devices-protocol.md): the paired devices, commands waiting for one, and turn leases.
+  | 'device'
+  | 'device_command'
+  | 'turn_lease'
 
 export interface RowBase {
   id: string
@@ -325,11 +344,20 @@ export interface TaskRow extends RowBase {
   updatedAt: number
 }
 
-/** A routine. kind: at (spec = ISO time) | daily (spec = "HH:mm") | interval (spec = minutes). */
+/**
+ * A routine. kind: at (spec = ISO time) | daily (spec = "HH:mm") | interval (spec = minutes) | event (spec = JSON
+ * EventFilter, workers.ts: it runs when a worker emits a matching event, in its own standing helper, the desk).
+ */
 export interface TriggerRow extends RowBase {
   name: string
-  kind: 'at' | 'daily' | 'interval'
+  kind: 'at' | 'daily' | 'interval' | 'event'
   spec: string
+  /** event only: matching events are gathered for this many seconds into one run (default 20). */
+  gatherSeconds?: number
+  /** event only: the profile its desk works in ('' = General). */
+  profile?: string
+  /** event only: the helper id of its desk, the one standing helper every run of this routine continues. */
+  deskId?: string
   prompt: string
   enabled: boolean
   lastRunAt: number | null
@@ -390,6 +418,8 @@ export interface EntityMap {
   trigger: TriggerRow
   project: ProjectRow
   device: DeviceRow
+  device_command: DeviceCommandRow
+  turn_lease: TurnLeaseRow
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -411,7 +441,20 @@ export interface DeviceFactsInfo {
   canReceiveFiles: boolean
   fingerprint: string
   urls: string[]
+  tools?: DeviceToolInfo[]
 }
+
+/** One tool a device lends to the agents on other devices (protocol s11). */
+export interface DeviceToolInfo {
+  name: string
+  description: string
+  params: Record<string, unknown>
+  group: 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'other'
+  readOnly: boolean
+}
+
+/** The groups of this computer's tools other devices may use (Settings > Devices). */
+export type DeviceShareGroup = 'browser' | 'files' | 'notifications' | 'approval' | 'shell'
 
 /** A paired device (protocol s4). Synced like every row; the pass hash is never in it. */
 export interface DeviceRow extends RowBase {
@@ -427,6 +470,8 @@ export interface DeviceRow extends RowBase {
   pairedAt: number
   lastSeen: number
   revoked: boolean
+  /** Its tools, from its latest hello (protocol s11). */
+  tools?: DeviceToolInfo[]
 }
 
 /** Settings > Devices: whether this computer lets other devices connect, and how they reach it. */
@@ -451,6 +496,15 @@ export interface DevicesStatus {
   connected: string[]
   /** A plain sentence when the server could not start (port in use...), else ''. */
   error: string
+  /** Which groups of this computer's tools other devices may use. */
+  shareGroups: Record<DeviceShareGroup, boolean>
+  /**
+   * Windows Firewall for the Devices port: 'blocked' or 'missing' means other devices on the network cannot reach
+   * this computer until the person allows it (one Windows prompt). 'not-needed' off Windows or with Devices off.
+   */
+  firewall: 'allowed' | 'missing' | 'blocked' | 'unknown' | 'not-needed'
+  /** The answering device this computer lends its tools to over its own connection, or ''. */
+  servingTo: string
   /** The optional overlay network (protocol s10); absent where the node has none (a remote view). */
   network?: DevicesNetwork
 }
@@ -512,8 +566,55 @@ export interface DevicesApi {
   move(id: string, direction: 'up' | 'down'): Promise<void>
   /** Takes the device out: its pass stops working at once and its connections close. */
   revoke(id: string): Promise<void>
+  /** Lets other devices use one group of this computer's tools, or not. */
+  setShareGroup(group: DeviceShareGroup, on: boolean): Promise<DevicesStatus>
+  /** Windows: the one prompt that lets other devices through the firewall. */
+  allowFirewall(): Promise<DevicesStatus>
   /** Fires when a device connects, pairs, changes or is taken out. */
   onChanged(cb: () => void): Unsubscribe
+}
+
+/** A command for one device (open a link, take a file) waiting to be delivered or acknowledged (s5.2). */
+export interface DeviceCommandRow extends RowBase {
+  target: string
+  kind: 'open_url' | 'send_file' | 'notify' | 'show_image' | 'tool'
+  /** kind 'tool' (s11): the device's tool name, its arguments (JSON), the result (JSON), how long it may take. */
+  tool?: string
+  args?: string
+  result?: string
+  deadlineMs?: number
+  url?: string
+  path?: string
+  name?: string
+  title?: string
+  body?: string
+  /** queued: waiting for the device; sent: delivered, no answer yet; done / failed: it answered; expired: never came. */
+  status: 'queued' | 'sent' | 'done' | 'failed' | 'expired'
+  note: string
+  /** The chat to tell when it expires or fails. */
+  chat: string
+  /** The brain that made it (the one that tells the chat). */
+  brainId: string
+  expiresAt: number
+  updatedAt: number
+}
+
+/**
+ * A turn or helper job being run by one brain (s8), so a crash resumes it and another brain can take it over.
+ * Named turn_lease because `turn` is the model transcript.
+ */
+export interface TurnLeaseRow extends RowBase {
+  kind: 'turn' | 'job'
+  chatId: string
+  /** The user's chat row the turn answers, or the helper's row for a job. */
+  messageId: string
+  brainId: string
+  status: 'running' | 'done' | 'failed' | 'interrupted'
+  attempt: number
+  heartbeatAt: number
+  startedAt: number
+  /** What the turn was started with, so a resume can name the task. */
+  prompt: string
 }
 
 /** What a caller supplies to create or update: everything except what the store fills in. `id` present = update. */
@@ -1061,6 +1162,9 @@ export interface AppInfo {
 export interface AgentApi {
   platform: AppPlatform
   version: string
+
+  /** Background workers and the events they emit (workers.ts). */
+  workers: WorkersApi
 
   settings: {
     get(): Promise<Settings>

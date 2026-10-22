@@ -145,6 +145,8 @@ export type PairAnswer =
   | { status: 200; json: { deviceId: string; pass: string; meshId: string; node: { id: string; name: string }; brains: BrainRef[] } }
   | { status: 400 | 403 | 410; json: { error: string } }
 
+const NODE_ID = /^dev_[A-Za-z0-9_-]{8,64}$/
+
 /** POST /v1/pair. Checks the code first so a wrong body never burns the offer's tries for nothing. */
 export async function handlePair(body: unknown, deps: PairDeps): Promise<PairAnswer> {
   const value = typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {}
@@ -160,7 +162,9 @@ export async function handlePair(body: unknown, deps: PairDeps): Promise<PairAns
   let roles: DeviceRole[] = cleanRoles(value['wantRoles'])
   if (roles.length === 0) roles = ['screen']
   const now = (deps.now ?? Date.now)()
-  const deviceId = newId('dev_')
+  // A node (it shows a certificate) keeps the id it already has, so every node in the mesh knows it by one name.
+  const asked = typeof value['nodeId'] === 'string' ? value['nodeId'] : ''
+  const deviceId = facts.fingerprint !== '' && NODE_ID.test(asked) && asked !== deps.node.id ? asked : newId('dev_')
   const pass = newPass()
   deps.passes.set(deviceId, hashPass(pass))
   const priority = roles.includes('brain') ? await deps.nextPriority() : 0

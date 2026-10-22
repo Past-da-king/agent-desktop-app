@@ -1,5 +1,5 @@
 /** DeviceFacts from the wire, checked and clamped (a device is trusted with its pass, not with its strings). */
-import type { DeviceFacts, DeviceKind, DevicePlatform, DeviceRole } from './types'
+import type { DeviceFacts, DeviceKind, DevicePlatform, DeviceRole, DeviceTool, DeviceToolGroup } from './types'
 
 const KINDS: readonly DeviceKind[] = ['phone', 'tablet', 'desktop', 'server']
 const PLATFORMS: readonly DevicePlatform[] = ['android', 'ios', 'windows', 'macos', 'linux']
@@ -35,7 +35,36 @@ export function cleanFacts(raw: unknown): DeviceFacts | null {
     canReceiveFiles: value['canReceiveFiles'] === true,
     fingerprint: typeof value['fingerprint'] === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value['fingerprint']) ? value['fingerprint'] : '',
     urls,
+    ...(value['tools'] === undefined ? {} : { tools: cleanTools(value['tools']) }),
   }
+}
+
+const GROUPS: readonly DeviceToolGroup[] = ['browser', 'notifications', 'files', 'shell', 'approval', 'phone', 'other']
+const MAX_TOOLS = 80
+
+/** A device's tool catalogue from the wire (protocol s11): names, words and schema kept small. */
+export function cleanTools(raw: unknown): DeviceTool[] {
+  if (!Array.isArray(raw)) return []
+  const out: DeviceTool[] = []
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue
+    const value = item as Record<string, unknown>
+    const name = typeof value['name'] === 'string' && /^[a-z][a-z0-9_]{1,63}$/.test(value['name']) ? value['name'] : ''
+    if (name === '' || seen.has(name)) continue
+    const params = typeof value['params'] === 'object' && value['params'] !== null && !Array.isArray(value['params']) ? (value['params'] as Record<string, unknown>) : {}
+    if (JSON.stringify(params).length > 8000) continue
+    seen.add(name)
+    out.push({
+      name,
+      description: text(value['description'], 600),
+      params,
+      group: GROUPS.find((g) => g === value['group']) ?? 'other',
+      readOnly: value['readOnly'] === true,
+    })
+    if (out.length >= MAX_TOOLS) break
+  }
+  return out
 }
 
 export function cleanRoles(raw: unknown): DeviceRole[] {

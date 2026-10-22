@@ -86,17 +86,58 @@ Branch `devices-headless` (off `devices`), worktree `~/agent-desktop-wt/devices-
   `agent-node pair --url https://<tailnet address>:7787 --code <code from 'agent-node offer' on the server>`; the
   server listed it as brain+hands; then revoked it (row stays, revoked). Bundle answers 404 until B is merged.
 
+## Relay + SOCKS5 (22 Oct 02:50 UTC+2 ~ 03:50)
+- `main/devices/relay.ts`: `relay.fetch` RPC on every node = the app's own web_fetch (no private nets, no loopback,
+  text only, capped), only for paired brain/hands devices (screens refused). Registered by the headless node;
+  the DESKTOP needs one line where index.ts starts DevicesService:
+  `registerRelay(devices.host(), { store, rolesOf: rolesFromStore(store) })`.
+- `headless/rpc-client.ts` (pinned WS RPC client) and tool `web_fetch_via_device` (main + helpers on headless).
+- `main/devices/socks.ts` + `headless/pinned.ts`: node-to-node connections through SOCKS5 when set
+  (`agent-node config --proxy socks5://host:port`, or AGENT_NODE_PROXY). FINDING: the server's tailscaled runs in
+  userspace mode, so the server reaches other tailnet devices ONLY through its local SOCKS5 port (direct = no route,
+  via socks5 = 200). The server node is configured with its local proxy. B's replication from the server
+  (devices/pinned-fetch.ts) needs the same proxy, or the desktop must be the side that connects.
+- PROVEN: headless.test.ts 12 pass (relay through a paired node in an agent turn; a screen is refused; SOCKS5
+  pin end to end + proxy down answers plainly). LIVE across machines (`scripts/headless/relay-live.sh <ssh host>
+  socks5://localhost:1055`): a temp node in WSL as "home computer", a temp dir on the server paired to it through
+  the proxy, and the server's agent (ChatGPT plan) answered with example.com's first sentence "Fetched through"
+  the WSL node; the WSL node logged `Relay fetch {host: example.com}`.
+
+## INTEGRATION A + B + design (C as integrator), 22 Oct 03:15, branch devices-headless-int 691ed06
+- Merged A (374139b), B (502ab1d), design (307888a, 0.2.41). Conflicts: core ipc.ts (A typed DeviceRow/DevicesApi +
+  B DeviceCommandRow/TurnLeaseRow + entities), origin.ts (union; originFromFacts = originFrom), A's device-tools.ts
+  renamed devices/device-tool-host.ts (B keeps device-tools.ts), preload/css/index (devices + workers;
+  index's helper toolset is `helperToolset`), remote bridge workers section.
+- `devices/attach.ts` attachDevicesSync(service, deps): B's registerDevicesSync on A's DevicesService while Devices
+  is on. Called in index.ts and in the headless node. A's service: isEnabled(), ownPass(), onSwitch().
+  index.ts also: registerRelay; connected-apps file named for the bundle.
+- SOCKS5 (`socks.ts` proxyAgent) used by A's uplink and B's pinnedFetch.
+- Fixes found by real runs: joining node keeps its id (`nodeId` in POST /v1/pair, protocol s3); one pass per joined
+  node (paired pass = devicesSelfPass); extraPeers (the paired brain) until its row arrives; person-added addresses
+  advertised first; headless listens once; helpers' late write after store close no longer rejects.
+- Headless node also runs workers + event router (design).
+- PROVEN: full suite 1242 passed / 0 failed (twice). headless.test.ts 14 incl. two real processes: join at once
+  (bundle: account + key), ready, memory replicates. LIVE cross-machine (`scripts/headless/cross-replicate.sh <ssh
+  host> socks5://localhost:1055`): temp node on the server paired with a WSL node through SOCKS5, took its account,
+  got its device row and its "CrossCheck" memory, 0 failed links.
+- Server: running 0.2.41 from this branch, ready, crontab 44 lines, proxy socks5://localhost:1055 set.
+
+## FINAL integration cc1d662 (22 Oct ~04:10), + deploy script
+- Re-merged A c9d76c0 and B 66c2d1d. Headless: B's ProjectAgentRows; A's DeviceToolHost lends browser, files,
+  shell_run, run_code (run_code joined group shell; on a server shell sharing is switched on at first start);
+  /usr/lib/chromium/chromium is a browser candidate (not present on this server: Playwright's Chromium is used).
+- Harness fixes: leases recovered after Devices attach (ownIds include the device id); runner stores the lease
+  before run_started; replicator re-reads peers on device change; first local change pushed at once.
+- PROVEN: full suite 1245 passed / exit 0; `bash scripts/devices-e2e-local.sh dist-headless/agent-node.mjs`:
+  a-g all PASS (f 3/3 alone); cross-machine (cross-replicate.sh) passes on 0.2.42.
+- Version 0.2.42 on devices-headless-int.
+- ONE-COMMAND deploy from WSL: `bash scripts/headless/deploy.sh <ssh host> [--node PATH] [--proxy socks5://...]
+  [--port N]` (build, copy, install, restart, status). On the server itself: `sh agent-node/install.sh` from the
+  tarball. Server now 0.2.42 via deploy.sh, ready, crontab 44 lines.
+
+## Not done
+- The raw TCP relay through a linked device (lead marked it LOWER priority; covered for now by web_fetch_via_device
+  and B's device tools, e.g. using the PC's or phone's browser).
+
 ## In flight / next
-- After the lead merges A+B: wire B (registerDevicesSync with the headless store/secrets/profiles/learned/passes,
-  TurnLeases, BundleKeeper; pair -> joinFrom), drop headless/bundle.ts stub, redeploy, prove bundle + replication
-  between the desktop and the server.
-- Relay through a linked device (scope item 6, part 2).
-
-## Merge notes
-- Wire A's server into `headless/node-server.ts` `startNodeServer` (deps: runtime with `ipc` HandlerTable,
-  config, cert, version). Its pass-table should read `secrets.get('passHashes')` (JSON) on the headless node.
-- Wire B's `applyBundle` into `headless/bundle.ts`; secret names `devicePass` and `passHashes` need adding to
-  `SecretName` if B types them.
-
-## Last commit
-(see git log)
+- Lead: fast-forward `devices` to devices-headless-int; live test with the test desktop + server + phone.

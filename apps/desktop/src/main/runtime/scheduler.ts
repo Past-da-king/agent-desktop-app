@@ -31,6 +31,8 @@ export interface SchedulerDeps {
    * memory service, which also catches up a missed day), so the tick never runs it.
    */
   runBuiltin?: (trigger: TriggerRow) => Promise<RoutineRunResult>
+  /** "Run now" on an event routine: its desk looks at what is waiting (workers/router.ts). */
+  runEvent?: (trigger: TriggerRow) => Promise<RoutineRunResult>
 }
 
 export const SCHEDULER_INTERVAL_MS = 30_000
@@ -44,6 +46,7 @@ export class Scheduler {
   private readonly intervalMs: number
   private readonly notifyRoutine: RoutineResultNotice
   private readonly runBuiltin: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
+  private readonly runEvent: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
 
   private timer: ReturnType<typeof setInterval> | null = null
   private chain: Promise<void> = Promise.resolve()
@@ -57,6 +60,7 @@ export class Scheduler {
     this.intervalMs = deps.intervalMs ?? SCHEDULER_INTERVAL_MS
     this.notifyRoutine = deps.notifyRoutine ?? (() => undefined)
     this.runBuiltin = deps.runBuiltin ?? null
+    this.runEvent = deps.runEvent ?? null
   }
 
   /** Look for due routines now, then again every interval. Safe to call more than once. */
@@ -126,6 +130,9 @@ export class Scheduler {
       if (isBuiltin(fresh)) {
         if (this.runBuiltin === null) throw new Error('That routine can only run from its own page.')
         outcome = await this.runBuiltin(fresh)
+      } else if (fresh.kind === 'event') {
+        if (this.runEvent === null) throw new Error('Event routines run when their worker sends something.')
+        outcome = await this.runEvent(fresh)
       } else {
         outcome = await this.runner.runRoutine(fresh)
       }
@@ -192,6 +199,12 @@ export function isDue(trigger: TriggerRow, now: number): boolean {
       const anchor = trigger.lastRunAt ?? trigger.createdAt
       return now - anchor >= minutes * 60_000
     }
+    // Event routines run when a worker emits (workers/router.ts), never on the clock.
+    case 'event':
+      return false
+    default:
+      // A kind from a newer build: leave it alone rather than guess.
+      return false
   }
 }
 

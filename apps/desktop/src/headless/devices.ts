@@ -7,6 +7,14 @@ import { dirname, join } from 'node:path'
 
 import { platformOf } from '../main/devices/facts'
 import { findSidecar } from '../main/devices/net'
+import { attachDevicesSync } from '../main/devices/attach'
+import { registerRelay, rolesFromStore } from '../main/devices/relay'
+import { devicesState } from '../main/devices/sync'
+import { readConfig, writeConfig } from './node-config'
+import { PASS_SECRET } from './pair'
+import { existsSync, readFileSync } from 'node:fs'
+
+import { DeviceToolHost } from '../main/devices/device-tool-host'
 import { DevicesService } from '../main/devices/service'
 import type { DeviceFacts } from '../main/devices/types'
 import type { HeadlessRuntime } from './runtime'
@@ -18,6 +26,8 @@ export interface HeadlessDevicesOptions {
   port: number
   /** Extra addresses that reach this node (a public name, an overlay address), as https URLs. */
   extraUrls?: string[]
+  /** Tests only: let relay.fetch reach a local fake page. */
+  relayLoopback?: boolean
 }
 
 /** What the headless node says about itself when it pairs (protocol s3): a server, no screen. */
@@ -42,7 +52,22 @@ export function canRunTurns(runtime: HeadlessRuntime): boolean {
 }
 
 export async function startHeadlessDevices(runtime: HeadlessRuntime, options: HeadlessDevicesOptions): Promise<DevicesService> {
-  const service = new DevicesService({
+  // A server is there to run things: on its first start it lends its shell and code tools too (shell is off by
+  // default on a desktop). The person can switch any group off again; that choice is kept.
+  const configFile = join(runtime.dataDir, 'devices', 'config.json')
+  const firstStart = !existsSync(configFile) || !/"shell"/.test(readFileSync(configFile, 'utf8'))
+  if (runtime.settings.get().devicesShareGroups?.['shell'] === undefined) {
+    runtime.settings.save({ devicesShareGroups: { ...runtime.settings.get().devicesShareGroups, shell: true } })
+  }
+  let service: DevicesService | null = null
+  const lent = new DeviceToolHost({
+    tools: () => runtime.mainTools,
+    context: (signal) => runtime.runner.deviceToolContext(signal),
+    shared: () => (service === null ? { browser: true, files: true, notifications: false, approval: false, shell: false } : service.shareGroups()),
+    inbox: join(runtime.dataDir, 'attachments', 'received'),
+    log: (message, detail) => runtime.logger.info(message, detail),
+  })
+  service = new DevicesService({
     userData: runtime.dataDir,
     store: runtime.store,
     secrets: runtime.secrets,
@@ -61,14 +86,79 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     canReceiveFiles: false,
     // The optional overlay helper ships next to agent-node.mjs in the tarball (scripts/build-headless.mjs).
     sidecar: () => findSidecar({ dirs: process.argv[1] !== undefined ? [dirname(process.argv[1])] : [] }),
+    // The brains it paired with sign in before their rows replicate here (their first push brings them).
+    knownPeer: (id) => (readConfig(runtime.dataDir).brains.some((brain) => brain.id === id) ? ['brain', 'hands'] : null),
+    // Its own tools (browser, files, shell, code) for the agents on the person's other devices (s11).
+    deviceTools: lent,
+    openUrl: async (url) => {
+      await runtime.actions.openUrl(url)
+    },
+    notify: (title, body) => runtime.actions.notify(title, body),
   })
-  service.registerIpc(runtime.ipcMain)
+  const node = service
+  node.registerIpc(runtime.ipcMain)
+  // Replication, the bundle, device commands, shared tools and turn failover (devices/attach.ts), as on the desktop.
+  const detach = attachDevicesSync(node, {
+    store: runtime.store,
+    bundle: {
+      settings: runtime.settings,
+      secrets: runtime.secrets,
+      profiles: runtime.apps.profiles,
+      learned: runtime.learned,
+      connected: runtime.connectedApps,
+      passes: node.passTable(),
+      projects: () => runtime.store.list('project'),
+    },
+    ...runtime.devicesHooks,
+    pairedPass: () => runtime.secrets.get(PASS_SECRET),
+    imageDir: join(runtime.dataDir, 'attachments', 'from-devices'),
+    log: (line) => runtime.logger.info(line),
+    // The brains this node paired with, until their device rows replicate here.
+    extraPeers: () => readConfig(runtime.dataDir).brains.map((brain) => ({ id: brain.id, name: brain.name, urls: brain.urls, fp: brain.fp })),
+  })
+  runtime.onStop(async () => {
+    detach()
+    await node.stop()
+  })
+  // `agent-node pair` while this node runs: take the brain's bundle (settings, accounts, keys) now.
+  runtime.ipcMain.handle(JOIN_CHANNEL, async (_event, url, fp) => {
+    if (typeof url !== 'string' || typeof fp !== 'string') throw new Error('Which node to join?')
+    return joinNow(runtime.dataDir, url, fp)
+  })
+  // This node fetches pages for the person's other nodes too (relay.fetch).
+  registerRelay(node.host(), {
+    store: runtime.store,
+    rolesOf: rolesFromStore(runtime.store),
+    ...(options.relayLoopback === true ? { allowLoopback: true } : {}),
+    log: (message, detail) => runtime.logger.info(message, detail),
+  })
   // Events the window would get go to paired devices too (only the ones they may hear).
-  runtime.ipc.onEvent((channel, payload) => service.broadcast(channel, payload))
-  await service.start()
-  await service.configure({ listen: options.listen, port: options.port })
-  if (options.extraUrls !== undefined && options.extraUrls.length > 0) await service.setExtraUrls(options.extraUrls)
+  runtime.ipc.onEvent((channel, payload) => node.broadcast(channel, payload))
+  // Where it listens is set before it starts, so it starts listening once, there.
+  await node.configure({ listen: options.listen, port: options.port })
+  await node.start()
+  if (options.extraUrls !== undefined && options.extraUrls.length > 0) await node.setExtraUrls(options.extraUrls)
   // A headless node exists to be reached: it always listens (on loopback unless told otherwise).
-  await service.setEnabled(true)
-  return service
+  if (!node.isEnabled()) await node.setEnabled(true)
+  if (firstStart) await node.setShareGroup('shell', true)
+  // A pairing made while it was stopped: take that brain's bundle now.
+  const pending = readConfig(runtime.dataDir).join
+  if (pending !== null) await joinNow(runtime.dataDir, pending.url, pending.fp).catch(() => false)
+  // What a crash or a restart cut off runs again, once (runtime/turns.ts), now that this node knows its device id.
+  void runtime.leases.recover().catch(() => 0)
+  return node
+}
+
+/** The control channel `agent-node pair` uses to hand a fresh pairing to the running node. */
+export const JOIN_CHANNEL = 'agent:devices.join'
+
+async function joinNow(dataDir: string, url: string, fp: string): Promise<boolean> {
+  const sync = devicesState.sync
+  if (sync === null) return false
+  const ok = await sync.joinFrom(url, fp)
+  if (ok) {
+    const config = readConfig(dataDir)
+    if (config.join !== null) writeConfig(dataDir, { ...config, join: null })
+  }
+  return ok
 }

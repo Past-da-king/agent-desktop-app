@@ -67,6 +67,26 @@ export class ConnectedAppsFile {
     return this.userIdValue
   }
 
+  /** Every account's rules (devices/bundle.ts). */
+  allRules(): Record<string, AccountRules> {
+    return Object.fromEntries(Object.entries(this.rules).map(([id, rule]) => [id, { ...rule }]))
+  }
+
+  replaceRules(rules: Record<string, AccountRules>): void {
+    this.rules = {}
+    for (const [id, rule] of Object.entries(rules)) {
+      this.rules[id] = { read: isRule(rule?.read) ? rule.read : DEFAULT_ACCOUNT_RULES.read, change: isRule(rule?.change) ? rule.change : DEFAULT_ACCOUNT_RULES.change }
+    }
+    this.persist()
+  }
+
+  /** The same Composio user on every brain, so the person's connections work wherever a turn runs. */
+  setUserId(id: string): void {
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(id) || id === this.userIdValue) return
+    this.userIdValue = id
+    this.persist()
+  }
+
   rulesFor(accountId: string | null): AccountRules {
     if (accountId === null) return { ...DEFAULT_ACCOUNT_RULES }
     return { ...(this.rules[accountId] ?? DEFAULT_ACCOUNT_RULES) }
@@ -213,6 +233,12 @@ export class LearnedStore {
 
   remove(id: string): void {
     this.list = this.list.filter((a) => a.id !== id)
+    this.persist()
+  }
+
+  /** Everything at once, from another of the person's devices (devices/bundle.ts). */
+  replaceAll(list: LearnedApp[]): void {
+    this.list = list.map(toApp).filter((a): a is LearnedApp => a !== null).slice(0, MAX_APPS)
     this.persist()
   }
 

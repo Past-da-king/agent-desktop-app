@@ -26,10 +26,11 @@ import { loadIdentity } from '../main/devices/identity'
 import { OverlayNet } from '../main/devices/net'
 import { DEVICES_CHANNELS } from '../shared/devices-channels'
 import { callControl, startControl, terminalQr } from './control'
-import { headlessFacts, startHeadlessDevices } from './devices'
+import { headlessFacts, JOIN_CHANNEL, startHeadlessDevices } from './devices'
 import { readConfig, writeConfig, type NodeConfig } from './node-config'
 import { pair, parsePairLink, shortCodeTarget } from './pair'
-import { pinnedJson } from './pinned'
+import { parseSocksProxy } from '../main/devices/socks'
+import { pinnedJson, setNodeProxy } from './pinned'
 import { startHeadlessRuntime } from './runtime'
 
 declare const __AGENT_VERSION__: string | undefined
@@ -47,6 +48,7 @@ const HELP = `agent-node: your agent as a service
   agent-node revoke <id>                                   take a device out
   agent-node config [--listen ADDR] [--port N] [--url U]   where it listens, and an address that reaches it
   agent-node net none | tailscale | headscale URL < key    optional overlay network (auth key on stdin)
+  agent-node config --proxy socks5://HOST:PORT | none      reach your other devices through a SOCKS5 proxy
   agent-node account list | add claude | add codex          the AI it thinks with (a plan signed in on this machine)
   agent-node account add api --provider P < keyfile        ... or an API key, read from stdin
   agent-node ask "hello"                                   one turn, to check it answers (while stopped)
@@ -80,7 +82,9 @@ export function parseArgs(argv: string[]): Args {
       }
     } else positional.push(arg)
   }
-  return { command: positional.shift() ?? 'help', positional, flags }
+  // `agent-node --version` and `--help` work like the commands of the same name.
+  const command = positional.shift() ?? (flags.has('version') ? 'version' : 'help')
+  return { command, positional, flags }
 }
 
 function flag(args: Args, name: string): string {
@@ -138,6 +142,12 @@ function applyListenFlags(args: Args, config: NodeConfig, dataDir: string): void
   const listen = flag(args, 'listen')
   if (listen !== '') {
     config.listen = listen
+    changed = true
+  }
+  const proxy = flag(args, 'proxy')
+  if (proxy !== '') {
+    if (proxy !== 'none' && parseSocksProxy(proxy) === null) throw new Error('A proxy looks like socks5://127.0.0.1:1055 (or none).')
+    config.proxy = proxy === 'none' ? '' : proxy
     changed = true
   }
   const url = flag(args, 'url')
@@ -241,15 +251,33 @@ async function stopCommand(args: Args): Promise<number> {
     return 0
   }
   process.kill(pid, 'SIGTERM')
-  for (let i = 0; i < 120; i++) {
-    await new Promise((r) => setTimeout(r, 250))
-    if (runningPid(dataDir) === null) {
-      console.log('Stopped.')
-      return 0
+  // Wait for the process itself to be gone (not just its pid file), so a start right after this works. A running
+  // turn gets up to 20 s to finish (it resumes on the next start if it does not); after 30 s it is killed.
+  const alive = (): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
     }
   }
-  console.error(`Still stopping (pid ${pid}); a turn may be finishing.`)
-  return 1
+  for (let i = 0; i < 120 && alive(); i++) await new Promise((r) => setTimeout(r, 250))
+  if (alive()) {
+    console.error(`It did not stop in 30 s (pid ${pid}); killing it. Its turn resumes on the next start.`)
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Gone in the meantime.
+    }
+    for (let i = 0; i < 40 && alive(); i++) await new Promise((r) => setTimeout(r, 250))
+  }
+  if (alive()) {
+    console.error(`Could not stop pid ${pid}.`)
+    return 1
+  }
+  rmSync(pidFile(dataDir), { force: true })
+  console.log('Stopped.')
+  return 0
 }
 
 async function status(args: Args): Promise<number> {
@@ -291,13 +319,16 @@ async function pairCommand(args: Args): Promise<number> {
   const settings = new SettingsStore(join(dataDir, 'settings.json'))
   const secrets = new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key')))
   const facts = headlessFacts(config.name, version(), config.publicUrls, identity.fp)
-  const outcome = await pair(target, facts, config, dataDir, { dataDir, settings, secrets })
+  const outcome = await pair(target, facts, config, dataDir, { dataDir, secrets })
   console.log(`Paired with ${outcome.url} as ${outcome.deviceId} (mesh ${outcome.meshId}).`)
   if (target.fp === '') console.log(`Its certificate fingerprint is ${outcome.fp}. Check it matches the one on that device.`)
-  if (outcome.bundle !== null) {
-    console.log(`Took in ${outcome.bundle.settings} settings and ${outcome.bundle.secrets} keys.`)
-  } else console.log(`Paired, but the settings and keys did not come over yet: ${outcome.bundleError}`)
-  if (runningPid(dataDir) !== null) console.log('Restart it to use them: agent-node stop && agent-node start --daemon')
+  if (runningPid(dataDir) === null) {
+    console.log('Your settings, accounts and keys come over when it starts: agent-node start --daemon')
+    return 0
+  }
+  const joined = await callControl(dataDir, JOIN_CHANNEL, [outcome.url, outcome.fp]).catch((error: unknown) => error)
+  if (joined === true) console.log('Took in your settings, accounts and keys from it.')
+  else console.log(`Paired, but the settings and keys did not come over yet (${joined instanceof Error ? joined.message : 'no answer'}). They come over on the next start.`)
   return 0
 }
 
@@ -473,6 +504,9 @@ async function deviceAction(args: Args, action: 'revoke' | 'roles' | 'move'): Pr
 
 export async function run(argv: string[]): Promise<number> {
   const args = parseArgs(argv)
+  // Connections to the person's other devices go through the proxy the node is set to use, if any.
+  const configured = existsSync(join(dataDirOf(args), 'node.json')) ? readConfig(dataDirOf(args)).proxy : ''
+  setNodeProxy(parseSocksProxy(process.env['AGENT_NODE_PROXY'] || configured))
   switch (args.command) {
     case 'start':
       checkNode()
@@ -506,7 +540,7 @@ export async function run(argv: string[]): Promise<number> {
       const dataDir = dataDirOf(args)
       const config = readConfig(dataDir)
       applyListenFlags(args, config, dataDir)
-      console.log(`listen: https://${config.listen}:${config.port}; addresses: ${config.publicUrls.join(' ') || '(none)'} (takes effect on the next start)`)
+      console.log(`listen: https://${config.listen}:${config.port}; addresses: ${config.publicUrls.join(' ') || '(none)'}; proxy: ${config.proxy || '(none)'} (takes effect on the next start)`)
       return 0
     }
     case 'version':

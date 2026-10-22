@@ -38,6 +38,9 @@ import type {
   SystemInfo,
   Unsubscribe,
   VoiceResult,
+  WorkerEvent,
+  WorkerInfo,
+  WorkerLogLine,
 } from '@agent/core'
 import type { DeviceRow, DevicesStatus, PairingOfferInfo } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
@@ -46,6 +49,7 @@ import { CHANNELS, EVENTS } from '../shared/channels'
 import { MEMORY_CHANNELS, MEMORY_EVENTS } from '../shared/memory-channels'
 import { MEMORY_HISTORY_CHANNELS } from '../shared/memory-history-channels'
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../shared/devices-channels'
+import { WORKER_CHANNELS, WORKER_EVENTS } from '../shared/workers-channels'
 
 const platform: AgentApi['platform'] =
   process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
@@ -291,7 +295,21 @@ const api: AgentApi = {
     setRoles: (id, roles) => call<void>(DEVICES_CHANNELS.setRoles, id, roles),
     move: (id, direction) => call<void>(DEVICES_CHANNELS.move, id, direction),
     revoke: (id) => call<void>(DEVICES_CHANNELS.revoke, id),
+    setShareGroup: (group, on) => call<DevicesStatus>(DEVICES_CHANNELS.setShareGroup, group, on),
+    allowFirewall: () => call<DevicesStatus>(DEVICES_CHANNELS.allowFirewall),
     onChanged: (callback) => on<null>(DEVICES_EVENTS.changed, () => callback()),
+  },
+  workers: {
+    list: () => call<WorkerInfo[]>(WORKER_CHANNELS.list),
+    events: (worker, limit) => call<WorkerEvent[]>(WORKER_CHANNELS.events, worker ?? '', limit ?? 100),
+    logs: (id, limit) => call<WorkerLogLine[]>(WORKER_CHANNELS.logs, id, limit ?? 200),
+    start: (id) => call<void>(WORKER_CHANNELS.start, id),
+    stop: (id) => call<void>(WORKER_CHANNELS.stop, id),
+    restart: (id) => call<void>(WORKER_CHANNELS.restart, id),
+    remove: (id) => call<void>(WORKER_CHANNELS.remove, id),
+    setSecret: (id, name, value) => call<void>(WORKER_CHANNELS.setSecret, id, name, value),
+    openFolder: (id) => call<void>(WORKER_CHANNELS.openFolder, id),
+    onChange: (callback) => on<null>(WORKER_EVENTS.changed, () => callback()),
   },
 }
 
