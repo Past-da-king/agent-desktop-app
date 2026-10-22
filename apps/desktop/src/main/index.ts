@@ -45,7 +45,7 @@ import { clipboardAttachments } from './clipboard-files'
 import { savePastedFile } from './pasted'
 import { Runner } from './runtime/runner'
 import { TurnLeases } from './runtime/turns'
-import { devicesState } from './devices/sync'
+import { devicesState, type DevicesSyncDeps } from './devices/sync'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
@@ -136,6 +136,8 @@ let account: AccountService | null = null
 let runner: Runner | null = null
 /** Turn leases: a turn or helper cut off by a crash resumes on the next start (runtime/turns.ts). */
 let leases: TurnLeases | null = null
+/** The app's side of registerDevicesSync (set once the runtime is built). */
+let devicesAppHooks: Pick<DevicesSyncDeps, 'leases' | 'localTools' | 'shareGroups' | 'preferred' | 'noteBack' | 'context'> | null = null
 let memory: MemoryService | null = null
 let chatIndex: ChatIndex | null = null
 let voice: VoiceService | null = null
@@ -656,6 +658,29 @@ async function startServices(win: BrowserWindow): Promise<void> {
       else runner?.stop(lease.chatId)
     },
   })
+  const workerTools = buildWorkerToolset({
+    deviceHub: () => devicesState.sync?.tools ?? null,
+    store,
+    settings,
+    browser: agentBrowser,
+    agentName: () => settings.get().agentName,
+    environment,
+    apps,
+    learned,
+  })
+  // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
+  // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
+  devicesAppHooks = {
+    leases,
+    localTools: () => workerTools,
+    shareGroups: () => settings.get().devicesShareGroups,
+    preferred: () => settings.get().devicesPreferred,
+    noteBack: async (chat, text) => {
+      if (runner !== null) await runner.deliver(text, chat)
+    },
+    // ask_user / request_approval another brain runs here show as cards in that chat on this computer.
+    context: (chat, signal) => runner?.deviceContext(chat, signal) ?? {},
+  }
   const helpers = new HelperManager({
     leases,
     store,
@@ -663,16 +688,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     settings,
     secrets,
     providerFactory: factory,
-    workerTools: buildWorkerToolset({
-      deviceHub: () => devicesState.sync?.tools ?? null,
-      store,
-      settings,
-      browser: agentBrowser,
-      agentName: () => settings.get().agentName,
-      environment,
-      apps,
-      learned,
-    }),
+    workerTools,
     deliver: async (note, chat) => {
       if (runner !== null) await runner.deliver(note, chat)
     },

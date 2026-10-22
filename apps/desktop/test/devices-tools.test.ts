@@ -7,9 +7,11 @@ import { SyncClient, schema, str, type DeviceRow, type Tool } from '@agent/core'
 import { Store } from '../src/main/db'
 import { DeviceToolHub, DeviceToolRunner, catalogueOf, deviceAgentTools, shareOf, withDeviceArg } from '../src/main/devices/device-tools'
 import { Replicator, registerSyncRoutes } from '../src/main/devices/replicate'
+import { Runner } from '../src/main/runtime/runner'
+import { buildWorkerToolset } from '../src/main/runtime/toolset'
 import type { DeviceTool, MessageOrigin } from '../src/main/devices/types'
 import { facts, startTestHost, type TestHost } from './devices-host'
-import { testContext, toolNamed } from './support'
+import { secretsView, settingsView, testContext, toolNamed } from './support'
 import { waitFor } from '../../../packages/core/test/helpers'
 
 const cleanups: Array<() => Promise<void> | void> = []
@@ -263,6 +265,58 @@ describe('shared device tools: another node, over replication', () => {
     await pcStore.upsert('device_command', { id: 'cmd_forced', target: 'dev_server', kind: 'tool', tool: 'shell_run', args: '{}', deadlineMs: 5000, status: 'queued', note: '', chat: 'main', brainId: 'dev_pc', expiresAt: Date.now() + 60_000, updatedAt: Date.now() })
     await waitFor(async () => (await pcStore.get('device_command', 'cmd_forced'))?.status === 'failed', 8000)
     expect((await pcStore.get('device_command', 'cmd_forced'))?.result).toContain('does not share shell_run')
+  }, 20_000)
+
+  it('ask_user on another node shows the question as a card there; the person answers and the brain gets it', async () => {
+    const pcStore = new Store(':memory:')
+    const serverStore = new Store(':memory:')
+    const serverHost = await startTestHost('dev_server')
+    registerSyncRoutes(serverHost, serverStore)
+    serverHost.passes.set('pass-pc', { deviceId: 'dev_pc', node: true })
+    const pcHost = await startTestHost('dev_pc')
+    for (const s of [pcStore, serverStore]) {
+      await s.upsert('device', { ...base, id: 'dev_pc', name: 'Office PC', kind: 'desktop', roles: ['brain'], priority: 0 })
+      await s.upsert('device', { ...base, id: 'dev_laptop', name: 'Laptop', kind: 'desktop', roles: ['brain'], priority: 1, urls: [serverHost.url] })
+    }
+    // The other node runs the real app tools and its real runner, which shows cards to its person.
+    const nodeTools = buildWorkerToolset({ store: serverStore })
+    const nodeRunner = new Runner({ store: serverStore, settings: settingsView(), secrets: secretsView(null), providerFactory: () => null, tools: nodeTools, isFocused: () => true })
+    const nodeHub = new DeviceToolHub({ store: serverStore, selfId: () => 'dev_laptop', localTools: () => nodeTools, noteBack: () => undefined })
+    await nodeHub.refresh()
+    const runner = new DeviceToolRunner({ store: serverStore, selfId: () => 'dev_laptop', tools: () => nodeTools, context: (chat, signal) => nodeRunner.deviceContext(chat, signal) })
+    runner.start()
+    const replicator = new Replicator({
+      store: pcStore,
+      selfId: () => 'dev_pc',
+      pass: () => 'pass-pc',
+      peers: async () => [{ id: 'dev_laptop', name: 'Laptop', urls: [serverHost.url], fp: '' }],
+      clientFor: (url, _peer, pass) => new SyncClient(url, pass, fetch, true),
+      waitSeconds: 1,
+      initialBackoffMs: 50,
+    })
+    replicator.start()
+    const hub = new DeviceToolHub({ store: pcStore, selfId: () => 'dev_pc', noteBack: () => undefined, reachable: () => true })
+    hub.attach(pcHost)
+    cleanups.push(async () => {
+      nodeRunner.dispose()
+      hub.stop()
+      runner.stop()
+      replicator.stop()
+      await serverHost.close()
+      await pcHost.close()
+      pcStore.close()
+      serverStore.close()
+    })
+    await waitFor(async () => ((await pcStore.get('device', 'dev_laptop')) as DeviceRow | null)?.tools?.some((t) => t.name === 'ask_user') === true, 8000)
+
+    const asking = withDeviceArg([{ spec: { name: 'ask_user', description: 'ask', schema: schema(['question'], { question: str('q') }) }, run: async () => 'asked here' }], () => hub)[0]!
+      .run({ question: 'Ship the release tonight?', options: ['Yes', 'Not yet'], device: 'laptop' }, testContext({ chat: 'pc4' }))
+    // The card shows on the laptop, in the same chat.
+    const card = await waitFor(async () => (await serverStore.list('chat_item')).find((row) => row.kind === 'question'), 8000)
+    expect(card.text).toBe('Ship the release tonight?')
+    expect(JSON.parse(card.meta)).toMatchObject({ chat: 'pc4' })
+    await nodeRunner.answer(card.id, 'Yes')
+    expect(await asking).toBe('The user answered on Laptop: The user answered: Yes')
   }, 20_000)
 
   it('the catalogue follows the share switches', () => {
