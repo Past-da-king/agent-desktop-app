@@ -86,6 +86,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 06:25 A: build copy C:/temp/agent-build-devices synced to devices 78ebb6c, dry-run installer OK (322.7 MB). Live copy on 78ebb6c, stop.ps1/start.ps1 hooks for the harness. A now runs the live cross-machine test (desktop copy + temp server node port 7788 + harness phone). Final 0.2.42 build waits for B g fix. Server service stays clean for Ayanda: he pairs it to his real PC after installing 0.2.42 (START-HERE step).
 
+- 06:45 B fixed g (3dde4de: lease recovered before Devices attaches via ownBrainIds/devices_self_id; messageId kept) and made f honest (9d833af: waits until turn + lease reach the next brain). Harness 7/7 twice locally; full suite 1248. A is editing bundle/replicate in the same worktree for the live test.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
