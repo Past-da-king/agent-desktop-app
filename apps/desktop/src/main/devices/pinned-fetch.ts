@@ -61,7 +61,7 @@ export function pinnedFetch(fp: string, timeoutMs = 70_000): typeof fetch {
           // The chain is not checked (self-signed by design); the pin below is.
           rejectUnauthorized: false,
           // Through the devices proxy when one is set (devices/socks.ts), else direct as before.
-          agent: proxyAgent(),
+          agent: proxyAgent(url.hostname),
           timeout: timeoutMs,
         },
         (res) => {

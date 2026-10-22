@@ -16,6 +16,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Store } from '../src/main/db'
 import { loadIdentity } from '../src/main/devices/identity'
+import { pinnedFetch } from '../src/main/devices/pinned-fetch'
+import { proxyFor, setDevicesProxy } from '../src/main/devices/socks'
 import { HandlerRegistry } from '../src/main/devices/registry'
 import { DevicesService } from '../src/main/devices/service'
 import { Secrets } from '../src/main/secrets'
@@ -34,6 +36,7 @@ import {
   overlayHostname,
   parseSidecarLine,
   peerRequestOptions,
+  setOverlayNet,
   sidecarBuildName,
   socksConnect,
   type SpawnLike,
@@ -418,6 +421,69 @@ describe('OverlayNet with a fake sidecar', () => {
     })
     expect(JSON.parse(body)).toEqual({ ok: true, path: '/v1/health' })
     expect(tlsSocks.targets).toEqual(['100.64.0.10:7787'])
+  })
+})
+
+describe('peer dialling picks the overlay', () => {
+  let dir = ''
+  const servers: Server[] = []
+  let net: OverlayNet | null = null
+
+  afterEach(async () => {
+    setOverlayNet(null)
+    setDevicesProxy(null)
+    await net?.stop()
+    for (const server of servers.splice(0)) server.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('a set proxy wins, loopback is never proxied, the overlay only for its hosts; pinnedFetch goes through it', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'agent-net-dial-'))
+    const identity = loadIdentity(join(dir, 'peer'))
+    const tls = createHttpsServer({ key: identity.keyPem, cert: identity.certPem }, (req, res) => {
+      res.end(JSON.stringify({ ok: true, path: req.url }))
+    })
+    await new Promise<void>((resolve) => tls.listen(0, '127.0.0.1', () => resolve()))
+    servers.push(tls)
+    const stub = await socksStub((tls.address() as AddressInfo).port)
+    servers.push(stub.server)
+    const secrets = new MemorySecrets()
+    net = new OverlayNet({
+      dir,
+      secrets,
+      binary: () => '/fake/agent-net',
+      nodeName: () => 'Dial Box',
+      onChange: () => undefined,
+      spawn: (command, args, options) => spawn(process.execPath, [FAKE, ...args], { ...options, env: { ...options.env, FAKE_NET_SOCKS: stub.addr } }),
+      interfaces: () => ({}),
+    })
+    // Off: nothing is proxied.
+    expect(proxyFor('100.64.0.10')).toBeNull()
+    net.save({ network: 'tailscale', authKey: KEY })
+    net.apply(7787)
+    await until('running', () => net?.status().state === 'running')
+    setOverlayNet(net)
+    const [stubHost, stubPort] = stub.addr.split(':')
+    expect(proxyFor('100.64.0.10')).toEqual({ host: stubHost, port: Number(stubPort) })
+    expect(proxyFor('[fd7a:115c:a1e0::10]')).toEqual({ host: stubHost, port: Number(stubPort) })
+    expect(proxyFor('other.example.ts.net')).toEqual({ host: stubHost, port: Number(stubPort) })
+    expect(proxyFor('192.168.1.20')).toBeNull()
+    expect(proxyFor('127.0.0.1')).toBeNull()
+    expect(proxyFor('localhost')).toBeNull()
+
+    // The real pinnedFetch (replication's client) reaches the peer over the overlay, pin checked.
+    const res = await pinnedFetch(identity.fp, 10_000)('https://100.64.0.10:7787/v1/health')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, path: '/v1/health' })
+    expect(stub.targets).toEqual(['100.64.0.10:7787'])
+    // A wrong pin is still refused through the overlay.
+    await expect(pinnedFetch('not-the-pin', 10_000)('https://100.64.0.10:7787/v1/health')).rejects.toThrow()
+
+    // A proxy the person set wins over the overlay; loopback still never goes through it.
+    setDevicesProxy({ host: '127.0.0.1', port: 1 })
+    expect(proxyFor('100.64.0.10')).toEqual({ host: '127.0.0.1', port: 1 })
+    expect(proxyFor('192.168.1.20')).toEqual({ host: '127.0.0.1', port: 1 })
+    expect(proxyFor('127.0.0.1')).toBeNull()
   })
 })
 

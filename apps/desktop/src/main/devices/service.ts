@@ -153,7 +153,8 @@ export class DevicesService {
       log: deps.log,
       // New overlay addresses go into this node's own row, so paired devices learn them.
       onChange: () => {
-        this.netWrite = this.netWrite.then(() => this.writeSelf()).catch(() => undefined)
+        // Only while Devices is on: with it off this node has no identity or row yet, and must not make one.
+        if (this.enabled) this.netWrite = this.netWrite.then(() => this.writeSelf()).catch(() => undefined)
         this.changed()
       },
     })
@@ -458,7 +459,7 @@ export class DevicesService {
       authKey: key === null ? null : typeof key === 'string' ? key : undefined,
     })
     this.applyNet()
-    await this.writeSelf()
+    if (this.enabled) await this.writeSelf()
     this.changed()
     return this.status()
   }

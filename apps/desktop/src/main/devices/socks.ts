@@ -7,6 +7,8 @@ import { Agent } from 'node:https'
 import { connect, isIP, type Socket } from 'node:net'
 import { connect as tlsConnect, type ConnectionOptions } from 'node:tls'
 
+import { getOverlayNet } from './net'
+
 export interface SocksProxy {
   host: string
   port: number
@@ -109,11 +111,26 @@ export function devicesProxy(): SocksProxy | null {
 }
 
 /**
+ * The proxy a connection to `host` goes through, or null for a direct one. Loopback: never. A proxy the person set
+ * (agent-node config --proxy, AGENT_NODE_PROXY): always, it wins. Otherwise the built-in overlay's own SOCKS port
+ * (devices/net.ts) for overlay hosts the computer cannot route itself (Network = Tailscale or Headscale).
+ */
+export function proxyFor(host: string): SocksProxy | null {
+  const h = host.replace(/^\[|\]$/g, '')
+  if (h === '' || isLoopbackHost(h)) return null
+  if (current !== null) return current
+  const net = getOverlayNet()
+  if (net === null || !net.shouldProxy(h)) return null
+  return parseSocksProxy(`socks5://${net.socksAddress() ?? ''}`)
+}
+
+/**
  * For https.request: an Agent that opens each connection through the proxy, or false for a direct connection (as
  * before). TLS and the pin check still run on the socket the request gets, so 'secureConnect' fires as usual.
  */
-export function proxyAgent(): Agent | false {
-  const proxy = current
+export function proxyAgent(host = ''): Agent | false {
+  // With a host: the proxy for that host (proxyFor). Without one (older callers): only the person's own proxy.
+  const proxy = host === '' ? current : proxyFor(host)
   if (proxy === null) return false
   const agent = new Agent({ keepAlive: false })
   ;(agent as unknown as { createConnection: unknown }).createConnection = (
