@@ -12,7 +12,7 @@ import type { DataChange, DeviceRow, Tool, ToolContext } from '@agent/core'
 
 import type { DataStore } from '../runtime/data'
 import { rankedBrains, type TurnLeases } from '../runtime/turns'
-import { BundleKeeper, pullBundle, registerBundle, type BundleSources } from './bundle'
+import { BundleKeeper, pullBundle, pushBundle, registerBundle, type BundleSources } from './bundle'
 import { DeviceCommands } from './commands'
 import { DeviceToolHub, DeviceToolRunner } from './device-tools'
 import { originFromFacts, originLine, latestOrigin } from './origin'
@@ -94,6 +94,8 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
   registerSyncRoutes(host, store, () => keeper.version())
   const offBundle = registerBundle(host, { keeper, devices: () => store.list('device') })
 
+  // Our bundle version each peer last took from us (a push), so a version goes to a peer once.
+  const pushedTo = new Map<string, string>()
   const replicator = new Replicator({
     store,
     selfId: () => host.self().id,
@@ -112,6 +114,18 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
       const pass = deps.pass()
       if (pass === null) return
       void pullBundle(keeper, url, pass, pinnedFetch(peer.fp, 15_000)).catch(() => false)
+    },
+    // A peer whose bundle differs from ours may be one that cannot reach us to read it: give it ours. It keeps
+    // whichever is newer, so this never undoes a newer change on the other side.
+    afterPull: (peer, version, url) => {
+      const pass = deps.pass()
+      const own = keeper.version()
+      if (pass === null || own === '' || own === version || pushedTo.get(peer.id) === own) return
+      pushedTo.set(peer.id, own)
+      void pushBundle(keeper, url, pass, pinnedFetch(peer.fp, 15_000)).catch(() => {
+        pushedTo.delete(peer.id)
+        return false
+      })
     },
     ...(deps.log === undefined ? {} : { log: deps.log }),
   })
