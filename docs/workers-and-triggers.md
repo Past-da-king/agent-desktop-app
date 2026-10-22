@@ -1,6 +1,8 @@
 # Workers and event triggers
 
-Status: design, not built. Written against `design` 0.2.38 (188355a), 22 Oct 2026.
+Status: slice 1 built and proven, 22 Oct 2026: 0.2.39 (87530e6) workers, inbox, event routines, desks; 0.2.40 (a57b149) desks delegate on a plan; 0.2.41 (d7f14be) polish. Decisions D1 to D6 below were all taken as recommended (D1: Socket Mode wherever the app can be installed, polling where it cannot). An example chat worker is in `docs/examples/workers/`.
+
+Proof on the real Windows build (a separate test copy with its own data folder): a real chat workspace worker caught up 6 real messages after a hard kill of the app and a relaunch, the desk ran on the plan, handed two requests to helpers and reported to the main agent, which followed up; after a second restart the desk said they were the same six as last time (it remembers). Killing the worker brought it back in 1.4 s from its cursor with no duplicates. A broken key went to failing after 5 tries with the real error on the Workers page, a Needs-you card on Home and a notice in the chat.
 
 ## 1. The problem
 
