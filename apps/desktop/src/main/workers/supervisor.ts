@@ -385,6 +385,12 @@ export class Supervisor {
     }
     switch (parsed.type) {
       case 'ready':
+        // Connected again: an old error no longer describes it.
+        if (this.store.state(id).lastError !== '') {
+          this.store.patchState(id, { lastError: '' })
+          this.onChange()
+        }
+        return
       case 'alive':
         return
       case 'log':
