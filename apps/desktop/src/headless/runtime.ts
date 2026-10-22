@@ -484,6 +484,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     emitChat: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
     dailyAt: () => dailyRoutineSlot(store),
     onDaily: (report) => recordDailyRun(store, report),
+    claimDaily: (day) => wire.claimDaily(day),
     log: (message, detail) => logger.info(message, detail),
   })
   memory = theMemory
