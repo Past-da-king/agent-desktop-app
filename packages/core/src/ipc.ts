@@ -130,6 +130,13 @@ export interface Settings {
   devicesPreferred: Record<string, string>
   /** Devices (s11): which groups of this computer's tools other devices may use. Missing = the default. */
   devicesShareGroups: Record<string, boolean>
+  /**
+   * Devices (s12): where the helpers this computer starts run: 'best' (a linked server when the job does not need
+   * this computer), 'here', or one linked brain's device id. This computer only.
+   */
+  helpersRunOn: string
+  /** Devices (s12): how many helpers this computer runs at once for the person's other devices; 0 = none. */
+  devicesJobCap: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -167,6 +174,8 @@ export const DEFAULT_SETTINGS: Settings = {
   ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
   devicesPreferred: {},
   devicesShareGroups: {},
+  helpersRunOn: 'best',
+  devicesJobCap: 4,
 }
 
 export interface ModelOption {
@@ -249,6 +258,8 @@ export type EntityName =
   | 'device'
   | 'device_command'
   | 'turn_lease'
+  // Offload (docs/devices-protocol.md s12): work placed on another brain, its messages and each node's capacity.
+  | 'job'
 
 export interface RowBase {
   id: string
@@ -364,6 +375,8 @@ export interface TriggerRow extends RowBase {
   lastResult: string
   /** Set on a routine the app itself runs (not a prompt for the agent): only its time and on/off can change. */
   builtin?: string
+  /** Devices (s12): which linked brain runs it, by name or id; '' or absent = the best one (a server first). */
+  device?: string
 }
 
 /** A project's icon, like an app icon: a glyph from the app's icon set or an emoji, on a coloured rounded tile. */
@@ -420,6 +433,7 @@ export interface EntityMap {
   device: DeviceRow
   device_command: DeviceCommandRow
   turn_lease: TurnLeaseRow
+  job: JobRow
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -634,6 +648,32 @@ export interface TurnLeaseRow extends RowBase {
   startedAt: number
   /** What the turn was started with, so a resume can name the task. */
   prompt: string
+}
+
+/**
+ * Offload (docs/devices-protocol.md s12). One synced row kind for work handed between brains:
+ *  - `node`: a brain's own capacity, written only by that brain (`device` = itself), beaten every 20 s.
+ *  - `msg`: one message to one brain about one helper (`op`: start, steer, push, stop, answer, decide, result,
+ *    bounce). Written once by the sender, then marked `done` by the receiver.
+ *  - `claim`: who runs one slot of a routine (`helper` = `<routine id>@<slot>`); the newest write wins.
+ */
+export interface JobRow extends RowBase {
+  kind: 'node' | 'msg' | 'claim'
+  /** node: the brain itself; msg: the receiver; claim: the brain that claims it. */
+  device: string
+  /** msg: the sender. */
+  from: string
+  /** msg: the helper's chat row id; claim: the routine slot. */
+  helper: string
+  op: string
+  text: string
+  /** msg answer / decide: the card's row id. */
+  item: string
+  /** msg: sent | done. */
+  status: string
+  /** node: JSON NodeCapacity; msg result: JSON { state, result }. */
+  info: string
+  at: number
 }
 
 /** What a caller supplies to create or update: everything except what the store fills in. `id` present = update. */

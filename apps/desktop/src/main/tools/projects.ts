@@ -36,6 +36,8 @@ export interface ProjectToolDeps {
   open?(projectId: string): void
   /** The main agent handed work to a project chat: show that project's agent as a helper row in the main chat. */
   agents?: { delegated(chat: string, project: ProjectRow, brief: string): Promise<void> }
+  /** Devices (s12): where a new project chat runs (a linked server, or here), decided before its first message. */
+  place?(chat: string, project: ProjectRow, brief: string, device?: string): Promise<unknown>
 }
 
 /** An account by name or id; 'main' / 'same as main' / '' means the main agent's. */
@@ -189,6 +191,7 @@ function projectChatStart(deps: ProjectToolDeps): Tool {
       schema: schema(['project', 'brief'], {
         project: str('The project, by name or id'),
         brief: str('What this chat should do, complete and self-contained'),
+        device: str("Optional: where it runs. Leave it out (best): it stays on this computer when the project has a folder here, else a linked server may run it. 'here', or a linked device by name."),
       }),
     },
     run: async (input, ctx) => {
@@ -199,6 +202,8 @@ function projectChatStart(deps: ProjectToolDeps): Tool {
       if (brief === '') return 'Pass the brief.'
       const chat = newProjectChatId()
       await deps.store.upsert('project', { id: project.id, chats: [...project.chats, chat] })
+      const device = text(input['device'])
+      await deps.place?.(chat, project, brief, device === '' ? undefined : device)
       await deps.post(chat, brief, viaOf(ctx, projects, deps))
       return `Started a chat in ${project.name} (chat ${chat}). It is working on it and will write back with what it finds; project_list shows how it is going.`
     },

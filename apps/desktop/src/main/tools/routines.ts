@@ -47,6 +47,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
           prompt: str('What you will do each time, written as an instruction to yourself. For an event routine: the standing brief of its desk (what matters, who owns what, what to hand out)'),
           gather_seconds: int('event only: gather matching events for this many seconds into one run (default 20)'),
           profile: str('event only: the profile its desk works in, by name. Leave out for General'),
+          device: str('Optional, not for event routines: which linked device runs it, by name. Leave out for the best one (a linked server when it can run it).'),
         },
       ),
     },
@@ -63,6 +64,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
       if (problem !== null) return `Not created: ${problem}`
       const gather = gatherOf(input['gather_seconds'])
       const profile = kind === 'event' ? text(input['profile']).trim() : ''
+      const device = kind === 'event' ? '' : text(input['device']).trim()
 
       const approved = await ctx.approve(
         `Create a routine: ${name}`,
@@ -81,6 +83,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
         lastRunAt: null,
         lastResult: '',
         ...(kind === 'event' ? { gatherSeconds: gather, profile, deskId: '' } : {}),
+        ...(device === '' ? {} : { device }),
       })
       await ctx.activity(`New routine: ${name}`, { tool: 'routine_create' })
       return `Routine #${row.id} created.`

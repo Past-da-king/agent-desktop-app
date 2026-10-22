@@ -49,6 +49,7 @@ import { HelperManager } from '../main/runtime/helpers'
 import { Runner } from '../main/runtime/runner'
 import { ProjectAgentRows } from '../main/runtime/project-agents'
 import { Scheduler } from '../main/runtime/scheduler'
+import { startOffload, type OffloadWire } from '../main/devices/offload-wire'
 import { buildToolset, buildWorkerToolset } from '../main/runtime/toolset'
 import { getDevicesService } from '../main/devices/service'
 import type { AppControlDeps } from '../main/tools/app-control'
@@ -258,9 +259,14 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   // Late-bound: the runner needs the tools, the tools need the helpers, the helpers deliver to the runner.
   let runner: Runner | null = null
   // A project agent the main agent hands work to shows as a helper row in the main chat, with the project's icon.
+  // Devices (s12): helpers, project chats and routines placed on another brain (devices/offload-wire.ts).
+  let offloadWire: OffloadWire | null = null
   const projectAgents = new ProjectAgentRows({
     store,
-    state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
+    state: (chat) => {
+      const local = runner?.state(chat) ?? { running: false, waiting: [] }
+      return offloadWire?.state(local, chat) ?? local
+    },
     changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
   })
   let memory: MemoryService | null = null
@@ -359,8 +365,10 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       projects: {
         agents: projectAgents,
         post: async (chat, text, via) => {
+          if ((await offloadWire?.forward(chat, text, via)) === true) return
           if (runner !== null) await runner.receive(chat, text, via)
         },
+        place: async (chat, project, brief, device) => offloadWire?.placeChat(chat, project, brief, device),
         state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
         agentName: () => settings.get().agentName,
         profiles: () => apps.profiles.all(),
@@ -420,6 +428,21 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     },
   })
   runner = theRunner
+  const wire = startOffload({
+    store,
+    helpers,
+    settings,
+    secrets,
+    providerFactory: factory,
+    cli: cliHost,
+    runner: () => runner,
+    kind: 'server',
+    name: () => readConfig(dir).name,
+    browser: () => browser !== null,
+    emitChat: (event) => broadcast(EVENTS.chat, event),
+    log: (message, detail) => logger.info(message, detail),
+  })
+  offloadWire = wire
 
   try {
     await adoptEarlierChats(store, store.deletedIds('project').has(EARLIER_CHATS_PROJECT))
@@ -490,6 +513,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       return { text: resultLine(await theMemory.runNow()), waiting: false }
     },
     runEvent: async (trigger) => router.runNow(trigger),
+    claim: (trigger) => wire.claimRoutine(trigger),
   })
   if (options.quiet !== true) {
     scheduler.start()
@@ -530,7 +554,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     secrets,
     accounts,
     account,
-    chat: theRunner,
+    chat: wire.wrapRunner(theRunner),
     routines: scheduler,
     helpers,
     ipcMain,
@@ -611,6 +635,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       logger.info('Stopping headless node', { stillWorking: working() ? 1 : 0 })
       await browser?.close()
       leases.stop()
+      wire.stop()
       disposeIpc()
       disposeStore()
       theRunner.dispose()
