@@ -119,6 +119,9 @@ describe('headless runtime', () => {
     const settings = (await runtime.ipc.invoke(CHANNELS.settings.get, [])) as { model: string }
     expect(settings.model).toBe('fake-model')
     expect(runtime.busy()).toBe(false)
+    // A linked phone with no Google key asks this node for a call: with no key here it is told where to add one.
+    expect(runtime.registry.has(CHANNELS.voice.liveToken)).toBe(true)
+    expect(await runtime.ipc.invoke(CHANNELS.voice.liveToken, [])).toMatchObject({ ok: false, needsKey: true })
   })
 })
 
