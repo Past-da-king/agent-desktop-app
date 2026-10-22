@@ -1,0 +1,379 @@
+/**
+ * The node's HTTPS server (protocol s2 and s5): one port, its own certificate, routes added by the parts that
+ * plug in (DevicesHost), pass auth by Bearer header or the agent_pass cookie, and the RPC WebSocket at /v1/rpc.
+ */
+import { createReadStream, statSync } from 'node:fs'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { createServer, type Server } from 'node:https'
+import type { AddressInfo } from 'node:net'
+import type { Duplex } from 'node:stream'
+
+import { RPC_EVENTS } from '../../shared/rpc-methods'
+import { compilePath, matchPath, passFrom, type CompiledPath } from './router'
+import { RpcSession } from './rpc'
+import type { DeviceFacts, DeviceRole, DevicesHost, DevicesRoute, RouteReply, RpcMethod } from './types'
+import { acceptUpgrade } from './ws'
+
+const SMALL_BODY = 64 * 1024
+const LARGE_BODY = 32 * 1024 * 1024
+
+export interface DevicesServerOptions {
+  keyPem: string
+  certPem: string
+  /** The paired device a pass belongs to, or null. */
+  deviceForPass(pass: string): string | null
+  /** A paired device's roles; null when it is unknown or revoked (its pass is then refused). */
+  rolesOf(deviceId: string): DeviceRole[] | null
+  self(): { id: string; facts: DeviceFacts }
+  /** Runs one RPC call that no `addRpc` method answered (rpc.ts callAllowed). */
+  callRpc(session: RpcSession, method: string, args: unknown[]): Promise<unknown>
+  /** A device connected, said hello or went away. */
+  onConnections?(): void
+  /** A device was heard from (for lastSeen). */
+  onSeen?(deviceId: string): void
+  log?(message: string, detail?: Record<string, unknown>): void
+}
+
+interface Mounted {
+  route: DevicesRoute
+  compiled: CompiledPath
+}
+
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+export const CONTENT_TYPES: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  ico: 'image/x-icon',
+  woff2: 'font/woff2',
+  woff: 'font/woff',
+  pdf: 'application/pdf',
+  wav: 'audio/wav',
+  mp3: 'audio/mpeg',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  zip: 'application/zip',
+  csv: 'text/csv; charset=utf-8',
+}
+
+export function contentTypeFor(path: string): string {
+  const ext = /\.([A-Za-z0-9]+)$/.exec(path)?.[1]?.toLowerCase() ?? ''
+  return CONTENT_TYPES[ext] ?? 'application/octet-stream'
+}
+
+/** Parses a single `bytes=a-b` range against a size; null for none or one we do not serve (then the whole file). */
+export function parseRange(header: string | undefined, size: number): { start: number; end: number } | 'bad' | null {
+  if (header === undefined || header === '') return null
+  const found = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
+  if (found === null) return null
+  const [, a = '', b = ''] = found
+  if (a === '' && b === '') return 'bad'
+  let start: number
+  let end: number
+  if (a === '') {
+    const suffix = Number(b)
+    start = Math.max(0, size - suffix)
+    end = size - 1
+  } else {
+    start = Number(a)
+    end = b === '' ? size - 1 : Math.min(Number(b), size - 1)
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) return 'bad'
+  return { start, end }
+}
+
+export class DevicesServer implements DevicesHost {
+  private readonly routes: Mounted[] = []
+  private readonly rpcMethods = new Map<string, RpcMethod>()
+  private readonly sessions = new Set<RpcSession>()
+  private server: Server | null = null
+
+  constructor(private readonly options: DevicesServerOptions) {}
+
+  // ---- DevicesHost ----
+
+  addRoute(route: DevicesRoute): void {
+    this.routes.push({ route, compiled: compilePath(route.path) })
+  }
+
+  addRpc(name: string, method: RpcMethod): void {
+    this.rpcMethods.set(name, method)
+  }
+
+  emit(deviceId: string | null, name: string, payload: unknown): void {
+    for (const session of this.sessions) {
+      if (session.facts === null) continue
+      if (deviceId === null || session.deviceId === deviceId) session.event(name, payload)
+    }
+  }
+
+  factsOf(deviceId: string): DeviceFacts | null {
+    let latest: DeviceFacts | null = null
+    for (const session of this.sessions) if (session.deviceId === deviceId && session.facts !== null) latest = session.facts
+    return latest
+  }
+
+  isConnected(deviceId: string): boolean {
+    for (const session of this.sessions) if (session.deviceId === deviceId && session.open) return true
+    return false
+  }
+
+  self(): { id: string; facts: DeviceFacts } {
+    return this.options.self()
+  }
+
+  // ---- for the devices service ----
+
+  /** A main-process event: passed on to every connection when it is one devices may hear. */
+  broadcast(channel: string, payload: unknown): void {
+    if (!RPC_EVENTS.has(channel)) return
+    this.emit(null, channel, payload)
+  }
+
+  added(): ReadonlyMap<string, RpcMethod> {
+    return this.rpcMethods
+  }
+
+  connectedIds(): string[] {
+    const ids = new Set<string>()
+    for (const session of this.sessions) if (session.open) ids.add(session.deviceId)
+    return [...ids]
+  }
+
+  /** Closes every connection of one device (revoked). */
+  closeDevice(deviceId: string): void {
+    for (const session of [...this.sessions]) if (session.deviceId === deviceId) session.close(4003, 'revoked')
+  }
+
+  /** The device a request's pass belongs to, when that device is still paired. */
+  deviceFor(headers: Record<string, string | string[] | undefined>): string | null {
+    const pass = passFrom(headers)
+    if (pass === '') return null
+    const id = this.options.deviceForPass(pass)
+    if (id === null || this.options.rolesOf(id) === null) return null
+    return id
+  }
+
+  get running(): boolean {
+    return this.server !== null && this.server.listening
+  }
+
+  port(): number {
+    const address = this.server?.address()
+    return typeof address === 'object' && address !== null ? (address as AddressInfo).port : 0
+  }
+
+  start(listen: string, port: number): Promise<void> {
+    if (this.server !== null) return Promise.resolve()
+    const server = createServer({ key: this.options.keyPem, cert: this.options.certPem, minVersion: 'TLSv1.2' }, (req, res) => {
+      void this.onRequest(req, res)
+    })
+    server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => this.onUpgrade(req, socket, head))
+    server.on('tlsClientError', () => undefined)
+    this.server = server
+    return new Promise((resolve, reject) => {
+      const fail = (error: Error): void => {
+        this.server = null
+        reject(error)
+      }
+      server.once('error', fail)
+      server.listen(port, listen, () => {
+        server.off('error', fail)
+        server.on('error', (error) => this.options.log?.('Devices server error', { message: error.message }))
+        resolve()
+      })
+    })
+  }
+
+  async stop(): Promise<void> {
+    for (const session of [...this.sessions]) session.close(1001, 'node stopping')
+    this.sessions.clear()
+    const server = this.server
+    this.server = null
+    if (server === null) return
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve())
+      server.closeAllConnections?.()
+    })
+  }
+
+  // ---- HTTP ----
+
+  private find(method: string, path: string): { mounted: Mounted; params: Record<string, string> } | null {
+    for (const mounted of this.routes) {
+      if (mounted.route.method !== method) continue
+      const params = matchPath(mounted.compiled, path)
+      if (params !== null) return { mounted, params }
+    }
+    return null
+  }
+
+  private authorise(auth: DevicesRoute['auth'], headers: IncomingMessage['headers']): string | null {
+    if (auth === 'none') return null
+    const id = this.deviceFor(headers)
+    if (id === null) throw new HttpError(401, 'This device is not paired with this computer.')
+    if (auth === 'node') {
+      const roles = this.options.rolesOf(id) ?? []
+      if (!roles.includes('brain') && !roles.includes('hands')) throw new HttpError(403, 'Only another agent can do that.')
+    }
+    this.options.onSeen?.(id)
+    return id
+  }
+
+  private async onRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Referrer-Policy', 'no-referrer')
+    const controller = new AbortController()
+    res.on('close', () => controller.abort())
+    try {
+      const url = new URL(req.url ?? '/', 'https://node.invalid')
+      const method = (req.method ?? 'GET').toUpperCase()
+      const found = this.find(method === 'HEAD' ? 'GET' : method, url.pathname)
+      if (found === null) throw new HttpError(404, 'Not found.')
+      const deviceId = this.authorise(found.mounted.route.auth, req.headers)
+      const body = method === 'POST' ? await readJson(req, found.mounted.route.auth === 'none' ? SMALL_BODY : LARGE_BODY) : undefined
+      const reply = await found.mounted.route.handle({
+        deviceId,
+        method,
+        path: url.pathname,
+        params: found.params,
+        query: url.searchParams,
+        headers: req.headers,
+        body,
+        signal: controller.signal,
+      })
+      await this.send(req, res, reply)
+    } catch (error) {
+      const status = error instanceof HttpError ? error.status : 500
+      if (status === 500) this.options.log?.('Devices request failed', { message: error instanceof Error ? error.message : String(error) })
+      if (!res.headersSent) sendJson(res, status, { error: status === 500 ? 'Something went wrong on the node.' : (error as Error).message })
+      else res.destroy()
+    }
+  }
+
+  private async send(req: IncomingMessage, res: ServerResponse, reply: RouteReply): Promise<void> {
+    for (const [name, value] of Object.entries(reply.headers ?? {})) res.setHeader(name, value)
+    if ('json' in reply) {
+      sendJson(res, reply.status, reply.json)
+      return
+    }
+    if ('text' in reply) {
+      const bytes = Buffer.from(reply.text, 'utf8')
+      res.writeHead(reply.status, { 'Content-Type': reply.contentType ?? 'text/plain; charset=utf-8', 'Content-Length': bytes.length })
+      res.end(req.method === 'HEAD' ? undefined : bytes)
+      return
+    }
+    const info = statSync(reply.file, { throwIfNoEntry: false })
+    if (info === undefined || !info.isFile()) throw new HttpError(404, 'That file is not on this computer.')
+    const type = reply.contentType ?? contentTypeFor(reply.file)
+    const range = parseRange(typeof req.headers.range === 'string' ? req.headers.range : undefined, info.size)
+    if (range === 'bad') {
+      res.writeHead(416, { 'Content-Range': `bytes */${info.size}` })
+      res.end()
+      return
+    }
+    const headers: Record<string, string | number> = { 'Content-Type': type, 'Accept-Ranges': 'bytes' }
+    if (range === null) {
+      res.writeHead(reply.status, { ...headers, 'Content-Length': info.size })
+    } else {
+      res.writeHead(206, { ...headers, 'Content-Length': range.end - range.start + 1, 'Content-Range': `bytes ${range.start}-${range.end}/${info.size}` })
+    }
+    if (req.method === 'HEAD') {
+      res.end()
+      return
+    }
+    await new Promise<void>((resolve) => {
+      const stream = createReadStream(reply.file, range === null ? {} : { start: range.start, end: range.end })
+      stream.on('error', () => {
+        res.destroy()
+        resolve()
+      })
+      stream.on('end', () => resolve())
+      stream.pipe(res)
+    })
+  }
+
+  // ---- WebSocket ----
+
+  private onUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    const url = new URL(req.url ?? '/', 'https://node.invalid')
+    if (url.pathname !== '/v1/rpc') {
+      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
+      return
+    }
+    const deviceId = this.deviceFor(req.headers)
+    if (deviceId === null) {
+      socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      return
+    }
+    const conn = acceptUpgrade(req, socket, head)
+    if (conn === null) return
+    this.options.onSeen?.(deviceId)
+    const session = new RpcSession(conn, {
+      deviceId,
+      call: (from, method, args) => this.options.callRpc(from, method, args),
+      onHello: () => {
+        this.options.onSeen?.(deviceId)
+        this.options.onConnections?.()
+      },
+      onClose: (closed) => {
+        this.sessions.delete(closed)
+        this.options.onConnections?.()
+      },
+    })
+    this.sessions.add(session)
+    this.options.onConnections?.()
+  }
+}
+
+function sendJson(res: ServerResponse, status: number, value: unknown): void {
+  const bytes = Buffer.from(JSON.stringify(value ?? null), 'utf8')
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': bytes.length, 'Cache-Control': 'no-store' })
+  res.end(bytes)
+}
+
+function readJson(req: IncomingMessage, max: number): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > max) {
+        reject(new HttpError(413, 'That is too big to send.'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (size === 0) {
+        resolve(undefined)
+        return
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch {
+        reject(new HttpError(400, 'The body is not JSON.'))
+      }
+    })
+    req.on('error', reject)
+  })
+}

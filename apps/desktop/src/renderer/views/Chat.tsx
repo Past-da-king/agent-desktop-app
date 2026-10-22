@@ -844,7 +844,7 @@ export function Chat(): JSX.Element {
 
   useEffect(() => {
     // The browser preview can open straight into a call (?demo=1&call=1), so the call view can be screenshotted.
-    if (agent.platform === 'web' && new URLSearchParams(window.location.search).get('call') === '1') void startCall()
+    if (agent.platform === 'web' && agent.remote === undefined && new URLSearchParams(window.location.search).get('call') === '1') void startCall()
   }, [startCall])
 
 

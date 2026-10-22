@@ -28,7 +28,7 @@ export function DictationPill(): JSX.Element {
   const capture = useRef<Capture | null>(null)
   const session = useRef(0)
   const wave = useRef<HTMLSpanElement>(null)
-  const preview = agent.platform === 'web'
+  const preview = agent.platform === 'web' && agent.remote === undefined
 
   useEffect(() => {
     document.documentElement.classList.add('pill-window')

@@ -73,10 +73,14 @@ export interface RouteRequest {
   signal: AbortSignal
 }
 
-export type RouteReply =
+export type RouteReply = (
   | { status: number; json: unknown }
   | { status: number; file: string; contentType?: string }
   | { status: number; text: string; contentType?: string }
+) & {
+  /** Extra response headers (Set-Cookie, Location, Cache-Control). Added by workstream A. */
+  headers?: Record<string, string>
+}
 
 export interface DevicesRoute {
   method: 'GET' | 'POST'
