@@ -852,6 +852,11 @@ export class HelperManager implements HelperHost {
         }
         continue
       }
+      // Another brain holds its job lease and is running it (a helper of that brain, replicated here): not ours.
+      if (this.offload !== null) {
+        const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
+        if (lease !== null && lease.status === 'running' && lease.brainId !== '' && !this.offload.isSelf(lease.brainId)) continue
+      }
       await this.updateMeta(row.id, {
         state: 'failed',
         summary: 'Interrupted when the app closed.',
