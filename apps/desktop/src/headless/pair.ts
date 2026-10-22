@@ -99,7 +99,7 @@ export async function pair(
   dataDir: string,
   targets: BundleTargets & { secrets: Secrets },
 ): Promise<PairOutcome> {
-  let lastError = ''
+  const failures: string[] = []
   for (const url of target.urls) {
     let reply
     try {
@@ -109,7 +109,7 @@ export async function pair(
         body: { code: target.code, device: facts, wantRoles: ['brain', 'hands'] },
       })
     } catch (error) {
-      lastError = `${url}: ${error instanceof Error ? error.message : String(error)}`
+      failures.push(`${url}: ${error instanceof Error ? error.message : String(error)}`)
       continue
     }
     if (reply.status !== 200) {
@@ -139,5 +139,5 @@ export async function pair(
     }
     return { url, fp: reply.fp, deviceId: answer.deviceId, meshId: answer.meshId, bundle, bundleError }
   }
-  throw new Error(`Could not reach the other device. ${lastError}`)
+  throw new Error(`Could not reach the other device. ${failures.join('; ')}`)
 }

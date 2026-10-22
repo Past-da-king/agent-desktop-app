@@ -8,6 +8,14 @@ import { request } from 'node:http'
 import { connect, type TLSSocket } from 'node:tls'
 
 import { fingerprintOf } from '../main/devices/cert'
+import { parseSocksProxy, socksConnect, type SocksProxy } from '../main/devices/socks'
+
+/** Node-to-node connections go through this SOCKS5 proxy when set (agent-node config --proxy, or AGENT_NODE_PROXY). */
+let proxy: SocksProxy | null = parseSocksProxy(process.env['AGENT_NODE_PROXY'])
+
+export function setNodeProxy(next: SocksProxy | null): void {
+  proxy = next
+}
 
 export interface PinnedReply {
   status: number
@@ -33,9 +41,14 @@ export async function pinnedSocket(target: URL, fp: string, timeoutMs = 15_000):
   if (target.protocol !== 'https:') throw new Error('Nodes only talk over https.')
   const port = target.port === '' ? 443 : Number(target.port)
   const host = target.hostname.replace(/^\[|\]$/g, '')
+  const tunnel = proxy === null ? null : await socksConnect(proxy, host, port, timeoutMs)
   const socket = await new Promise<TLSSocket>((resolve, reject) => {
     const isName = !/^[\d.]+$/.test(host) && !host.includes(':')
-    const tls = connect({ host, port, rejectUnauthorized: false, ...(isName ? { servername: host } : {}) })
+    const tls = connect({
+      ...(tunnel === null ? { host, port } : { socket: tunnel }),
+      rejectUnauthorized: false,
+      ...(isName ? { servername: host } : {}),
+    })
     const timer = setTimeout(() => {
       tls.destroy()
       reject(new Error(`No answer from ${target.host} in ${Math.round(timeoutMs / 1000)} s.`))

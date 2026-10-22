@@ -25,6 +25,8 @@ export interface NodeConfig {
   brains: BrainRef[]
   /** This node's own device id in the mesh it joined ('' if it made the mesh). */
   deviceId: string
+  /** socks5://host:port when other devices are only reachable through a proxy (a userspace mesh VPN); '' for none. */
+  proxy: string
 }
 
 function configFile(dataDir: string): string {
@@ -54,6 +56,7 @@ export function readConfig(dataDir: string): NodeConfig {
     publicUrls: Array.isArray(raw.publicUrls) ? raw.publicUrls.filter((u): u is string => typeof u === 'string') : [],
     brains: Array.isArray(raw.brains) ? raw.brains : [],
     deviceId: typeof raw.deviceId === 'string' ? raw.deviceId : '',
+    proxy: typeof raw.proxy === 'string' ? raw.proxy : '',
   }
   if (!existsSync(file)) writeConfig(dataDir, config)
   return config

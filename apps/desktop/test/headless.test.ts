@@ -23,7 +23,9 @@ import { canRunTurns, headlessFacts, startHeadlessDevices } from '../src/headles
 import { readConfig } from '../src/headless/node-config'
 import { pair, parsePairLink, shortCodeTarget, PASS_SECRET } from '../src/headless/pair'
 import { connectRpc } from './devices-client'
-import { pinnedJson } from '../src/headless/pinned'
+import { pinnedJson, setNodeProxy } from '../src/headless/pinned'
+import { parseSocksProxy } from '../src/main/devices/socks'
+import { createServer as createTcpServer, connect as tcpConnect } from 'node:net'
 import { startHeadlessRuntime, type HeadlessRuntime } from '../src/headless/runtime'
 
 // Each test boots a whole runtime (two SQLite files, the tool registry); on a busy machine that takes seconds.
@@ -427,4 +429,54 @@ describe('relay: fetching through a paired computer', () => {
     closers.push(() => client.close())
     await expect(client.call('relay.fetch', { url: pageUrl })).rejects.toThrow(/Only your own computers/)
   }, 60_000)
+})
+
+describe('reaching other nodes through a SOCKS5 proxy', () => {
+  it('pins the node certificate end to end through the proxy, and says when the proxy is down', async () => {
+    const desk = await fakePairingNode()
+    const seen: string[] = []
+    const open = new Set<import('node:net').Socket>()
+    // A minimal SOCKS5 proxy: no sign-in, CONNECT by IPv4 or name.
+    const proxy = createTcpServer((client) => {
+      open.add(client)
+      client.once('data', () => {
+        client.write(Buffer.from([0x05, 0x00]))
+        client.once('data', (req: Buffer) => {
+          const atyp = req[3]
+          const host = atyp === 0x01 ? [...req.subarray(4, 8)].join('.') : req.subarray(5, 5 + (req[4] ?? 0)).toString()
+          const at = atyp === 0x01 ? 8 : 5 + (req[4] ?? 0)
+          const port = req.readUInt16BE(at)
+          seen.push(`${host}:${port}`)
+          const upstream = tcpConnect({ host, port }, () => {
+            client.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]))
+            client.pipe(upstream)
+            upstream.pipe(client)
+          })
+          open.add(upstream)
+          upstream.on('error', () => client.destroy())
+        })
+      })
+      client.on('error', () => undefined)
+    })
+    await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', () => resolve()))
+    const proxyAddress = proxy.address()
+    const proxyPort = typeof proxyAddress === 'object' && proxyAddress !== null ? proxyAddress.port : 0
+    closers.push(() => {
+      setNodeProxy(null)
+      for (const socket of open) socket.destroy()
+      return new Promise<void>((resolve) => proxy.close(() => resolve()))
+    })
+
+    setNodeProxy(parseSocksProxy(`socks5://127.0.0.1:${proxyPort}`))
+    const reply = await pinnedJson(`${desk.url}/v1/bundle`, { fp: desk.fp, pass: 'x' })
+    expect(reply.status).toBe(401)
+    expect(seen).toEqual([new URL(desk.url).host])
+    await expect(pinnedJson(`${desk.url}/v1/bundle`, { fp: cert('imposter').fp })).rejects.toThrow(/different certificate/)
+
+    setNodeProxy(parseSocksProxy('socks5://127.0.0.1:1'))
+    // Refused or silent, depending on the network: either way a plain answer, not a hang.
+    await expect(pinnedJson(`${desk.url}/v1/bundle`, { fp: desk.fp, timeoutMs: 3000 })).rejects.toThrow(/proxy (could not be reached|did not connect)/)
+    expect(parseSocksProxy('http://127.0.0.1:8080')).toBeNull()
+    expect(parseSocksProxy('socks5://[::1]:1055')).toEqual({ host: '::1', port: 1055 })
+  })
 })

@@ -28,7 +28,8 @@ import { callControl, startControl, terminalQr } from './control'
 import { headlessFacts, startHeadlessDevices } from './devices'
 import { readConfig, writeConfig, type NodeConfig } from './node-config'
 import { pair, parsePairLink, shortCodeTarget } from './pair'
-import { pinnedJson } from './pinned'
+import { parseSocksProxy } from '../main/devices/socks'
+import { pinnedJson, setNodeProxy } from './pinned'
 import { startHeadlessRuntime } from './runtime'
 
 declare const __AGENT_VERSION__: string | undefined
@@ -45,6 +46,7 @@ const HELP = `agent-node: your agent as a service
   agent-node roles <id> brain,hands | move <id> up|down    who answers, in which order
   agent-node revoke <id>                                   take a device out
   agent-node config [--listen ADDR] [--port N] [--url U]   where it listens, and an address that reaches it
+  agent-node config --proxy socks5://HOST:PORT | none      reach your other devices through a SOCKS5 proxy
   agent-node account list | add claude | add codex          the AI it thinks with (a plan signed in on this machine)
   agent-node account add api --provider P < keyfile        ... or an API key, read from stdin
   agent-node ask "hello"                                   one turn, to check it answers (while stopped)
@@ -136,6 +138,12 @@ function applyListenFlags(args: Args, config: NodeConfig, dataDir: string): void
   const listen = flag(args, 'listen')
   if (listen !== '') {
     config.listen = listen
+    changed = true
+  }
+  const proxy = flag(args, 'proxy')
+  if (proxy !== '') {
+    if (proxy !== 'none' && parseSocksProxy(proxy) === null) throw new Error('A proxy looks like socks5://127.0.0.1:1055 (or none).')
+    config.proxy = proxy === 'none' ? '' : proxy
     changed = true
   }
   const url = flag(args, 'url')
@@ -444,6 +452,9 @@ async function deviceAction(args: Args, action: 'revoke' | 'roles' | 'move'): Pr
 
 export async function run(argv: string[]): Promise<number> {
   const args = parseArgs(argv)
+  // Connections to the person's other devices go through the proxy the node is set to use, if any.
+  const configured = existsSync(join(dataDirOf(args), 'node.json')) ? readConfig(dataDirOf(args)).proxy : ''
+  setNodeProxy(parseSocksProxy(process.env['AGENT_NODE_PROXY'] || configured))
   switch (args.command) {
     case 'start':
       checkNode()
@@ -475,7 +486,7 @@ export async function run(argv: string[]): Promise<number> {
       const dataDir = dataDirOf(args)
       const config = readConfig(dataDir)
       applyListenFlags(args, config, dataDir)
-      console.log(`listen: https://${config.listen}:${config.port}; addresses: ${config.publicUrls.join(' ') || '(none)'} (takes effect on the next start)`)
+      console.log(`listen: https://${config.listen}:${config.port}; addresses: ${config.publicUrls.join(' ') || '(none)'}; proxy: ${config.proxy || '(none)'} (takes effect on the next start)`)
       return 0
     }
     case 'version':
