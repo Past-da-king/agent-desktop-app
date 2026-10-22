@@ -48,6 +48,9 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 - 01:45 worktree + protocol written.
 - 01:55 seam types (apps/desktop/src/main/devices/types.ts) + common brief committed (3df8a89). Chats A-D started; each keeps PROGRESS-<letter>.md in its worktree (D: in the server phone repo).
 
+- 02:40 C done with steps 1-6: headless node built (devices-headless f9705c9, code de641d5), 9 headless tests + full suite 1120 pass. DEPLOYED on the server: ~/agent-node, data ~/.local/share/agent-node, 127.0.0.1:7787, reachable over the tailnet, keepalive = 2 crontab lines tagged "# agent-node keepalive", idle 71 MB. Real turn on the server via its ChatGPT plan (codex). Server Claude login EXPIRED (needs a person to run `claude` there; not blocking, ChatGPT plan works). Seams for merge: A replaces startNodeServer in src/headless/node-server.ts; B replaces applyBundle in src/headless/bundle.ts. Build: `node scripts/build-headless.mjs`; redeploy: scp tgz + `sh agent-node/install.sh --node ~/node-v24.15.0-linux-x64/bin/node`. C now on the server's own headless browser, then relay.
+- 02:42 lead killed an orphaned 5 h vitest in ~/agent-desktop-wt/accounts (90% CPU, parent gone).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
