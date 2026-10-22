@@ -204,7 +204,7 @@ export class EventRouter {
     const finishedAt = this.now()
     const ok = outcome.state === 'done'
     if (ids.length > 0) {
-      this.workers.setStatus(ids, ok ? 'routed' : 'failed', trigger.id, ok ? `Desk #${outcome.deskId}` : clip(outcome.result, 300))
+      this.workers.setStatus(ids, ok ? 'routed' : 'failed', trigger.id, ok ? `To the desk of "${trigger.name}"` : clip(outcome.result, 300))
     }
     for (const id of ids) this.inFlight.delete(id)
     try {

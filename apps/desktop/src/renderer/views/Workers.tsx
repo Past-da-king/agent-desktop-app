@@ -171,7 +171,7 @@ function WorkerCard({ worker }: { worker: WorkerInfo }): JSX.Element {
         <span>
           Last heard <b>{ago(worker.lastLineAt)}</b>
         </span>
-        {worker.lastGap !== null ? (
+        {worker.lastGap !== null && worker.lastGap.to - worker.lastGap.from >= 60_000 ? (
           <span>
             Last gap {clockOf(worker.lastGap.from)} to {clockOf(worker.lastGap.to)}, caught up <b>{worker.lastGap.caughtUp}</b>
           </span>
