@@ -14,7 +14,9 @@ import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
 import { Icon, type IconName } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
+import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
+import { useSettings } from '../state/useSettings'
 import { JoinRow } from './DevicesJoin'
 import { NetworkRow } from './DevicesNetwork'
 
@@ -311,6 +313,55 @@ function DeviceItem({
   )
 }
 
+/** The cap a computer may set for helpers it runs for the person's other devices (s12). */
+const CAP_OPTIONS = [
+  { value: '0', label: 'None' },
+  { value: '2', label: '2' },
+  { value: '4', label: '4' },
+  { value: '8', label: '8' },
+]
+
+/**
+ * Where the helpers this computer starts run (s12): best (a linked server takes jobs that do not need this
+ * computer), this computer, or one linked brain; and how many this computer runs for the other devices.
+ */
+function HelperPlacement({ brains, selfId }: { brains: DeviceRow[]; selfId: string }): JSX.Element {
+  const settings = useSettings((state) => state.settings)
+  const save = useSettings((state) => state.save)
+  const others = brains.filter((device) => device.id !== selfId)
+  const runOn = settings?.helpersRunOn ?? 'best'
+  const value = runOn === 'best' || runOn === 'here' || others.some((device) => device.id === runOn) ? runOn : 'best'
+  const options = [
+    { value: 'best', label: 'Best' },
+    { value: 'here', label: 'This computer' },
+    ...others.map((device) => ({ value: device.id, label: device.name })),
+  ]
+  const cap = String(settings?.devicesJobCap ?? 4)
+  const capValue = CAP_OPTIONS.some((option) => option.value === cap) ? cap : '4'
+  const change = (patch: Parameters<typeof save>[0]): void => {
+    void save(patch).catch((cause: unknown) => toast(message(cause, 'Could not change that.')))
+  }
+  return (
+    <div className="dv-share dv-place">
+      <span className="eyebrow mute">WHERE HELPERS RUN</span>
+      <div className="dv-place-row">
+        <span>
+          Run helpers on
+          <small>{value === 'best' ? 'A linked server takes jobs that do not need this computer, so it stays free. They show here the same way.' : value === 'here' ? 'Every helper runs on this computer.' : 'Helpers run there when it is online, else here.'}</small>
+        </span>
+        <Segmented ariaLabel="Run helpers on" options={options} value={value} onChange={(next) => change({ helpersRunOn: next })} />
+      </div>
+      <div className="dv-place-row">
+        <span>
+          Helpers this computer runs for your other devices
+          <small>At the same time.</small>
+        </span>
+        <Segmented ariaLabel="Helpers this computer runs for your other devices" options={CAP_OPTIONS} value={capValue} onChange={(next) => change({ devicesJobCap: Number(next) })} />
+      </div>
+    </div>
+  )
+}
+
 export function DevicesSettings(): JSX.Element {
   const readOnly = agent.remote !== undefined
   const [status, setStatus] = useState<DevicesStatus | null>(null)
@@ -458,6 +509,7 @@ export function DevicesSettings(): JSX.Element {
             ))}
           </div>
         ) : null}
+        {enabled && !readOnly && status !== null && brains.length > 1 ? <HelperPlacement brains={brains} selfId={status.nodeId} /> : null}
         {!readOnly && status !== null ? <JoinRow /> : null}
         {!readOnly && status !== null ? <NetworkRow status={status} onStatus={setStatus} /> : null}
       </div>

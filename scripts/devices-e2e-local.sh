@@ -14,7 +14,7 @@ PORT_AI=$((18000 + RANDOM % 900)); PORT_A=$((19000 + RANDOM % 400)); PORT_B=$((1
 cleanup() {
   for d in a b; do "$NODE_BIN" "$AGENT_NODE" stop --data-dir "$WORK/$d" >/dev/null 2>&1; done
   kill "$AI_PID" 2>/dev/null
-  rm -rf "$WORK"
+  if [ -n "${KEEP_WORK:-}" ]; then echo "kept $WORK"; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
 
