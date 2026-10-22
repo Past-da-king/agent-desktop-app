@@ -16,14 +16,28 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 - D4 Crash resume and failover through synced `turn` lease rows. (s8)
 - D5 Networking pluggable; LAN/direct first, tsnet sidecar optional. (s10)
 
+## SCOPE CORRECTION (Ayanda, 01:45), acknowledged 02:05, overrides everything above where they differ
+1. Both apps stay standalone and work exactly as today. Linking is an optional extra (scan, or skip and nothing changes). No regressions.
+2. Phone base = 0.13.0 (`~/phone-aos/app-thin`, targetSdk 28). No merging of the older server copies beyond backing up their uncommitted work.
+3. Minimal changes. Desktop: only pair a phone/server by QR and serve them (minimal Settings > Devices). Phone: only "scan to link", then use that brain and its data in its existing native screens. D2 (WebView of the desktop UI) is DROPPED; A's /app/ web build and phone-width web UI are dropped.
+4. Phone shows no project list/page. Only new visible thing: a delegated project agent shows like a helper with the project's icon and its live status line.
+5. Origin awareness stays as plumbing (links/files to origin device, local images in chat).
+6. Server: full freedom. One-command deploy, own headless browser, runs code and tools itself, relays blocked traffic through a linked device (PC or phone). Failover stays user-ranked. Assigned to C (relay after runtime + deploy).
+- Contract: lease rows are entity `turn_lease` ('turn' is taken by transcript rows); B owns adding device, device_command, turn_lease to EntityName; A writes device rows via store.upsert.
+
+## ADDITION (Ayanda, 01:50), acknowledged 02:10
+1. Phone base is the THIN app (0.13.0, about 30 to 60 MB, runtimes downloaded on first use). Never ship the 360 MB bundled build.
+2. Device tools are shared across linked devices: any agent on any brain can use another device's browser, notifications, files, approvals, shell. General layer: devices advertise tools, agents call with a device target or the router picks the best. Contract: protocol s11. Split: B = brain side (devices_list, device_tool, router, device arg on local tools); A = desktop serves its own tools to other brains; C = server serves its browser/shell and calls others; D = phone serves browser, notifications_read, files, notify/ask approval.
+3. Origin awareness stays (replies, links, files to the sending device).
+
 ## Workstreams (each a project chat; branch off `devices`)
 | # | Work | Branch / worktree | Status |
 |---|---|---|---|
-| A | Desktop node: server, TLS, pairing, RPC, /app web build + remote bridge, Settings > Devices UI | devices-node / ~/agent-desktop-wt/devices-node | starting |
-| B | Replication, bundle + secrets, origin awareness, device commands, turn leases, crash resume | devices-sync / ~/agent-desktop-wt/devices-sync | starting |
-| C | Headless node (plain Node 24) + deploy on server as a service | devices-headless / ~/agent-desktop-wt/devices-headless | starting |
-| D | Phone: merge 0.13.0 into server repo, Remote mode | server ~/phone-aos | starting |
-| E | agent-net tsnet sidecar | later | not started |
+| A | Desktop node: server, TLS, pairing, RPC, /app web build + remote bridge, Settings > Devices UI | devices-node / ~/agent-desktop-wt/devices-node | chat pca89bc68131914ac8, running |
+| B | Replication, bundle + secrets, origin awareness, device commands, turn leases, crash resume | devices-sync / ~/agent-desktop-wt/devices-sync | chat pc06e6196729724dbf, running |
+| C | Headless node (plain Node 24) + deploy on server as a service | devices-headless / ~/agent-desktop-wt/devices-headless | chat pc79d2a9989e324333, running |
+| D | Phone: linking on 0.13.0 (server feature/remote off 3811400, worktree ~/phone-aos/app-remote; backups backup/app-0.11.23-dirty, backup/app-thin-snapshot) | server ~/phone-aos | chat pc2f0194f996a947e0, running |
+| E | agent-net tsnet sidecar | devices-net / ~/agent-desktop-wt/devices-net | chat pc0f6688d4a37f4884, running (Go builds on server) |
 
 ## Shared machine rules
 - Locks: full vitest `flock /tmp/agent-vitest.lock`, Electron build `flock /tmp/agent-electron.lock`. Gradle only on the server.
@@ -32,3 +46,20 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 ## Log
 - 01:45 worktree + protocol written.
+- 01:55 seam types (apps/desktop/src/main/devices/types.ts) + common brief committed (3df8a89). Chats A-D started; each keeps PROGRESS-<letter>.md in its worktree (D: in the server phone repo).
+
+- 02:40 C done with steps 1-6: headless node built (devices-headless f9705c9, code de641d5), 9 headless tests + full suite 1120 pass. DEPLOYED on the server: ~/agent-node, data ~/.local/share/agent-node, 127.0.0.1:7787, reachable over the tailnet, keepalive = 2 crontab lines tagged "# agent-node keepalive", idle 71 MB. Real turn on the server via its ChatGPT plan (codex). Server Claude login EXPIRED (needs a person to run `claude` there; not blocking, ChatGPT plan works). Seams for merge: A replaces startNodeServer in src/headless/node-server.ts; B replaces applyBundle in src/headless/bundle.ts. Build: `node scripts/build-headless.mjs`; redeploy: scp tgz + `sh agent-node/install.sh --node ~/node-v24.15.0-linux-x64/bin/node`. C now on the server's own headless browser, then relay.
+- 02:42 lead killed an orphaned 5 h vitest in ~/agent-desktop-wt/accounts (90% CPU, parent gone).
+
+- 02:22 WSL restarted on its own (Wsl/Service/0x8007274c), likely Windows memory pressure (~1.6 GB free). Server node unaffected (it runs on the server). A on track: devices-node fb428a1, live proof copy C:\temp\devices-node-run (own userData, port 7797). WSL networking is mirrored (127.0.0.1 shared with Windows).
+
+- 03:00 C: server has its own browser (CDP on the server's Chromium, devices-headless 88ee83e), real turn on the server opened a page and answered. Full suite 1123 pass. A core done (devices-node fb428a1: server, pairing, rpc, Settings > Devices; finishing live proof + s11). B core done (devices-sync 1b4c93d: change log + replication, pinned fetch, bundle, origin line, device commands, open_url/send_file, turn leases wired in index.ts; finishing s11 brain side).
+- 03:05 C made INTEGRATOR: branch devices-headless-int merging node+sync+headless, wiring seams, two-node + scripted phone test; then relay. Lead merges devices-int into devices, then design.
+
+- 03:20 B core DONE devices-sync 9f797ac (31 devices tests, full suite 1141 pass): replication 3 nodes with relay + conflict + no echo + TLS pin, bundle (secrets brain only), origin line, open_url/send_file device commands, turn leases with crash resume exactly once + failover claim, works with Devices off. Merge notes in PROGRESS-B.md, forwarded to C. B now on s11 device tools brain side (was missed).
+
+## Next for the lead
+1. Watch RAM (Windows and WSL), answer helpers.
+2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
+3. Live test: test desktop (win-unpacked, own userData) + server headless node + scripted phone client: chat, bundle after scan, project turn, local image, open_url to origin, failover x2, crash resume.
+4. Installer + APK + START-HERE.md into C:\Users\past9\Downloads\agent\. Start E when RAM allows.
