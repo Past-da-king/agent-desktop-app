@@ -131,3 +131,12 @@ describe('the window applies row changes together', () => {
     }
   })
 })
+
+describe('Home finds the newest reply without sorting every row', () => {
+  it('picks the newest, and the first listed of rows made at the same moment, as the sort did', async () => {
+    const { lastAgentWork } = await import('../src/renderer/state/useRun')
+    const items = [row('a', 'agent', 5), row('r', 'report', 9), row('b', 'agent', 9), row('u', 'user', 20)]
+    expect(lastAgentWork(items)?.id).toBe('r')
+    expect(lastAgentWork([row('u', 'user', 1)])).toBeNull()
+  })
+})
