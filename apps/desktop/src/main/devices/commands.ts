@@ -137,7 +137,7 @@ export class DeviceCommands {
         await this.deps.noteBack(row.chat, `[Device note: ${what(row)} was not delivered: ${why}. Tell the user another way if it still matters.]`)
         continue
       }
-      if (row.status === 'queued' && host !== null && host.isConnected(row.target)) await this.deliver(host, row)
+      if (row.status === 'queued' && row.kind !== 'tool' && host !== null && host.isConnected(row.target)) await this.deliver(host, row)
     }
   }
 
@@ -185,6 +185,7 @@ function clean(input: CommandInput): CommandInput {
 }
 
 function what(row: DeviceCommandRow): string {
+  if (row.kind === 'tool') return `Running ${row.tool ?? 'the tool'}`
   if (row.kind === 'open_url') return `Opening ${row.url ?? 'the link'}`
   if (row.kind === 'send_file') return `Sending ${row.name ?? 'the file'}`
   if (row.kind === 'show_image') return 'Showing the picture'

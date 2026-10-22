@@ -8,12 +8,13 @@
  * switched off. Turn leases and crash resume run without it (Devices off); this only adds the parts that need
  * other devices.
  */
-import type { DataChange, DeviceRow } from '@agent/core'
+import type { DataChange, DeviceRow, Tool, ToolContext } from '@agent/core'
 
 import type { DataStore } from '../runtime/data'
 import { rankedBrains, type TurnLeases } from '../runtime/turns'
 import { BundleKeeper, pullBundle, registerBundle, type BundleSources } from './bundle'
 import { DeviceCommands } from './commands'
+import { DeviceToolHub, DeviceToolRunner } from './device-tools'
 import { originFromFacts, originLine, latestOrigin } from './origin'
 import { pinnedFetch } from './pinned-fetch'
 import { Replicator, registerSyncRoutes, type ReplicaStore } from './replicate'
@@ -30,6 +31,15 @@ export interface DevicesSyncDeps {
   leases?: TurnLeases
   /** Tell the agent in a chat (an expired device command). Usually runner.deliver. */
   noteBack: (chat: string, text: string) => void | Promise<void>
+  /** This node's own tools other devices may use (s11): the helpers' toolset. Filtered by `shareGroups`. */
+  localTools?: () => Tool[]
+  /** Settings devicesShareGroups and devicesPreferred. */
+  shareGroups?: () => Partial<Record<string, boolean>>
+  preferred?: () => Partial<Record<string, string>>
+  /** How a tool another brain runs here reaches the person on this node (ask_user, request_approval, notify). */
+  context?: (chat: string, signal: AbortSignal) => Partial<ToolContext>
+  /** Where pictures from other devices are saved. */
+  imageDir?: string
   log?: (line: string) => void
 }
 
@@ -37,6 +47,8 @@ export interface DevicesSync {
   replicator: Replicator
   keeper: BundleKeeper
   commands: DeviceCommands
+  /** Shared device tools (s11): devices_list, device_tool and the router. */
+  tools: DeviceToolHub
   /** This node's device id, as other nodes know it. */
   selfId(): string
   /** The origin for a message typed on this node (runner devices.selfOrigin). */
@@ -80,6 +92,28 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
   const commands = new DeviceCommands({ store, selfId: () => host.self().id, noteBack: deps.noteBack })
   commands.attach(host)
 
+  const local = deps.localTools ?? (() => [])
+  const tools = new DeviceToolHub({
+    store,
+    selfId: () => host.self().id,
+    localTools: local,
+    noteBack: deps.noteBack,
+    ...(deps.shareGroups === undefined ? {} : { shareGroups: deps.shareGroups }),
+    ...(deps.preferred === undefined ? {} : { preferred: deps.preferred }),
+    ...(deps.imageDir === undefined ? {} : { imageDir: deps.imageDir }),
+    // Another node counts as online while its replication link is up.
+    reachable: (id) => replicator.status().some((link) => link.peer === id && link.ok),
+  })
+  tools.attach(host)
+  const runner = new DeviceToolRunner({
+    store,
+    selfId: () => host.self().id,
+    tools: local,
+    ...(deps.shareGroups === undefined ? {} : { shareGroups: deps.shareGroups }),
+    ...(deps.context === undefined ? {} : { context: deps.context }),
+  })
+  runner.start()
+
   deps.leases?.setFailover({
     health: probeHealth,
     brains: () => rankedBrains(store),
@@ -92,6 +126,7 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
     replicator,
     keeper,
     commands,
+    tools,
     selfId: () => host.self().id,
     selfOrigin: () => originFromFacts(host.self().id, host.self().facts),
     originLine: async (chat) => originLine(await latestOrigin(store, chat), host.self().id),
@@ -103,6 +138,8 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
     stop: () => {
       replicator.stop()
       commands.stop()
+      tools.stop()
+      runner.stop()
       offBundle()
       keeper.dispose()
       deps.leases?.setFailover(null)

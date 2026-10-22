@@ -243,6 +243,23 @@ approvals). General for any devices; nothing assumes a phone or a particular mac
 - **Safety**: only paired, non-revoked devices; each device may turn groups off ("Let other devices use my
   browser/notifications/files/shell"), default ON for browser, files, notifications, approval and OFF for shell.
 
+As built (apps/desktop/src/main/devices/device-tools.ts, brain side):
+- `tools` rides in hello inside the device facts (`device.tools`, DeviceFacts.tools in devices/types.ts); the node
+  server must keep that field when it cleans facts. The hub copies it onto the device row (`tools`) every 3 s and
+  before each call, so it replicates to every brain. A node lists its own tools on its own row.
+- Phones (on RPC) get event `device.command` `{ id, kind: "tool", tool, args, chatId, deadlineMs }` and answer
+  `device.result(id, ok, value | error)`; only the target may answer. Another NODE gets the same command through the
+  synced `device_command` row (its DeviceToolRunner runs it and writes `result` into the row, which replicates back),
+  so no node needs an RPC socket to another. Row fields added: `tool`, `args` (JSON), `result` (JSON), `deadlineMs`.
+- The agent waits up to the deadline; a result that comes later is posted to the chat once as
+  `[Device result: ...]`. Pictures `{ type: "image", mime, data }` are saved to files and shown to the model.
+- Tool names: a device's own names; `notify_user` also matches `notify`/`notification_post`, `send_file` matches
+  `file_send`, `open_url` matches `url_open`.
+- Settings: `devicesPreferred` ({ group: deviceId }, shared through the bundle) and `devicesShareGroups`
+  ({ group: boolean }, this device only). Defaults as above, plus `phone` on and `other` off.
+- The runner on a node runs tools with no person to answer unless the app wires `context` (ask_user /
+  request_approval on a NODE then answer "nobody could answer"); phones answer them natively.
+
 ## 10. Overlay network (optional, pluggable)
 
 A sidecar (`agent-net`, Go, tsnet) can join a Tailscale-compatible control server (Tailscale or the user's own
