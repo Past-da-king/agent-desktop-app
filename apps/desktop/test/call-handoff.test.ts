@@ -84,7 +84,7 @@ describe('a call hands work to the agent it names', () => {
   it('sends anything unnamed to the main agent', async () => {
     const { deps, sent } = setup()
     const result = await callHandoff(deps, { target: 'main', message: 'Email Ben the report' }, { device: 'phone' })
-    expect(result).toMatchObject({ ok: true, kind: 'main', said: 'Sent to your main agent.' })
+    expect(result).toMatchObject({ ok: true, kind: 'main', said: "I'm on it." })
     expect(sent).toEqual([{ text: 'Email Ben the report', chat: 'main', origin: { device: 'phone' } }])
     expect(await callHandoff(deps, { target: '', message: 'x' })).toMatchObject({ ok: true, kind: 'main' })
   })
@@ -94,7 +94,7 @@ describe('a call hands work to the agent it names', () => {
     const result = await callHandoff(deps, { target: 'the agent desktop app project', message: 'Ship 0.2.51' })
     // It shows in the main chat as that project's agent, like work the main agent hands over.
     expect(shown).toEqual(['Agent Desktop App:pc222222'])
-    expect(result).toMatchObject({ ok: true, kind: 'project', name: 'Agent Desktop App', chat: 'pc222222', said: 'Sent to the Agent Desktop App project.' })
+    expect(result).toMatchObject({ ok: true, kind: 'project', name: 'Agent Desktop App', chat: 'pc222222', said: "I'm on it in the Agent Desktop App project." })
     expect(sent.at(-1)).toMatchObject({ chat: 'pc222222', text: 'Ship 0.2.51' })
     expect(await callHandoff(deps, { target: 'strategic website', message: 'hi' })).toMatchObject({ ok: true, name: 'Strat Edge Website', chat: 'pc333333' })
   })
@@ -102,19 +102,19 @@ describe('a call hands work to the agent it names', () => {
   it('starts a new chat in a project when asked, or when it has none', async () => {
     const { deps, sent, projects } = setup()
     const fresh = await callHandoff(deps, { target: 'Agent Desktop App', message: 'New idea', newChat: true })
-    expect(fresh).toMatchObject({ ok: true, said: 'Started a new chat in the Agent Desktop App project.' })
+    expect(fresh).toMatchObject({ ok: true, said: "I've started a new chat on it in the Agent Desktop App project." })
     const chat = fresh.ok ? fresh.chat : ''
     expect(chat).toMatch(/^pc[a-z0-9]+$/)
     expect(projects[0]!.chats).toContain(chat)
     expect(sent.at(-1)?.chat).toBe(chat)
     const empty = await callHandoff(deps, { target: 'Strat Edge Solutions', message: 'Hello' })
-    expect(empty).toMatchObject({ ok: true, said: 'Started a new chat in the Strat Edge Solutions project.' })
+    expect(empty).toMatchObject({ ok: true, said: "I've started a new chat on it in the Strat Edge Solutions project." })
   })
 
   it('steers a helper by its label, the one at work when two share it', async () => {
     const { deps, steered, sent } = setup()
     const result = await callHandoff(deps, { target: 'the dictation helper', message: 'Use the 30 second limit' })
-    expect(result).toMatchObject({ ok: true, kind: 'helper', id: 'h1', said: 'Sent to the helper "Desktop dictation fix".' })
+    expect(result).toMatchObject({ ok: true, kind: 'helper', id: 'h1', said: 'I\'ve passed it to my helper "Desktop dictation fix".' })
     expect(steered).toEqual([{ id: 'h1', message: 'From the person, on a voice call: Use the 30 second limit' }])
     expect(sent).toEqual([])
   })

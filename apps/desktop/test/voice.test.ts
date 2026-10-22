@@ -436,13 +436,17 @@ describe('VoiceService', () => {
     expect(prompt).toContain('Find me a flight to Durban')
     expect(setup['generationConfig'].speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName).toBe('Puck')
     const names = setup['tools'][0].functionDeclarations.map((tool: { name: string }) => tool.name)
-    expect(names).toEqual(expect.arrayContaining(['hand_to_agent', 'show_on_screen', 'memory_search', 'task_list']))
+    expect(names).toEqual(expect.arrayContaining(['start_work', 'show_on_screen', 'memory_search', 'task_list']))
+    // It is the agent itself on the call: its own name, first person, nothing about another agent.
+    const onCall = prompt.slice(prompt.indexOf('## This is a live voice call'))
+    expect(onCall).toContain('You are Nova')
+    expect(onCall).not.toMatch(/\b(the|your|main) agent\b|\bmain agent\b/i)
 
     socket.push({ serverContent: { inputTranscription: { text: 'Book the 06:05 and show me the plan' } } })
     socket.push({
       toolCall: {
         functionCalls: [
-          { id: 'a', name: 'hand_to_agent', args: { task: 'Book SkyHop SH 151 for Sam, window seat' } },
+          { id: 'a', name: 'start_work', args: { task: 'Book SkyHop SH 151 for Sam, window seat' } },
           { id: 'b', name: 'show_on_screen', args: { kind: 'list', title: 'The plan', items: ['Book the flight', 'Send the receipt'] } },
         ],
       },
@@ -615,7 +619,7 @@ describe('voice tools and guards', () => {
     const names = voiceTools({ store: fake, handToAgent: async () => ({ queued: false }), show: async () => undefined }).map(
       (tool) => tool.spec.name,
     )
-    expect(names.sort()).toEqual(['hand_to_agent', 'memory_get', 'memory_search', 'now', 'show_on_screen', 'task_list'])
+    expect(names.sort()).toEqual(['memory_get', 'memory_search', 'now', 'show_on_screen', 'start_work', 'task_list'])
   })
 
   it('grants the microphone only to the app window and never the camera', () => {

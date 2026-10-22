@@ -14,16 +14,10 @@ import { isIconImage } from '../../shared/project-icon'
 import type { DataStore } from '../runtime/data'
 import { chatOf, chatTitle, newProjectChatId, parseMeta } from '../runtime/chat-lines'
 
-/** Who a message between chats came from, as the receiving chat shows it. */
-export interface ChatVia {
-  from: 'main' | 'project'
-  /** The main agent's name, or the project's name. */
-  name: string
-  /** The sending chat. */
-  chat: string
-  /** The sending chat's title (a project chat). */
-  title?: string
-}
+import { viaFromMeta, type ChatVia } from '../../shared/sender'
+
+/** Who a message came from (shared/sender.ts): every sender that is not the person writes it on the row. */
+export { viaLabel, type ChatVia } from '../../shared/sender'
 
 export interface ProjectToolDeps {
   store: DataStore
@@ -265,19 +259,9 @@ function viaOf(ctx: ToolContext, projects: ProjectRow[], deps: ProjectToolDeps):
   return { from: 'project', name: project.name, chat }
 }
 
-/** The label a message from another chat carries for the model reading it. */
-export function viaLabel(via: ChatVia): string {
-  if (via.from === 'main') return `[From ${via.name}, the main agent]`
-  return `[From project ${via.name}${via.title === undefined || via.title === '' ? '' : `, chat "${via.title}"`}]`
-}
-
 /** The sender recorded on a row, or null for the person. */
 export function viaOfRow(meta: string): ChatVia | null {
-  const value = parseMeta(meta)['via']
-  if (typeof value !== 'object' || value === null) return null
-  const v = value as Record<string, unknown>
-  if ((v['from'] !== 'main' && v['from'] !== 'project') || typeof v['name'] !== 'string') return null
-  return { from: v['from'], name: v['name'], chat: typeof v['chat'] === 'string' ? v['chat'] : '', ...(typeof v['title'] === 'string' ? { title: v['title'] } : {}) }
+  return viaFromMeta(parseMeta(meta))
 }
 
 // ---- making and changing projects ---------------------------------------------------------------------------
