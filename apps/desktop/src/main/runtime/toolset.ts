@@ -36,6 +36,7 @@ import { profileTools } from '../tools/profiles'
 import { projectTools, type ProjectToolDeps } from '../tools/projects'
 import type { HelperHost } from './helpers'
 import type { SettingsView } from './runner'
+import { deviceTools, type DeviceToolDeps } from '../tools/devices'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -63,6 +64,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   searchChats?: (query: string, limit: number) => Promise<PastChatHit[]>
   /** Main agent only: projects and messaging between the main thread and project chats (tools/projects.ts). */
   projects?: Omit<ProjectToolDeps, 'store'>
+  /** Main agent only: open_url and send_file act on the device the person is using (tools/devices.ts). */
+  devices?: Omit<DeviceToolDeps, 'store'>
 }
 
 /**
@@ -179,6 +182,7 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
     tools.push(...profileTools(deps.apps, deps.learned)) // profile_create
   }
   if (deps.projects !== undefined) tools.push(...projectTools({ store: deps.store, ...deps.projects })) // project_list, project_create, project_update, project_chat_start, project_chat_send, message_main, project_open
+  if (deps.devices !== undefined) tools.push(...asOwner(deviceTools({ store: deps.store, ...deps.devices }))) // open_url, send_file
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
   // No step counter any more (21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.

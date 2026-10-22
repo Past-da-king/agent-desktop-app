@@ -1043,7 +1043,8 @@ export class HelperManager implements HelperHost {
     }
     if (pending.timer === null) {
       pending.timer = setTimeout(() => {
-        void this.flushMeta(id)
+        // A passing summary written after the store closed (the app quitting) is simply dropped.
+        this.flushMeta(id).catch(() => undefined)
       }, META_FLUSH_MS)
     }
   }
