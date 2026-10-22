@@ -39,6 +39,7 @@ import { brainFor, isBrain, pickFor, rosterFor, type Brain, type BrainDeps } fro
 import { buildSystemPrompt } from './prompt'
 import { finishRun, runStarted } from './run-detail'
 import { redactSecrets } from '../logger'
+import type { LeaseHook } from './turns'
 import {
   describeCall,
   friendlyError,
@@ -142,6 +143,8 @@ export interface HelperManagerDeps {
   profiles?: ProfileLookup
   /** Learned app id -> name, for the helper's YOUR PROFILE line. */
   learnedNames?: () => Record<string, string>
+  /** Turn leases (runtime/turns.ts): a helper cut off by a crash is sent back to work on the next start. */
+  leases?: LeaseHook
 }
 
 interface Ready {
@@ -209,6 +212,7 @@ export class HelperManager implements HelperHost {
   private readonly maxSteps: number
   private readonly emit: (event: ChatEvent) => void
   private readonly notifyUser: (title: string, body: string) => void
+  private readonly leases: LeaseHook | undefined
 
   private readonly runs = new Map<string, HelperRun>()
   private readonly queue: string[] = []
@@ -241,6 +245,7 @@ export class HelperManager implements HelperHost {
     this.maxSteps = deps.maxSteps ?? MAX_HELPER_STEPS
     this.emit = deps.emit ?? (() => undefined)
     this.notifyUser = deps.notify ?? (() => undefined)
+    this.leases = deps.leases
   }
 
   // ---- the main agent's side ---------------------------------------------------------------
@@ -616,6 +621,7 @@ export class HelperManager implements HelperHost {
       const run = this.runs.get(id)
       if (run === undefined) continue
       this.active.add(id)
+      this.leases?.begin({ kind: 'job', chatId: run.chat, messageId: id, prompt: run.brief })
       void this.runHelper(run)
     }
   }
@@ -679,6 +685,7 @@ export class HelperManager implements HelperHost {
   }
 
   private async finish(run: HelperRun, state: HelperState, result: string): Promise<void> {
+    this.leases?.end(`job-${run.id}`, state === 'failed' ? 'failed' : 'done')
     this.runs.delete(run.id)
     this.active.delete(run.id)
     this.inbox.delete(run.id)
@@ -1036,7 +1043,8 @@ export class HelperManager implements HelperHost {
     }
     if (pending.timer === null) {
       pending.timer = setTimeout(() => {
-        void this.flushMeta(id)
+        // A passing summary written after the store closed (the app quitting) is simply dropped.
+        this.flushMeta(id).catch(() => undefined)
       }, META_FLUSH_MS)
     }
   }

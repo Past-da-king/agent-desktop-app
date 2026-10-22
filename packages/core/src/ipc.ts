@@ -124,6 +124,10 @@ export interface Settings {
   accounts: AiAccount[]
   /** What the main thread thinks with: its agent, and its helpers. Routines and the memory pass use `main`. */
   ai: AiPicks
+  /** Devices (s11): the device to use first for a group of shared tools ({ browser: deviceId }). Shared by brains. */
+  devicesPreferred: Record<string, string>
+  /** Devices (s11): which groups of this computer's tools other devices may use. Missing = the default. */
+  devicesShareGroups: Record<string, boolean>
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -159,6 +163,8 @@ export const DEFAULT_SETTINGS: Settings = {
   dailyMemoryAt: '23:30',
   accounts: [],
   ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
+  devicesPreferred: {},
+  devicesShareGroups: {},
 }
 
 export interface ModelOption {
@@ -229,7 +235,18 @@ export interface ProviderInfo {
 // The sync payload is the row minus `id`. Field names are the phone app's Room column names, camelCase.
 // ---------------------------------------------------------------------------------------------------------------
 
-export type EntityName = 'chat_item' | 'turn' | 'memory' | 'goal' | 'task' | 'trigger' | 'project' | 'device'
+export type EntityName =
+  | 'chat_item'
+  | 'turn'
+  | 'memory'
+  | 'goal'
+  | 'task'
+  | 'trigger'
+  | 'project'
+  // Devices (docs/devices-protocol.md): the paired devices, commands waiting for one, and turn leases.
+  | 'device'
+  | 'device_command'
+  | 'turn_lease'
 
 export interface RowBase {
   id: string
@@ -390,6 +407,8 @@ export interface EntityMap {
   trigger: TriggerRow
   project: ProjectRow
   device: DeviceRow
+  device_command: DeviceCommandRow
+  turn_lease: TurnLeaseRow
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -509,6 +528,49 @@ export interface DevicesApi {
   allowFirewall(): Promise<DevicesStatus>
   /** Fires when a device connects, pairs, changes or is taken out. */
   onChanged(cb: () => void): Unsubscribe
+}
+
+/** A command for one device (open a link, take a file) waiting to be delivered or acknowledged (s5.2). */
+export interface DeviceCommandRow extends RowBase {
+  target: string
+  kind: 'open_url' | 'send_file' | 'notify' | 'show_image' | 'tool'
+  /** kind 'tool' (s11): the device's tool name, its arguments (JSON), the result (JSON), how long it may take. */
+  tool?: string
+  args?: string
+  result?: string
+  deadlineMs?: number
+  url?: string
+  path?: string
+  name?: string
+  title?: string
+  body?: string
+  /** queued: waiting for the device; sent: delivered, no answer yet; done / failed: it answered; expired: never came. */
+  status: 'queued' | 'sent' | 'done' | 'failed' | 'expired'
+  note: string
+  /** The chat to tell when it expires or fails. */
+  chat: string
+  /** The brain that made it (the one that tells the chat). */
+  brainId: string
+  expiresAt: number
+  updatedAt: number
+}
+
+/**
+ * A turn or helper job being run by one brain (s8), so a crash resumes it and another brain can take it over.
+ * Named turn_lease because `turn` is the model transcript.
+ */
+export interface TurnLeaseRow extends RowBase {
+  kind: 'turn' | 'job'
+  chatId: string
+  /** The user's chat row the turn answers, or the helper's row for a job. */
+  messageId: string
+  brainId: string
+  status: 'running' | 'done' | 'failed' | 'interrupted'
+  attempt: number
+  heartbeatAt: number
+  startedAt: number
+  /** What the turn was started with, so a resume can name the task. */
+  prompt: string
 }
 
 /** What a caller supplies to create or update: everything except what the store fills in. `id` present = update. */
