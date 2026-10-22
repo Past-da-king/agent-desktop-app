@@ -468,8 +468,8 @@ async function pair() {
     }
   }
   if (answer === null) throw lastError ?? new Error('pairing failed')
-  const brains = (answer.brains ?? []).map((b) => ({ id: b.id, label: b.name, urls: b.urls ?? [], fp: b.fp ?? '', priority: b.priority ?? 0 }))
-  if (!brains.some((b) => b.id === answer.node.id)) brains.unshift({ id: answer.node.id, label: answer.node.name, urls: [answer.firstUrl], fp, priority: -1 })
+  const brains = (answer.brains ?? []).map((b) => ({ id: b.id, label: `${b.name} [${b.id}]`, urls: b.urls ?? [], fp: b.fp ?? '', priority: b.priority ?? 0 }))
+  if (!brains.some((b) => b.id === answer.node.id)) brains.unshift({ id: answer.node.id, label: `${answer.node.name} [${answer.node.id}]`, urls: [answer.firstUrl], fp, priority: -1 })
   const first = brains.find((b) => b.id === answer.node.id)
   if (first.fp === '') first.fp = fp
   if (!first.urls.includes(answer.firstUrl)) first.urls.unshift(answer.firstUrl)
@@ -687,6 +687,26 @@ async function main() {
     // chat.send answers when the turn ends: do not wait for it, the brain is about to go away.
     phone.call('chat.send', `Automated link test: write a short paragraph (about 120 words) about lighthouses, then end with this code on its own line: ${marker}`).catch(() => undefined)
     await waitRunning(phone, undefined, 30_000).catch(() => undefined)
+    // The next brain can only take over a turn it knows about: wait until the message and its lease have reached it.
+    const others = brains.filter((b) => b.id !== top.id)
+    const watcher = new Phone(state)
+    let seenOn = null
+    try {
+      const next = await watcher.connectBest(others)
+      await watcher.waitFor(async () => {
+        const rows = await watcher.rows('chat_item').catch(() => [])
+        const sent = rows.find((r) => r.kind === 'user' && r.text.includes(marker))
+        if (!sent) return null
+        const leases = await watcher.rows('turn_lease').catch(() => [])
+        return leases.some((l) => l.messageId === sent.id && l.status === 'running') ? true : null
+      }, 30_000, `the turn to reach ${next.label}`)
+      seenOn = next.label
+    } catch (error) {
+      ev.push(`the turn never reached another brain before the stop: ${error.message}`)
+    } finally {
+      watcher.close()
+    }
+    if (seenOn !== null) ev.push(`the turn and its lease reached ${seenOn}`)
     ev.push(`turn started on ${top.label}; stopping it now`)
     runHook('stop', top)
     try {
