@@ -20,7 +20,7 @@ import { SecretPassTable, type SecretsLike } from './passes'
 import { callAllowed } from './rpc'
 import { wireOf, type HandlerRegistry } from './registry'
 import { DevicesServer, contentTypeFor } from './server'
-import type { BrainRef, DeviceFacts, DeviceRecord, DeviceRole, DevicesHost, RouteReply, RouteRequest } from './types'
+import type { BrainRef, DeviceFacts, DeviceKind, DeviceRecord, DeviceRole, DevicesHost, RouteReply, RouteRequest } from './types'
 
 const SEEN_EVERY_MS = 60_000
 const COOKIE_DAYS = 400
@@ -59,6 +59,10 @@ export interface DevicesServiceDeps {
   emitWindow: (channel: string, payload: unknown) => void
   log?: (message: string, detail?: Record<string, unknown>) => void
   now?: () => number
+  /** What this node is (the headless node is a 'server' with no screen). Default: a desktop that opens links and files. */
+  kind?: DeviceKind
+  canOpenLinks?: boolean
+  canReceiveFiles?: boolean
 }
 
 function toRecord(row: DeviceRow): DeviceRecord {
@@ -166,12 +170,12 @@ export class DevicesService {
   selfFacts(): DeviceFacts {
     return {
       name: this.deps.nodeName(),
-      kind: 'desktop',
+      kind: this.deps.kind ?? 'desktop',
       platform: platformOf(this.deps.platform),
       appVersion: this.deps.appVersion,
       screen: { width: 0, height: 0 },
-      canOpenLinks: true,
-      canReceiveFiles: true,
+      canOpenLinks: this.deps.canOpenLinks ?? true,
+      canReceiveFiles: this.deps.canReceiveFiles ?? true,
       fingerprint: this.identity.fp,
       urls: this.urls(),
     }

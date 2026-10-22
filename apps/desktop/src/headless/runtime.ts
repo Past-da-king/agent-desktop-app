@@ -20,6 +20,7 @@ import { AppsService } from '../main/apps/service'
 import { ConnectedAppsFile, LearnedStore } from '../main/apps/store'
 import { FileBrainLocks } from '../main/brain-locks'
 import { Store } from '../main/db'
+import { HandlerRegistry, recordHandlers } from '../main/devices/registry'
 import { registerIpc, type IpcMainLike } from '../main/ipc'
 import { Logger } from '../main/logger'
 import { ChatIndex } from '../main/memory/chat-index'
@@ -119,8 +120,12 @@ export interface HeadlessRuntime {
   learned: LearnedStore
   /** The node's own headless browser, or null when this machine has no Chromium. */
   browser: HeadlessBrowser | null
-  /** The app contract, for the node server's /v1/rpc. */
+  /** The app contract by channel, for tests and local calls. */
   ipc: HandlerTable
+  /** The same handlers in the devices registry, so the node server serves them over /v1/rpc (devices/rpc.ts). */
+  registry: HandlerRegistry
+  /** Where more handlers register (Settings > Devices channels): recorded in both. */
+  ipcMain: IpcMainLike
   /** Replaced by the node server once it runs (device commands to the origin device). */
   actions: DeviceActions
   /** True while any chat has a turn running. */
@@ -145,6 +150,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const logger = new Logger(join(dir, 'logs'))
   const ipc = new HandlerTable()
+  const registry = new HandlerRegistry()
+  const ipcMain = recordHandlers(ipc, registry)
   const broadcast = (channel: string, payload?: unknown): void => ipc.broadcast(channel, payload)
 
   const actions: DeviceActions = {
@@ -316,8 +323,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     file: new TidyFile(join(dir, 'memory-tidy.json')),
     log: (message, detail) => logger.info(message, detail),
   })
-  registerMemoryIpc({ ipcMain: ipc, service: theMemory, store, log: (message, detail) => logger.info(message, detail), tidy: memoryTidy })
-  registerMemoryHistoryIpc(ipc, store)
+  registerMemoryIpc({ ipcMain, service: theMemory, store, log: (message, detail) => logger.info(message, detail), tidy: memoryTidy })
+  registerMemoryHistoryIpc(ipcMain, store)
   if (options.quiet !== true) {
     void theMemory.restore().catch(() => undefined)
     theMemory.start()
@@ -346,7 +353,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     chat: theRunner,
     routines: scheduler,
     helpers,
-    ipcMain: ipc,
+    ipcMain,
     windows: { minimize: () => undefined, toggleMaximize: () => undefined, close: () => undefined, isMaximized: () => false },
     broadcast,
     shell: {
@@ -387,6 +394,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     learned,
     browser,
     ipc,
+    registry,
+    ipcMain,
     actions,
     busy,
     async stop(graceMs = 20_000): Promise<void> {
