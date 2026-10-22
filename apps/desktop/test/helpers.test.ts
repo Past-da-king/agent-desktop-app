@@ -494,6 +494,21 @@ describe('HelperManager', () => {
     })
   })
 
+  it('leaves a project agent row working on restore: its project chat resumes and ProjectAgentRows closes it', async () => {
+    const db = database()
+    await db.upsert('chat_item', {
+      id: 'pa-pc9',
+      kind: 'helper',
+      text: 'Fix the panel.',
+      meta: JSON.stringify({ id: 'pa-pc9', label: 'Agent Desktop App', state: 'working', summary: 'Starting', projectChat: 'pc9' }),
+    })
+    const { manager } = makeManager()
+
+    await manager.restore()
+
+    expect(meta((await db.get('chat_item', 'pa-pc9')) as ChatItem)).toMatchObject({ state: 'working', projectChat: 'pc9' })
+  })
+
   it('puts the helper tools on the main toolset only', async () => {
     const db = database()
     const { manager } = makeManager()
