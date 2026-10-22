@@ -10,6 +10,10 @@ export const DEVICES_CHANNELS = {
   setRoles: 'agent:devices.setRoles',
   move: 'agent:devices.move',
   revoke: 'agent:devices.revoke',
+  /** Deletes a taken-out device's row for good. */
+  forget: 'agent:devices.forget',
+  /** Join the devices of another node from the pairing link it made (headless JOIN_CHANNEL is a different thing). */
+  join: 'agent:devices.joinLink',
   setShareGroup: 'agent:devices.setShareGroup',
   allowFirewall: 'agent:devices.allowFirewall',
 } as const

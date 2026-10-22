@@ -134,6 +134,16 @@ export const mockDevices: DevicesApi = {
     rows = rows.map((row) => (row.id === id ? { ...row, revoked: true } : row))
     changed()
   },
+  async forget(id) {
+    rows = rows.filter((row) => row.id !== id)
+    changed()
+  },
+  async join(link: string) {
+    if (!link.startsWith('agent://pair?')) throw new Error('That is not a pairing link. It starts with agent://pair?v=1')
+    enabled = true
+    changed()
+    return { node: { id: 'dev_preview_server', name: 'A server' }, url: 'https://192.0.2.20:7787', deviceId: SELF, meshId: 'mesh_preview', brains: [{ id: 'dev_preview_server', name: 'A server' }], tookBundle: false }
+  },
   async setShareGroup(group, on) {
     shareGroups = { ...shareGroups, [group]: on }
     changed()

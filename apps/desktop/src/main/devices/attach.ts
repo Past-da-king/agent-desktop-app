@@ -17,6 +17,12 @@ export type AttachDeps = Omit<DevicesSyncDeps, 'pass'> & {
 
 export function attachDevicesSync(service: DevicesService, deps: AttachDeps): () => void {
   let sync: DevicesSync | null = null
+  // The brains this node joined from their pairing links (service.join) are peers too, until their rows arrive.
+  const extraPeers = (): ReturnType<NonNullable<AttachDeps['extraPeers']>> => {
+    const given = deps.extraPeers?.() ?? []
+    const joined = service.joinedPeers().filter((peer) => !given.some((other) => other.id === peer.id))
+    return [...given, ...joined]
+  }
   const pass = (): string | null => {
     const paired = deps.pairedPass?.() ?? null
     return paired !== null && paired !== '' ? paired : service.ownPass()
@@ -24,7 +30,7 @@ export function attachDevicesSync(service: DevicesService, deps: AttachDeps): ()
   const on = (): void => {
     if (sync === null) {
       const { pairedPass: _pairedPass, ...rest } = deps
-      sync = registerDevicesSync(service.host(), { ...rest, pass })
+      sync = registerDevicesSync(service.host(), { ...rest, extraPeers, pass })
     } else sync.replicator.start()
     devicesState.sync = sync
   }
