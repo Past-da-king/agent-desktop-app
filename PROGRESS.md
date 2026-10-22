@@ -98,6 +98,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 07:55 C merged its line into devices 9bd42d0 (fixes deduped, 0.2.42, CLI stop/status fixed), full suite 1250, harness 7/7. Real server redeployed from 9bd42d0, unpaired, crontab identical. A builds final installer from devices.
 
+- 08:05 D REAL-NODE PROOF DONE: Agent-0.14.2.apk (35.6 MB, versionCode 92, feature/remote 18eb65c) in Downloads/agent. Redroid vs real headless node: pair by lowercase short code, chat round trip, open_url to origin, lent notify tool, project agent row with icon (phone fix: reads brain row shape). Found node bug: device-tools ALIASES one-way (notify vs notify_user) -> B fixing; A builds after.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
