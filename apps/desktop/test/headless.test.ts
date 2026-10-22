@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { providerFor } from '@agent/core'
 
@@ -20,6 +20,9 @@ import { selfFacts, startNodeServer } from '../src/headless/node-server'
 import { pair, parsePairLink, shortCodeTarget, PASS_SECRET } from '../src/headless/pair'
 import { pinnedJson } from '../src/headless/pinned'
 import { startHeadlessRuntime, type HeadlessRuntime } from '../src/headless/runtime'
+
+// Each test boots a whole runtime (two SQLite files, the tool registry); on a busy machine that takes seconds.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const temps: string[] = []

@@ -153,7 +153,8 @@ async function start(args: Args): Promise<number> {
     child.unref()
     closeSync(out)
     // Give it a moment to bind, so the person sees a real answer.
-    for (let i = 0; i < 40; i++) {
+    // A busy machine can take a while to open the databases; give it a minute.
+    for (let i = 0; i < 240; i++) {
       await new Promise((r) => setTimeout(r, 250))
       if (runningPid(dataDir) !== null) {
         console.log(`Started (pid ${runningPid(dataDir)}). Log: ${join(dataDir, 'logs')}`)
