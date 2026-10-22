@@ -37,7 +37,7 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 | B | Replication, bundle + secrets, origin awareness, device commands, turn leases, crash resume | devices-sync / ~/agent-desktop-wt/devices-sync | chat pc06e6196729724dbf, running |
 | C | Headless node (plain Node 24) + deploy on server as a service | devices-headless / ~/agent-desktop-wt/devices-headless | chat pc79d2a9989e324333, running |
 | D | Phone: linking on 0.13.0 (server feature/remote off 3811400, worktree ~/phone-aos/app-remote; backups backup/app-0.11.23-dirty, backup/app-thin-snapshot) | server ~/phone-aos | chat pc2f0194f996a947e0, running |
-| E | agent-net tsnet sidecar | later | held: Windows had 1.6 GB free at 01:55 |
+| E | agent-net tsnet sidecar | devices-net / ~/agent-desktop-wt/devices-net | chat pc0f6688d4a37f4884, running (Go builds on server) |
 
 ## Shared machine rules
 - Locks: full vitest `flock /tmp/agent-vitest.lock`, Electron build `flock /tmp/agent-electron.lock`. Gradle only on the server.
