@@ -17,6 +17,7 @@ import { CLEANUP_MODELS, cleanUp } from './cleanup'
 import { DictationController } from './controller'
 import { electronClipboard, keySenderFor, typeText, type KeySender } from './paste'
 import { PillWindow, type PillOptions } from './pill'
+import { dictationTarget, type DictationSurface } from './target'
 import { EVENTS } from '../../shared/channels'
 import { LiveTranscriber, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, languageHint, replayRecording } from './transcriber'
 
@@ -88,6 +89,8 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
   let draftTarget: BrowserWindow | null = null
   // A window whose own microphone button started this dictation.
   let requestedBy: BrowserWindow | null = null
+  // Into one of those windows ('app': its strip shows the words, never the pill), or into another app ('pill').
+  let surface: DictationSurface = 'pill'
   const focusedOwn = (): BrowserWindow | null => {
     const focused = BrowserWindow.getFocusedWindow()
     return focused !== null && !focused.isDestroyed() && !pill.isPill(focused.webContents.id) ? focused : null
@@ -129,12 +132,20 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
 
   const controller = new DictationController({
     began: () => {
-      const asked = requestedBy !== null && !requestedBy.isDestroyed() ? requestedBy : null
+      const picked = dictationTarget<BrowserWindow>({
+        requested: requestedBy,
+        focused: BrowserWindow.getFocusedWindow(),
+        isDestroyed: (window) => window.isDestroyed(),
+        isPill: (window) => pill.isPill(window.webContents.id),
+      })
       requestedBy = null
-      ownTarget = asked ?? focusedOwn()
+      ownTarget = picked.target
       draftTarget = ownTarget
+      surface = picked.surface
+      deps.log('Dictation target', { surface })
       void refreshWords()
     },
+    surface: () => surface,
     hasKey: () => key() !== null,
     transcriber: (handlers) =>
       new LiveTranscriber({

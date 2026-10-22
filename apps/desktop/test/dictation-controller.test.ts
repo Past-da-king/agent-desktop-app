@@ -522,3 +522,79 @@ describe('loudness', () => {
     expect(loudness(Buffer.alloc(0))).toBe(0)
   })
 })
+
+describe('DictationController: the pill only for dictating into other apps', () => {
+  /** A dictation into one of the app's own windows (its microphone, or the shortcut while it is in front). */
+  const inApp = (overrides: Partial<DictationDeps> = {}): Harness => harness({ surface: () => 'app', ...overrides })
+
+  it('the message box microphone never shows the pill: listening, finishing, typed', async () => {
+    const h = inApp()
+    const session = await listening(h)
+    h.controller.audio(session, LOUD)
+    h.transcriber().say('Into the box.')
+    expect(h.views.at(-1)).toMatchObject({ phase: 'listening', text: 'Into the box.' })
+    // The microphone still runs in the (hidden) pill window.
+    expect(h.commands[0]).toEqual({ type: 'start', session })
+    h.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.typed).toEqual(['Into the box.'])
+    expect(h.views.at(-1)).toMatchObject({ phase: 'done' })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(h.pill).not.toContain('show')
+  })
+
+  it('no pill for an error, the Retry from the strip, or its result', async () => {
+    let answer = false
+    const h = inApp({ batch: async () => (answer ? { ok: true, text: 'Second go.' } : { ok: false, error: 'Gemini is busy.' }) })
+    const session = await listening(h)
+    h.controller.audio(session, LOUD)
+    h.transcriber().drop('dropped')
+    h.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.views.at(-1)).toMatchObject({ phase: 'error', canRetry: true })
+    answer = true
+    await h.controller.retry()
+    expect(h.typed).toEqual(['Second go.'])
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(h.pill).not.toContain('show')
+  })
+
+  it('no pill when the microphone fails, never reports in, or there is no key', async () => {
+    const blocked = inApp()
+    blocked.controller.toggle('plain')
+    const command = blocked.commands.at(-1)
+    if (command?.type !== 'start') throw new Error('expected start')
+    blocked.controller.micState(command.session, false, 'Blocked.')
+    expect(blocked.views.at(-1)).toMatchObject({ phase: 'error', message: 'Blocked.' })
+
+    const silent = inApp({ micStartMs: 5000 })
+    silent.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(5500)
+    expect(silent.views.at(-1)).toMatchObject({ phase: 'error', message: 'The microphone did not start. Try again.' })
+
+    const keyless = inApp({ hasKey: () => false })
+    keyless.controller.toggle('plain')
+    expect(keyless.views.at(-1)).toMatchObject({ phase: 'notice' })
+
+    for (const h of [blocked, silent, keyless]) expect(h.pill).not.toContain('show')
+  })
+
+  it('an in-app dictation puts away a pill still up from an earlier one, and the next one elsewhere shows it again', async () => {
+    let surface: 'app' | 'pill' = 'pill'
+    const h = harness({ surface: () => surface })
+    h.controller.toggle('plain')
+    const first = h.commands.at(-1)
+    if (first?.type !== 'start') throw new Error('expected start')
+    h.controller.micState(first.session, false, 'Blocked.')
+    expect(h.pill.at(-1)).toBe('show')
+    const before = h.pill.length
+    surface = 'app'
+    await listening(h)
+    expect(h.pill.slice(before)).toEqual(['hide'])
+    h.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(5000)
+    surface = 'pill'
+    await listening(h)
+    expect(h.pill.at(-1)).toBe('show')
+  })
+})
