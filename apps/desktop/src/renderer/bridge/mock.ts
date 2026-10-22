@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS, pickModel, resolvePick } from '@agent/core'
+import { mockDevices } from './mock-devices'
 import type {
   AccountRules,
   AgentApi,
@@ -606,6 +607,7 @@ function appName(slug: string): string {
 export const mockAgent: AgentApi = {
   platform: 'web',
   version: '0.0.0',
+  devices: mockDevices,
 
   settings: {
     async get() {
@@ -697,6 +699,7 @@ export const mockAgent: AgentApi = {
         task: [],
         trigger: [],
         project: [],
+        device: [],
       }
       settings = { ...DEFAULT_SETTINGS, deviceName: 'This computer' }
       apiKey = ''

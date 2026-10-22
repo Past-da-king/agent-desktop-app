@@ -9,7 +9,7 @@ import {
   Notification,
   dialog,
   globalShortcut,
-  ipcMain,
+  ipcMain as electronIpcMain,
   nativeImage,
   powerMonitor,
   safeStorage,
@@ -68,11 +68,20 @@ import { dailyRoutineSlot, ensureDailyRoutine, recordDailyRun, resultLine } from
 import { MEMORY_EVENTS } from '../shared/memory-channels'
 import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
+import { recordHandlers, handlerRegistry } from './devices/registry'
+import { DevicesService, setDevicesService } from './devices/service'
+
+// Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
+const ipcMain = recordHandlers(electronIpcMain)
 
 const isSmoke = process.argv.includes('--smoke')
 const smokeTimeoutMs = 30_000
 
 app.setName(APP_NAME)
+// A second copy (tests, a live proof next to the person's own app) runs with its own data folder, and so its own
+// single-instance lock. Unset in normal use.
+const userDataOverride = process.env['AGENT_USER_DATA']?.trim() ?? ''
+if (userDataOverride !== '') app.setPath('userData', userDataOverride)
 // Set once, before any window or notification exists, so Windows shows toasts under the app's name.
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
@@ -154,10 +163,14 @@ let routinesPaused = false
 let lastHotkeyStatuses: HotkeyStatus[] = []
 const filePicks = new Set<string>()
 
+let devices: DevicesService | null = null
+
 function broadcast(channel: string, payload?: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
+  // Paired devices hear the same events (only the ones they may: shared/rpc-methods.ts RPC_EVENTS).
+  devices?.broadcast(channel, payload)
 }
 
 function showNotification(title: string, body: string): void {
@@ -941,6 +954,29 @@ async function startServices(win: BrowserWindow): Promise<void> {
   }, 4000)
 
   applyLoginItem(settings.get())
+
+  // Devices: this computer as a node other devices pair with (main/devices). Off until switched on in Settings.
+  try {
+    devices = new DevicesService({
+      userData: dir,
+      store,
+      secrets,
+      registry: handlerRegistry,
+      appVersion: app.getVersion(),
+      nodeName: () => settings.get().deviceName,
+      platform: process.platform,
+      ready: () => settings.get().mode !== 'none' || settings.get().accounts.length > 0,
+      busy: () => runner?.state().running ?? false,
+      rendererDir: join(__dirname, '../renderer'),
+      emitWindow: (channel, payload) => broadcast(channel, payload),
+      log: (message, detail) => logger.info(message, detail),
+    })
+    devices.registerIpc(ipcMain)
+    setDevicesService(devices)
+    await devices.start()
+  } catch (error) {
+    logger.error('Devices could not start', { message: error instanceof Error ? error.message : String(error) })
+  }
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -996,6 +1032,9 @@ if (!app.requestSingleInstanceLock()) {
     globalShortcut.unregisterAll()
     void voice?.callEnd()
     voice = null
+    void devices?.stop()
+    devices = null
+    setDevicesService(null)
     runner?.dispose()
     runner = null
     agentBrowser?.destroy()

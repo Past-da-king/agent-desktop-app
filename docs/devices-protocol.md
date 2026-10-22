@@ -30,7 +30,14 @@ names or keys in source or defaults.
   sidecar, see section 10). A node advertises every address it believes reachable: its non-loopback interface
   addresses plus the user's extra addresses, each as `https://<addr>:<port>`.
 - Auth: `Authorization: Bearer <pass>` or cookie `agent_pass=<pass>` (for the web UI in a WebView). Every
-  authenticated request is bound to the `deviceId` that owns the pass.
+  authenticated request is bound to the `deviceId` that owns the pass. A WebView or browser gets the cookie by
+  opening `GET /app/?k=<pass>` once: the node answers `302 Location: /app/` with
+  `Set-Cookie: agent_pass=<pass>; Path=/; Secure; HttpOnly; SameSite=Strict` (so page script never sees the pass).
+- Listen `0.0.0.0` means every address: the desktop node listens dual-stack (`::`) and falls back to IPv4 only
+  (then it stops advertising IPv6 addresses) where the system has no IPv6.
+- Windows: the first time the node listens, Windows Firewall asks whether the app may use the network. Unanswered
+  or refused, Windows adds a Block rule and other devices on the LAN cannot connect (loopback still works).
+  Settings > Devices says so on Windows. A per-user installer cannot add an Allow rule without admin rights.
 
 ## 3. Pairing (QR + short code)
 
@@ -95,7 +102,7 @@ Entity `device` rows (they sync like every other row, HLC last-writer-wins):
 | GET | `/v1/health` | none | `{ id, name, version, roles, ready, busy, meshId }`. `ready` = can run turns now. |
 | POST | `/v1/pair` | none | section 3 |
 | GET | `/v1/rpc` (WebSocket upgrade) | pass | the app contract over the wire, section 5.1 |
-| GET | `/app/` | pass (cookie) | the web build of the renderer, using the remote bridge |
+| GET | `/app/` | pass (cookie) | the web build of the renderer, using the remote bridge. It is the app's own renderer build (`out/renderer`), with `<meta name="agent-remote" content="1">` added to index.html at serve time; `?k=<pass>` sets the cookie (s2). Without a valid cookie: a short "not linked yet" page. |
 | GET | `/v1/file?path=<abs>` | pass | a local file named in a chat (images in cards, attachments). Only paths that appear in a chat row, the user's attachments folder, or project folders. `Content-Type` by extension. Range requests for big files. |
 | GET | `/v1/bundle` | pass | section 6 |
 | POST | `/v1/sync/push` | pass (node) | same body/answer as `packages/core/src/sync/client.ts` |
@@ -117,6 +124,19 @@ Then:
 (chats, memory, tasks, goals, routines, projects as read + open, profiles read, apps status read, learned apps read,
 settings read). Never over the wire: raw secrets reads, window controls, hotkeys, dictation hardware, file pickers,
 shell settings changes. A method not on the list answers `ok:false, error:"not available on this device"`.
+
+The list itself is code: `apps/desktop/src/shared/rpc-methods.ts` (`RPC_ALLOWED`, and `RPC_EVENTS` for the
+events a device hears). Methods another part adds with `DevicesHost.addRpc` are answered first, by name. Details:
+
+- The first frame must be `hello` within 15 s, or the node closes with 4000; a bad hello closes with 4002; a
+  revoked device's connections close with 4003. Calls before hello answer `ok:false`.
+- Bytes (`Uint8Array`, e.g. `files.savePasted`, `voice.noteAudio`) travel as `{"$b64":"<base64>"}` in args and
+  values. Everything else is plain JSON.
+- `data.upsert` and `data.remove` on entity `device` are refused over the wire (roles and order change only
+  through the node's own Settings).
+- `devices.status` and `devices.list` are on the list; `status.viewer` is the calling device's id.
+- A wire call reaches the main-process handler with a stand-in event `{ sender: null, wire: { deviceId, origin } }`
+  (`main/devices/registry.ts` `wireOf`), so any handler can tell which device called.
 
 ### 5.2 Device commands (tools that act on a device)
 
@@ -153,14 +173,16 @@ reach C. Replication is initiated by whichever side can reach the other, so a no
 ## 8. Turns, origin, failover, crash resume
 
 - **Origin**: every user message row's `meta.origin = { deviceId, name, kind, platform, screenWidth, canOpenLinks,
-  canReceiveFiles }`. Local messages on a node get the node's own facts. The prompt says, in one line, which device
+  canReceiveFiles }`. Local messages on a node get the node's own facts. (Desktop node: `ChatRunner.send(text,
+  attachments, chat, origin)`; `main/devices/origin.ts` `messageOrigin(event)` gives the origin for any handler.) The prompt says, in one line, which device
   the message came from and its facts. `open_url` and `send_file` (and `notify` when the origin is a screen) go to the
   origin device as device commands (5.2); if the origin is this node, they act locally as today.
 - **Brain choice (client side)**: the client keeps the ranked brain list (device rows, `roles` has `brain`, not
   revoked, by `priority`). It probes `/v1/health` (3 s timeout) in order and connects to the first `ready` one;
   re-probes every 15 s and on any failure, and moves back up when a higher brain returns, between turns only. The UI
   always shows "Answered by <name>". Only when every brain fails: "No agents available" with Retry.
-- **Turn lease**: when a brain starts a turn it writes a `turn` row
+- **Turn lease** (note: the entity name `turn` is already taken by the model transcript rows, `TurnRow`; the lease
+  rows need their own entity, e.g. `turn_lease`): when a brain starts a turn it writes a `turn` row
   `{ id, chatId, messageId, brainId, status: "running|done|failed|interrupted", attempt, heartbeatAt, startedAt }`
   and updates `heartbeatAt` every 10 s. Helper jobs do the same with `kind: "job"`.
 - **Crash resume**: on start, a brain marks its own `running` turns `interrupted` and resumes them (re-runs the turn

@@ -229,7 +229,7 @@ export interface ProviderInfo {
 // The sync payload is the row minus `id`. Field names are the phone app's Room column names, camelCase.
 // ---------------------------------------------------------------------------------------------------------------
 
-export type EntityName = 'chat_item' | 'turn' | 'memory' | 'goal' | 'task' | 'trigger' | 'project'
+export type EntityName = 'chat_item' | 'turn' | 'memory' | 'goal' | 'task' | 'trigger' | 'project' | 'device'
 
 export interface RowBase {
   id: string
@@ -389,6 +389,98 @@ export interface EntityMap {
   task: TaskRow
   trigger: TriggerRow
   project: ProjectRow
+  device: DeviceRow
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Devices: one agent across a person's devices (docs/devices-protocol.md). The node server lives in main/devices.
+// ---------------------------------------------------------------------------------------------------------------
+
+export type DeviceKind = 'phone' | 'tablet' | 'desktop' | 'server'
+export type DevicePlatform = 'android' | 'ios' | 'windows' | 'macos' | 'linux'
+export type DeviceRole = 'screen' | 'brain' | 'hands'
+
+/** What a device says about itself when it pairs and in every hello (protocol s3). */
+export interface DeviceFactsInfo {
+  name: string
+  kind: DeviceKind
+  platform: DevicePlatform
+  appVersion: string
+  screen: { width: number; height: number }
+  canOpenLinks: boolean
+  canReceiveFiles: boolean
+  fingerprint: string
+  urls: string[]
+}
+
+/** A paired device (protocol s4). Synced like every row; the pass hash is never in it. */
+export interface DeviceRow extends RowBase {
+  name: string
+  kind: DeviceKind
+  platform: DevicePlatform
+  roles: DeviceRole[]
+  /** Lower is tried first among brains. */
+  priority: number
+  urls: string[]
+  fp: string
+  facts: DeviceFactsInfo
+  pairedAt: number
+  lastSeen: number
+  revoked: boolean
+}
+
+/** Settings > Devices: whether this computer lets other devices connect, and how they reach it. */
+export interface DevicesStatus {
+  enabled: boolean
+  /** The server is listening now. */
+  running: boolean
+  port: number
+  /** The addresses this node advertises (interfaces plus the extra ones). */
+  urls: string[]
+  /** The addresses the person added. */
+  extraUrls: string[]
+  /** This node's own device id. */
+  nodeId: string
+  /** The device asking: this node in its own window, the paired device over the wire. */
+  viewer: string
+  nodeName: string
+  /** This node's certificate fingerprint, and the same as four words to compare by eye. */
+  fp: string
+  fpWords: string
+  /** Device ids with a live connection now. */
+  connected: string[]
+  /** A plain sentence when the server could not start (port in use...), else ''. */
+  error: string
+}
+
+/** "Add a device": what the QR code and the short code carry, valid until `expiresAt` (ms). */
+export interface PairingOfferInfo {
+  uri: string
+  /** ABCD-EFGH */
+  shortCode: string
+  expiresAt: number
+  urls: string[]
+  /** The QR code as rows of dark (true) and light modules. */
+  qr: boolean[][]
+}
+
+export interface DevicesApi {
+  status(): Promise<DevicesStatus>
+  setEnabled(on: boolean): Promise<DevicesStatus>
+  /** The addresses the person typed that reach this computer (a public name, a VPN address). */
+  setExtraUrls(urls: string[]): Promise<DevicesStatus>
+  /** A new pairing offer (the old one stops working). */
+  offer(): Promise<PairingOfferInfo>
+  cancelOffer(): Promise<void>
+  /** Every device row, this one included, brains first by priority. */
+  list(): Promise<DeviceRow[]>
+  setRoles(id: string, roles: DeviceRole[]): Promise<void>
+  /** Moves a brain up or down the order its devices try them in. */
+  move(id: string, direction: 'up' | 'down'): Promise<void>
+  /** Takes the device out: its pass stops working at once and its connections close. */
+  revoke(id: string): Promise<void>
+  /** Fires when a device connects, pairs, changes or is taken out. */
+  onChanged(cb: () => void): Unsubscribe
 }
 
 /** What a caller supplies to create or update: everything except what the store fills in. `id` present = update. */
@@ -1138,6 +1230,16 @@ export interface AgentApi {
     openLogsFolder(): Promise<void>
     openLicences(): Promise<void>
   }
+
+  /** Settings > Devices: this computer as a node other devices pair with. */
+  devices: DevicesApi
+
+  /**
+   * Set only when the window is the node's web UI on another device (renderer/bridge/remote.ts): the app runs in a
+   * browser or WebView and talks to the node over the wire. Window controls, shortcuts, dictation anywhere and file
+   * pickers are not there.
+   */
+  remote?: { nodeName: string }
 }
 
 declare global {

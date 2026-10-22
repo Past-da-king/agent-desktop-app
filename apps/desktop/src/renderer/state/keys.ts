@@ -41,7 +41,7 @@ export function useGlobalKeys(): void {
         state.navigate({ page: 'settings' })
         return
       }
-      if (event.code === 'Space' && event.ctrlKey && event.shiftKey && !onboarding && agent.platform === 'web') {
+      if (event.code === 'Space' && event.ctrlKey && event.shiftKey && !onboarding && agent.platform === 'web' && agent.remote === undefined) {
         event.preventDefault()
         state.openQuick()
         return

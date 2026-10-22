@@ -8,11 +8,11 @@ import { patched } from '../lib/patch'
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
 
 function emptyRows(): RowStore {
-  return { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [], project: [] }
+  return { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [], project: [], device: [] }
 }
 
 function emptyFlags(): Record<EntityName, boolean> {
-  return { chat_item: false, turn: false, memory: false, goal: false, task: false, trigger: false, project: false }
+  return { chat_item: false, turn: false, memory: false, goal: false, task: false, trigger: false, project: false, device: false }
 }
 
 interface DataState {
