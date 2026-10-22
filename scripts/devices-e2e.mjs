@@ -22,7 +22,8 @@
  * when done, and revoke "E2E test phone" in Settings > Devices.
  *
  * Checks: a chat round trip | b data and bundle, no secrets | c project agent row | d /v1/file image |
- *         e open_url and device tools reach this phone | f failover to the next brain | g crash resume exactly once
+ *         e open_url and device tools reach this phone | f failover to the next brain | g crash resume exactly once |
+ *         h a call with no key on the phone (voice.liveToken, Live on a one-use token, voice.callSave)
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -550,6 +551,45 @@ async function check(id, title, body) {
   }
 }
 
+/** Opens a Gemini Live session on a one-use token the way the phone does; resolves with what came back. */
+function liveProbe(url, model, voice, timeoutMs = 45_000) {
+  return new Promise((resolve) => {
+    const out = { setup: false, audioBytes: 0, text: '', closed: '' }
+    let ws
+    try {
+      ws = new WebSocket(url)
+    } catch (error) {
+      resolve({ ...out, closed: `open failed: ${error.message}` })
+      return
+    }
+    ws.binaryType = 'arraybuffer'
+    const done = (why) => {
+      clearTimeout(timer)
+      if (!out.closed) out.closed = why
+      try { ws.close() } catch {}
+      resolve(out)
+    }
+    const timer = setTimeout(() => done('timed out'), timeoutMs)
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ setup: { model: model.startsWith('models/') ? model : `models/${model}`, generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } }, outputAudioTranscription: {} } }))
+    }
+    ws.onmessage = (event) => {
+      const text = typeof event.data === 'string' ? event.data : Buffer.from(event.data).toString('utf8')
+      let msg
+      try { msg = JSON.parse(text) } catch { return }
+      if (msg.setupComplete !== undefined) {
+        out.setup = true
+        ws.send(JSON.stringify({ clientContent: { turns: [{ role: 'user', parts: [{ text: 'Say: the link test works.' }] }], turnComplete: true } }))
+      }
+      for (const part of msg.serverContent?.modelTurn?.parts ?? []) if (part.inlineData?.data) out.audioBytes += Buffer.from(part.inlineData.data, 'base64').length
+      if (msg.serverContent?.outputTranscription?.text) out.text += msg.serverContent.outputTranscription.text
+      if (msg.serverContent?.turnComplete) done('turn complete')
+    }
+    ws.onclose = (event) => done(`closed ${event.code} ${event.reason}`.trim())
+    ws.onerror = () => undefined
+  })
+}
+
 async function main() {
   const state = await pair()
   const brains = ranked(state)
@@ -755,6 +795,31 @@ async function main() {
     for (const l of leases) ev.push(`lease ${l.id}: status ${l.status}, attempt ${l.attempt}, brain ${l.brainId}`)
     if (copies.length !== 1) return 'FAIL'
     if (leases.length > 0 && !leases.some((l) => l.attempt >= 2)) ev.push('note: the lease shows no resume (the turn may have finished before the kill)')
+  })
+
+  await check('h', 'call with no key on the phone: voice.liveToken, Live on the token, the token is one-use, voice.callSave', async (ev) => {
+    const t = await phone.call('voice.liveToken')
+    if (!t?.ok) {
+      ev.push(`voice.liveToken: ${t?.error ?? 'no answer'}`)
+      return t?.needsKey ? 'SKIP' : 'FAIL'
+    }
+    if (/AIza[0-9A-Za-z_-]{20,}/.test(JSON.stringify(t))) {
+      ev.push('the answer carries a raw Google key')
+      return 'FAIL'
+    }
+    ev.push(`token ${String(t.token).slice(0, 18)}..., model ${t.model}, voice ${t.voice}, good for ${Math.round((t.expiresAt - Date.now()) / 1000)} s`)
+    const url = `${t.url}?access_token=${encodeURIComponent(t.token)}`
+    const first = await liveProbe(url, t.model, t.voice)
+    ev.push(`first session: setup ${first.setup}, audio ${first.audioBytes} bytes, said "${first.text.trim().slice(0, 60)}", ${first.closed}`)
+    if (!first.setup || first.audioBytes === 0) return 'FAIL'
+    const again = await liveProbe(url, t.model, t.voice, 20_000)
+    ev.push(`same token again: setup ${again.setup}, ${again.closed}`)
+    if (again.setup && again.audioBytes > 0) return 'FAIL'
+    const startedAt = Date.now() - 5000
+    const saved = await phone.call('voice.callSave', { startedAt, durationMs: 5000, lines: [{ who: 'you', text: 'Link test call', at: startedAt }, { who: 'agent', text: first.text.trim() || 'ok', at: startedAt + 2000 }] })
+    const row = (await phone.rows('chat_item')).find((r) => r.id === saved?.itemId)
+    ev.push(`voice.callSave: ${saved?.itemId ?? 'nothing'}; row kind ${row?.kind ?? 'missing'}, "${row?.text ?? ''}"`)
+    if (row?.kind !== 'call') return 'FAIL'
   })
 
   phone.close()
