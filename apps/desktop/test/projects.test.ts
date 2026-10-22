@@ -9,7 +9,13 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// The fake project folder C:\Work\Acme is "on this computer" for these tests.
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>()
+  return { ...real, existsSync: (path: string) => path.startsWith('C:\\Work') || real.existsSync(path) }
+})
 
 import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, providerFor, type ChatItem, type JsonObject, type MemoryRow, type Settings } from '@agent/core'
 
