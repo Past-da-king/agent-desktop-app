@@ -51,7 +51,7 @@ function Page(): JSX.Element {
   switch (route.page) {
     case 'chat':
       return (
-        <Shell panel={<ChatPanel />}>
+        <Shell panel={<ChatPanel />} ownScroll>
           <Chat />
         </Shell>
       )

@@ -46,7 +46,20 @@ function MobileNav(): JSX.Element {
   )
 }
 
-export function Shell({ children, panel }: { children: ReactNode; panel?: ReactNode }): JSX.Element {
+/**
+ * The sheet scrolls by default, on every page and at every width. Only a page that scrolls its own inner region (Chat:
+ * a fixed header and composer around a scrolling thread) passes ownScroll. Having the side panel is not the same thing:
+ * the project page has it and must still scroll.
+ */
+export function Shell({
+  children,
+  panel,
+  ownScroll = false,
+}: {
+  children: ReactNode
+  panel?: ReactNode
+  ownScroll?: boolean
+}): JSX.Element {
   const collapsed = useUi((state) => state.railCollapsed)
   const panelWidth = usePanel((state) => state.width)
   const panelCollapsed = usePanel((state) => state.collapsed)
@@ -61,7 +74,7 @@ export function Shell({ children, panel }: { children: ReactNode; panel?: ReactN
     <>
       <div className={classes} style={style}>
         <Rail needs={needs} />
-        <main className="sheet" style={panel ? { overflow: 'hidden' } : undefined}>
+        <main className={ownScroll ? 'sheet own-scroll' : 'sheet'}>
           {children}
         </main>
         {/* The same ChatPanel element on every page (only Chat passes one), so the browser card it holds is never
