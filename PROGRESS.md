@@ -60,6 +60,9 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 03:35 A core DONE devices-node a3c06e9 (30 devices tests, full suite 1141 pass, no new deps: own DER/cert, RFC 6455, QR). Live on Windows test copy C:\temp\devices-node-run (AGENT_USER_DATA, port 7797): QR decoded and paired the scripted client from WSL, RPC/event/upload/file, revoke 4003 then 401, pass survives restart. LIMIT: Windows Firewall prompted and auto-added Block rules for the test exe; LAN/VPN inbound needs Allow. WSL can only reach Windows on 127.0.0.1. A now on: s11 serving its tools + outbound client link, and an "Allow connections" UAC step for the firewall rule.
 
+- 03:50 C: devices-headless-int 55f5882 = headless + A, headless node runs A's DevicesService as kind server, CLI offer (terminal QR)/devices/roles/move/revoke/config --url; 10 headless tests, full suite 1153. Server redeployed; a WSL node paired with the server over the tailnet by short code, then revoked. C now merging B in (A/B conflict on DeviceRow, db, runner, ipc, origin, change, seed, useData), wiring B on both sides, redeploy. Then lead fast-forwards devices and A/B merge devices for s11.
+- Note: the server node listens on 127.0.0.1; its reachable url is added at runtime with `agent-node config --url` (not in source).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
