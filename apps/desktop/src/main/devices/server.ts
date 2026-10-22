@@ -11,7 +11,7 @@ import type { Duplex } from 'node:stream'
 import { RPC_EVENTS } from '../../shared/rpc-methods'
 import { compilePath, matchPath, passFrom, type CompiledPath } from './router'
 import { RpcSession } from './rpc'
-import type { DeviceFacts, DeviceRole, DevicesHost, DevicesRoute, RouteReply, RpcMethod } from './types'
+import type { DeviceFacts, DeviceRole, DevicesHost, DevicesRoute, DeviceToolResult, RouteReply, RpcMethod } from './types'
 import { acceptUpgrade } from './ws'
 
 const SMALL_BODY = 64 * 1024
@@ -31,6 +31,8 @@ export interface DevicesServerOptions {
   onConnections?(): void
   /** A device was heard from (for lastSeen). */
   onSeen?(deviceId: string): void
+  /** A device said hello (again): its latest facts, tools included. */
+  onHello?(deviceId: string, facts: DeviceFacts): void
   log?(message: string, detail?: Record<string, unknown>): void
 }
 
@@ -105,8 +107,26 @@ export class DevicesServer implements DevicesHost {
   private readonly rpcMethods = new Map<string, RpcMethod>()
   private readonly sessions = new Set<RpcSession>()
   private server: Server | null = null
+  private readonly resultListeners = new Set<(deviceId: string, id: string, result: DeviceToolResult) => void>()
 
-  constructor(private readonly options: DevicesServerOptions) {}
+  constructor(private readonly options: DevicesServerOptions) {
+    // s11: a device answers a tool command with device.result(id, ok, value | error); whoever sent it listens.
+    this.addRpc('device.result', async (deviceId, args) => {
+      const [id, ok, value] = args
+      if (typeof id !== 'string' || id === '' || id.length > 200) throw new Error('A result needs the command id.')
+      const result: DeviceToolResult =
+        ok === true ? { ok: true, value: value ?? null } : { ok: false, error: typeof value === 'string' ? value.slice(0, 2000) : 'The device could not do that.' }
+      for (const listener of this.resultListeners) listener(deviceId, id, result)
+      return true
+    })
+  }
+
+  onDeviceResult(listener: (deviceId: string, id: string, result: DeviceToolResult) => void): () => void {
+    this.resultListeners.add(listener)
+    return () => {
+      this.resultListeners.delete(listener)
+    }
+  }
 
   // ---- DevicesHost ----
 
@@ -330,7 +350,8 @@ export class DevicesServer implements DevicesHost {
     const session = new RpcSession(conn, {
       deviceId,
       call: (from, method, args) => this.options.callRpc(from, method, args),
-      onHello: () => {
+      onHello: (hello) => {
+        if (hello.facts !== null) this.options.onHello?.(deviceId, hello.facts)
         this.options.onSeen?.(deviceId)
         this.options.onConnections?.()
       },

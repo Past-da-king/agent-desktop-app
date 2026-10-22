@@ -411,7 +411,20 @@ export interface DeviceFactsInfo {
   canReceiveFiles: boolean
   fingerprint: string
   urls: string[]
+  tools?: DeviceToolInfo[]
 }
+
+/** One tool a device lends to the agents on other devices (protocol s11). */
+export interface DeviceToolInfo {
+  name: string
+  description: string
+  params: Record<string, unknown>
+  group: 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'other'
+  readOnly: boolean
+}
+
+/** The groups of this computer's tools other devices may use (Settings > Devices). */
+export type DeviceShareGroup = 'browser' | 'files' | 'notifications' | 'approval' | 'shell'
 
 /** A paired device (protocol s4). Synced like every row; the pass hash is never in it. */
 export interface DeviceRow extends RowBase {
@@ -427,6 +440,8 @@ export interface DeviceRow extends RowBase {
   pairedAt: number
   lastSeen: number
   revoked: boolean
+  /** Its tools, from its latest hello (protocol s11). */
+  tools?: DeviceToolInfo[]
 }
 
 /** Settings > Devices: whether this computer lets other devices connect, and how they reach it. */
@@ -451,6 +466,15 @@ export interface DevicesStatus {
   connected: string[]
   /** A plain sentence when the server could not start (port in use...), else ''. */
   error: string
+  /** Which groups of this computer's tools other devices may use. */
+  shareGroups: Record<DeviceShareGroup, boolean>
+  /**
+   * Windows Firewall for the Devices port: 'blocked' or 'missing' means other devices on the network cannot reach
+   * this computer until the person allows it (one Windows prompt). 'not-needed' off Windows or with Devices off.
+   */
+  firewall: 'allowed' | 'missing' | 'blocked' | 'unknown' | 'not-needed'
+  /** The answering device this computer lends its tools to over its own connection, or ''. */
+  servingTo: string
 }
 
 /** "Add a device": what the QR code and the short code carry, valid until `expiresAt` (ms). */
@@ -479,6 +503,10 @@ export interface DevicesApi {
   move(id: string, direction: 'up' | 'down'): Promise<void>
   /** Takes the device out: its pass stops working at once and its connections close. */
   revoke(id: string): Promise<void>
+  /** Lets other devices use one group of this computer's tools, or not. */
+  setShareGroup(group: DeviceShareGroup, on: boolean): Promise<DevicesStatus>
+  /** Windows: the one prompt that lets other devices through the firewall. */
+  allowFirewall(): Promise<DevicesStatus>
   /** Fires when a device connects, pairs, changes or is taken out. */
   onChanged(cb: () => void): Unsubscribe
 }

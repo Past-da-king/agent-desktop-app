@@ -70,6 +70,8 @@ import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
 import { recordHandlers, handlerRegistry } from './devices/registry'
 import { DevicesService, setDevicesService } from './devices/service'
+import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tools'
+import { WindowsFirewall } from './devices/firewall'
 
 // Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
 const ipcMain = recordHandlers(electronIpcMain)
@@ -970,6 +972,20 @@ async function startServices(win: BrowserWindow): Promise<void> {
       rendererDir: join(__dirname, '../renderer'),
       emitWindow: (channel, payload) => broadcast(channel, payload),
       log: (message, detail) => logger.info(message, detail),
+      // This computer lends its own tools to the agents on other devices (protocol s11), group by group.
+      deviceTools: new DeviceToolHost({
+        tools: () => tools,
+        context: (signal) => {
+          if (runner === null) throw new Error('The agent is not running.')
+          return runner.deviceToolContext(signal)
+        },
+        shared: () => devices?.shareGroups() ?? DEFAULT_SHARE,
+        inbox: join(dir, 'attachments', 'received'),
+        log: (message, detail) => logger.info(message, detail),
+      }),
+      firewall: new WindowsFirewall({ platform: process.platform, program: process.execPath }),
+      openUrl: (url) => shell.openExternal(url),
+      notify: showNotification,
     })
     devices.registerIpc(ipcMain)
     setDevicesService(devices)

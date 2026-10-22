@@ -16,11 +16,14 @@ import { cleanRoles, platformOf } from './facts'
 import { loadIdentity, type NodeIdentity } from './identity'
 import { originFrom, setLocalOrigin } from './origin'
 import { formatShortCode, handlePair, pairUri, PairingOffers } from './pairing'
-import { SecretPassTable, type SecretsLike } from './passes'
+import { SecretPassTable, hashPass, newPass, type SecretsLike } from './passes'
+import { DEFAULT_SHARE, SHARE_GROUPS, type DeviceToolHost, type ShareGroup } from './device-tools'
+import type { FirewallState, WindowsFirewall } from './firewall'
+import { Uplink, type UplinkTarget } from './uplink'
 import { callAllowed } from './rpc'
 import { wireOf, type HandlerRegistry } from './registry'
 import { DevicesServer, contentTypeFor } from './server'
-import type { BrainRef, DeviceFacts, DeviceKind, DeviceRecord, DeviceRole, DevicesHost, RouteReply, RouteRequest } from './types'
+import type { BrainRef, DeviceFacts, DeviceKind, DeviceRecord, DeviceRole, DevicesHost, DeviceToolResult, RouteReply, RouteRequest } from './types'
 
 const SEEN_EVERY_MS = 60_000
 const COOKIE_DAYS = 400
@@ -63,7 +66,16 @@ export interface DevicesServiceDeps {
   kind?: DeviceKind
   canOpenLinks?: boolean
   canReceiveFiles?: boolean
+  /** This node's own tools for other devices (protocol s11). Without it the node offers none. */
+  deviceTools?: DeviceToolHost
+  /** Windows Firewall check and the one-prompt "Allow connections" (Windows only). */
+  firewall?: WindowsFirewall
+  /** Device commands other than "tool" that reach this node over its link to the answering brain. */
+  openUrl?: (url: string) => Promise<void>
+  notify?: (title: string, body: string) => void
 }
+
+const SELF_PASS = 'devicesSelfPass'
 
 function toRecord(row: DeviceRow): DeviceRecord {
   const { createdAt: _createdAt, ...rest } = row
@@ -98,11 +110,14 @@ function real(path: string): string | null {
 }
 
 export class DevicesService {
-  readonly identity: NodeIdentity
+  private ident: NodeIdentity | null = null
+  private srv: DevicesServer | null = null
   private readonly config: DevicesConfigFile
   private readonly passes: SecretPassTable
   private readonly offers: PairingOffers
-  private readonly server: DevicesServer
+  private readonly uplink: Uplink
+  private firewallState: FirewallState = 'unknown'
+  private firewallAt = 0
   private rows = new Map<string, DeviceRow>()
   private readonly seenAt = new Map<string, number>()
   private error = ''
@@ -115,31 +130,68 @@ export class DevicesService {
   constructor(private readonly deps: DevicesServiceDeps) {
     this.now = deps.now ?? Date.now
     this.dir = join(deps.userData, 'devices')
-    this.identity = loadIdentity(this.dir)
     this.config = new DevicesConfigFile(join(this.dir, 'config.json'))
     this.passes = new SecretPassTable(deps.secrets)
     this.offers = new PairingOffers(this.now)
-    this.server = new DevicesServer({
-      keyPem: this.identity.keyPem,
-      certPem: this.identity.certPem,
-      deviceForPass: (pass) => this.passes.deviceFor(pass),
-      rolesOf: (id) => {
-        const row = this.rows.get(id)
-        return row === undefined || row.revoked ? null : row.roles
-      },
-      self: () => ({ id: this.identity.nodeId, facts: this.selfFacts() }),
-      callRpc: (session, method, args) => callAllowed(deps.registry, this.server.added(), session, method, args),
-      onConnections: () => this.changed(),
-      onSeen: (id) => this.seen(id),
+    this.uplink = new Uplink({
+      target: () => this.uplinkTarget(),
+      pass: () => this.selfPass(),
+      facts: () => this.selfFacts(),
+      runTool: (command) => this.runTool(command),
+      other: (command) => this.otherCommand(command),
       log: deps.log,
+      onState: () => this.changed(),
     })
-    setLocalOrigin(originFrom(this.identity.nodeId, this.selfFacts()))
-    this.mountRoutes()
+  }
+
+  /**
+   * Who this node is. Made the first time something needs it (Devices switched on, or a part that plugs in asks
+   * for the host), so an app that never uses Devices writes nothing for it.
+   */
+  get identity(): NodeIdentity {
+    if (this.ident === null) this.ident = loadIdentity(this.dir)
+    return this.ident
+  }
+
+  private get server(): DevicesServer {
+    if (this.srv === null) {
+      this.srv = new DevicesServer({
+        keyPem: this.identity.keyPem,
+        certPem: this.identity.certPem,
+        deviceForPass: (pass) => this.passes.deviceFor(pass),
+        rolesOf: (id) => {
+          const row = this.rows.get(id)
+          return row === undefined || row.revoked ? null : row.roles
+        },
+        self: () => ({ id: this.identity.nodeId, facts: this.selfFacts() }),
+        callRpc: (session, method, args) => callAllowed(this.deps.registry, this.server.added(), session, method, args),
+        onConnections: () => this.changed(),
+        onSeen: (id) => this.seen(id),
+        onHello: (id, facts) => void this.hello(id, facts),
+        log: this.deps.log,
+      })
+      this.mountRoutes()
+    }
+    return this.srv
+  }
+
+  private get enabled(): boolean {
+    return this.config.get().enabled
   }
 
   /** For the parts that plug in (replication, bundle, device commands). Available whether or not it listens. */
   host(): DevicesHost {
     return this.server
+  }
+
+  /** The brain this node is serving its tools to right now, or null. */
+  servingTo(): string | null {
+    return this.uplink.target
+  }
+
+  /** Checks the link to the answering brain now instead of at the next 15 s check. */
+  uplinkNow(): Promise<void> {
+    return this.uplink.tick()
   }
 
   passTable(): SecretPassTable {
@@ -150,21 +202,119 @@ export class DevicesService {
   async start(): Promise<void> {
     await this.reloadRows()
     this.offStore = this.deps.store.onChange((change) => {
-      if (change.entity === 'device') void this.reloadRows()
+      if (change.entity === 'device') void this.reloadRows().then(() => this.uplink.tick())
     })
-    await this.writeSelf()
-    if (this.config.get().enabled) await this.listen()
+    if (this.enabled) await this.switchOn()
   }
 
   async stop(): Promise<void> {
     this.offStore?.()
     this.offStore = null
-    await this.server.stop()
+    this.uplink.stop()
+    await this.srv?.stop()
   }
 
   /** A main-process event (index.ts broadcast): passed on to connected devices that may hear it. */
   broadcast(channel: string, payload: unknown): void {
-    this.server.broadcast(channel, payload)
+    this.srv?.broadcast(channel, payload)
+  }
+
+  /** Runs a tool command on this node (protocol s11); the brain-side router may call it for this node itself. */
+  runTool(command: unknown): Promise<DeviceToolResult> {
+    if (!this.enabled) return Promise.resolve({ ok: false, error: 'Devices is off on this computer.' })
+    if (this.deps.deviceTools === undefined) return Promise.resolve({ ok: false, error: 'This device shares no tools.' })
+    return this.deps.deviceTools.run(command)
+  }
+
+  private async otherCommand(command: Record<string, unknown>): Promise<{ ok: boolean; note: string }> {
+    const kind = command['kind']
+    const url = command['url']
+    if (kind === 'open_url' && typeof url === 'string' && /^https?:\/\//i.test(url) && this.deps.openUrl !== undefined) {
+      await this.deps.openUrl(url)
+      return { ok: true, note: 'Opened' }
+    }
+    if (kind === 'notify' && this.deps.notify !== undefined) {
+      const title = typeof command['title'] === 'string' ? command['title'].slice(0, 120) : 'Your agent'
+      const body = typeof command['body'] === 'string' ? command['body'].slice(0, 500) : ''
+      this.deps.notify(title, body)
+      return { ok: true, note: 'Shown' }
+    }
+    return { ok: false, note: 'This device does not do that.' }
+  }
+
+  private async switchOn(): Promise<void> {
+    await this.listen()
+    this.selfPass()
+    await this.writeSelf()
+    this.uplink.start()
+    void this.checkFirewall(true)
+  }
+
+  /** This node's own pass, for its link to another brain; its hash sits in the mesh's pass table like any device's. */
+  private selfPass(): string {
+    let pass = this.deps.secrets.get(SELF_PASS)
+    if (pass === null || pass === '') {
+      pass = newPass()
+      this.deps.secrets.set(SELF_PASS, pass)
+    }
+    const hash = hashPass(pass)
+    if (this.passes.all()[this.identity.nodeId] !== hash) this.passes.set(this.identity.nodeId, hash)
+    return pass
+  }
+
+  /** The brain this node serves its tools to: the first brain in the order, when that is not this node. */
+  private uplinkTarget(): UplinkTarget | null {
+    if (!this.enabled) return null
+    const first = this.list().find((row) => row.roles.includes('brain') && !row.revoked)
+    if (first === undefined || first.id === this.identity.nodeId || first.fp === '' || first.urls.length === 0) return null
+    return { id: first.id, urls: first.urls, fp: first.fp }
+  }
+
+  /** The person's switches for which of this node's tools other devices may use. */
+  shareGroups(): Record<ShareGroup, boolean> {
+    return { ...DEFAULT_SHARE, ...this.config.get().shareGroups }
+  }
+
+  async setShareGroup(group: string, on: boolean): Promise<DevicesStatus> {
+    const found = SHARE_GROUPS.find((g) => g === group)
+    if (found === undefined) throw new Error('Unknown group')
+    this.config.save({ shareGroups: { ...this.shareGroups(), [found]: on } })
+    if (this.enabled) await this.writeSelf()
+    this.uplink.refresh()
+    this.changed()
+    return this.status()
+  }
+
+  /** Re-reads Windows Firewall at most every 30 s (it runs netsh). */
+  private async checkFirewall(force = false): Promise<void> {
+    const firewall = this.deps.firewall
+    if (firewall === undefined || !firewall.needed || !this.enabled) return
+    if (!force && this.now() - this.firewallAt < 30_000) return
+    this.firewallAt = this.now()
+    const state = await firewall.state(this.config.get().port)
+    if (state !== this.firewallState) {
+      this.firewallState = state
+      this.changed()
+    }
+  }
+
+  /** The one UAC prompt that lets other devices in, then a fresh look at the rules. */
+  async allowFirewall(): Promise<DevicesStatus> {
+    const firewall = this.deps.firewall
+    if (firewall !== undefined && firewall.needed) {
+      await firewall.allow(this.config.get().port)
+      await this.checkFirewall(true)
+    }
+    return this.status()
+  }
+
+  /** A device said hello: keep its latest facts and tools on its row at once (others pick it by its tools). */
+  private async hello(id: string, facts: DeviceFacts): Promise<void> {
+    const row = this.rows.get(id)
+    if (row === undefined || row.revoked) return
+    this.seenAt.set(id, this.now())
+    const { tools, ...rest } = facts
+    await this.saveRow({ ...row, name: facts.name, urls: facts.urls, facts: rest, tools: tools ?? [], lastSeen: this.now() }).catch(() => undefined)
   }
 
   selfFacts(): DeviceFacts {
@@ -178,39 +328,48 @@ export class DevicesService {
       canReceiveFiles: this.deps.canReceiveFiles ?? true,
       fingerprint: this.identity.fp,
       urls: this.urls(),
+      tools: this.deps.deviceTools?.catalogue() ?? [],
     }
   }
 
   // ---- Settings > Devices ----
 
   /** `viewer`: the device asking (a wire caller), else this node. */
-  status(viewer: string = this.identity.nodeId): DevicesStatus {
+  status(viewer?: string): DevicesStatus {
     const config = this.config.get()
+    // Devices never switched on: no identity is made just to show Settings.
+    const id = config.enabled || this.ident !== null ? this.identity : null
+    const running = this.srv?.running ?? false
+    if (config.enabled) void this.checkFirewall()
     return {
       enabled: config.enabled,
-      running: this.server.running,
-      port: this.server.running ? this.server.port() : config.port,
-      urls: this.urls(),
+      running,
+      port: running ? (this.srv?.port() ?? config.port) : config.port,
+      urls: id === null ? [] : this.urls(),
       extraUrls: config.extraUrls,
-      nodeId: this.identity.nodeId,
-      viewer,
+      nodeId: id?.nodeId ?? '',
+      viewer: viewer ?? id?.nodeId ?? '',
       nodeName: this.deps.nodeName(),
-      fp: this.identity.fp,
-      fpWords: fingerprintWords(this.identity.fp),
-      connected: this.server.connectedIds(),
+      fp: id?.fp ?? '',
+      fpWords: id === null ? '' : fingerprintWords(id.fp),
+      connected: this.srv?.connectedIds() ?? [],
       error: this.error,
+      shareGroups: this.shareGroups(),
+      firewall: this.deps.firewall?.needed === true && config.enabled ? this.firewallState : 'not-needed',
+      servingTo: this.uplink.target ?? '',
     }
   }
 
   async setEnabled(on: boolean): Promise<DevicesStatus> {
     this.config.save({ enabled: on })
-    if (on) await this.listen()
+    if (on) await this.switchOn()
     else {
       this.offers.cancel()
-      await this.server.stop()
+      this.uplink.stop()
+      await this.srv?.stop()
       this.error = ''
+      setLocalOrigin(null)
     }
-    await this.writeSelf()
     this.changed()
     return this.status()
   }
@@ -219,7 +378,7 @@ export class DevicesService {
     const port = this.config.get().port
     const clean = urls.map((url) => normaliseUrl(url, port)).filter((url): url is string => url !== null)
     this.config.save({ extraUrls: clean })
-    await this.writeSelf()
+    if (this.enabled) await this.writeSelf()
     this.changed()
     return this.status()
   }
@@ -227,8 +386,8 @@ export class DevicesService {
   /** Changes port or listen address (tests and the headless node); restarts the server when it runs. */
   async configure(patch: Partial<DevicesConfig>): Promise<DevicesStatus> {
     this.config.save(patch)
-    if (this.server.running) {
-      await this.server.stop()
+    if (this.srv?.running === true) {
+      await this.srv.stop()
       await this.listen()
     }
     return this.status()
@@ -291,7 +450,7 @@ export class DevicesService {
     if (row === undefined) throw new Error('That device is not paired.')
     this.passes.remove(id)
     await this.saveRow({ ...row, revoked: true })
-    this.server.closeDevice(id)
+    this.srv?.closeDevice(id)
     this.changed()
   }
 
@@ -306,7 +465,7 @@ export class DevicesService {
       this.setExtraUrls(Array.isArray(raw) ? raw.filter((u): u is string => typeof u === 'string').slice(0, 12) : []),
     )
     ipc.handle(DEVICES_CHANNELS.offer, async () => {
-      if (!this.server.running) throw new Error('Switch on "Let my other devices connect" first.')
+      if (this.srv?.running !== true) throw new Error('Switch on "Let my other devices connect" first.')
       return this.offer()
     })
     ipc.handle(DEVICES_CHANNELS.cancelOffer, async () => this.cancelOffer())
@@ -314,6 +473,8 @@ export class DevicesService {
     ipc.handle(DEVICES_CHANNELS.setRoles, async (_event, raw, roles) => this.setRoles(id(raw), roles))
     ipc.handle(DEVICES_CHANNELS.move, async (_event, raw, direction) => this.move(id(raw), direction === 'up' ? 'up' : 'down'))
     ipc.handle(DEVICES_CHANNELS.revoke, async (_event, raw) => this.revoke(id(raw)))
+    ipc.handle(DEVICES_CHANNELS.setShareGroup, async (_event, group, on) => this.setShareGroup(String(group), on === true))
+    ipc.handle(DEVICES_CHANNELS.allowFirewall, async () => this.allowFirewall())
   }
 
   // ---- inside ----
@@ -355,7 +516,7 @@ export class DevicesService {
 
   private changed(): void {
     this.deps.emitWindow(DEVICES_EVENTS.changed, null)
-    this.server.emit(null, DEVICES_EVENTS.changed, null)
+    this.srv?.emit(null, DEVICES_EVENTS.changed, null)
   }
 
   private async reloadRows(): Promise<void> {
@@ -376,7 +537,7 @@ export class DevicesService {
 
   /** This node's own row: always a brain and hands; its place in the brain order is the person's. */
   private async writeSelf(): Promise<void> {
-    const facts = this.selfFacts()
+    const { tools, ...facts } = this.selfFacts()
     const existing = this.rows.get(this.identity.nodeId)
     const priority = existing?.priority ?? this.nextPriorityNow()
     const record: DeviceRecord = {
@@ -392,6 +553,7 @@ export class DevicesService {
       pairedAt: existing?.pairedAt ?? this.now(),
       lastSeen: this.now(),
       revoked: false,
+      tools: tools ?? [],
     }
     const same = existing !== undefined && JSON.stringify(toRecord({ ...existing, lastSeen: 0 })) === JSON.stringify({ ...record, lastSeen: 0 })
     if (!same) await this.saveRow(record)
@@ -404,8 +566,12 @@ export class DevicesService {
     this.seenAt.set(id, at)
     const row = this.rows.get(id)
     if (row === undefined || row.revoked) return
-    const facts = this.server.factsOf(id)
-    const patch: DeviceRow = facts === null ? { ...row, lastSeen: at } : { ...row, lastSeen: at, facts, name: facts.name, urls: facts.urls }
+    const facts = this.srv?.factsOf(id) ?? null
+    let patch: DeviceRow = { ...row, lastSeen: at }
+    if (facts !== null) {
+      const { tools: _tools, ...plain } = facts
+      patch = { ...patch, facts: plain, name: facts.name, urls: facts.urls }
+    }
     void this.saveRow(patch).catch(() => undefined)
   }
 
