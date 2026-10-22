@@ -125,7 +125,14 @@ kbd{font:500 12px/1 var(--font);padding:4px 7px;border-radius:8px;background:var
 .boot{height:100%;display:grid;place-items:center}
 .boot-wordmark{font:500 28px/1.2 var(--font);letter-spacing:-.5px;color:var(--on-bg)}
 .eyes ellipse{transform-box:fill-box;transform-origin:center;animation:blink 5.5s infinite}
-@keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+@keyframes blink{0%,93%,100%{transform:scaleY(1)}93.01%,96%{transform:scaleY(.1)}}
+.mascot-spin{will-change:transform;animation:mascot-turn 14s linear infinite}
+@keyframes mascot-turn{to{transform:rotate(360deg)}}
+.mascot-calm,.mascot-busy{will-change:opacity}
+.mascot-calm{animation:mascot-calm 2.6s ease-in-out infinite}
+.mascot-busy{animation:mascot-busy 2.6s ease-in-out infinite}
+@keyframes mascot-calm{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes mascot-busy{0%,100%{opacity:0}50%{opacity:1}}
 /* The window has no native frame: the title bar is the handle that moves it; its controls stay clickable. */
 .titlebar{-webkit-app-region:drag}
 .titlebar button,.titlebar input,.titlebar [role="button"],.titlebar .search,.titlebar .syncpill,.titlebar kbd{-webkit-app-region:no-drag}

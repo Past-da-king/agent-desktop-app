@@ -16,6 +16,8 @@ import { startChatTracking, useChatRunning, useChats } from '../state/useChats'
 import { CopyButton } from '../ui/CopyButton'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { plainPreview, reportText } from '../lib/report'
+import { chatPlaces } from '../lib/chat-place'
+import { PlaceChip } from '../ui/PlaceChip'
 import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -836,6 +838,9 @@ export function Chat(): JSX.Element {
   const agentName = settings?.agentName.trim() || 'Your agent'
   const startCall = useCall((state) => state.start)
   const projects = useEntity('project')
+  const jobs = useEntity('job')
+  const deviceRows = useEntity('device')
+  const placedOn = useMemo(() => chatPlaces(jobs, deviceRows).get(openChat) ?? '', [jobs, deviceRows, openChat])
   // The main thread is the one main agent; a project chat is that agent at work in one project.
   const project = projectOfChat(projects, openChat)
   const navigate = useUi((state) => state.navigate)
@@ -979,6 +984,7 @@ export function Chat(): JSX.Element {
           <span className={`chat-sub${needsYou ? ' warn' : ''}`}>
             {project === null ? '' : `${title} · `}
             {needsYou ? 'Waiting for you' : running ? 'Working' : 'Ready'}
+            <PlaceChip name={placedOn} />
           </span>
         </div>
         {project === null ? null : (

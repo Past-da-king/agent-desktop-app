@@ -7,6 +7,8 @@
  */
 import type { AgentProfileInfo, EnvironmentReport, Found, GoalRow, MemoryRow, Settings, TaskRow } from '@agent/core'
 
+import { existsSync } from 'node:fs'
+
 import { appName } from '../apps/catalog'
 
 import { OPENUI_PROMPT } from './openui-prompt'
@@ -70,10 +72,26 @@ export interface ProjectContext {
 export const FOCUS_LINE =
   '- STAY ON WHAT THE USER IS DOING NOW. Answer the message in front of you. Do not bring up older topics, past memories, other projects or open tasks unless the user asks, or it directly blocks or changes what they are doing now (a clash, something due today, an approval only they can give). The memories below are background for you, not things to mention.'
 
+/**
+ * The project's folder, said the way it is true here: on this computer, work in it; on another computer (the chat was
+ * placed on a server, the folder is on the person's PC), say so, so the agent works over git or the device link
+ * instead of looking for a path that is not here.
+ */
+export function folderLine(path: string, exists: (p: string) => boolean = existsSync): string {
+  const folder = path.trim()
+  if (exists(folder)) return `- Its folder is ${folder}. Work there by default: files, commands and code for this project live in it.`
+  return `- Its folder is ${folder}, on another computer: it is not on this one. Work on this computer's own shell: clone or pull the project's git repository here (or reach the other computer through the device link: devices_list, device_tool), and bring the commits back the same way.`
+}
+
+/** The same for a helper: unchanged when the folder is here, the elsewhere note when it is not. */
+function helperFolderLine(path: string, exists: (p: string) => boolean = existsSync): string {
+  return exists(path.trim()) ? `Its folder is ${path.trim()}.` : folderLine(path, exists).replace(/^- /, '')
+}
+
 /** The main agent's own part when a project chat runs. */
 export function projectLines(project: ProjectContext): string[] {
   const out = ['THIS PROJECT', `You are working in the project "${project.name}".${project.description.trim() === '' ? '' : ` ${project.description.trim()}`}`]
-  if (project.path.trim() !== '') out.push(`- Its folder is ${project.path.trim()}. Work there by default: files, commands and code for this project live in it.`)
+  if (project.path.trim() !== '') out.push(folderLine(project.path))
   out.push(`- Its profile is ${project.profile}: helpers you start here work in it (their accounts and logins) unless the job truly needs another.`)
   out.push('- Stay inside this project. You are its main agent: keep to the high-level picture, break big work into parts and hand each to helpers with delegate (they work in this project\'s profile and folder, and think with its helpers AI), then say in one short line where things stand.')
   out.push('- Helpers, not new chats: a one-off job, a try, a check or a fix goes to a helper with delegate and its result comes back to this chat. Start another project chat with project_chat_start only when the user asks for one, or for a separate long-running line of work they will come back to on its own.')
@@ -337,7 +355,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     // A helper working for a project keeps that project's memory too.
     if (input.role === 'helper' && project !== null) {
       lines.push('')
-      lines.push(`You are working for the project "${project.name}".${project.path.trim() === '' ? '' : ` Its folder is ${project.path.trim()}.`}`)
+      lines.push(`You are working for the project "${project.name}".${project.path.trim() === '' ? '' : ` ${helperFolderLine(project.path)}`}`)
       lines.push(...projectMemoryLines(project.name))
     }
   }

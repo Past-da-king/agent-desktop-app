@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react'
 import { agent } from '../bridge'
 import { isOpenCard } from '../lib/cards'
 import { openChat, startProjectChat } from '../lib/chat-actions'
+import { chatPlaces } from '../lib/chat-place'
+import { PlaceChip } from '../ui/PlaceChip'
 import { chatList, chatOf, chatStatus, STATUS_LABEL } from '../lib/chats'
 import { short, timeAgo } from '../lib/format'
 import { useChats } from '../state/useChats'
@@ -139,6 +141,9 @@ export function Project({ id }: { id: string }): JSX.Element {
   const projects = useEntity('project')
   const loaded = useEntityLoaded('project')
   const items = useEntity('chat_item')
+  const jobs = useEntity('job')
+  const devices = useEntity('device')
+  const places = useMemo(() => chatPlaces(jobs, devices), [jobs, devices])
   const memories = useEntity('memory')
   const profiles = useProfiles() ?? []
   const settings = useSettings((state) => state.settings)
@@ -157,7 +162,13 @@ export function Project({ id }: { id: string }): JSX.Element {
     const own = items.filter((item) => project.chats.includes(chatOf(item)))
     const cards = new Map<string, number>()
     for (const item of own) if (isOpenCard(item)) cards.set(chatOf(item), (cards.get(chatOf(item)) ?? 0) + 1)
-    return chatList(own).map((entry) => ({ entry, status: chatStatus(entry, runs[entry.id], seen[entry.id] ?? since, false, cards.get(entry.id) ?? 0) }))
+    const listed = chatList(own)
+    // A chat the agent just started on another device has no rows here until that device writes them back: list it
+    // at once, so it is there to open and message.
+    for (const chat of project.chats) {
+      if (!listed.some((entry) => entry.id === chat)) listed.push({ id: chat, title: 'New chat', at: Number.MAX_SAFE_INTEGER, lastReplyAt: 0, branch: false, device: 'desk' })
+    }
+    return listed.sort((a, b) => b.at - a.at).map((entry) => ({ entry, status: chatStatus(entry, runs[entry.id], seen[entry.id] ?? since, false, cards.get(entry.id) ?? 0) }))
   }, [project, items, runs, seen, since])
   const notes = useMemo(() => (project === undefined ? [] : memories.filter((memory) => memory.project === project.id).sort((a, b) => b.updatedAt - a.updatedAt)), [project, memories])
 
@@ -250,7 +261,7 @@ export function Project({ id }: { id: string }): JSX.Element {
                   {status === 'idle' ? <Icon name={entry.branch ? 'branch' : 'chat'} size={16} /> : <i />}
                 </span>
                 <span className="pj-row-t">
-                  <b>{entry.title}</b>
+                  <b>{entry.title}<PlaceChip name={places.get(entry.id) ?? ''} /></b>
                   <span>{STATUS_LABEL[status] === '' ? timeAgo(entry.at) : STATUS_LABEL[status]}</span>
                 </span>
                 <Icon name="chev" size={18} />

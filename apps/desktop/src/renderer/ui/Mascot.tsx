@@ -64,37 +64,28 @@ export function Mascot({
   const reduce = prefersReducedMotion()
   const morph = busy && !reduce
 
+  const color = needsYou ? 'var(--tert)' : (fill ?? 'var(--mascot)')
+  const layer = { position: 'absolute', inset: 0, width: size, height: size } as const
+  // Cheap while busy: the shape change is a cross-fade between two stacked SVGs and the turning is a rotation of
+  // the wrapper, both transform/opacity animations the compositor runs without any layout, style or path work.
   return (
-    <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true">
-      <g>
-        {morph && shape.spin === 1 ? (
-          <animateTransform
-            attributeName="transform"
-            type="rotate"
-            from="0 50 50"
-            to="360 50 50"
-            dur="14s"
-            repeatCount="indefinite"
-          />
+    <span className="mascot" style={{ position: 'relative', display: 'inline-block', width: size, height: size, flex: 'none' }} aria-hidden="true">
+      <span className={morph && shape.spin === 1 ? 'mascot-spin' : undefined} style={{ ...layer, display: 'block' }}>
+        <svg viewBox="0 0 100 100" className={morph ? 'mascot-calm' : undefined} style={layer}>
+          <path d={calm} fill={color} />
+        </svg>
+        {morph ? (
+          <svg viewBox="0 0 100 100" className="mascot-busy" style={layer}>
+            <path d={active} fill={color} />
+          </svg>
         ) : null}
-        <path d={calm} fill={needsYou ? 'var(--tert)' : (fill ?? 'var(--mascot)')} style={{ transition: 'fill .3s var(--effects)' }}>
-          {morph ? (
-            <animate
-              attributeName="d"
-              dur="2.6s"
-              repeatCount="indefinite"
-              calcMode="spline"
-              keyTimes="0;.5;1"
-              keySplines=".4 0 .2 1;.4 0 .2 1"
-              values={`${calm};${active};${calm}`}
-            />
-          ) : null}
-        </path>
-      </g>
-      <g className="eyes" fill={needsYou ? 'var(--on-tert)' : 'var(--eye)'}>
-        <ellipse cx="37.5" cy="49" rx="4.3" ry="6.4" />
-        <ellipse cx="62.5" cy="49" rx="4.3" ry="6.4" />
-      </g>
-    </svg>
+      </span>
+      <svg viewBox="0 0 100 100" style={layer}>
+        <g className="eyes" fill={needsYou ? 'var(--on-tert)' : 'var(--eye)'}>
+          <ellipse cx="37.5" cy="49" rx="4.3" ry="6.4" />
+          <ellipse cx="62.5" cy="49" rx="4.3" ry="6.4" />
+        </g>
+      </svg>
+    </span>
   )
 }
