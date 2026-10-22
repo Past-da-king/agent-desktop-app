@@ -226,9 +226,13 @@ function DeviceItem({
   brainCount,
   readOnly,
   onRevoke,
+  node,
 }: {
   device: DeviceRow
+  /** The device the person is looking from. */
   self: boolean
+  /** The node serving this window: its roles are fixed. */
+  node: boolean
   connected: boolean
   brainIndex: number
   brainCount: number
@@ -266,8 +270,8 @@ function DeviceItem({
                 type="button"
                 className={`chip dv-role${on ? ' on' : ''}`}
                 aria-pressed={on}
-                title={self ? 'This computer always answers and acts as itself' : ROLE_HINT[role]}
-                disabled={self || readOnly}
+                title={node ? 'This computer always answers and acts as itself' : ROLE_HINT[role]}
+                disabled={node || readOnly}
                 onClick={() => toggle(role)}
               >
                 {on ? <Icon name="check" size={14} /> : null}
@@ -285,7 +289,7 @@ function DeviceItem({
             <IconButton icon="chevd" label={`Move ${device.name} down`} size={18} disabled={brainIndex === brainCount - 1} onClick={() => move('down')} />
           </span>
         ) : null}
-        {!self && !readOnly ? (
+        {!node && !readOnly ? (
           <Button variant="text" size="sm" onClick={onRevoke}>
             Take out
           </Button>
@@ -405,6 +409,11 @@ export function DevicesSettings(): JSX.Element {
                 Security words for this computer: <b className="dv-fp">{status.fpWords}</b>
               </span>
             ) : null}
+            {agent.platform === 'win32' ? (
+              <span className="small muted dv-note">
+                If Windows asks whether Agent may use your network, choose Allow. Otherwise your other devices cannot reach it.
+              </span>
+            ) : null}
           </div>
         ) : null}
 
@@ -413,7 +422,8 @@ export function DevicesSettings(): JSX.Element {
           <DeviceItem
             key={device.id}
             device={device}
-            self={device.id === status?.nodeId}
+            self={device.id === (status?.viewer ?? status?.nodeId)}
+            node={device.id === status?.nodeId}
             connected={connected.has(device.id)}
             brainIndex={brains.findIndex((brain) => brain.id === device.id)}
             brainCount={brains.length}

@@ -94,7 +94,8 @@ export function isAdvertisable(address: string, family: string | number, interna
 }
 
 /** The addresses this node advertises: interface addresses plus the person's extra addresses (protocol s2). */
-export function advertisedUrls(config: DevicesConfig, interfaces: InterfaceMap = networkInterfaces()): string[] {
+/** `ipv6`: false when the server could only listen on IPv4, so IPv6 addresses would not answer. */
+export function advertisedUrls(config: DevicesConfig, interfaces: InterfaceMap = networkInterfaces(), ipv6 = true): string[] {
   const out: string[] = []
   const add = (url: string): void => {
     if (!out.includes(url)) out.push(url)
@@ -104,7 +105,9 @@ export function advertisedUrls(config: DevicesConfig, interfaces: InterfaceMap =
     for (const list of Object.values(interfaces)) {
       for (const entry of list ?? []) {
         if (!isAdvertisable(entry.address, entry.family, entry.internal)) continue
-        const host = entry.family === 'IPv6' || (entry.family as unknown) === 6 ? `[${entry.address.split('%')[0]}]` : entry.address
+        const v6 = entry.family === 'IPv6' || (entry.family as unknown) === 6
+        if (v6 && !ipv6) continue
+        const host = v6 ? `[${entry.address.split('%')[0]}]` : entry.address
         add(`https://${host}:${config.port}`)
       }
     }
