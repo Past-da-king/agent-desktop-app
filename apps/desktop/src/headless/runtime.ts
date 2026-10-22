@@ -120,7 +120,7 @@ export interface HeadlessRuntime {
   actions: DeviceActions
   /** True while any chat has a turn running. */
   busy(): boolean
-  /** Stop timers, wait for running turns (up to `graceMs`), close the database. */
+  /** Stop timers, wait for running turns and helpers (up to `graceMs`), close the database. */
   stop(graceMs?: number): Promise<void>
 }
 
@@ -381,8 +381,9 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       theMemory.stop()
       // Let a running turn finish; if it does not in time it is marked interrupted on the next start and resumed.
       const deadline = Date.now() + graceMs
-      while (busy() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200))
-      logger.info('Stopping headless node', { turnStillRunning: busy() ? 1 : 0 })
+      const working = (): boolean => busy() || helpers.live().length > 0
+      while (working() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200))
+      logger.info('Stopping headless node', { stillWorking: working() ? 1 : 0 })
       disposeIpc()
       disposeStore()
       theRunner.dispose()

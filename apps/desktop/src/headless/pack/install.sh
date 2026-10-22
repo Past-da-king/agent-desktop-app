@@ -60,11 +60,16 @@ have_user_systemd() {
   [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || echo no)" = "yes" ]
 }
 
+# Crontab edits read the whole table into a file first, then install it: other lines are never lost.
 remove_cron() {
   if command -v crontab >/dev/null 2>&1 && crontab -l >/dev/null 2>&1; then
-    if crontab -l | grep -q "$TAG"; then
-      crontab -l | grep -v "$TAG" | crontab -
+    TMP_CRON="$(mktemp)"
+    crontab -l > "$TMP_CRON"
+    if grep -q "$TAG" "$TMP_CRON"; then
+      grep -v "$TAG" "$TMP_CRON" > "$TMP_CRON.new" || true
+      crontab "$TMP_CRON.new"
     fi
+    rm -f "$TMP_CRON" "$TMP_CRON.new"
   fi
 }
 
@@ -146,11 +151,19 @@ EOF
 else
   if command -v crontab >/dev/null 2>&1; then
     mkdir -p "$HOME_DIR/backups"
-    crontab -l > "$HOME_DIR/backups/crontab.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
-    { crontab -l 2>/dev/null | grep -v "$TAG" || true
+    BACKUP="$HOME_DIR/backups/crontab.$(date +%Y%m%d-%H%M%S)"
+    crontab -l > "$BACKUP" 2>/dev/null || : > "$BACKUP"
+    TMP_CRON="$(mktemp)"
+    { grep -v "$TAG" "$BACKUP" || true
       echo "@reboot $HOME_DIR/keepalive.sh $TAG"
       echo "*/5 * * * * $HOME_DIR/keepalive.sh $TAG"
-    } | crontab -
+    } > "$TMP_CRON"
+    # Never install a table that lost lines it had.
+    KEPT="$(grep -vc "$TAG" "$BACKUP" || true)"
+    NOW="$(grep -vc "$TAG" "$TMP_CRON" || true)"
+    if [ "$KEPT" != "$NOW" ]; then echo "Refusing to change the crontab: it would lose lines. Nothing was changed." >&2; rm -f "$TMP_CRON"; exit 1; fi
+    crontab "$TMP_CRON"
+    rm -f "$TMP_CRON"
     KEEP="crontab (@reboot and every 5 minutes)"
   else
     KEEP="none (no systemd user service and no crontab here: start it yourself)"
