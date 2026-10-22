@@ -102,6 +102,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 08:20 A: firewall scope a8302c7 (4 rules incl. Public limited to LocalSubnet + VPN ranges). Trial final installer Downloads/agent/Agent-0.2.42-setup.exe (322.7 MB) from a8302c7; to be REBUILT after B alias fix + A url-order check. START-HERE.md written. Server clean (only itself, 0.2.42, unpaired).
 
+- 08:50 FINAL: installer Downloads/agent/Agent-0.2.42-setup.exe (322,717,883 bytes, sha256 D69CCBE9...9B6F) from devices 408a97d (url ranking + parallel probe, alias fix e14cca8, firewall a8302c7). Lead verified head bc3b0bd: typecheck, lint, full suite 1254 pass. design fast-forwarded to bc3b0bd. Phone Agent-0.14.2.apk 35.6 MB. START-HERE.md written. C redeploying the clean server from the head.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
