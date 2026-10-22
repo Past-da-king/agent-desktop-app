@@ -155,14 +155,6 @@ export function helperLine(helper: HelperView): string {
   return helper.queued ? 'Waiting its turn' : 'Starting'
 }
 
-export interface HelperCardOptions {
-  /** Also keep helpers that finished at most this long ago, with their done line. Default 0. */
-  keepFinishedMs?: number
-  /** Keep only project agent cards once finished (the side panel); the device feed keeps every one. */
-  finishedProjectsOnly?: boolean
-  now?: number
-}
-
 /** A project chat's own lines (its agent's steps and replies; helpers' steps are on their own cards), oldest first. */
 export function projectChatLines(items: ChatItem[], chat: string): ChatItem[] {
   return items
@@ -185,15 +177,11 @@ export function projectLine(view: HelperView, lines: ChatItem[]): string {
 /**
  * Every helper working right now, from any chat (the main thread, any project, hidden ones too), for the side panel.
  * A project agent's card comes first and the helpers working in its project chat sit right under it; the rest are
- * oldest first. Nothing is cut: the panel scrolls. With `keepFinishedMs`, helpers that finished within it stay in
- * their place too (a stopped one never does).
+ * oldest first. Nothing is cut: the panel scrolls. Only working cards (queued ones included): a card that is done,
+ * failed or stopped leaves at once, everywhere these cards show (the side panel, the collapsed strip, a linked
+ * device). Its last answer stays in its own chat.
  */
-export function helperCards(items: ChatItem[], projects: ProjectRow[], options: HelperCardOptions = {}): HelperCard[] {
-  const keep = options.keepFinishedMs ?? 0
-  const now = options.now ?? Date.now()
-  const shown = (card: HelperCard): boolean =>
-    card.state === 'working' ||
-    (keep > 0 && card.state !== 'stopped' && card.endedAt !== null && now - card.endedAt <= keep && (options.finishedProjectsOnly !== true || card.projectChat !== ''))
+export function helperCards(items: ChatItem[], projects: ProjectRow[]): HelperCard[] {
   const working = items
     .filter((item) => item.kind === 'helper')
     .map((item): HelperCard => {
@@ -203,9 +191,9 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       const line = projectChat === '' ? helperLine(view) : projectLine(view, lines)
       return { ...view, row: item, owner: helperOwner(item, projects), line, depth: 0, projectChat, steps: lines }
     })
-    .filter(shown)
-    // Working cards first (queued after running), then the ones that just finished; oldest first within each.
-    .sort((a, b) => Number(a.state !== 'working') - Number(b.state !== 'working') || Number(a.queued) - Number(b.queued) || a.startedAt - b.startedAt)
+    .filter((card) => card.state === 'working')
+    // Running cards first, then queued ones; oldest first within each.
+    .sort((a, b) => Number(a.queued) - Number(b.queued) || a.startedAt - b.startedAt)
   const heads = new Set(working.filter((card) => card.projectChat !== '').map((card) => card.projectChat))
   const under = (card: HelperCard): string => (card.projectChat === '' && heads.has(chatOfRow(card.row)) ? chatOfRow(card.row) : '')
   const out: HelperCard[] = []
@@ -217,9 +205,6 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
   }
   return out
 }
-
-/** How long a finished card stays, with its done line (the device feed; the side panel for project agent cards). */
-export const FINISHED_CARD_MS = 20 * 60_000
 
 const MAX_LINE = 160
 const MAX_BRIEF = 600

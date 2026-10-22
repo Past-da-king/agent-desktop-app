@@ -6,15 +6,14 @@
  *
  * The feed starts on the first `helpers.cards` call, so a computer with nothing linked does no work for it. It keeps
  * the helper rows, their newest steps and the newest lines of each side chat in memory, follows every row change,
- * and sends a new list (debounced) only when it differs from the last one.
+ * and sends a new list (debounced) only when it differs from the last one. Like the side panel, it carries working
+ * cards only: a card that finished leaves the device's list at once.
  */
 import { MAIN_CHAT, type ChatItem, type DataChange, type HelperCardsSnapshot, type ProjectRow } from '@agent/core'
 
-import { FINISHED_CARD_MS, cardInfo, helperCards } from '../../shared/helper-cards'
+import { cardInfo, helperCards } from '../../shared/helper-cards'
 import type { Store } from '../db'
 
-/** How long a finished helper keeps its card, with its done line. */
-export const FINISHED_KEEP_MS = FINISHED_CARD_MS
 const DEBOUNCE_MS = 250
 /** Steps older than this are not read at start (a helper still working that long has newer ones). */
 const LOOKBACK_MS = 48 * 3_600_000
@@ -25,7 +24,6 @@ export interface HelperFeedDeps {
   emit(snapshot: HelperCardsSnapshot): void
   now?: () => number
   debounceMs?: number
-  keepFinishedMs?: number
 }
 
 function metaOf(row: ChatItem): Record<string, unknown> {
@@ -60,7 +58,6 @@ export class HelperFeed {
   private started: Promise<void> | null = null
   private offChange: (() => void) | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
-  private expiry: ReturnType<typeof setTimeout> | null = null
   private last: HelperCardsSnapshot = { seq: 0, at: 0, cards: [] }
   private lastJson = ''
   private disposed = false
@@ -83,9 +80,7 @@ export class HelperFeed {
     this.offChange?.()
     this.offChange = null
     if (this.timer !== null) clearTimeout(this.timer)
-    if (this.expiry !== null) clearTimeout(this.expiry)
     this.timer = null
-    this.expiry = null
   }
 
   private start(): Promise<void> {
@@ -162,7 +157,6 @@ export class HelperFeed {
   /** Builds the list; a new one gets the next seq, and is sent when `send` is set. */
   private compute(send: boolean): void {
     const now = this.now()
-    const keep = this.deps.keepFinishedMs ?? FINISHED_KEEP_MS
     const rows = [...this.helpers.values()]
     const items: ChatItem[] = [...rows]
     for (const row of rows) {
@@ -171,26 +165,12 @@ export class HelperFeed {
       const projectChat = text(meta, 'projectChat')
       if (projectChat !== '') items.push(...(this.chatLines.get(projectChat) ?? []))
     }
-    const cards = helperCards(items, this.projects, { keepFinishedMs: keep, now }).map((card) => cardInfo(card))
+    const cards = helperCards(items, this.projects).map((card) => cardInfo(card))
     const json = JSON.stringify(cards)
     if (json !== this.lastJson) {
       this.lastJson = json
       this.last = { seq: this.last.seq + 1, at: now, cards }
       if (send) this.deps.emit(this.last)
     }
-    this.planExpiry(cards.map((card) => card.endedAt).filter((at): at is number => at !== null), keep, now)
-  }
-
-  /** A finished card leaves when its time is up, without waiting for another change. */
-  private planExpiry(ended: number[], keep: number, now: number): void {
-    if (this.expiry !== null) clearTimeout(this.expiry)
-    this.expiry = null
-    if (ended.length === 0 || this.disposed) return
-    const wait = Math.max(0, Math.min(...ended) + keep - now) + 50
-    this.expiry = setTimeout(() => {
-      this.expiry = null
-      this.compute(true)
-    }, wait)
-    this.expiry.unref?.()
   }
 }

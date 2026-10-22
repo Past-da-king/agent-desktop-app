@@ -146,9 +146,11 @@ export class ProjectAgentRows {
       const rows = (await this.deps.store.listWhere?.('chat_item', { chat })) ?? (await this.deps.store.list('chat_item')).filter((row) => chatOf(row) === chat)
       if (rows.some((row) => row.kind === 'helper' && parse(row.meta)['state'] === 'working')) continue
       const last = [...rows].reverse().find((row) => row.kind === 'agent' || row.kind === 'notice')
-      const failed = last?.kind === 'notice' && !/^Stopped$/.test(last.text)
+      // A turn that was stopped ends on the runner's "Stopped" notice: the row reads stopped, not done.
+      const stopped = last?.kind === 'notice' && /^Stopped$/.test(last.text.trim())
+      const failed = last?.kind === 'notice' && !stopped
       await this.patch(chat, {
-        state: failed ? 'failed' : 'done',
+        state: stopped ? 'stopped' : failed ? 'failed' : 'done',
         summary: clip(last?.text ?? 'Done'),
         result: (last?.text ?? '').slice(0, 6000),
         endedAt: this.now(),
