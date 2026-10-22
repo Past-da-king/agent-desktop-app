@@ -14,6 +14,7 @@ import { providerFor } from '@agent/core'
 
 import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { CHANNELS } from '../src/shared/channels'
+import { WORKER_CHANNELS } from '../src/shared/workers-channels'
 import { Secrets } from '../src/main/secrets'
 import { SettingsStore } from '../src/main/settings'
 import { FileKeyCipher } from '../src/headless/file-cipher'
@@ -112,6 +113,9 @@ describe('headless runtime', () => {
 
     // The same handlers the window calls over IPC, ready for /v1/rpc.
     expect(runtime.ipc.handlers.size).toBeGreaterThan(40)
+    // Background workers run here too: their tools are offered and their part of the contract answers.
+    expect(tools.some((tool) => (tool.function?.name ?? '').startsWith('worker'))).toBe(true)
+    expect(await runtime.ipc.invoke(WORKER_CHANNELS.list, [])).toEqual([])
     const settings = (await runtime.ipc.invoke(CHANNELS.settings.get, [])) as { model: string }
     expect(settings.model).toBe('fake-model')
     expect(runtime.busy()).toBe(false)

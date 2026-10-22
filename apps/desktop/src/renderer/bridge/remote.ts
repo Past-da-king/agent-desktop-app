@@ -486,6 +486,19 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       allowFirewall: () => notHere('Changing devices'),
       onChanged: (callback) => wire.on(DEVICES_EVENTS.changed, () => callback()),
     },
+    // Workers run on the computer that has them; they are managed there, not from another device.
+    workers: {
+      list: async () => [],
+      events: async () => [],
+      logs: async () => [],
+      start: () => notHere('Starting a worker'),
+      stop: () => notHere('Stopping a worker'),
+      restart: () => notHere('Restarting a worker'),
+      remove: () => notHere('Removing a worker'),
+      setSecret: () => notHere('Adding a worker key'),
+      openFolder: () => notHere('Opening a folder'),
+      onChange: noop,
+    },
   }
   return api
 }

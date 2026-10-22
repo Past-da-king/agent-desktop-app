@@ -22,6 +22,7 @@ import { SectionHeader } from '../ui/SectionHeader'
 import { Skeleton } from '../ui/Skeleton'
 import { Wave } from '../ui/Wave'
 import { TaskDialog } from './TaskDialog'
+import { FailingWorkers, useFailingCount } from './Workers'
 import { withNo } from '../../shared/ask-options'
 
 /** Home shows the soonest few; the Tasks view holds the whole list. */
@@ -194,6 +195,7 @@ export function Home(): JSX.Element {
   const firstName = (settings?.userName.trim() || 'there').split(' ')[0] ?? 'there'
 
   const needs = useWaiting()
+  const failingWorkers = useFailingCount()
   const helpers = useMemo(() => workingHelpers(chatItems), [chatItems])
   const openGoal = goals.find((goal) => goal.status === 'open') ?? null
   const goal = goalProgress(openGoal, tasks)
@@ -515,7 +517,8 @@ export function Home(): JSX.Element {
           <section>
             <SectionHeader eyebrow="NEEDS YOU" line="Your agent can't go on without these" />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {needs.length === 0 ? (
+              <FailingWorkers />
+              {needs.length === 0 && failingWorkers > 0 ? null : needs.length === 0 ? (
                 <div className="need done">
                   <div className="eyebrow">
                     <Icon name="check" size={14} />
