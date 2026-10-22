@@ -51,6 +51,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 - 02:40 C done with steps 1-6: headless node built (devices-headless f9705c9, code de641d5), 9 headless tests + full suite 1120 pass. DEPLOYED on the server: ~/agent-node, data ~/.local/share/agent-node, 127.0.0.1:7787, reachable over the tailnet, keepalive = 2 crontab lines tagged "# agent-node keepalive", idle 71 MB. Real turn on the server via its ChatGPT plan (codex). Server Claude login EXPIRED (needs a person to run `claude` there; not blocking, ChatGPT plan works). Seams for merge: A replaces startNodeServer in src/headless/node-server.ts; B replaces applyBundle in src/headless/bundle.ts. Build: `node scripts/build-headless.mjs`; redeploy: scp tgz + `sh agent-node/install.sh --node ~/node-v24.15.0-linux-x64/bin/node`. C now on the server's own headless browser, then relay.
 - 02:42 lead killed an orphaned 5 h vitest in ~/agent-desktop-wt/accounts (90% CPU, parent gone).
 
+- 02:22 WSL restarted on its own (Wsl/Service/0x8007274c), likely Windows memory pressure (~1.6 GB free). Server node unaffected (it runs on the server). A on track: devices-node fb428a1, live proof copy C:\temp\devices-node-run (own userData, port 7797). WSL networking is mirrored (127.0.0.1 shared with Windows).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
