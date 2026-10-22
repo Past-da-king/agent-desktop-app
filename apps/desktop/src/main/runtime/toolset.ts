@@ -40,6 +40,7 @@ import type { SettingsView } from './runner'
 import { deviceTools, type DeviceToolDeps } from '../tools/devices'
 import { deviceAgentTools, withDeviceArg, type DeviceToolHub } from '../devices/device-tools'
 import { appControlTools, appUpdateTools, type AppControlDeps } from '../tools/app-control'
+import { appActionTools } from '../tools/app-actions'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -191,6 +192,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
     // The developer tools replace the learned apps' in-page network watcher: every tab records from the start.
     ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
+    ...(deps.appControl?.invoker === undefined ? [] : appActionTools({ invoker: deps.appControl.invoker })), // app_actions, app_action: every button in the window
     ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
   ]
 }

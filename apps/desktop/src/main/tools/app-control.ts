@@ -23,6 +23,7 @@ import {
 } from '@agent/core'
 
 import type { DeviceJoinResult } from '../devices/service'
+import type { AppActionInvoker } from './app-actions'
 
 /** What these tools use of DevicesService (main/devices/service.ts). */
 export interface DevicesControl {
@@ -63,6 +64,8 @@ export interface AppControlDeps {
   settings?: SettingsControl
   /** Main agent only: installing an update ends the app. */
   update?: UpdateControl
+  /** The window's own IPC handlers, for app_action (tools/app-actions.ts). */
+  invoker?: () => AppActionInvoker | null
 }
 
 const SHARE_GROUPS = ['browser', 'files', 'notifications', 'approval', 'shell'] as const
