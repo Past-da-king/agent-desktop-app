@@ -19,7 +19,8 @@ export interface RpcSessionDeps {
   /** Runs one call; throws with a plain message on failure. */
   call(session: RpcSession, method: string, args: unknown[]): Promise<unknown>
   onHello(session: RpcSession): void
-  onClose(session: RpcSession): void
+  /** The link ended with WebSocket close `code` (1006: the socket just went). */
+  onClose(session: RpcSession, code: number): void
 }
 
 export class RpcSession {
@@ -36,10 +37,10 @@ export class RpcSession {
     conn.onMessage((message) => {
       if ('text' in message) void this.onText(message.text)
     })
-    conn.onClose(() => {
+    conn.onClose((code) => {
       clearInterval(this.pinger)
       clearTimeout(this.helloTimer)
-      deps.onClose(this)
+      deps.onClose(this, code)
     })
     this.pinger = setInterval(() => conn.ping(), PING_MS)
     this.pinger.unref?.()
