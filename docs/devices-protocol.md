@@ -200,14 +200,48 @@ single sync service (`syncUrl`) is unchanged and runs beside it; what it brings 
 
 ## 9. Phone (screen) app
 
-- Remote mode: "Link to my computer": scan the QR (or type address + short code), pair, store pass + brain list
-  in Android Keystore-encrypted prefs. No AI keys stored in Remote mode.
-- The chat, memory, tasks, routines and projects screens are the node's own web UI at `/app/` in a WebView, with
-  TLS pinned (`onReceivedSslError` accepts only the pinned fingerprint) and the pass as a cookie. The native shell
-  owns: scanning, brain choice and failover (reloads the WebView on the next brain, shows which brain answers),
-  device commands (open_url via Intent, send_file into Downloads, notify as Android notifications), and sending its
-  DeviceFacts (`hello`) through a small JS bridge.
-- Local mode (its own key / subscription on the phone) keeps working as before.
+Revised 01:45 (owner's correction): both apps stay standalone; linking is optional; minimal changes.
+- The phone app works exactly as before on its own (own keys, own data). Linking adds only "scan to link to a
+  desktop or server" (QR, or address + short code). Store pass + brain list in Keystore-encrypted prefs. While
+  linked, no AI keys are used or stored for it on the phone.
+- While linked, the phone's EXISTING native screens show the brain's data and chat sends go to the brain over
+  `/v1/rpc`. No WebView of the desktop UI, no new screens, no project list. Unlinking returns to local data untouched.
+- The only new visible thing: a delegated project agent shows like a helper, with that project's icon and its live
+  status line; plus a small "linked to <brain>" indicator and "No agents available" when every brain fails.
+- The native layer handles brain choice and failover, device commands (open_url via Intent, send_file into
+  Downloads, notify) and `hello` with DeviceFacts. Local images in chat load from `/v1/file` with the pass.
+- The `/app/` web UI route is optional and not part of v1.
+
+## 11. Shared device tools (added 01:50)
+
+Any agent on any brain can use a tool that lives on another linked device (browser, notifications, files, shell,
+approvals). General for any devices; nothing assumes a phone or a particular machine.
+
+- **Advertise**: every device (node or screen) sends its tool catalogue in `hello` as `tools: DeviceTool[]` and the
+  node stores it on the device row as `tools`. `DeviceTool = { name, description, params (JSON schema), group:
+  "browser|notifications|files|shell|approval|phone|other", readOnly }`. Tool names are the device's own names
+  (e.g. `browser_open`, `notifications_read`, `file_send`, `shell_run`, `ask_user`).
+- **Call**: a brain sends a device command `{ kind: "tool", id, tool, args, chatId, deadlineMs }` (s5.2) to the
+  target device; the device runs it and answers with RPC `device.result(id, ok, value | error)` (value JSON, images as
+  `{ type: "image", mime, data base64 }` or a `/v1/file` path on the device's node). Default deadline 120 s,
+  browser up to 600 s. While the device is offline the command waits in `device_command` (expires 10 min).
+  A screen-only device (phone) reaches the brain over its existing `/v1/rpc` socket, so tools on it work without
+  inbound connections to it.
+- **Agent side** (every brain): two tools plus routing.
+  `devices_list()` lists linked devices with kind, online, and tool groups.
+  `device_tool(device, tool, args)` calls one tool on a named device (`device` by id or name, forgiving match, or
+  `"best"`). Existing local tools gain an optional `device` argument where cheap (browser tools, notify, ask_user,
+  send_file, open_url); without it they act locally, except open_url/send_file/notify which default to the origin
+  device.
+- **Router** for `"best"`: prefer the origin device if it has the tool; else a device the user marked preferred for
+  that group in Settings > Devices (optional); else the online device with the tool, by brain priority, phones
+  last for heavy work. If a local browser call fails with a block (HTTP 403/429, captcha, "access denied") the agent
+  is told which linked devices have a browser and may retry there.
+- **Approval on another device**: `ask_user` / `request_approval` with `device` puts the question on that device
+  (on the phone: a notification with the buttons); the answer comes back as the tool result and work continues on
+  the brain.
+- **Safety**: only paired, non-revoked devices; each device may turn groups off ("Let other devices use my
+  browser/notifications/files/shell"), default ON for browser, files, notifications, approval and OFF for shell.
 
 ## 10. Overlay network (optional, pluggable)
 
