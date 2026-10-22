@@ -129,6 +129,8 @@ export const CHANNELS = {
     noteAudio: 'agent:voice.noteAudio',
     liveToken: 'agent:voice.liveToken',
     callSave: 'agent:voice.callSave',
+    callTargets: 'agent:voice.callTargets',
+    callHandoff: 'agent:voice.callHandoff',
     callStart: 'agent:voice.callStart',
     callAudio: 'agent:voice.callAudio',
     callMute: 'agent:voice.callMute',

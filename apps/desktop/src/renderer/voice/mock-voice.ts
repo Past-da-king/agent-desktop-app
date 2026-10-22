@@ -121,6 +121,12 @@ export function mockVoice(deps: MockVoiceDeps): VoiceApi {
     async callSave() {
       return null
     },
+    async callTargets() {
+      return []
+    },
+    async callHandoff() {
+      return { ok: false as const, error: 'Calls from another device need a computer.', ambiguous: [] }
+    },
     async callStart() {
       if (!deps.settings().hasVoiceKey) return { ok: false, message: 'Add a Gemini key in Settings to talk.' }
       clear()
