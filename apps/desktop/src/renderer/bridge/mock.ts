@@ -1,5 +1,9 @@
 import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS, pickModel, resolvePick } from '@agent/core'
+import { mockDevices } from './mock-devices'
 import type {
+  WorkerEvent,
+  WorkerInfo,
+  WorkerLogLine,
   AccountRules,
   AgentApi,
   AgentProfileInfo,
@@ -606,6 +610,7 @@ function appName(slug: string): string {
 export const mockAgent: AgentApi = {
   platform: 'web',
   version: '0.0.0',
+  devices: mockDevices,
 
   settings: {
     async get() {
@@ -692,6 +697,9 @@ export const mockAgent: AgentApi = {
       rows = {
         chat_item: [],
         turn: [],
+        device: [],
+        device_command: [],
+        turn_lease: [],
         memory: [],
         goal: [],
         task: [],
@@ -1444,6 +1452,7 @@ export const mockAgent: AgentApi = {
   }),
 
   ...mockHotkeys(() => settings),
+  workers: mockWorkers(),
   memory: {
     async newChat(target) {
       const chatOfRow = (item: ChatItem): string => String(parseMeta(item.meta)['chat'] ?? MAIN_CHAT)
@@ -1707,5 +1716,86 @@ function mockUpkeepReport(): UpkeepReport {
       change('dropped', 'big-m3', 'Checking flights now', 'Progress note, only true that day'),
       change('dropped', 'm-dup', 'lerato', 'Duplicate of "Lerato"'),
     ],
+  }
+}
+
+/** Background workers in the browser preview: one demo worker that is running, with a few events. */
+function mockWorkers(): AgentApi['workers'] {
+  const now = Date.now()
+  const workers: WorkerInfo[] = [
+    {
+      id: 'w_demo01',
+      name: 'Team chat: DMs and mentions',
+      about: 'Holds a live connection to the team chat and emits each direct message and mention.',
+      entry: 'main.mjs',
+      runtime: 'node',
+      args: [],
+      mode: 'stay',
+      everyMinutes: null,
+      secrets: ['CHAT_APP_TOKEN', 'CHAT_USER_TOKEN'],
+      enabled: true,
+      createdAt: now - 86_400_000,
+      updatedAt: now - 3_600_000,
+      dir: 'C:\Users\you\AppData\Roaming\Agent\workers\w_demo01',
+      state: 'running',
+      pid: 4242,
+      upSince: now - 2 * 3_600_000,
+      lastEventAt: now - 6 * 60_000,
+      lastLineAt: now - 20_000,
+      eventsToday: 7,
+      restartsToday: 0,
+      lastError: '',
+      downSince: null,
+      lastGap: { from: now - 10 * 3_600_000, to: now - 2 * 3_600_000, caughtUp: 3 },
+      secretsSet: ['CHAT_APP_TOKEN', 'CHAT_USER_TOKEN'],
+      nextRunAt: null,
+    },
+  ]
+  const events: WorkerEvent[] = [
+    { id: 'e_demo1', worker: 'w_demo01', source: 'chat', event: 'message.dm', payload: JSON.stringify({ from: 'Sam', text: 'Can you check the invoice before Friday?' }), dedupeKey: 'D1/1', seenAt: now - 6 * 60_000, receivedAt: now - 6 * 60_000, status: 'routed', routine: 'r-demo', note: 'Desk #h-demo' },
+    { id: 'e_demo2', worker: 'w_demo01', source: 'chat', event: 'message.mention', payload: JSON.stringify({ from: 'Lee', channel: 'general', text: 'thanks all' }), dedupeKey: 'C1/2', seenAt: now - 40 * 60_000, receivedAt: now - 40 * 60_000, status: 'routed', routine: 'r-demo', note: 'Desk #h-demo' },
+  ]
+  const logs: WorkerLogLine[] = [
+    { at: now - 2 * 3_600_000, level: 'info', text: 'Started; catching up' },
+    { at: now - 2 * 3_600_000 + 2000, level: 'info', text: 'connected' },
+  ]
+  const listeners = new Set<() => void>()
+  const changed = (): void => listeners.forEach((cb) => cb())
+  const find = (id: string): WorkerInfo => {
+    const w = workers.find((each) => each.id === id)
+    if (w === undefined) throw new Error('No such worker.')
+    return w
+  }
+  return {
+    list: async () => workers.map((w) => ({ ...w })),
+    events: async (worker, limit) => events.filter((e) => worker === undefined || worker === '' || e.worker === worker).slice(0, limit ?? 100),
+    logs: async (id, limit) => (id === 'w_demo01' ? logs.slice(-(limit ?? 200)) : []),
+    start: async (id) => {
+      Object.assign(find(id), { state: 'running', enabled: true, upSince: Date.now() })
+      changed()
+    },
+    stop: async (id) => {
+      Object.assign(find(id), { state: 'stopped', enabled: false, upSince: null, downSince: Date.now() })
+      changed()
+    },
+    restart: async (id) => {
+      Object.assign(find(id), { state: 'running', upSince: Date.now() })
+      changed()
+    },
+    remove: async (id) => {
+      const index = workers.findIndex((w) => w.id === id)
+      if (index >= 0) workers.splice(index, 1)
+      changed()
+    },
+    setSecret: async (id, name) => {
+      const w = find(id)
+      if (!w.secretsSet.includes(name)) w.secretsSet.push(name)
+      changed()
+    },
+    openFolder: async () => undefined,
+    onChange: (cb) => {
+      listeners.add(cb)
+      return () => listeners.delete(cb)
+    },
   }
 }

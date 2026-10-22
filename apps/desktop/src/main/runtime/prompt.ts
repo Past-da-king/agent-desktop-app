@@ -51,6 +51,8 @@ export interface PromptInput {
   project?: ProjectContext | null
   /** The user's projects by name, so the main thread knows where work can go. */
   projectNames?: string[]
+  /** Devices: one line on which of the person's devices the newest message came from (devices/origin.ts). */
+  deviceLine?: string
 }
 
 /** What the agent is told about the project a chat belongs to. */
@@ -382,6 +384,11 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push('')
     lines.push('THIS COMPUTER')
     lines.push(...computerLines)
+  }
+  if (input.deviceLine !== undefined && input.deviceLine.trim() !== '') {
+    lines.push('')
+    lines.push('THE DEVICE THE USER IS ON')
+    lines.push(`- ${input.deviceLine.trim()}`)
   }
 
   if (pinned.length > 0) {

@@ -105,6 +105,17 @@ function useBrowserState(): BrowserState | null {
 
 /** The mock bridge shows the designed SkyHop page; Electron paints the real page over this slot. */
 function MockPage({ agentName }: { agentName: string }): JSX.Element {
+  // On another device the agent's browser runs on the computer: say so instead of the preview's demo page.
+  if (agent.remote !== undefined) {
+    return (
+      <div className="br-remote">
+        <Icon name="monitor" size={22} />
+        <span>
+          {agentName} browses on {agent.remote.nodeName}. The page is there, and the cards here show what it found.
+        </span>
+      </div>
+    )
+  }
   return (
     <div className="web">
       <div className="web-h">

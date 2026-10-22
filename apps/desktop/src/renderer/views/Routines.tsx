@@ -1,4 +1,4 @@
-import type { TriggerRow } from '@agent/core'
+import { parseEventFilter, type TriggerRow, type WorkerInfo } from '@agent/core'
 import { useState } from 'react'
 
 import { agent } from '../bridge'
@@ -17,6 +17,8 @@ import { SectionHeader } from '../ui/SectionHeader'
 import { Segmented } from '../ui/Segmented'
 import { Skeleton } from '../ui/Skeleton'
 import { Switch } from '../ui/Switch'
+import { useWorkers } from '../state/useWorkers'
+import { WorkersSection } from './Workers'
 
 interface Template {
   name: string
@@ -87,19 +89,32 @@ function lastLabel(trigger: TriggerRow): string {
   return `Last run ${readable}: ${result}`
 }
 
+/** The worker and event an event routine listens for, as the dialog edits them. */
+function eventParts(spec: string): { worker: string; event: string } {
+  const filter = parseEventFilter(spec)
+  if (typeof filter === 'string') return { worker: '', event: '*' }
+  return { worker: filter.worker ?? '', event: filter.event ?? '*' }
+}
+
 function RoutineDialog({
   trigger,
   template,
+  workers,
   onClose,
 }: {
   trigger: TriggerRow | null
   template: Template | null
+  workers: WorkerInfo[]
   onClose: () => void
 }): JSX.Element {
   const [name, setName] = useState(trigger?.name ?? template?.name ?? '')
   const [kind, setKind] = useState<TriggerRow['kind']>(trigger?.kind ?? template?.kind ?? 'daily')
   const [spec, setSpec] = useState(trigger?.spec ?? template?.spec ?? '07:00')
   const [prompt, setPrompt] = useState(trigger?.prompt ?? template?.prompt ?? '')
+  const startParts = trigger?.kind === 'event' ? eventParts(trigger.spec) : { worker: workers[0]?.id ?? '', event: '*' }
+  const [worker, setWorker] = useState(startParts.worker)
+  const [eventName, setEventName] = useState(startParts.event)
+  const [gather, setGather] = useState(String(trigger?.gatherSeconds ?? 20))
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -108,6 +123,7 @@ function RoutineDialog({
     setError('')
     if (next === 'daily') setSpec('07:00')
     else if (next === 'interval') setSpec('60')
+    else if (next === 'event') setSpec('')
     else {
       const later = new Date(Date.now() + 60 * 60_000)
       later.setSeconds(0, 0)
@@ -156,18 +172,26 @@ function RoutineDialog({
         return
       }
     }
+    if (kind === 'event' && worker === '') {
+      setError('Choose the worker it listens to.')
+      return
+    }
+    const eventSpec = kind === 'event' ? JSON.stringify({ worker, ...(eventName.trim() === '' || eventName.trim() === '*' ? {} : { event: eventName.trim() }) }) : spec.trim()
+    const gatherSeconds = Math.max(0, Math.min(600, Math.round(Number(gather) || 0)))
     setBusy(true)
     const now = Date.now()
     const row: TriggerRow = {
+      ...(trigger ?? {}),
       id: trigger?.id ?? '',
       createdAt: trigger?.createdAt ?? now,
       name: name.trim(),
       kind,
-      spec: spec.trim(),
+      spec: eventSpec,
       prompt: prompt.trim(),
       enabled: trigger?.enabled ?? true,
       lastRunAt: trigger?.lastRunAt ?? null,
       lastResult: trigger?.lastResult ?? 'Not run yet',
+      ...(kind === 'event' ? { gatherSeconds, profile: trigger?.profile ?? '', deskId: trigger?.deskId ?? '' } : {}),
     }
     try {
       await agent.data.upsert('trigger', row)
@@ -212,10 +236,33 @@ function RoutineDialog({
               { value: 'daily', label: 'Every day' },
               { value: 'interval', label: 'Every few minutes' },
               { value: 'at', label: 'One time' },
+              { value: 'event', label: 'When something happens' },
             ]}
           />
         </>
       )}
+      {kind === 'event' ? (
+        <>
+          <div className="field">
+            <label htmlFor="routine-worker">Worker</label>
+            {workers.length === 0 ? (
+              <p className="small muted" id="routine-worker">
+                No workers yet. Ask your agent to make one first; it shows under Workers below.
+              </p>
+            ) : (
+              <select id="routine-worker" className="input" value={worker} onChange={(event) => setWorker(event.target.value)}>
+                {workers.map((each) => (
+                  <option key={each.id} value={each.id}>
+                    {each.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <Field label="Which events (* for all, or e.g. message.*)" value={eventName} onChange={setEventName} placeholder="*" />
+          <Field label="Gather for this many seconds into one run" value={gather} onChange={setGather} placeholder="20" />
+        </>
+      ) : (
       <div className="field">
         <label htmlFor="routine-spec">
           {kind === 'daily' ? 'Time' : kind === 'interval' ? 'Minutes between runs' : 'When'}
@@ -240,9 +287,10 @@ function RoutineDialog({
         />
         {builtin && error !== '' ? <span className="small" role="alert">{error}</span> : null}
       </div>
+      )}
       {builtin ? null : (
         <div className="field">
-          <label htmlFor="routine-prompt">What should it do?</label>
+          <label htmlFor="routine-prompt">{kind === 'event' ? 'What should its desk do with each batch?' : 'What should it do?'}</label>
           <textarea
             id="routine-prompt"
             className="textarea"
@@ -273,6 +321,8 @@ export function Routines(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const triggers = useEntity('trigger')
   const loaded = useEntityLoaded('trigger')
+  const { workers } = useWorkers()
+  const workerName = (id: string): string | undefined => workers.find((w) => w.id === id)?.name
   const navigate = useUi((state) => state.navigate)
   const [dialog, setDialog] = useState<{ trigger: TriggerRow | null; template: Template | null } | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
@@ -379,13 +429,13 @@ export function Routines(): JSX.Element {
               {sorted.map((trigger) => (
                 <div className="rtn" key={trigger.id}>
                   <span className="mi2">
-                    <Icon name={isBuiltin(trigger) ? 'sync' : 'clock'} size={22} />
+                    <Icon name={isBuiltin(trigger) ? 'sync' : trigger.kind === 'event' ? 'bolt' : 'clock'} size={22} />
                   </span>
                   <div className="rt">
                     <b>
                       {trigger.name}
                     </b>
-                    <span className="rt-when">{scheduleLabel(trigger)}</span>
+                    <span className="rt-when">{scheduleLabel(trigger, workerName)}</span>
                     <span className="rt-last">{lastLabel(trigger)}</span>
                   </div>
                   <div className="rtn-actions">
@@ -432,6 +482,8 @@ export function Routines(): JSX.Element {
         </>
       )}
 
+      <WorkersSection />
+
       {loaded ? (
         <div style={{ marginTop: 34 }}>
           <SectionHeader eyebrow="START FROM" line="Pick one and change anything" />
@@ -452,7 +504,7 @@ export function Routines(): JSX.Element {
       ) : null}
 
       <div className="banner" style={{ marginTop: 28 }}>
-        Routines run while the app is open. Anything missed while it was closed runs once on the next start.
+        Routines run while the app is open. Anything missed while it was closed runs once on the next start, and workers catch up on what arrived meanwhile.
         {' '}
         <button
           type="button"
@@ -470,6 +522,7 @@ export function Routines(): JSX.Element {
         <RoutineDialog
           trigger={dialog.trigger}
           template={dialog.template}
+          workers={workers}
           onClose={() => setDialog(null)}
         />
       ) : null}
