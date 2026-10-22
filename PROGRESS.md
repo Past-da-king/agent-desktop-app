@@ -88,6 +88,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 06:45 B fixed g (3dde4de: lease recovered before Devices attaches via ownBrainIds/devices_self_id; messageId kept) and made f honest (9d833af: waits until turn + lease reach the next brain). Harness 7/7 twice locally; full suite 1248. A is editing bundle/replicate in the same worktree for the live test.
 
+- 06:55 D: R8 shrink, APK 35.6 MB (Agent-0.14.1.apk in Downloads/agent, versionCode 91, 8000755), emulator-proven Local + linked; 541/543. D now does the real-node redroid proof on a temp server node (port 7789).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
