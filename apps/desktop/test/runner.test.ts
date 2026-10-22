@@ -273,6 +273,42 @@ describe('Runner', () => {
     expect(JSON.parse(rows.find((row) => row.id === card.id)?.meta ?? '{}')).toMatchObject({ answer: 'Blue' })
   })
 
+  it('counts every open card in the store, not only its own (a helper card, 22 Oct 2026)', async () => {
+    fake = await startFakeAi(() => ({ text: 'Fine, not now.' }))
+    const { runner, store: database } = makeRunner()
+
+    // Written by runtime/helpers.ts, not by the runner: before the fix it was counted on the rail but never in
+    // chat.state(), so Home said "Nothing needs you" while the rail said "Waiting for you".
+    const question = await database.upsert('chat_item', {
+      kind: 'question',
+      text: 'Plug your phone in?',
+      meta: JSON.stringify({ options: ['Plugged in', 'Not now'], answer: '', helper: 'h-ended', by: 'Ship phone fixes', chat: 'pc-1' }),
+    })
+    const approval = await database.upsert('chat_item', {
+      kind: 'approval',
+      text: 'Change the worker',
+      meta: JSON.stringify({ summary: 'Change the worker', details: '', decision: '', scope: 'computer', helper: 'h-live', by: 'Another' }),
+    })
+    expect(runner.state().waiting).toEqual(expect.arrayContaining([question.id, approval.id]))
+    expect(runner.state('pc-1').waiting).toEqual([question.id])
+    expect(runner.states().find((info) => info.chat === 'pc-1')?.waiting).toEqual([question.id])
+
+    // Its helper has ended: answering still works and carries the conversation on in that chat.
+    await runner.answer(question.id, 'Not now')
+    expect(runner.state().waiting).not.toContain(question.id)
+    await waitFor(async () => (await items(database)).some((row) => row.kind === 'agent' && row.text === 'Fine, not now.'))
+
+    // Decided anywhere (another window, the phone, a sync): it leaves the list at once.
+    await database.upsert('chat_item', { id: approval.id, kind: 'approval', text: approval.text, meta: JSON.stringify({ ...JSON.parse(approval.meta), decision: 'decline' }) })
+    expect(runner.state().waiting).toEqual([])
+
+    // Deleted: gone too.
+    const again = await database.upsert('chat_item', { kind: 'question', text: 'Still there?', meta: JSON.stringify({ answer: '' }) })
+    expect(runner.state().waiting).toEqual([again.id])
+    await database.remove('chat_item', again.id)
+    expect(runner.state().waiting).toEqual([])
+  })
+
   it('merges a message sent while the agent is working into the same run', async () => {
     const slow: Tool = {
       spec: { name: 'slow_tool', description: 'Waits a while.', schema: { type: 'object', properties: {} } },
