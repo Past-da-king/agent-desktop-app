@@ -336,3 +336,39 @@ describe('headless CLI, end to end', () => {
     expect(fake.requests[0]?.headers['authorization']).toBe('Bearer sk-cli-test')
   }, 60_000)
 })
+
+describe('headless CLI pairing, end to end', () => {
+  it('offers from a running node, pairs a second node with the printed link, lists and revokes it', async () => {
+    const built = spawnSync(process.execPath, [join(root, 'scripts', 'build-headless.mjs'), '--bundle'], { cwd: root, encoding: 'utf8' })
+    expect(built.status, built.stderr).toBe(0)
+    const one = temp()
+    const two = temp()
+    const port = String(20000 + Math.floor(Math.random() * 30000))
+    expect((await cli(['config', '--port', port, '--url', `https://127.0.0.1:${port}`, '--data-dir', one])).code).toBe(0)
+    const started = await cli(['start', '--daemon', '--data-dir', one])
+    closers.push(async () => {
+      await cli(['stop', '--data-dir', one])
+    })
+    expect(started.code, started.err + started.out).toBe(0)
+
+    const offered = await cli(['offer', '--data-dir', one])
+    expect(offered.code, offered.err).toBe(0)
+    // The QR is drawn in half blocks, then the link and code.
+    expect(offered.out).toMatch(/[\u2580\u2584\u2588]{10}/)
+    const link = /Pairing link: (agent:\/\/pair\?\S+)/.exec(offered.out)?.[1] ?? ''
+    expect(link).toContain(`u=${encodeURIComponent(`https://127.0.0.1:${port}`)}`)
+
+    const paired = await cli(['pair', link, '--data-dir', two])
+    expect(paired.code, paired.err + paired.out).toBe(0)
+    expect(paired.out).toMatch(/Paired with https:\/\/127\.0\.0\.1/)
+
+    const listed = await cli(['devices', '--data-dir', one])
+    const joined = /^(dev_\S+)\s+\S+\s+server\/linux\s+brain\+hands/m.exec(listed.out.split('\n').slice(1).join('\n'))
+    expect(listed.out.split('\n').filter((l) => l.startsWith('dev_')).length).toBe(2)
+    const id = joined?.[1] ?? listed.out.split('\n').filter((l) => l.startsWith('dev_'))[1]?.split(' ')[0] ?? ''
+    expect((await cli(['revoke', id, '--data-dir', one])).code).toBe(0)
+    expect((await cli(['devices', '--data-dir', one])).out).toContain('revoked')
+    // Anyone without the folder's permissions cannot reach the control line.
+    expect(statSync(join(one, 'control.sock')).mode & 0o777).toBe(0o600)
+  }, 90_000)
+})
