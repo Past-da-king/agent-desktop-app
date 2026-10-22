@@ -96,6 +96,27 @@ export const PASS_SECRET = 'devicePass'
 /** devices/service.ts SELF_PASS. */
 const OWN_PASS_SECRET = 'devicesSelfPass'
 
+/** How long one address gets to answer /v1/health before the next is preferred. */
+const PROBE_MS = 3000
+
+/**
+ * The addresses in the order to try them: those that answer /v1/health (pinned, all at once, a few seconds each)
+ * first, in the advertised order, then the rest. An unreachable LAN or virtual-switch address never stalls pairing.
+ */
+export async function reachableFirst(urls: string[], fp: string, probeMs: number = PROBE_MS): Promise<string[]> {
+  const answers = await Promise.all(
+    urls.map(async (url) => {
+      try {
+        const reply = await pinnedJson(`${url.replace(/\/+$/, '')}/v1/health`, { fp, timeoutMs: probeMs })
+        return reply.status === 200
+      } catch {
+        return false
+      }
+    }),
+  )
+  return [...urls.filter((_, i) => answers[i] === true), ...urls.filter((_, i) => answers[i] !== true)]
+}
+
 export async function pair(
   target: PairTarget,
   facts: DeviceFacts,
@@ -104,7 +125,7 @@ export async function pair(
   targets: PairTargets,
 ): Promise<PairOutcome> {
   const failures: string[] = []
-  for (const url of target.urls) {
+  for (const url of await reachableFirst(target.urls, target.fp)) {
     let reply
     try {
       reply = await pinnedJson(`${url.replace(/\/+$/, '')}/v1/pair`, {
