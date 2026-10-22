@@ -1,5 +1,5 @@
 /**
- * A call on a linked phone hands work to the RIGHT agent on this computer (22 Oct 2026, Ayanda: "tell the Agent
+ * A call on a linked phone hands work to the RIGHT agent on this computer (22 Oct 2026: "tell the Agent
  * Desktop App project to...", "ask the dictation helper..."). Two RPCs: `voice.callTargets` lists who is there to talk
  * to (the main agent, each project with its chats and what they are doing, the helpers at work) so the voice knows,
  * and `voice.callHandoff` puts the message in front of the one named: the main chat, a project chat (or a new chat in
