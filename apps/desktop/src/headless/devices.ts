@@ -104,11 +104,12 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
   })
   // Events the window would get go to paired devices too (only the ones they may hear).
   runtime.ipc.onEvent((channel, payload) => service.broadcast(channel, payload))
-  await service.start()
+  // Where it listens is set before it starts, so it starts listening once, there.
   await service.configure({ listen: options.listen, port: options.port })
+  await service.start()
   if (options.extraUrls !== undefined && options.extraUrls.length > 0) await service.setExtraUrls(options.extraUrls)
   // A headless node exists to be reached: it always listens (on loopback unless told otherwise).
-  await service.setEnabled(true)
+  if (!service.isEnabled()) await service.setEnabled(true)
   // A pairing made while it was stopped: take that brain's bundle now.
   const pending = readConfig(runtime.dataDir).join
   if (pending !== null) await joinNow(runtime.dataDir, pending.url, pending.fp).catch(() => false)

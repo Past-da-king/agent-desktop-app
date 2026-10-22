@@ -107,6 +107,9 @@ export function advertisedUrls(config: DevicesConfig, interfaces: InterfaceMap =
   const add = (url: string): void => {
     if (!out.includes(url)) out.push(url)
   }
+  // The addresses the person added first: they said these reach this node (a VPN or public name), so other devices
+  // try them before guessing at local interfaces that may not be reachable from where they are.
+  for (const url of config.extraUrls) add(url)
   const loopbackOnly = config.listen.startsWith('127.') || config.listen === '::1'
   if (!loopbackOnly) {
     for (const list of Object.values(interfaces)) {
@@ -119,6 +122,5 @@ export function advertisedUrls(config: DevicesConfig, interfaces: InterfaceMap =
       }
     }
   }
-  for (const url of config.extraUrls) add(url)
   return out
 }
