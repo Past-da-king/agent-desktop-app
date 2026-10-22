@@ -74,8 +74,21 @@ const HEALTH_TIMEOUT_MS = 3_000
  */
 export const devicesState: { sync: DevicesSync | null } = { sync: null }
 
+/** Where this install remembers its device id, so a restart knows its own leases before Devices is attached. */
+export const SELF_ID_KEY = 'devices_self_id'
+
+/**
+ * Every id this brain has written leases under: its install id, and the device id it had with Devices on. Turn
+ * leases are recovered on start, before the node server attaches, so the device id must come from the store.
+ */
+export function ownBrainIds(store: { deviceId: string; localValue(key: string): string | null }): string[] {
+  const device = store.localValue(SELF_ID_KEY)
+  return device === null || device === '' ? [store.deviceId] : [store.deviceId, device]
+}
+
 export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): DevicesSync {
   const store = deps.store
+  store.setLocalValue(SELF_ID_KEY, host.self().id)
   const keeper = new BundleKeeper({ ...deps.bundle, local: store })
   keeper.watch()
   registerSyncRoutes(host, store, () => keeper.version())

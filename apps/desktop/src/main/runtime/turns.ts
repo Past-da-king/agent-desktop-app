@@ -111,10 +111,10 @@ export class TurnLeases implements LeaseHook {
         id,
         kind: info.kind,
         chatId: info.chatId,
-        messageId: info.messageId,
         brainId: this.deps.selfId(),
         status: 'running',
-        ...(keep ? {} : { attempt: 1, startedAt: at, prompt: info.prompt.slice(0, 2000) }),
+        // A resumed run keeps the message it answers, its attempt count and the request it was started with.
+        ...(keep ? {} : { messageId: info.messageId, attempt: 1, startedAt: at, prompt: info.prompt.slice(0, 2000) }),
         heartbeatAt: at,
       })
     })

@@ -46,7 +46,7 @@ import { savePastedFile } from './pasted'
 import { Runner } from './runtime/runner'
 import { TurnLeases } from './runtime/turns'
 import { ProjectAgentRows } from './runtime/project-agents'
-import { devicesState, type DevicesSyncDeps } from './devices/sync'
+import { devicesState, ownBrainIds, type DevicesSyncDeps } from './devices/sync'
 import { attachDevicesSync } from './devices/attach'
 import { registerRelay, rolesFromStore } from './devices/relay'
 import { Scheduler } from './runtime/scheduler'
@@ -717,7 +717,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   leases = new TurnLeases({
     store: leaseStore,
     selfId: () => devicesState.sync?.selfId() ?? leaseStore.deviceId,
-    ownIds: () => [leaseStore.deviceId],
+    ownIds: () => ownBrainIds(leaseStore),
     resumeTurn: (chat, id, note) => runner?.resumeTurn(chat, id, note),
     resumeJob: async (id, note) => {
       await helpers.push(id, note)
