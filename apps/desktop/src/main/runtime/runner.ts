@@ -218,6 +218,8 @@ export class Runner {
   private readonly decisionWaiters = new Map<string, (approved: boolean) => void>()
   /** Card id -> the chat it is in, for every card waiting on the person. */
   private readonly waiting = new Map<string, string>()
+  /** Stops following the store's card rows (dispose). */
+  private readonly offCards: (() => void) | null
   private readonly activities = new Map<string, ActivityRow>()
   private readonly activityIds = new Map<number, string>()
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
@@ -247,6 +249,49 @@ export class Runner {
     this.joinPickupMs = deps.joinPickupMs ?? JOIN_PICKUP_MS
     this.locks = deps.locks
     this.devices = deps.devices
+    // Every card row is a card the person can answer, whoever wrote it: this runner, a helper (runtime/helpers.ts),
+    // a project agent, or a row synced from another device. Before 22 Oct 2026 only the runner's own cards were
+    // tracked, so a helper's question or approval was counted on the rail ("Waiting for you", 2) but never drawn
+    // in Needs you or on the phone, and a card whose helper had ended could not be answered from there at all.
+    const watched = deps.store as DataStore & { onChange?: (listener: (change: CardChange) => void) => () => void }
+    this.offCards = watched.onChange?.((change) => this.trackCard(change)) ?? null
+  }
+
+  /** Keep the waiting list in step with the store: an open card row is waiting, an answered or deleted one is not. */
+  private trackCard(change: CardChange): void {
+    if (change.entity !== 'chat_item') return
+    if (change.reset === true) {
+      void this.rearmCards().catch(() => undefined)
+      return
+    }
+    if (change.deleted === true) {
+      const id = change.id ?? (change.row as { id?: string } | undefined)?.id
+      if (id !== undefined && this.waiting.delete(id)) this.emit({ type: 'chat_changed' })
+      return
+    }
+    const row = change.row as ChatItem | undefined
+    if (row === undefined || (row.kind !== 'question' && row.kind !== 'approval')) return
+    if (isOpenCardRow(row)) {
+      if (this.waiting.get(row.id) === chatOf(row)) return
+      this.waiting.set(row.id, chatOf(row))
+      this.emitFor(chatOf(row), { type: 'chat_changed' })
+    } else if (this.waiting.delete(row.id)) {
+      this.emitFor(chatOf(row), { type: 'chat_changed' })
+    }
+  }
+
+  /** Read every card again (the store was reset, for example by a sync). */
+  private async rearmCards(): Promise<void> {
+    const rows = await this.store.list('chat_item')
+    const open = new Map<string, string>()
+    for (const row of rows) if (isOpenCardRow(row)) open.set(row.id, chatOf(row))
+    let changed = false
+    for (const id of [...this.waiting.keys()]) if (!open.has(id)) changed = this.waiting.delete(id) || changed
+    for (const [id, chat] of open) if (this.waiting.get(id) !== chat) {
+      this.waiting.set(id, chat)
+      changed = true
+    }
+    if (changed) this.emit({ type: 'chat_changed' })
   }
 
   /** What runtime/brains.ts needs to say which AI a chat thinks with. */
@@ -624,8 +669,7 @@ export class Runner {
         changed = true
       }
 
-      if (item.kind === 'question' && !isSet(meta['answer'])) this.waiting.set(item.id, chatOf(item))
-      if (item.kind === 'approval' && !isSet(meta['decision'])) this.waiting.set(item.id, chatOf(item))
+      if (isOpenCardRow(item)) this.waiting.set(item.id, chatOf(item))
 
       // A message routed while the app closed: it is in the chat, so say it was not answered rather than "deciding".
       if (item.kind === 'user' && meta['route'] === 'pending') {
@@ -644,6 +688,7 @@ export class Runner {
 
   dispose(): void {
     this.disposing = true
+    this.offCards?.()
     for (const line of this.lines.values()) line.controller?.abort()
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
@@ -1616,6 +1661,26 @@ function parseMeta(raw: string): Record<string, unknown> {
 
 function isSet(value: unknown): boolean {
   return typeof value === 'string' && value !== ''
+}
+
+/** What the store tells a listener (main/db.ts StoreChange), as far as the runner reads it. */
+interface CardChange {
+  entity: string
+  row?: unknown
+  id?: string
+  deleted?: boolean
+  reset?: boolean
+}
+
+/**
+ * A question nobody has answered or an approval nobody has decided: the one rule for "waiting for you", the same as
+ * the window's (renderer/lib/cards.ts isOpenCard), so the rail, Needs you, the tray and the phone always agree.
+ */
+export function isOpenCardRow(row: { kind: string; meta: string }): boolean {
+  if (row.kind !== 'question' && row.kind !== 'approval') return false
+  const meta = parseMeta(row.meta)
+  if (row.kind === 'question') return !isSet(meta['answer'])
+  return meta['decision'] !== 'approve' && meta['decision'] !== 'decline'
 }
 
 function stringField(value: unknown): string {
