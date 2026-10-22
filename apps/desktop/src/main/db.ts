@@ -50,7 +50,7 @@ const MAX_SINGLE_CHANGES = 40
  */
 const CHAT_SQL = "CASE WHEN json_valid(json_extract(payload, '$.meta')) THEN json_extract(json_extract(payload, '$.meta'), '$.chat') END"
 
-const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device']
+const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease']
 
 /** Versions kept per memory page; the oldest go first. */
 const MAX_VERSIONS = 300
@@ -72,6 +72,7 @@ export class Store implements SyncStore {
     this.now = clock
     this.db = new DatabaseSync(file)
     this.db.exec('PRAGMA journal_mode = WAL')
+    const hadLog = this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'change_log'").get() !== undefined
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS rows(
         entity TEXT NOT NULL,
@@ -99,7 +100,16 @@ export class Store implements SyncStore {
         payload TEXT NOT NULL,
         PRIMARY KEY(memory_id, n)
       );
+      CREATE TABLE IF NOT EXISTS change_log(
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity TEXT NOT NULL,
+        cid TEXT NOT NULL,
+        via TEXT NOT NULL DEFAULT '',
+        UNIQUE(entity, cid)
+      );
     `)
+    // The change log (docs/devices-protocol.md s7) starts with every row there is, so a new peer gets them all.
+    if (!hadLog) this.db.exec("INSERT OR REPLACE INTO change_log(entity, cid, via) SELECT entity, cid, '' FROM rows ORDER BY stamp")
 
     const existing = this.kv('device_id')
     if (existing === null) {
@@ -203,6 +213,7 @@ export class Store implements SyncStore {
            local = 1`,
       )
       .run(entity, id, stamp, JSON.stringify(payload))
+    this.logChange(entity, id, '')
 
     const saved = { id, ...payload } as EntityMap[E]
     this.emit({ entity, row: saved })
@@ -218,6 +229,7 @@ export class Store implements SyncStore {
     this.db
       .prepare('UPDATE rows SET stamp = ?, deleted = 1, local = 1 WHERE entity = ? AND cid = ?')
       .run(stamp, entity, id)
+    this.logChange(entity, id, '')
     this.emit({ entity, id, deleted: true })
   }
 
@@ -225,6 +237,7 @@ export class Store implements SyncStore {
   async clearAll(): Promise<void> {
     this.db.exec('DELETE FROM rows')
     this.db.exec('DELETE FROM memory_versions')
+    this.db.exec('DELETE FROM change_log')
     this.db.prepare("DELETE FROM kv WHERE k IN ('push_mark', 'cursor')").run()
     for (const entity of ENTITY_NAMES) this.emit({ entity, reset: true })
   }
@@ -360,7 +373,11 @@ export class Store implements SyncStore {
     return changes
   }
 
-  async applyRemote(changes: Change[]): Promise<void> {
+  /**
+   * Apply changes from another device. `via` names the peer node that handed them over ('' for the sync service),
+   * so the change log never hands a change back to the peer it came from.
+   */
+  async applyRemote(changes: Change[], via = ''): Promise<void> {
     const touched: StoreChange[] = []
     for (const change of changes) {
       if (!isEntityName(change.entity)) continue
@@ -393,6 +410,7 @@ export class Store implements SyncStore {
              local = 0`,
         )
         .run(change.entity, change.id, change.stamp, change.deleted ? 1 : 0, JSON.stringify(payload))
+      this.logChange(change.entity, change.id, via)
       touched.push(change.deleted ? { entity: change.entity, id: change.id, deleted: true } : { entity: change.entity, row: { id: change.id, ...payload } as EntityMap[EntityName] })
     }
     this.announce(touched)
@@ -415,6 +433,61 @@ export class Store implements SyncStore {
 
   async setCursor(seq: number): Promise<void> {
     this.setKv('cursor', String(Math.max(0, Math.floor(seq))))
+  }
+
+  // ---- change log (replication between nodes, docs/devices-protocol.md s7) ----
+
+  /** The newest change-log sequence number (0 when nothing has changed yet). */
+  logSeq(): number {
+    const row = this.db.prepare('SELECT MAX(seq) AS seq FROM change_log').get()
+    return row === undefined ? 0 : numberField(row['seq'])
+  }
+
+  /**
+   * Rows changed after `seq`, oldest first, as they are now, each with its log seq. Entries that came from
+   * `skipVia` are passed over (the peer already has them) but still move the cursor. Nothing while a batch is
+   * open, so a change that may yet roll back never leaves this device.
+   */
+  changesAfter(seq: number, limit = 500, skipVia = ''): { changes: Change[]; cursor: number } {
+    const after = Math.max(0, Math.floor(seq))
+    if (this.batching !== null) return { changes: [], cursor: after }
+    const entries = this.db
+      .prepare(
+        `SELECT l.seq AS seq, l.entity AS entity, l.cid AS cid, l.via AS via, r.stamp AS stamp, r.deleted AS deleted, r.payload AS payload
+         FROM change_log l LEFT JOIN rows r ON r.entity = l.entity AND r.cid = l.cid
+         WHERE l.seq > ? ORDER BY l.seq LIMIT ?`,
+      )
+      .all(after, Math.max(1, Math.floor(limit)))
+    const changes: Change[] = []
+    let cursor = after
+    for (const entry of entries) {
+      cursor = numberField(entry['seq'])
+      const entity = stringField(entry['entity'])
+      if (!isEntityName(entity) || typeof entry['stamp'] !== 'string') continue
+      if (skipVia !== '' && stringField(entry['via']) === skipVia) continue
+      changes.push({
+        entity,
+        id: stringField(entry['cid']),
+        deleted: numberField(entry['deleted']) === 1,
+        stamp: stringField(entry['stamp']),
+        payload: parsePayload(entry['payload']),
+        seq: cursor,
+      })
+    }
+    return { changes, cursor }
+  }
+
+  /** A small value kept on this device only (replication cursors). */
+  localValue(key: string): string | null {
+    return this.kv(`local:${key}`)
+  }
+
+  setLocalValue(key: string, value: string): void {
+    this.setKv(`local:${key}`, value)
+  }
+
+  private logChange(entity: EntityName, cid: string, via: string): void {
+    this.db.prepare('INSERT OR REPLACE INTO change_log(entity, cid, via) VALUES(?, ?, ?)').run(entity, cid, via)
   }
 
   // ---- events ----
@@ -574,5 +647,9 @@ function defaultsFor(entity: EntityName): Record<string, unknown> {
       return { name: '', description: '', icon: { glyph: 'folder', color: 'iris' }, path: '', profile: '', hidden: false, chats: [] }
     case 'device':
       return { name: '', kind: 'desktop', platform: 'linux', roles: [], priority: 0, urls: [], fp: '', facts: {}, pairedAt: 0, lastSeen: 0, revoked: false }
+    case 'device_command':
+      return { target: '', kind: 'notify', status: 'queued', note: '', chat: 'main', brainId: '', expiresAt: 0, updatedAt: 0 }
+    case 'turn_lease':
+      return { kind: 'turn', chatId: 'main', messageId: '', brainId: '', status: 'running', attempt: 1, heartbeatAt: 0, startedAt: 0, prompt: '' }
   }
 }

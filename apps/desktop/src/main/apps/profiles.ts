@@ -242,6 +242,17 @@ export class ProfileStore {
     return partitionFor(profile.id)
   }
 
+  /** Everything at once, from another of the person's devices (devices/bundle.ts). General is always kept. */
+  replaceAll(list: AgentProfileInfo[]): void {
+    const next = list
+      .filter((p) => typeof p.id === 'string' && p.id !== '' && cleanName(p.name ?? '') !== '')
+      .slice(0, MAX_PROFILES + 1)
+      .map((p) => ({ ...p, name: cleanName(p.name), accounts: [...(p.accounts ?? [])], learned: [...(p.learned ?? [])], browser: p.browser ?? '', general: p.id === GENERAL_ID }))
+    if (!next.some((p) => p.general)) next.unshift(general())
+    this.list = [...next.filter((p) => p.general), ...next.filter((p) => !p.general)]
+    this.persist()
+  }
+
   onChange(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

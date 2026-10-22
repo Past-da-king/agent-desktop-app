@@ -1,332 +1,327 @@
-/**
- * Protocol s11 on the desktop node, and the Windows Firewall step. The firewall part never runs netsh for real and
- * never shows a UAC prompt: it checks the parsing, the state, and the exact command the one prompt would run.
- */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import type { Tool, ToolContext } from '@agent/core'
+import { SyncClient, schema, str, type DeviceRow, type Tool } from '@agent/core'
 
 import { Store } from '../src/main/db'
-import { DEFAULT_SHARE, DeviceToolHost, groupOf, resultValue, toolCommand, type ShareGroup } from '../src/main/devices/device-tools'
-import { RULE_NAME, WindowsFirewall, allowScript, elevateArgs, firewallState, parseFirewallRules } from '../src/main/devices/firewall'
-import { HandlerRegistry } from '../src/main/devices/registry'
-import { DevicesService } from '../src/main/devices/service'
-import type { DeviceToolResult } from '../src/main/devices/types'
-import { connectRpc, pinnedRequest } from './devices-client'
+import { DeviceToolHub, DeviceToolRunner, catalogueOf, deviceAgentTools, shareOf, withDeviceArg } from '../src/main/devices/device-tools'
+import { Replicator, registerSyncRoutes } from '../src/main/devices/replicate'
+import { Runner } from '../src/main/runtime/runner'
+import { buildWorkerToolset } from '../src/main/runtime/toolset'
+import type { DeviceTool, MessageOrigin } from '../src/main/devices/types'
+import { facts, startTestHost, type TestHost } from './devices-host'
+import { secretsView, settingsView, testContext, toolNamed } from './support'
+import { waitFor } from '../../../packages/core/test/helpers'
 
-const dirs: string[] = []
-const services: DevicesService[] = []
-const stores: Store[] = []
+const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
-  for (const service of services.splice(0)) await service.stop()
-  for (const store of stores.splice(0)) store.close()
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  for (const c of cleanups.splice(0)) await c()
 })
 
-function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-s11-'))
-  dirs.push(dir)
-  return dir
+const PHONE_TOOLS: DeviceTool[] = [
+  { name: 'browser_open', description: 'Open a page in the phone browser', params: { type: 'object', properties: { url: { type: 'string' } } }, group: 'browser', readOnly: false },
+  { name: 'browser_look', description: 'Screenshot', params: { type: 'object', properties: {} }, group: 'browser', readOnly: true },
+  { name: 'ask_user', description: 'Ask on the phone', params: { type: 'object', properties: {} }, group: 'approval', readOnly: false },
+  { name: 'request_approval', description: 'Approve on the phone', params: { type: 'object', properties: {} }, group: 'approval', readOnly: false },
+  { name: 'notify', description: 'Phone notification', params: { type: 'object', properties: {} }, group: 'notifications', readOnly: false },
+]
+
+const PHONE_ORIGIN: MessageOrigin = { deviceId: 'dev_phone', name: 'Test Phone', kind: 'phone', platform: 'android', screenWidth: 412, canOpenLinks: true, canReceiveFiles: true }
+
+/** A tool that stands in for a real one on this computer. */
+function fakeTool(name: string, answer: (input: Record<string, unknown>) => string): Tool {
+  return { spec: { name, description: `fake ${name}`, schema: schema([], { url: str('url') }) }, run: async (input) => answer(input) }
 }
 
-const noCtx = (signal: AbortSignal): ToolContext => ({
-  agentLabel: 'another device',
-  owner: 'device',
-  activity: async () => 0,
-  updateActivity: async () => undefined,
-  ask: async () => 'Yes',
-  approve: async () => true,
-  notify: async () => undefined,
-  signal,
-})
+const base = { platform: 'linux', urls: [], fp: '', facts: {}, pairedAt: 1, lastSeen: 1, revoked: false }
 
-function fakeTool(name: string, run: Tool['run']): Tool {
-  return { spec: { name, description: `${name} for tests`, schema: { type: 'object', properties: {} } }, run }
-}
-
-// ---- the firewall (Windows) ----
-
-const NETSH = `
-Rule Name:                            Electron
-----------------------------------------------------------------------
-Enabled:                              Yes
-Direction:                            In
-Profiles:                             Public
-Grouping:
-LocalIP:                              Any
-RemoteIP:                             Any
-Protocol:                             TCP
-LocalPort:                            Any
-RemotePort:                           Any
-Edge traversal:                       No
-Program:                              C:\\Apps\\Agent\\Agent.exe
-InterfaceTypes:                       Any
-Security:                             NotRequired
-Rule source:                          Local Setting
-Action:                               Block
-
-Rule Name:                            Some other app
-----------------------------------------------------------------------
-Enabled:                              Yes
-Direction:                            In
-Profiles:                             Private
-Protocol:                             TCP
-LocalPort:                            8080
-Program:                              C:\\Other\\other.exe
-Action:                               Allow
-Ok.
-`
-
-describe('Windows Firewall step', () => {
-  const program = 'C:\\Apps\\Agent\\Agent.exe'
-
-  it('reads netsh rules and sees that a Block rule for the app keeps devices out', () => {
-    const rules = parseFirewallRules(NETSH)
-    expect(rules).toHaveLength(2)
-    expect(rules[0]).toMatchObject({ name: 'Electron', enabled: true, direction: 'in', action: 'block', program, localPort: 'Any' })
-    expect(firewallState(rules, program, 7787)).toBe('blocked')
-    // The path compares without case, as Windows does.
-    expect(firewallState(rules, program.toLowerCase(), 7787)).toBe('blocked')
-  })
-
-  it('says missing with no rule, allowed with an Allow rule for the program or the port', () => {
-    expect(firewallState([], program, 7787)).toBe('missing')
-    const allowProgram = parseFirewallRules(`Rule Name: ${RULE_NAME}\nEnabled: Yes\nDirection: In\nProgram: ${program}\nAction: Allow\n`)
-    expect(firewallState(allowProgram, program, 7787)).toBe('allowed')
-    const allowPort = parseFirewallRules(`Rule Name: ${RULE_NAME} (port 7787)\nEnabled: Yes\nDirection: In\nLocalPort: 7787\nProgram: Any\nAction: Allow\n`)
-    expect(firewallState(allowPort, program, 7787)).toBe('allowed')
-    expect(firewallState(allowPort, program, 7797)).toBe('missing')
-    const disabled = parseFirewallRules(`Rule Name: x\nEnabled: No\nDirection: In\nProgram: ${program}\nAction: Allow\n`)
-    expect(firewallState(disabled, program, 7787)).toBe('missing')
-  })
-
-  it('builds ONE elevated command that clears the app\'s Block rules and allows the app and the port', () => {
-    const path = "C:\\Users\\Sam O'Neil\\Apps\\Agent.exe"
-    const script = allowScript(path, 7787)
-    expect(script).toContain("Get-NetFirewallApplicationFilter -Program 'C:\\Users\\Sam O''Neil\\Apps\\Agent.exe'")
-    expect(script).toContain("Remove-NetFirewallRule")
-    expect(script).toContain(`netsh advfirewall firewall add rule name='${RULE_NAME}' dir=in action=allow program='C:\\Users\\Sam O''Neil\\Apps\\Agent.exe' enable=yes profile=private,domain`)
-    expect(script).toContain(`netsh advfirewall firewall add rule name='${RULE_NAME} (port 7787)' dir=in action=allow protocol=TCP localport=7787 enable=yes profile=private,domain`)
-    const args = elevateArgs(path, 7787)
-    expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command'])
-    const outer = args[3] ?? ''
-    expect(outer).toMatch(/^Start-Process -FilePath powershell\.exe -Verb RunAs -Wait /)
-    // The elevated part travels base64 (UTF-16LE), so the path is never quoted through two shells.
-    const encoded = /'-EncodedCommand','([A-Za-z0-9+/=]+)'/.exec(outer)?.[1] ?? ''
-    expect(Buffer.from(encoded, 'base64').toString('utf16le')).toBe(script)
-  })
-
-  it('checks with netsh (no elevation) and needs nothing off Windows', async () => {
-    const calls: string[][] = []
-    const win = new WindowsFirewall({ platform: 'win32', program, run: async (file, args) => (calls.push([file, ...args]), NETSH) })
-    expect(await win.state(7787)).toBe('blocked')
-    expect(calls[0]).toEqual(['netsh', 'advfirewall', 'firewall', 'show', 'rule', 'name=all', 'dir=in', 'verbose'])
-    const broken = new WindowsFirewall({ platform: 'win32', program, run: async () => Promise.reject(new Error('no netsh')) })
-    expect(await broken.state(7787)).toBe('unknown')
-    const linux = new WindowsFirewall({ platform: 'linux', program: '/usr/bin/agent', run: async () => { throw new Error('must not run') } })
-    expect(linux.needed).toBe(false)
-    expect(await linux.state(7787)).toBe('not-needed')
-  })
-})
-
-// ---- the tool host ----
-
-describe('this node\'s tools for other devices', () => {
-  it('sorts the app\'s tools into the groups a person can switch off', () => {
-    expect(groupOf('browser_open')).toBe('browser')
-    expect(groupOf('notify_user')).toBe('notifications')
-    expect(groupOf('ask_user')).toBe('approval')
-    expect(groupOf('request_approval')).toBe('approval')
-    expect(groupOf('files_read')).toBe('files')
-    expect(groupOf('shell_run')).toBe('shell')
-    expect(groupOf('memory_save')).toBeNull()
-    expect(DEFAULT_SHARE).toEqual({ browser: true, files: true, notifications: true, approval: true, shell: false })
-  })
-
-  it('offers only switched-on groups, runs a command and answers with images inline', async () => {
-    const dir = tempDir()
-    const shot = join(dir, 'page.png')
-    writeFileSync(shot, Buffer.from([137, 80, 78, 71]))
-    let shared: Record<ShareGroup, boolean> = { ...DEFAULT_SHARE }
-    const host = new DeviceToolHost({
-      tools: () => [
-        fakeTool('browser_look', async () => `Here is the page:\n[[image:${shot}]]`),
-        fakeTool('shell_run', async () => 'ran'),
-        fakeTool('memory_save', async () => 'saved'),
-        fakeTool('ask_user', async (_input, ctx) => (await ctx.ask('Go?', ['Yes', 'No'])) ?? 'no answer'),
-      ],
-      context: (signal) => noCtx(signal),
-      shared: () => shared,
-      inbox: join(dir, 'inbox'),
-    })
-    const names = host.catalogue().map((tool) => tool.name)
-    expect(names).toEqual(['browser_look', 'ask_user', 'file_send', 'file_receive'])
-    expect(host.catalogue().find((t) => t.name === 'browser_look')).toMatchObject({ group: 'browser', readOnly: true })
-
-    const look = await host.run({ kind: 'tool', id: 'c1', tool: 'browser_look', args: {}, chatId: 'main', deadlineMs: 5000 })
-    expect(look).toEqual({ ok: true, value: { text: 'Here is the page:', images: [{ type: 'image', mime: 'image/png', data: Buffer.from([137, 80, 78, 71]).toString('base64') }] } })
-    expect(await host.run({ kind: 'tool', id: 'c2', tool: 'ask_user', args: {}, chatId: '', deadlineMs: 0 })).toEqual({ ok: true, value: { text: 'Yes' } })
-    expect(await host.run({ kind: 'tool', id: 'c3', tool: 'shell_run', args: {}, chatId: '', deadlineMs: 0 })).toEqual({ ok: false, error: 'shell_run is not shared on this device.' })
-    expect(await host.run({ kind: 'tool', id: 'c4', tool: 'memory_save', args: {}, chatId: '', deadlineMs: 0 })).toMatchObject({ ok: false })
-    expect(await host.run({ kind: 'nope' })).toEqual({ ok: false, error: 'That is not a tool command.' })
-
-    shared = { ...shared, shell: true, browser: false }
-    expect(host.catalogue().map((t) => t.name)).toEqual(['shell_run', 'ask_user', 'file_send', 'file_receive'])
-    expect(await host.run({ kind: 'tool', id: 'c5', tool: 'shell_run', args: {}, chatId: '', deadlineMs: 0 })).toEqual({ ok: true, value: { text: 'ran' } })
-  })
-
-  it('stops a tool at its deadline', async () => {
-    const host = new DeviceToolHost({
-      tools: () => [fakeTool('notify_user', () => new Promise(() => undefined))],
-      context: (signal) => noCtx(signal),
-      shared: () => DEFAULT_SHARE,
-      inbox: tempDir(),
-    })
-    const started = Date.now()
-    const result = await host.run({ kind: 'tool', id: 'slow', tool: 'notify_user', args: {}, chatId: '', deadlineMs: 1000 })
-    expect(result.ok).toBe(false)
-    expect(Date.now() - started).toBeLessThan(5000)
-  })
-
-  it('sends and receives a file in one step', async () => {
-    const dir = tempDir()
-    const host = new DeviceToolHost({ tools: () => [], context: (signal) => noCtx(signal), shared: () => DEFAULT_SHARE, inbox: join(dir, 'received') })
-    const got = await host.run({ kind: 'tool', id: 'r', tool: 'file_receive', args: { name: '../report.txt', data: Buffer.from('hello').toString('base64') }, chatId: '', deadlineMs: 0 })
-    expect(got.ok).toBe(true)
-    const path = (got as { value: { path: string } }).value.path
-    expect(path).toBe(join(dir, 'received', 'report.txt'))
-    expect(readFileSync(path, 'utf8')).toBe('hello')
-    const again = await host.run({ kind: 'tool', id: 'r2', tool: 'file_receive', args: { name: 'report.txt', data: '' }, chatId: '', deadlineMs: 0 })
-    expect((again as { value: { path: string } }).value.path).toBe(join(dir, 'received', 'report (2).txt'))
-    const sent = await host.run({ kind: 'tool', id: 's', tool: 'file_send', args: { path }, chatId: '', deadlineMs: 0 })
-    expect(sent).toEqual({ ok: true, value: { type: 'file', name: 'report.txt', mime: 'text/plain; charset=utf-8', size: 5, data: Buffer.from('hello').toString('base64') } })
-    expect((await host.run({ kind: 'tool', id: 's2', tool: 'file_send', args: { path: join(dir, 'missing') }, chatId: '', deadlineMs: 0 })).ok).toBe(false)
-  })
-
-  it('reads commands strictly and leaves plain text alone', () => {
-    expect(toolCommand({ kind: 'tool', id: 'a', tool: 't', args: [1], chatId: 5 })).toEqual({ kind: 'tool', id: 'a', tool: 't', args: {}, chatId: '', deadlineMs: 0 })
-    expect(toolCommand({ kind: 'tool', tool: 't' })).toBeNull()
-    expect(resultValue('just words')).toEqual({ text: 'just words' })
-  })
-})
-
-// ---- two real nodes ----
-
-function secretsMap(): { get(n: string): string | null; set(n: string, v: string): void; delete(n: string): void } {
-  const data = new Map<string, string>()
-  return { get: (n) => data.get(n) ?? null, set: (n, v) => void data.set(n, v), delete: (n) => void data.delete(n) }
-}
-
-async function node(name: string, tools: Tool[] = []): Promise<{ service: DevicesService; store: Store; dir: string; secrets: ReturnType<typeof secretsMap> }> {
-  const dir = tempDir()
-  const store = new Store(join(dir, 'agent.db'))
-  stores.push(store)
-  const secrets = secretsMap()
-  const service: DevicesService = new DevicesService({
-    userData: dir,
+async function setup(options: { phoneOnline?: boolean } = {}) {
+  const store = new Store(':memory:')
+  const host: TestHost = await startTestHost('dev_pc')
+  await store.upsert('device', { ...base, id: 'dev_pc', name: 'Office PC', kind: 'desktop', roles: ['brain'], priority: 0 })
+  await store.upsert('device', { ...base, id: 'dev_phone', name: 'Test Phone', kind: 'phone', platform: 'android', roles: ['screen'], priority: 5 })
+  host.facts.set('dev_phone', { ...facts('Test Phone', { kind: 'phone', platform: 'android' }), tools: PHONE_TOOLS })
+  if (options.phoneOnline !== false) host.connected.add('dev_phone')
+  // What it offered when it was last connected.
+  else await store.upsert('device', { id: 'dev_phone', tools: PHONE_TOOLS } as Partial<DeviceRow> & { id: string })
+  const notes: Array<{ chat: string; text: string }> = []
+  const localTools = [fakeTool('browser_open', (i) => `Opened ${String(i['url'])} on the PC`), fakeTool('shell_run', () => 'ran')]
+  const settings = { preferred: {} as Record<string, string> }
+  const hub = new DeviceToolHub({
     store,
-    secrets,
-    registry: new HandlerRegistry(),
-    appVersion: '1.0.0',
-    nodeName: () => name,
-    platform: 'linux',
-    ready: () => true,
-    busy: () => false,
-    rendererDir: join(dir, 'renderer'),
-    emitWindow: () => undefined,
-    deviceTools: new DeviceToolHost({ tools: () => tools, context: (signal) => noCtx(signal), shared: () => service.shareGroups(), inbox: join(dir, 'in') }),
+    selfId: () => 'dev_pc',
+    localTools: () => localTools,
+    preferred: () => settings.preferred,
+    noteBack: (chat, text) => {
+      notes.push({ chat, text })
+    },
+    waitMs: 1500,
   })
-  services.push(service)
-  await service.start()
-  return { service, store, dir, secrets }
+  hub.attach(host)
+  cleanups.push(async () => {
+    hub.stop()
+    await host.close()
+    store.close()
+  })
+  return { store, host, hub, notes, settings, localTools }
 }
 
-async function listenOn(service: DevicesService): Promise<string> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    await service.configure({ listen: '127.0.0.1', port: 20000 + Math.floor(Math.random() * 30000) })
-    const status = await service.setEnabled(true)
-    if (status.running) return `https://127.0.0.1:${status.port}`
-  }
-  throw new Error('no port')
+/** The phone: answers every tool command it is sent, like the app would. */
+function phone(host: TestHost, answer: (tool: string, args: Record<string, unknown>) => { ok: boolean; value: unknown } | null): () => void {
+  let seen = 0
+  const timer = setInterval(() => {
+    const commands = host.events.filter((e) => e.name === 'device.command' && e.deviceId === 'dev_phone')
+    for (const event of commands.slice(seen)) {
+      const payload = event.payload as { id: string; kind: string; tool: string; args: Record<string, unknown>; deadlineMs: number }
+      if (payload.kind !== 'tool') continue
+      const out = answer(payload.tool, payload.args)
+      if (out !== null) void host.rpc.get('device.result')?.('dev_phone', [payload.id, out.ok, out.value])
+    }
+    seen = commands.length
+  }, 10)
+  return () => clearInterval(timer)
 }
 
-describe('the desktop node with Devices off', () => {
-  it('makes no identity, no device row and no origin until it is switched on', async () => {
-    const off = await node('Quiet desk')
-    const status = off.service.status()
-    expect(status).toMatchObject({ enabled: false, running: false, nodeId: '', fp: '', urls: [], firewall: 'not-needed', servingTo: '' })
-    expect(existsSync(join(off.dir, 'devices', 'identity.json'))).toBe(false)
-    expect(existsSync(join(off.dir, 'devices', 'node-key.pem'))).toBe(false)
-    expect(await off.store.list('device')).toEqual([])
-    expect(await off.service.runTool({ kind: 'tool', id: 'x', tool: 'file_send', args: {}, chatId: '', deadlineMs: 0 })).toEqual({ ok: false, error: 'Devices is off on this computer.' })
+function phoneAnswers(tool: string, args: Record<string, unknown>): { ok: boolean; value: unknown } {
+  if (tool === 'browser_open') return { ok: true, value: `Phone opened ${String(args['url'])}` }
+  if (tool === 'browser_look') return { ok: true, value: { title: 'Shop', shot: { type: 'image', mime: 'image/png', data: Buffer.from('png-bytes').toString('base64') } } }
+  if (tool === 'ask_user') return { ok: true, value: 'Yes, book it' }
+  if (tool === 'request_approval') return { ok: true, value: true }
+  if (tool === 'notify') return { ok: true, value: 'Shown' }
+  return { ok: false, value: 'unknown tool' }
+}
+
+async function from(store: Store, origin: MessageOrigin | null, chat = 'main'): Promise<void> {
+  const meta: Record<string, unknown> = chat === 'main' ? {} : { chat }
+  if (origin !== null) meta['origin'] = origin
+  await store.upsert('chat_item', { kind: 'user', text: 'hi', meta: JSON.stringify(meta) })
+}
+
+describe('shared device tools: a phone', () => {
+  it('lists devices with their tool groups, keeping the phone tools from its hello on its row', async () => {
+    const { hub, store } = await setup()
+    const tools = deviceAgentTools({ hub: () => hub })
+    const listed = await toolNamed(tools, 'devices_list').run({}, testContext())
+    expect(listed).toContain('Test Phone (phone, online')
+    expect(listed).toContain('browser, approval, notifications')
+    expect(listed).toContain('Office PC (desktop, this computer, online')
+    const row = (await store.get('device', 'dev_phone')) as DeviceRow
+    expect(row.tools?.map((t) => t.name)).toEqual(PHONE_TOOLS.map((t) => t.name))
+    // This computer shares its browser but not its shell (off by default).
+    expect(((await store.get('device', 'dev_pc')) as DeviceRow).tools?.map((t) => t.name)).toEqual(['browser_open'])
+  })
+
+  it('device_tool runs a tool on the phone, found by a loose name, and returns its answer', async () => {
+    const { host, hub, store } = await setup()
+    cleanups.push(phone(host, phoneAnswers))
+    const out = await toolNamed(deviceAgentTools({ hub: () => hub }), 'device_tool').run({ device: 'my phone', tool: 'browser_open', args: { url: 'https://example.com' } }, testContext())
+    expect(out).toBe('On Test Phone: Phone opened https://example.com')
+    const sent = host.events.find((e) => e.name === 'device.command')?.payload as Record<string, unknown>
+    expect(sent).toMatchObject({ kind: 'tool', tool: 'browser_open', args: { url: 'https://example.com' }, deadlineMs: 600_000 })
+    expect((await store.list('device_command'))[0]?.status).toBe('done')
+  })
+
+  it('pictures come back as files the model can see', async () => {
+    const { host, hub } = await setup()
+    cleanups.push(phone(host, phoneAnswers))
+    const out = await hub.call('Test Phone', 'browser_look', {}, 'main')
+    expect(out.text).toContain('"shot":"[picture]"')
+    const path = /\[\[image:([^\]]+)]]/.exec(out.text)?.[1] ?? ''
+    expect(existsSync(path)).toBe(true)
+  })
+
+  it('"best" picks the device the user wrote from, then the preferred one, then by priority with phones last for browsing', async () => {
+    const { host, hub, store, settings } = await setup()
+    cleanups.push(phone(host, phoneAnswers))
+    // No origin: the PC (priority 0, not a phone) runs it, here.
+    const here = await hub.call('best', 'browser_open', { url: 'https://example.com' }, 'main', testContext())
+    expect(here).toMatchObject({ device: 'Office PC', text: 'Opened https://example.com on the PC' })
+    // Preferred for browsing: the phone.
+    settings.preferred = { browser: 'dev_phone' }
+    expect((await hub.call('best', 'browser_open', { url: 'https://a.example' }, 'main', testContext())).device).toBe('Test Phone')
+    settings.preferred = {}
+    // Written from the phone: the phone, first.
+    await from(store, PHONE_ORIGIN, 'pc7')
+    expect((await hub.call('best', 'browser_open', { url: 'https://b.example' }, 'pc7', testContext())).device).toBe('Test Phone')
+  })
+
+  it('ask_user and request_approval with device put the question on the phone; the answer is the tool result', async () => {
+    const { host, hub } = await setup()
+    cleanups.push(phone(host, phoneAnswers))
+    const local: Tool[] = [
+      { spec: { name: 'ask_user', description: 'ask', schema: schema(['question'], { question: str('q') }) }, run: async () => 'asked here' },
+      { spec: { name: 'request_approval', description: 'approve', schema: schema(['summary'], { summary: str('s') }) }, run: async () => 'approved here' },
+    ]
+    const wrapped = withDeviceArg(local, () => hub)
+    expect((toolNamed(wrapped, 'ask_user').spec.schema['properties'] as Record<string, unknown>)['device']).toBeDefined()
+    expect(await toolNamed(wrapped, 'ask_user').run({ question: 'Book the 9am?', options: ['Yes', 'No'], device: 'Test Phone' }, testContext())).toBe('The user answered on Test Phone: Yes, book it')
+    expect(await toolNamed(wrapped, 'request_approval').run({ summary: 'Pay R200', device: 'phone' }, testContext())).toBe('The user approved on Test Phone.')
+    // Without device it asks here, as before.
+    expect(await toolNamed(wrapped, 'ask_user').run({ question: 'Here?' }, testContext())).toBe('asked here')
+    const asked = host.events.map((e) => (e.payload as { tool?: string }).tool)
+    expect(asked).toEqual(['ask_user', 'request_approval'])
+  })
+
+  it('notify_user goes to the device the user wrote from (by its own tool name), else stays here', async () => {
+    const { host, hub, store } = await setup()
+    cleanups.push(phone(host, phoneAnswers))
+    const local: Tool[] = [{ spec: { name: 'notify_user', description: 'n', schema: schema([], {}) }, run: async () => 'Notified here.' }]
+    const [notify] = withDeviceArg(local, () => hub)
+    expect(await notify!.run({ title: 'x', body: 'y' }, testContext())).toBe('Notified here.')
+    await from(store, PHONE_ORIGIN)
+    expect(await notify!.run({ title: 'Done', body: 'Report ready' }, testContext())).toBe('On Test Phone: Shown')
+    expect(host.events.at(-1)?.payload).toMatchObject({ tool: 'notify', args: { title: 'Done', body: 'Report ready' } })
+  })
+
+  it('an offline phone gets the command when it connects; the late result is posted to the chat once', async () => {
+    const { host, hub, notes, store } = await setup({ phoneOnline: false })
+    const out = await hub.call('Test Phone', 'browser_open', { url: 'https://late.example' }, 'pc3')
+    expect(out.state).toBe('waiting')
+    expect(out.text).toContain('offline')
+    expect(host.events).toEqual([])
+    cleanups.push(phone(host, phoneAnswers))
+    host.connected.add('dev_phone')
+    await hub.deliverQueued()
+    await waitFor(() => notes.length === 1, 3000)
+    expect(notes[0]).toEqual({ chat: 'pc3', text: '[Device result: browser_open on Test Phone finished: Phone opened https://late.example]' })
+    await hub.deliverQueued()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(notes).toHaveLength(1)
+    expect((await store.list('device_command'))[0]?.status).toBe('done')
+  })
+
+  it('only the target device may answer, and a tool it does not have is named', async () => {
+    const { hub, store } = await setup({ phoneOnline: false })
+    await hub.call('Test Phone', 'browser_open', { url: 'https://x.example' }, 'main')
+    const [row] = await store.list('device_command')
+    expect(await hub.result('dev_other', row?.id ?? '', true, 'forged')).toBe(false)
+    expect((await store.get('device_command', row?.id ?? ''))?.status).toBe('queued')
+    expect((await hub.call('Test Phone', 'shell_run', {}, 'main')).text).toContain('has no shell_run')
+  })
+
+  it('a block on this computer\'s browser names the linked devices that have one', async () => {
+    const { hub } = await setup()
+    const local: Tool[] = [{ spec: { name: 'browser_open', description: 'open', schema: schema([], {}) }, run: async () => 'HTTP 403 Forbidden: access denied' }]
+    const [open] = withDeviceArg(local, () => hub)
+    const out = await open!.run({ url: 'https://shop.example' }, testContext())
+    expect(out).toContain('Linked devices with a browser: Test Phone (online)')
+    const fine: Tool[] = [{ spec: { name: 'browser_open', description: 'open', schema: schema([], {}) }, run: async () => 'Opened. Outline: [1] Buy' }]
+    expect(await withDeviceArg(fine, () => hub)[0]!.run({}, testContext())).toBe('Opened. Outline: [1] Buy')
   })
 })
 
-describe('shared device tools across two nodes', () => {
-  it('stores a device\'s tools from its hello and routes device.result to whoever listens', async () => {
-    const brain = await node('Brain desk')
-    const base = await listenOn(brain.service)
-    const fp = brain.service.status().fp
-    const offer = brain.service.offer()
-    const phoneFacts = { name: 'Test phone', kind: 'phone', platform: 'android', appVersion: '1', screen: { width: 412, height: 900 }, canOpenLinks: true, canReceiveFiles: true, fingerprint: '', urls: [] }
-    const paired = (await pinnedRequest(`${base}/v1/pair`, fp, { method: 'POST', body: { code: offer.shortCode, device: phoneFacts } })).json() as { deviceId: string; pass: string }
-    const heard: Array<[string, string, DeviceToolResult]> = []
-    brain.service.host().onDeviceResult((deviceId, id, result) => void heard.push([deviceId, id, result]))
-    const phone = await connectRpc(base, fp, paired.pass, phoneFacts)
-    phone.send({ type: 'hello', device: phoneFacts, tools: [{ name: 'notifications_read', description: 'Read the notifications', params: {}, group: 'notifications', readOnly: true }, { name: 'BAD NAME' }] })
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    const row = await brain.store.get('device', paired.deviceId)
-    expect(row?.tools).toEqual([{ name: 'notifications_read', description: 'Read the notifications', params: {}, group: 'notifications', readOnly: true }])
-    expect(await phone.call('device.result', 'cmd_9', true, { text: '3 new' })).toBe(true)
-    expect(await phone.call('device.result', 'cmd_10', false, 'No permission')).toBe(true)
-    expect(heard).toEqual([
-      [paired.deviceId, 'cmd_9', { ok: true, value: { text: '3 new' } }],
-      [paired.deviceId, 'cmd_10', { ok: false, error: 'No permission' }],
-    ])
-    phone.close()
-  })
-
-  it('links OUT to the answering brain, says hello with its tools and serves a command', async () => {
-    const brain = await node('Brain server')
-    const brainBase = await listenOn(brain.service)
-    const brainSelf = await brain.store.get('device', brain.service.identity.nodeId)
-    expect(brainSelf).not.toBeNull()
-
-    const desk = await node('Desk behind a firewall', [fakeTool('browser_read', async (input) => `read ${String(input['url'] ?? '')}`)])
-    // What sync and the bundle do in the app (workstream B): each side learns the other's row; the brain learns the
-    // desk's pass hash. Here by hand, so this test covers only this lane.
-    if (brainSelf !== null) await desk.store.upsert('device', { ...brainSelf, urls: [brainBase] })
-    await listenOn(desk.service)
-    const deskSelf = await desk.store.get('device', desk.service.identity.nodeId)
-    expect(deskSelf?.priority).toBe(1)
-    expect(deskSelf?.tools?.map((t) => t.name)).toEqual(['browser_read', 'file_send', 'file_receive'])
-    if (deskSelf !== null) await brain.store.upsert('device', deskSelf)
-    brain.service.passTable().replaceAll({ ...brain.service.passTable().all(), ...desk.service.passTable().all() })
-    // Its first try ran before the brain knew it (401); the next check (every 15 s) is made now.
-    await desk.service.uplinkNow()
-
-    for (let i = 0; i < 40 && !brain.service.host().isConnected(desk.service.identity.nodeId); i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
+describe('shared device tools: another node, over replication', () => {
+  it('a brain runs a tool on another node through synced rows; the node refuses its shell by default', async () => {
+    const pcStore = new Store(':memory:')
+    const serverStore = new Store(':memory:')
+    const serverHost = await startTestHost('dev_server')
+    registerSyncRoutes(serverHost, serverStore)
+    serverHost.passes.set('pass-pc', { deviceId: 'dev_pc', node: true })
+    const pcHost = await startTestHost('dev_pc')
+    for (const s of [pcStore, serverStore]) {
+      await s.upsert('device', { ...base, id: 'dev_pc', name: 'Office PC', kind: 'desktop', roles: ['brain'], priority: 0 })
+      await s.upsert('device', { ...base, id: 'dev_server', name: 'Home Server', kind: 'server', roles: ['brain'], priority: 1, urls: [serverHost.url] })
     }
-    expect(brain.service.host().isConnected(desk.service.identity.nodeId)).toBe(true)
-    expect(desk.service.status().servingTo).toBe(brain.service.identity.nodeId)
-    expect(brain.service.host().factsOf(desk.service.identity.nodeId)?.tools?.map((t) => t.name)).toContain('browser_read')
-
-    const result = new Promise<DeviceToolResult>((resolve) => {
-      brain.service.host().onDeviceResult((deviceId, id, value) => {
-        if (deviceId === desk.service.identity.nodeId && id === 'cmd_1') resolve(value)
-      })
+    // The server shares its browser; its shell stays off (the default).
+    const serverTools = [fakeTool('browser_open', (i) => `Server opened ${String(i['url'])}`), fakeTool('shell_run', () => 'should not run')]
+    const serverHub = new DeviceToolHub({ store: serverStore, selfId: () => 'dev_server', localTools: () => serverTools, noteBack: () => undefined })
+    await serverHub.refresh()
+    const runner = new DeviceToolRunner({ store: serverStore, selfId: () => 'dev_server', tools: () => serverTools })
+    runner.start()
+    const replicator = new Replicator({
+      store: pcStore,
+      selfId: () => 'dev_pc',
+      pass: () => 'pass-pc',
+      peers: async () => [{ id: 'dev_server', name: 'Home Server', urls: [serverHost.url], fp: '' }],
+      clientFor: (url, _peer, pass) => new SyncClient(url, pass, fetch, true),
+      waitSeconds: 1,
+      initialBackoffMs: 50,
     })
-    brain.service.host().emit(desk.service.identity.nodeId, 'device.command', { kind: 'tool', id: 'cmd_1', tool: 'browser_read', args: { url: 'https://example.com/' }, chatId: 'main', deadlineMs: 5000 })
-    expect(await result).toEqual({ ok: true, value: { text: 'read https://example.com/' } })
+    replicator.start()
+    const hub = new DeviceToolHub({
+      store: pcStore,
+      selfId: () => 'dev_pc',
+      noteBack: () => undefined,
+      reachable: (id) => replicator.status().some((link) => link.peer === id && link.ok),
+    })
+    hub.attach(pcHost)
+    cleanups.push(async () => {
+      hub.stop()
+      runner.stop()
+      replicator.stop()
+      await serverHost.close()
+      await pcHost.close()
+      pcStore.close()
+      serverStore.close()
+    })
 
-    // The desk becomes the first brain: it stops linking out, it answers itself.
-    await desk.service.move(desk.service.identity.nodeId, 'up')
-    await desk.service.uplinkNow()
-    expect(desk.service.status().servingTo).toBe('')
+    // The server's catalogue arrives with its row.
+    await waitFor(async () => ((await pcStore.get('device', 'dev_server')) as DeviceRow | null)?.tools?.length === 1, 8000)
+    const out = await hub.call('server', 'browser_open', { url: 'https://blocked.example' }, 'main')
+    expect(out).toMatchObject({ state: 'done', device: 'Home Server', text: 'Server opened https://blocked.example' })
+
+    // Even asked straight (bypassing the catalogue), the runner refuses a group it does not share.
+    await pcStore.upsert('device_command', { id: 'cmd_forced', target: 'dev_server', kind: 'tool', tool: 'shell_run', args: '{}', deadlineMs: 5000, status: 'queued', note: '', chat: 'main', brainId: 'dev_pc', expiresAt: Date.now() + 60_000, updatedAt: Date.now() })
+    await waitFor(async () => (await pcStore.get('device_command', 'cmd_forced'))?.status === 'failed', 8000)
+    expect((await pcStore.get('device_command', 'cmd_forced'))?.result).toContain('does not share shell_run')
+  }, 20_000)
+
+  it('ask_user on another node shows the question as a card there; the person answers and the brain gets it', async () => {
+    const pcStore = new Store(':memory:')
+    const serverStore = new Store(':memory:')
+    const serverHost = await startTestHost('dev_server')
+    registerSyncRoutes(serverHost, serverStore)
+    serverHost.passes.set('pass-pc', { deviceId: 'dev_pc', node: true })
+    const pcHost = await startTestHost('dev_pc')
+    for (const s of [pcStore, serverStore]) {
+      await s.upsert('device', { ...base, id: 'dev_pc', name: 'Office PC', kind: 'desktop', roles: ['brain'], priority: 0 })
+      await s.upsert('device', { ...base, id: 'dev_laptop', name: 'Laptop', kind: 'desktop', roles: ['brain'], priority: 1, urls: [serverHost.url] })
+    }
+    // The other node runs the real app tools and its real runner, which shows cards to its person.
+    const nodeTools = buildWorkerToolset({ store: serverStore })
+    const nodeRunner = new Runner({ store: serverStore, settings: settingsView(), secrets: secretsView(null), providerFactory: () => null, tools: nodeTools, isFocused: () => true })
+    const nodeHub = new DeviceToolHub({ store: serverStore, selfId: () => 'dev_laptop', localTools: () => nodeTools, noteBack: () => undefined })
+    await nodeHub.refresh()
+    const runner = new DeviceToolRunner({ store: serverStore, selfId: () => 'dev_laptop', tools: () => nodeTools, context: (chat, signal) => nodeRunner.deviceContext(chat, signal) })
+    runner.start()
+    const replicator = new Replicator({
+      store: pcStore,
+      selfId: () => 'dev_pc',
+      pass: () => 'pass-pc',
+      peers: async () => [{ id: 'dev_laptop', name: 'Laptop', urls: [serverHost.url], fp: '' }],
+      clientFor: (url, _peer, pass) => new SyncClient(url, pass, fetch, true),
+      waitSeconds: 1,
+      initialBackoffMs: 50,
+    })
+    replicator.start()
+    const hub = new DeviceToolHub({ store: pcStore, selfId: () => 'dev_pc', noteBack: () => undefined, reachable: () => true })
+    hub.attach(pcHost)
+    cleanups.push(async () => {
+      nodeRunner.dispose()
+      hub.stop()
+      runner.stop()
+      replicator.stop()
+      await serverHost.close()
+      await pcHost.close()
+      pcStore.close()
+      serverStore.close()
+    })
+    await waitFor(async () => ((await pcStore.get('device', 'dev_laptop')) as DeviceRow | null)?.tools?.some((t) => t.name === 'ask_user') === true, 8000)
+
+    const asking = withDeviceArg([{ spec: { name: 'ask_user', description: 'ask', schema: schema(['question'], { question: str('q') }) }, run: async () => 'asked here' }], () => hub)[0]!
+      .run({ question: 'Ship the release tonight?', options: ['Yes', 'Not yet'], device: 'laptop' }, testContext({ chat: 'pc4' }))
+    // The card shows on the laptop, in the same chat.
+    const card = await waitFor(async () => (await serverStore.list('chat_item')).find((row) => row.kind === 'question'), 8000)
+    expect(card.text).toBe('Ship the release tonight?')
+    expect(JSON.parse(card.meta)).toMatchObject({ chat: 'pc4' })
+    await nodeRunner.answer(card.id, 'Yes')
+    expect(await asking).toBe('The user answered on Laptop: The user answered: Yes')
+  }, 20_000)
+
+  it('the catalogue follows the share switches', () => {
+    const tools = [fakeTool('browser_open', () => ''), fakeTool('shell_run', () => ''), fakeTool('notify_user', () => ''), fakeTool('memory_search', () => '')]
+    expect(catalogueOf(tools, shareOf({})).map((t) => t.name)).toEqual(['browser_open', 'notify_user'])
+    expect(catalogueOf(tools, shareOf({ shell: true, browser: false })).map((t) => t.name)).toEqual(['shell_run', 'notify_user'])
   })
 })

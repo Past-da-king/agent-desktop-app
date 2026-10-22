@@ -44,6 +44,8 @@ import { HelperManager } from './runtime/helpers'
 import { clipboardAttachments } from './clipboard-files'
 import { savePastedFile } from './pasted'
 import { Runner } from './runtime/runner'
+import { TurnLeases } from './runtime/turns'
+import { devicesState, type DevicesSyncDeps } from './devices/sync'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
@@ -70,7 +72,7 @@ import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
 import { recordHandlers, handlerRegistry } from './devices/registry'
 import { DevicesService, setDevicesService } from './devices/service'
-import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tools'
+import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tool-host'
 import { WindowsFirewall } from './devices/firewall'
 
 // Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
@@ -143,6 +145,10 @@ let store: Store | null = null
 let settingsStore: SettingsStore | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+/** Turn leases: a turn or helper cut off by a crash resumes on the next start (runtime/turns.ts). */
+let leases: TurnLeases | null = null
+/** The app's side of registerDevicesSync (set once the runtime is built). */
+let devicesAppHooks: Pick<DevicesSyncDeps, 'leases' | 'localTools' | 'shareGroups' | 'preferred' | 'noteBack' | 'context'> | null = null
 let memory: MemoryService | null = null
 let chatIndex: ChatIndex | null = null
 let voice: VoiceService | null = null
@@ -653,21 +659,51 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const budget = new StepBudget()
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
   cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
+  const leaseStore = store
+  leases = new TurnLeases({
+    store: leaseStore,
+    selfId: () => devicesState.sync?.selfId() ?? leaseStore.deviceId,
+    ownIds: () => [leaseStore.deviceId],
+    resumeTurn: (chat, id, note) => runner?.resumeTurn(chat, id, note),
+    resumeJob: async (id, note) => {
+      await helpers.push(id, note)
+    },
+    lost: (lease) => {
+      if (lease.kind === 'job') void helpers.stop(lease.messageId)
+      else runner?.stop(lease.chatId)
+    },
+  })
+  const workerTools = buildWorkerToolset({
+    deviceHub: () => devicesState.sync?.tools ?? null,
+    store,
+    settings,
+    browser: agentBrowser,
+    agentName: () => settings.get().agentName,
+    environment,
+    apps,
+    learned,
+  })
+  // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
+  // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
+  devicesAppHooks = {
+    leases,
+    localTools: () => workerTools,
+    shareGroups: () => settings.get().devicesShareGroups,
+    preferred: () => settings.get().devicesPreferred,
+    noteBack: async (chat, text) => {
+      if (runner !== null) await runner.deliver(text, chat)
+    },
+    // ask_user / request_approval another brain runs here show as cards in that chat on this computer.
+    context: (chat, signal) => runner?.deviceContext(chat, signal) ?? {},
+  }
   const helpers = new HelperManager({
+    leases,
     store,
     cli: cliHost,
     settings,
     secrets,
     providerFactory: factory,
-    workerTools: buildWorkerToolset({
-      store,
-      settings,
-      browser: agentBrowser,
-      agentName: () => settings.get().agentName,
-      environment,
-      apps,
-      learned,
-    }),
+    workerTools,
     deliver: async (note, chat) => {
       if (runner !== null) await runner.deliver(note, chat)
     },
@@ -694,6 +730,14 @@ async function startServices(win: BrowserWindow): Promise<void> {
     learned,
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
+    deviceHub: () => devicesState.sync?.tools ?? null,
+    devices: {
+      selfId: () => devicesState.sync?.selfId() ?? '',
+      commands: () => devicesState.sync?.commands ?? null,
+      openLocal: (url) => {
+        if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+      },
+    },
     projects: {
       post: async (chat, text, via) => {
         if (runner !== null) await runner.receive(chat, text, via)
@@ -716,6 +760,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
   })
   runner = new Runner({
+    devices: {
+      leases,
+      selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
+      originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
+    },
     store,
     settings,
     secrets,
@@ -756,6 +805,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     } catch {
       // Startup repair is best effort: the app must still open if a row cannot be rewritten.
     }
+    // After the repairs: what a crash cut off runs again, once (runtime/turns.ts).
+    void leases?.recover().catch(() => 0)
   }
   if (isSmoke) await repairs()
   else win.webContents.once('did-finish-load', () => setTimeout(() => void repairs(), 250))
@@ -1052,6 +1103,8 @@ if (!app.requestSingleInstanceLock()) {
     devices = null
     setDevicesService(null)
     runner?.dispose()
+    leases?.stop()
+    devicesState.sync?.stop()
     runner = null
     agentBrowser?.destroy()
     agentBrowser = null

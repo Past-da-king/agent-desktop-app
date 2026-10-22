@@ -8,6 +8,19 @@ export type DeviceKind = 'phone' | 'tablet' | 'desktop' | 'server'
 export type DevicePlatform = 'android' | 'ios' | 'windows' | 'macos' | 'linux'
 export type DeviceRole = 'screen' | 'brain' | 'hands'
 
+/** What kind of thing a shared device tool does (s11); each group can be switched off per device. */
+export type DeviceToolGroup = 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'other'
+
+/** One tool a device lets other devices use (s11), as it advertises it in its hello. */
+export interface DeviceTool {
+  name: string
+  description: string
+  /** JSON schema of its arguments. */
+  params: Record<string, unknown>
+  group: DeviceToolGroup
+  readOnly: boolean
+}
+
 export interface DeviceFacts {
   name: string
   kind: DeviceKind
@@ -21,19 +34,6 @@ export interface DeviceFacts {
   urls: string[]
   /** The tools this device lets other devices use (protocol s11), as sent in its hello. */
   tools?: DeviceTool[]
-}
-
-/** Protocol s11: what a tool on a device is for, so a person can switch a whole group off. */
-export type DeviceToolGroup = 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'other'
-
-/** One tool a device offers to the agents on other devices (protocol s11). */
-export interface DeviceTool {
-  name: string
-  description: string
-  /** JSON schema of its arguments. */
-  params: Record<string, unknown>
-  group: DeviceToolGroup
-  readOnly: boolean
 }
 
 /** A device command of kind "tool" (protocol s5.2 and s11): run `tool` with `args`, answer with device.result. */

@@ -694,12 +694,14 @@ export const mockAgent: AgentApi = {
       rows = {
         chat_item: [],
         turn: [],
+        device: [],
+        device_command: [],
+        turn_lease: [],
         memory: [],
         goal: [],
         task: [],
         trigger: [],
         project: [],
-        device: [],
       }
       settings = { ...DEFAULT_SETTINGS, deviceName: 'This computer' }
       apiKey = ''
