@@ -210,8 +210,10 @@ function RevokeDialog({ device, onClose }: { device: DeviceRow; onClose: () => v
   )
 }
 
-function seenLine(device: DeviceRow, self: boolean, connected: boolean): string {
+function seenLine(device: DeviceRow, self: boolean, connected: boolean, node: boolean): string {
   if (self) return 'You are on it now'
+  // Seen from another device, the computer serving this window is the one answering it.
+  if (node) return 'Answering you now'
   if (connected) return 'Connected now'
   if (device.lastSeen <= 0) return 'Not seen yet'
   const ago = timeAgo(device.lastSeen)
@@ -259,7 +261,7 @@ function DeviceItem({
         <b>{device.name}</b>
         <span>
           {KIND_LABEL[device.kind]}
-          {brainIndex >= 0 ? `, answers ${brainIndex === 0 ? 'first' : `in turn ${brainIndex + 1}`}` : ''}. {seenLine(device, self, connected)}
+          {brainIndex >= 0 ? `, answers ${brainIndex === 0 ? 'first' : `in turn ${brainIndex + 1}`}` : ''}. {seenLine(device, self, connected, node)}
         </span>
         <div className="dv-roles" role="group" aria-label={`What ${device.name} does`}>
           {(['screen', 'brain', 'hands'] as const).map((role) => {
