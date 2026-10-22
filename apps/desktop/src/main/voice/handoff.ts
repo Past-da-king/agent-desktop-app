@@ -22,6 +22,7 @@ import {
 } from '@agent/core'
 
 import { chatTitle, newProjectChatId } from '../runtime/chat-lines'
+import { callVia, type ChatVia } from '../../shared/sender'
 
 export interface CallHandoffDeps {
   store: {
@@ -30,10 +31,11 @@ export interface CallHandoffDeps {
     upsert(entity: 'project', row: Partial<ProjectRow> & { id: string }): Promise<unknown>
   }
   /**
-   * A message in a chat as if the person typed it there (runner.send, with the calling device as its origin). It
-   * resolves when that chat's turn ENDS, which can be minutes (an approval it waits on), so it is never awaited here.
+   * A message in a chat (runner.send, with the calling device as its origin) labelled as from the call (`via`), so it
+   * never shows as if he typed it. It resolves when that chat's turn ENDS, which can be minutes (an approval it waits
+   * on), so it is never awaited here.
    */
-  send(text: string, chat: string, origin?: unknown): Promise<void>
+  send(text: string, chat: string, origin?: unknown, via?: ChatVia): Promise<void>
   /** More for a helper at work, or sends a finished one back to work (helper_steer). */
   steer(id: string, message: string): Promise<string>
   /** The helper cards a linked device sees (helpers.cards). */
@@ -81,7 +83,14 @@ function short(text: string, limit: number): string {
  * turn waited on an approval the call itself had to put to him).
  */
 function start(deps: CallHandoffDeps, message: string, chat: string, origin: unknown): void {
-  void deps.send(message, chat, origin).catch(() => undefined)
+  void deps.send(message, chat, origin, callVia(deviceName(origin))).catch(() => undefined)
+}
+
+/** The calling device's name ("Pixel 9"), from its origin, or ''. */
+function deviceName(origin: unknown): string {
+  if (typeof origin !== 'object' || origin === null) return ''
+  const name = (origin as Record<string, unknown>)['name']
+  return typeof name === 'string' ? name : ''
 }
 
 /** Everyone the call can talk to, main agent first. */
@@ -140,7 +149,7 @@ export async function callHandoff(deps: CallHandoffDeps, input: CallHandoffInput
   const mainName = deps.agentName().trim() || 'Your agent'
   if (kind === 'main' || MAIN_NAMES.has(wanted) || wanted === mainName.toLowerCase()) {
     start(deps, message, MAIN_CHAT, origin)
-    return { ok: true, kind: 'main', id: MAIN_CHAT, name: mainName, chat: MAIN_CHAT, said: 'Sent to your main agent.', detail: '' }
+    return { ok: true, kind: 'main', id: MAIN_CHAT, name: mainName, chat: MAIN_CHAT, said: "I'm on it.", detail: '' }
   }
 
   const targets = await callTargets(deps)
@@ -183,13 +192,13 @@ export async function callHandoff(deps: CallHandoffDeps, input: CallHandoffInput
     if (hit === null) {
       const close = picked.close.map((c) => ({ kind: c.item.kind, id: c.item.id, name: c.item.name }))
       if (close.length > 1) return { ok: false, error: `"${said}" could be ${close.map((c) => c.name).join(' or ')}. Ask which one.`, ambiguous: close }
-      return { ok: false, error: `No project, chat or helper called "${said}". Ask who it is for, or send it to the main agent (target main), which routes it itself.`, ambiguous: [] }
+      return { ok: false, error: `No project, chat or helper called "${said}". Ask who it is for, or send it with target main and route it yourself from there.`, ambiguous: [] }
     }
   }
 
   if (hit.kind === 'helper') {
     const answer = await deps.steer(hit.id, `From the person, on a voice call: ${message}`)
-    return { ok: true, kind: 'helper', id: hit.id, name: hit.name, chat: '', said: `Sent to the helper "${hit.name}".`, detail: short(answer, 200) }
+    return { ok: true, kind: 'helper', id: hit.id, name: hit.name, chat: '', said: `I've passed it to my helper "${hit.name}".`, detail: short(answer, 200) }
   }
   const project = hit.project
   if (project === undefined) return { ok: false, error: 'That project is gone.', ambiguous: [] }
@@ -211,7 +220,7 @@ export async function callHandoff(deps: CallHandoffDeps, input: CallHandoffInput
     id: project.id,
     name: project.name,
     chat,
-    said: fresh ? `Started a new chat in the ${project.name} project.` : hit.kind === 'chat' ? `Sent to the chat ${hit.name}.` : `Sent to the ${project.name} project.`,
+    said: fresh ? `I've started a new chat on it in the ${project.name} project.` : hit.kind === 'chat' ? `I'm on it in the chat ${hit.name}.` : `I'm on it in the ${project.name} project.`,
     detail: '',
   }
 }

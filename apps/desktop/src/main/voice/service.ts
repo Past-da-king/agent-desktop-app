@@ -25,6 +25,7 @@ import type {
 } from '@agent/core'
 
 import { buildSystemPrompt } from '../runtime/prompt'
+import { callVia, senderLine, viaFromMeta, type ChatVia } from '../../shared/sender'
 import type { DataStore } from '../runtime/data'
 import { visualMarkdown, voiceTools } from '../tools/voice'
 import {
@@ -55,7 +56,8 @@ export interface VoiceSettings {
 }
 
 export interface VoiceRunner {
-  send(text: string): Promise<void>
+  /** runner.send: the call's hand-off goes to the main chat labelled as from the call (`via`), never as his words. */
+  send(text: string, attachments?: [], chat?: string, origin?: undefined, via?: ChatVia): Promise<void>
   state(): RunState
 }
 
@@ -304,9 +306,9 @@ export class VoiceService {
   private async handToAgent(brief: string): Promise<{ queued: boolean }> {
     const queued = this.deps.runner.state().running
     this.handoffs += 1
-    this.call?.note(`Handed to your agent: ${brief.length > 120 ? `${brief.slice(0, 117)}...` : brief}`)
+    this.call?.note(`Started: ${brief.length > 120 ? `${brief.slice(0, 117)}...` : brief}`)
     // Not awaited: the run takes as long as it takes, and the call keeps talking meanwhile.
-    void this.deps.runner.send(`From our voice call: ${brief}`).catch(() => undefined)
+    void this.deps.runner.send(`From our voice call: ${brief}`, [], 'main', undefined, callVia()).catch(() => undefined)
     return { queued }
   }
 
@@ -350,19 +352,45 @@ export class VoiceService {
       base,
       '',
       '## This is a live voice call',
-      `You are the same agent, speaking out loud with ${name} on a live call from their computer. Everything above still holds.`,
+      callIdentity(settings.agentName, name),
       'Talk like a person on the phone: short sentences, one or two at a time, warm and plain. No markdown, no lists read aloud, no urls spelled out.',
-      'On this call your tools are hand_to_agent, show_on_screen, memory_search, memory_get, task_list and now. The other tools named above are the main agent\'s, not yours.',
-      'Real work (research, writing, files, the browser, anything that takes more than a quick answer) goes to hand_to_agent with a full brief. Then say in a few words that it has started, and keep talking. Never pretend you did the work yourself.',
+      'On this call you speak and look things up with start_work, show_on_screen, memory_search, memory_get, task_list and now. Every other tool named above you still have: start_work begins the work in your main chat, where they all are.',
+      'Real work (research, writing, files, the browser, anything that takes more than a quick answer) goes to start_work with a full brief. Then say in a few words that you are on it ("I\'m on it", "I\'ve started that"), and keep talking. Its result comes back to you; never say it is done before then.',
       'When something is easier to see than hear (steps, options, numbers, a picture, a key fact), call show_on_screen while you talk about it, and say the gist out loud too.',
       'If you need an answer from them, ask one clear question and wait.',
     ]
     if (recent.length > 0) {
       lines.push('', '## The chat just before this call')
-      for (const item of recent) lines.push(`${item.kind === 'user' ? name : 'You'}: ${item.text.slice(0, 400)}`)
+      for (const item of recent) lines.push(`${speaker(item, name)}: ${item.text.slice(0, 400)}`)
     }
     return lines.join('\n')
   }
+}
+
+/**
+ * Who the voice is: the agent itself, by its own name, in the first person (22 Oct 2026: the call spoke of "the agent"
+ * as someone else, but it is the same one). The phone says the same (phone voice/CallController.kt systemPrompt).
+ */
+export function callIdentity(agentName: string, userName: string): string {
+  const own = agentName.trim()
+  const me = own === '' || own === 'Your agent' ? `${userName}'s agent` : own
+  return [
+    `You are ${me}, the same one ${userName} types to, now speaking out loud on a live call. Everything above still holds.`,
+    'There is only you. Speak in the first person about everything you do: "I\'ll do that", "I\'m on it", "I\'ve started a helper on it", "I\'ll check". Never speak of yourself as someone else, and never say you are passing work on to anyone: your main chat, your project chats and your helpers are simply how you work.',
+  ].join(' ')
+}
+
+/** Who said a line of the chat, for the call: him, a sender that is not him (a project, a call), or the agent itself. */
+function speaker(item: ChatItem, name: string): string {
+  if (item.kind !== 'user') return 'You'
+  let meta: Record<string, unknown> = {}
+  try {
+    meta = JSON.parse(item.meta) as Record<string, unknown>
+  } catch {
+    meta = {}
+  }
+  const via = viaFromMeta(meta)
+  return via === null ? name : senderLine(via)
 }
 
 function recentChat(items: ChatItem[]): ChatItem[] {

@@ -1,7 +1,7 @@
 /**
- * The tools the live voice agent has during a call. It talks; the main agent does the work.
+ * The tools the agent has while it speaks on a call. It is the same agent: real work starts in its own main chat.
  *
- *   hand_to_agent   sends a brief to the main agent's chat (the same path as typing it) and says it started.
+ *   start_work      puts a brief in the main chat (labelled as from the call) and says it started.
  *   show_on_screen  puts a list, an image or a small card next to the orb, and in the chat afterwards.
  *   memory_search, memory_get, task_list, now   quick lookups it may answer from itself.
  */
@@ -14,7 +14,7 @@ import { taskTools } from './tasks'
 
 export interface VoiceToolDeps {
   store: DataStore
-  /** Starts real work on the main agent. Resolves once the message is in, not when the work is done. */
+  /** Starts real work in the main chat. Resolves once the message is in, not when the work is done. */
   handToAgent(brief: string): Promise<{ queued: boolean }>
   /** Show something during the call. */
   show(visual: Omit<CallVisual, 'id' | 'at'>): Promise<void>
@@ -37,22 +37,22 @@ export function voiceTools(deps: VoiceToolDeps): Tool[] {
 function handToAgent(deps: VoiceToolDeps): Tool {
   return {
     spec: {
-      name: 'hand_to_agent',
+      name: 'start_work',
       description:
-        'Hand real work to the main agent (research, writing, files, the browser, anything that takes more than a quick answer). ' +
-        'Write a clear, complete brief in the third person with every detail the person gave. It starts right away in the chat; ' +
-        'tell the person in a few words that it has started, then keep talking.',
+        'Start real work yourself (research, writing, files, the browser, anything that takes more than a quick answer). ' +
+        'It begins at once in your main chat, where you have every tool. Write a clear, complete brief with every detail the person gave; ' +
+        'tell the person in a few words that you are on it, then keep talking.',
       schema: schema(['task'], {
-        task: str('The full brief for the main agent, with names, dates and preferences the person mentioned'),
+        task: str('The full brief, with names, dates and preferences the person mentioned'),
       }),
     },
     run: async (input) => {
       const task = clip(input['task'], 4_000)
-      if (task === '') return 'A brief is needed: say what the main agent should do.'
+      if (task === '') return 'A brief is needed: say what you are going to do.'
       const { queued } = await deps.handToAgent(task)
       return queued
-        ? 'Added to what the main agent is already doing. Tell the person it is on the list.'
-        : 'Started. The main agent is working on it in the chat. Tell the person briefly, then carry on.'
+        ? 'Added to what you are already doing. Tell the person it is on your list.'
+        : 'Started in your main chat. Tell the person briefly that you are on it, then carry on.'
     },
   }
 }
