@@ -20,6 +20,7 @@ without it.
 | `--status <addr>` | Optional local HTTP endpoint, `GET /status` returns the latest status JSON. |
 | `--ephemeral` | Register as an ephemeral node (removed by the control server soon after it goes away). |
 | `--logout-on-exit` | Log the node out on SIGTERM/SIGINT, so it disappears from the tailnet. |
+| `--stdin-control` | After the key line, read control lines on stdin: `quit`, `logout` (log out, then quit). stdin closing also quits, so the sidecar stops when its parent dies. This is how the app stops it on Windows, which has no SIGTERM. |
 | `--verbose` | Embedded node logs to stderr. |
 
 The auth key is never printed.

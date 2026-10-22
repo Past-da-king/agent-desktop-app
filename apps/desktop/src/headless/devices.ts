@@ -3,9 +3,10 @@
  * device of kind 'server' with no screen. It serves /v1/health, pairing, /v1/rpc (every app-contract handler the
  * runtime registered, through the shared handler registry), /v1/devices and /v1/file. No web UI is served.
  */
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { platformOf } from '../main/devices/facts'
+import { findSidecar } from '../main/devices/net'
 import { DevicesService } from '../main/devices/service'
 import type { DeviceFacts } from '../main/devices/types'
 import type { HeadlessRuntime } from './runtime'
@@ -58,6 +59,8 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     kind: 'server',
     canOpenLinks: false,
     canReceiveFiles: false,
+    // The optional overlay helper ships next to agent-node.mjs in the tarball (scripts/build-headless.mjs).
+    sidecar: () => findSidecar({ dirs: process.argv[1] !== undefined ? [dirname(process.argv[1])] : [] }),
   })
   service.registerIpc(runtime.ipcMain)
   // Events the window would get go to paired devices too (only the ones they may hear).

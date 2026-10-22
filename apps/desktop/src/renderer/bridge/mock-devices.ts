@@ -1,5 +1,5 @@
 /** Settings > Devices in the browser preview: this computer and one made-up phone, all in memory. */
-import type { DeviceRole, DeviceRow, DevicesApi, DevicesStatus, PairingOfferInfo } from '@agent/core'
+import type { DeviceRole, DeviceRow, DevicesApi, DevicesNetwork, DevicesStatus, PairingOfferInfo } from '@agent/core'
 
 import { qrMatrix } from '../../shared/qr'
 
@@ -7,6 +7,15 @@ const listeners = new Set<() => void>()
 const SELF = 'dev_preview_self'
 let enabled = false
 let extraUrls: string[] = []
+let network: DevicesNetwork = { mode: 'none', controlUrl: '', state: 'off', available: true, hasKey: false, addresses: [], dnsName: '', peers: 0, authUrl: '', error: '' }
+
+/** The preview pretends the overlay comes up at once with a made-up address from the documentation range. */
+function networkNow(): DevicesNetwork {
+  if (network.mode === 'none') return { ...network, state: 'off', addresses: [], dnsName: '', peers: 0 }
+  if (!enabled) return { ...network, state: 'off', addresses: [], dnsName: '', peers: 0 }
+  if (!network.hasKey) return { ...network, state: 'needs-login', addresses: [], dnsName: '', peers: 0 }
+  return { ...network, state: 'running', addresses: ['100.64.0.7'], dnsName: 'this-computer.example.ts.net', peers: 2 }
+}
 
 function facts(name: string, kind: DeviceRow['kind'], platform: DeviceRow['platform'], width: number): DeviceRow['facts'] {
   return { name, kind, platform, appVersion: '0.0.0', screen: { width, height: 0 }, canOpenLinks: true, canReceiveFiles: true, fingerprint: '', urls: [] }
@@ -64,6 +73,7 @@ function status(): DevicesStatus {
     fpWords: 'Prev iewF inge rpri',
     connected: enabled ? ['dev_preview_phone'] : [],
     error: '',
+    network: networkNow(),
   }
 }
 
@@ -73,6 +83,13 @@ export const mockDevices: DevicesApi = {
   },
   async setEnabled(on) {
     enabled = on
+    changed()
+    return status()
+  },
+  async setNetwork(input) {
+    if (input.mode === 'headscale' && (input.controlUrl ?? network.controlUrl).trim() === '') throw new Error('Add the address of your Headscale server, like https://headscale.example.com.')
+    const hasKey = input.authKey === null ? false : typeof input.authKey === 'string' && input.authKey.trim() !== '' ? true : network.hasKey
+    network = { ...network, mode: input.mode, controlUrl: input.mode === 'headscale' ? (input.controlUrl ?? network.controlUrl).trim() : network.controlUrl, hasKey }
     changed()
     return status()
   },

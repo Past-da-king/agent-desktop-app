@@ -14,6 +14,7 @@ import { qrMatrix } from '../../shared/qr'
 import { DevicesConfigFile, advertisedUrls, normaliseUrl, type DevicesConfig } from './config'
 import { cleanRoles, platformOf } from './facts'
 import { loadIdentity, type NodeIdentity } from './identity'
+import { OverlayNet, setOverlayNet } from './net'
 import { originFrom, setLocalOrigin } from './origin'
 import { formatShortCode, handlePair, pairUri, PairingOffers } from './pairing'
 import { SecretPassTable, type SecretsLike } from './passes'
@@ -63,6 +64,8 @@ export interface DevicesServiceDeps {
   kind?: DeviceKind
   canOpenLinks?: boolean
   canReceiveFiles?: boolean
+  /** Where the overlay network helper is (devices/net.ts findSidecar), or null when this build has none. */
+  sidecar?: () => string | null
 }
 
 function toRecord(row: DeviceRow): DeviceRecord {
@@ -111,12 +114,27 @@ export class DevicesService {
   private allowedCache = new Map<string, number>()
   private offStore: (() => void) | null = null
   private ipv6 = true
+  /** The optional overlay network (protocol s10); does nothing until the person picks one. */
+  readonly net: OverlayNet
+  private netWrite: Promise<void> = Promise.resolve()
 
   constructor(private readonly deps: DevicesServiceDeps) {
     this.now = deps.now ?? Date.now
     this.dir = join(deps.userData, 'devices')
     this.identity = loadIdentity(this.dir)
     this.config = new DevicesConfigFile(join(this.dir, 'config.json'))
+    this.net = new OverlayNet({
+      dir: this.dir,
+      secrets: deps.secrets,
+      binary: deps.sidecar ?? (() => null),
+      nodeName: () => deps.nodeName(),
+      log: deps.log,
+      // New overlay addresses go into this node's own row, so paired devices learn them.
+      onChange: () => {
+        this.netWrite = this.netWrite.then(() => this.writeSelf()).catch(() => undefined)
+        this.changed()
+      },
+    })
     this.passes = new SecretPassTable(deps.secrets)
     this.offers = new PairingOffers(this.now)
     this.server = new DevicesServer({
@@ -154,11 +172,15 @@ export class DevicesService {
     })
     await this.writeSelf()
     if (this.config.get().enabled) await this.listen()
+    setOverlayNet(this.net)
+    this.applyNet()
   }
 
   async stop(): Promise<void> {
     this.offStore?.()
     this.offStore = null
+    setOverlayNet(null)
+    await this.net.stop()
     await this.server.stop()
   }
 
@@ -199,6 +221,7 @@ export class DevicesService {
       fpWords: fingerprintWords(this.identity.fp),
       connected: this.server.connectedIds(),
       error: this.error,
+      network: this.net.status(),
     }
   }
 
@@ -210,6 +233,7 @@ export class DevicesService {
       await this.server.stop()
       this.error = ''
     }
+    this.applyNet()
     await this.writeSelf()
     this.changed()
     return this.status()
@@ -231,6 +255,23 @@ export class DevicesService {
       await this.server.stop()
       await this.listen()
     }
+    this.applyNet()
+    return this.status()
+  }
+
+  /** Settings > Devices > Network (protocol s10). The key goes to the secrets module only. */
+  async setNetwork(raw: unknown): Promise<DevicesStatus> {
+    const value = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+    const mode = value['mode'] === 'tailscale' || value['mode'] === 'headscale' ? value['mode'] : 'none'
+    const key = value['authKey']
+    this.net.save({
+      network: mode,
+      controlUrl: typeof value['controlUrl'] === 'string' ? value['controlUrl'] : undefined,
+      authKey: key === null ? null : typeof key === 'string' ? key : undefined,
+    })
+    this.applyNet()
+    await this.writeSelf()
+    this.changed()
     return this.status()
   }
 
@@ -305,6 +346,7 @@ export class DevicesService {
     ipc.handle(DEVICES_CHANNELS.setExtraUrls, async (_event, raw) =>
       this.setExtraUrls(Array.isArray(raw) ? raw.filter((u): u is string => typeof u === 'string').slice(0, 12) : []),
     )
+    ipc.handle(DEVICES_CHANNELS.setNetwork, async (_event, raw) => this.setNetwork(raw))
     ipc.handle(DEVICES_CHANNELS.offer, async () => {
       if (!this.server.running) throw new Error('Switch on "Let my other devices connect" first.')
       return this.offer()
@@ -320,7 +362,15 @@ export class DevicesService {
 
   /** What this node advertises right now (no IPv6 addresses when it could only listen on IPv4). */
   private urls(): string[] {
-    return advertisedUrls(this.config.get(), undefined, this.ipv6)
+    const port = this.config.get().port
+    const out = advertisedUrls(this.config.get(), undefined, this.ipv6)
+    for (const url of this.net.urls(this.server.running ? this.server.port() : port)) if (!out.includes(url)) out.push(url)
+    return out
+  }
+
+  /** The overlay follows the server: it forwards to the server's port while that listens. */
+  private applyNet(): void {
+    this.net.apply(this.server.running ? this.server.port() : null)
   }
 
   private async listen(): Promise<void> {

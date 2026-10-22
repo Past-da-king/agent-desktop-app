@@ -451,6 +451,37 @@ export interface DevicesStatus {
   connected: string[]
   /** A plain sentence when the server could not start (port in use...), else ''. */
   error: string
+  /** The optional overlay network (protocol s10); absent where the node has none (a remote view). */
+  network?: DevicesNetwork
+}
+
+/** Settings > Devices > Network: none (LAN or a typed address), Tailscale, or the person's own Headscale. */
+export type NetworkMode = 'none' | 'tailscale' | 'headscale'
+
+export interface DevicesNetwork {
+  mode: NetworkMode
+  /** Headscale's address ('' for Tailscale). */
+  controlUrl: string
+  /** off: not chosen, or Devices is off. needs-login: the control server wants a sign-in (authUrl) or a key. */
+  state: 'off' | 'starting' | 'needs-login' | 'running' | 'error'
+  /** This build carries the network helper. */
+  available: boolean
+  /** An auth key is saved (the key itself never leaves the main process). */
+  hasKey: boolean
+  /** This node's overlay addresses while running. */
+  addresses: string[]
+  dnsName: string
+  /** How many other machines the overlay shows. */
+  peers: number
+  authUrl: string
+  error: string
+}
+
+export interface DevicesNetworkInput {
+  mode: NetworkMode
+  controlUrl?: string
+  /** A new key replaces the saved one; '' or absent keeps it; null removes it. */
+  authKey?: string | null
 }
 
 /** "Add a device": what the QR code and the short code carry, valid until `expiresAt` (ms). */
@@ -469,6 +500,8 @@ export interface DevicesApi {
   setEnabled(on: boolean): Promise<DevicesStatus>
   /** The addresses the person typed that reach this computer (a public name, a VPN address). */
   setExtraUrls(urls: string[]): Promise<DevicesStatus>
+  /** Picks the overlay network (protocol s10) and saves its auth key in the secrets module. */
+  setNetwork(input: DevicesNetworkInput): Promise<DevicesStatus>
   /** A new pairing offer (the old one stops working). */
   offer(): Promise<PairingOfferInfo>
   cancelOffer(): Promise<void>

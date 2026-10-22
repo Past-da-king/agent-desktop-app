@@ -70,6 +70,7 @@ import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
 import { recordHandlers, handlerRegistry } from './devices/registry'
 import { DevicesService, setDevicesService } from './devices/service'
+import { findSidecar } from './devices/net'
 
 // Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
 const ipcMain = recordHandlers(electronIpcMain)
@@ -970,6 +971,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
       rendererDir: join(__dirname, '../renderer'),
       emitWindow: (channel, payload) => broadcast(channel, payload),
       log: (message, detail) => logger.info(message, detail),
+      // The optional overlay helper (devices/net.ts): packaged next to the app, or the repo's build in development.
+      sidecar: () => findSidecar({ resourcesPath: app.isPackaged ? process.resourcesPath : undefined, dirs: app.isPackaged ? [] : [join(app.getAppPath(), '..', '..')] }),
     })
     devices.registerIpc(ipcMain)
     setDevicesService(devices)

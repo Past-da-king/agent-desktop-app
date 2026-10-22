@@ -82,6 +82,16 @@ const packDir = join(desktop, 'src', 'headless', 'pack')
 cpSync(join(packDir, 'README.md'), join(stage, 'README.md'))
 cpSync(join(packDir, 'install.sh'), join(stage, 'install.sh'))
 chmodSync(join(stage, 'install.sh'), 0o755)
+// The optional overlay helper (tools/agent-net, built with Go by tools/agent-net/build.sh). The node finds it next to
+// agent-node.mjs. Without it the tarball still works; Network = Tailscale/Headscale then says the helper is missing.
+const sidecarBuild = join(root, 'tools', 'agent-net', 'dist', 'agent-net-linux-amd64')
+if (existsSync(sidecarBuild)) {
+  cpSync(sidecarBuild, join(stage, 'agent-net'))
+  chmodSync(join(stage, 'agent-net'), 0o755)
+  console.log('overlay helper: agent-net (linux-amd64) packed')
+} else {
+  console.log('overlay helper: tools/agent-net/dist/agent-net-linux-amd64 not built, left out (optional)')
+}
 writeFileSync(
   join(stage, 'package.json'),
   `${JSON.stringify(

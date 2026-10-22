@@ -30,6 +30,9 @@ import (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
+// stdinReader is shared by --authkey-stdin (first line) and --stdin-control (the lines after it).
+var stdinReader = bufio.NewReader(os.Stdin)
+
 type options struct {
 	controlURL   string
 	authKey      string
@@ -44,6 +47,7 @@ type options struct {
 	logoutOnExit bool
 	verbose      bool
 	noNetns      bool
+	stdinControl bool
 }
 
 func parseFlags(args []string) (options, error) {
@@ -64,6 +68,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&o.verbose, "verbose", false, "embedded node logs to stderr")
 	// Tests on a single machine talk to a DERP relay on loopback; socket marking gets in the way there.
 	fs.BoolVar(&o.noNetns, "test-no-netns", false, "testing only: disable socket network-namespace marking")
+	fs.BoolVar(&o.stdinControl, "stdin-control", false, "read control lines from stdin: quit, logout; stdin closing also quits")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -82,7 +87,7 @@ func parseFlags(args []string) (options, error) {
 		o.authKey = strings.TrimSpace(os.Getenv("AGENT_NET_AUTHKEY"))
 	}
 	if o.authStdin {
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		line, err := stdinReader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
 			return o, fmt.Errorf("reading auth key from stdin: %w", err)
 		}
@@ -216,9 +221,35 @@ func main() {
 
 	go watchStatus(ctx, lc, em, extra)
 
-	<-sigs
+	// Shutdown comes from a signal, or (with --stdin-control) a "quit" / "logout" line or stdin closing, which is
+	// how a parent on Windows (no SIGTERM) stops it, and how it stops when the parent dies.
+	stop := make(chan string, 2)
+	go func() {
+		<-sigs
+		stop <- "signal"
+	}()
+	if o.stdinControl {
+		go func() {
+			for {
+				line, err := stdinReader.ReadString('\n')
+				switch strings.TrimSpace(line) {
+				case "quit":
+					stop <- "quit"
+					return
+				case "logout":
+					stop <- "logout"
+					return
+				}
+				if err != nil {
+					stop <- "eof"
+					return
+				}
+			}
+		}()
+	}
+	reason := <-stop
 	cancel()
-	if o.logoutOnExit {
+	if o.logoutOnExit || reason == "logout" {
 		lctx, lcancel := context.WithTimeout(context.Background(), 10*time.Second)
 		if err := lc.Logout(lctx); err != nil {
 			em.emit(map[string]string{"type": "warning", "warning": "logout: " + err.Error()})
