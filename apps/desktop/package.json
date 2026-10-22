@@ -1,6 +1,6 @@
 {
   "name": "@agent/desktop",
-  "version": "0.2.42",
+  "version": "0.2.43",
   "private": true,
   "main": "out/main/index.js",
   "scripts": {
