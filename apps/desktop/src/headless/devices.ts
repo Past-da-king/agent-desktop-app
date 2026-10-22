@@ -6,6 +6,7 @@
 import { join } from 'node:path'
 
 import { platformOf } from '../main/devices/facts'
+import { registerRelay, rolesFromStore } from '../main/devices/relay'
 import { DevicesService } from '../main/devices/service'
 import type { DeviceFacts } from '../main/devices/types'
 import type { HeadlessRuntime } from './runtime'
@@ -17,6 +18,8 @@ export interface HeadlessDevicesOptions {
   port: number
   /** Extra addresses that reach this node (a public name, an overlay address), as https URLs. */
   extraUrls?: string[]
+  /** Tests only: let relay.fetch reach a local fake page. */
+  relayLoopback?: boolean
 }
 
 /** What the headless node says about itself when it pairs (protocol s3): a server, no screen. */
@@ -60,6 +63,13 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     canReceiveFiles: false,
   })
   service.registerIpc(runtime.ipcMain)
+  // This node fetches pages for the person's other nodes too (relay.fetch).
+  registerRelay(service.host(), {
+    store: runtime.store,
+    rolesOf: rolesFromStore(runtime.store),
+    ...(options.relayLoopback === true ? { allowLoopback: true } : {}),
+    log: (message, detail) => runtime.logger.info(message, detail),
+  })
   // Events the window would get go to paired devices too (only the ones they may hear).
   runtime.ipc.onEvent((channel, payload) => service.broadcast(channel, payload))
   await service.start()

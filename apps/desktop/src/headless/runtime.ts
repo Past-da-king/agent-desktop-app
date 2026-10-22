@@ -42,7 +42,11 @@ import { buildToolset, buildWorkerToolset } from '../main/runtime/toolset'
 import { Secrets } from '../main/secrets'
 import { SettingsStore } from '../main/settings'
 import { EVENTS } from '../shared/channels'
+import { loadIdentity } from '../main/devices/identity'
 import { findChromium, HeadlessBrowser } from './browser'
+import { headlessFacts } from './devices'
+import { readConfig } from './node-config'
+import { relayTool, type RelayTarget } from './relay-tool'
 import { FileKeyCipher } from './file-cipher'
 
 /** What a headless node can do on its own device. Device commands (protocol s5.2) plug in through these. */
@@ -196,6 +200,25 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const browserTools = (tools: Tool[]): Tool[] => (browser === null ? markNoBrowser(tools) : tools)
   const browserDep = browser === null ? {} : { browser }
 
+  // Fetching through the person's other computers (relay.fetch on them), for sites that block this server.
+  const devicesDir = join(dir, 'devices')
+  let selfId = ''
+  const relay = relayTool({
+    secrets,
+    selfId: () => (selfId ||= loadIdentity(devicesDir).nodeId),
+    facts: () => {
+      const identity = loadIdentity(devicesDir)
+      return headlessFacts(readConfig(dir).name, options.version, readConfig(dir).publicUrls, identity.fp)
+    },
+    targets: async () => {
+      const rows = (await store.list('device')).filter((row) => !row.revoked && (row.roles.includes('brain') || row.roles.includes('hands')))
+      const found: Array<RelayTarget & { priority: number }> = rows.map((row) => ({ id: row.id, name: row.name, urls: row.urls, fp: row.fp, priority: row.priority }))
+      for (const brain of readConfig(dir).brains) if (!found.some((t) => t.id === brain.id)) found.push(brain)
+      return found.sort((a, b) => a.priority - b.priority)
+    },
+  })
+  const nodeTools = [relay, ...(options.extraTools ?? [])]
+
   const factory =
     options.providerFactory ??
     ((current: ReturnType<SettingsStore['get']>, key: string): ReturnType<typeof providerFor> =>
@@ -213,7 +236,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     settings,
     secrets,
     providerFactory: factory,
-    workerTools: browserTools(buildWorkerToolset({ store, settings, ...browserDep, agentName: () => settings.get().agentName, environment, apps, learned })),
+    workerTools: [...browserTools(buildWorkerToolset({ store, settings, ...browserDep, agentName: () => settings.get().agentName, environment, apps, learned })), ...nodeTools],
     deliver: async (note, chat) => {
       if (runner !== null) await runner.deliver(note, chat)
     },
@@ -252,7 +275,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
         imageIcon: async () => null,
       },
     }),
-    ...(options.extraTools ?? []),
+    ...nodeTools,
   ])
   const theRunner = new Runner({
     store,
