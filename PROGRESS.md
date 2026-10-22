@@ -82,6 +82,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 06:00 LEAD merged into devices 9cc81a7: C 95e7872 + B 66c2d1d + A c9d76c0 + project agent rows in headless. Typecheck, lint ok; full suite 1245 pass (one flaky sync test once, green on rerun). Harness local (2 headless nodes + fake AI): a-f PASS, g crash resume FAIL (timeout) -> B fixing directly on devices. A building 0.2.42 installer + live desktop copy (C:	empgent-build-devices, C:	emp\devices-live).
 
+- 06:15 A: live desktop copy running at C:/temp/devices-live (win-unpacked trial build, AGENT_USER_DATA, port 7787, DevTools 9351, fake AI in WSL 127.0.0.1:18080, seeded memory/task/routine/project+image). Firewall shows blocked (needs Allow). D 880116f: project agent row with icon on the phone, images via /v1/file, lent approvals as notification + card, cold-start freeze fixed; RemoteLinkTest 25/25, full 541/543 (2 old). APK 85.8 MB is thin but unshrunk dex: D doing real-node redroid proof then R8 -> 0.14.1.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
