@@ -56,6 +56,8 @@ export interface DevicesSync {
   tools: DeviceToolHub
   /** This node's device id, as other nodes know it. */
   selfId(): string
+  /** Is that device connected to this node now (it dialled in: a server behind a userspace VPN does)? */
+  isConnected(id: string): boolean
   /** The origin for a message typed on this node (runner devices.selfOrigin). */
   selfOrigin(): MessageOrigin
   /** The prompt's device line for a chat (runner devices.originLine). */
@@ -164,6 +166,7 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
     keeper,
     commands,
     tools,
+    isConnected: (id) => host.isConnected(id),
     selfId: () => host.self().id,
     selfOrigin: () => originFromFacts(host.self().id, host.self().facts),
     originLine: async (chat) => originLine(await latestOrigin(store, chat), host.self().id),
