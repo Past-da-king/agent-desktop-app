@@ -12,7 +12,10 @@ HS_VERSION="${HS_VERSION:-0.29.5}"
 WORK="$(mktemp -d)"
 PIDS=()
 cleanup() {
+  # agent-node start detaches its service, so stop it by its data dir, then make sure nothing from WORK survives.
+  [ -d "$WORK/data" ] && AGENT_DATA_DIR="$WORK/data" "$NODE" "$WORK/agent-node/agent-node.mjs" stop > /dev/null 2>&1 || true
   [ -n "${AGENT_PID:-}" ] && kill "$AGENT_PID" 2>/dev/null || true
+  pkill -f "$WORK/" 2>/dev/null || true
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
   sleep 1
   rm -rf "$WORK"
