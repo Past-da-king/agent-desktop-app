@@ -181,6 +181,11 @@ export interface ToolContext {
   approve(summary: string, details?: string, scope?: 'computer'): Promise<boolean>
   notify(title: string, body: string): Promise<void>
   signal: AbortSignal
+  /**
+   * Commands and files for this run, when it is not this computer's own setting: a helper another computer placed
+   * here works with the choice the person made on that computer. Absent: this computer's Settings.
+   */
+  shell?: 'always' | 'ask' | 'never'
 }
 
 export interface Usage {

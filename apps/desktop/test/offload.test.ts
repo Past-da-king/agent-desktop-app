@@ -119,7 +119,7 @@ interface Node {
   cannot: string[]
 }
 
-async function makeNode(id: string, kind: 'desktop' | 'server', mesh: Mesh, options: { script: (body: Record<string, unknown>, index: number) => FakeReply; tools?: Tool[]; key?: string | null; mode?: string }): Promise<Node> {
+async function makeNode(id: string, kind: 'desktop' | 'server', mesh: Mesh, options: { script: (body: Record<string, unknown>, index: number) => FakeReply; tools?: Tool[]; key?: string | null; mode?: string; now?: () => number; settings?: Partial<Settings> }): Promise<Node> {
   const db = new Store(':memory:')
   const fake = await startFakeAi(options.script)
   const delivered: string[] = []
@@ -141,8 +141,9 @@ async function makeNode(id: string, kind: 'desktop' | 'server', mesh: Mesh, opti
   })
   const manager = new HelperManager({
     store: db,
-    settings: settingsView(READY),
+    settings: settingsView({ ...READY, ...(options.settings ?? {}) }),
     secrets: secretsView(options.key === undefined ? 'test-key' : options.key),
+    ...(options.now === undefined ? {} : { now: options.now }),
     providerFactory: (_s, key) => providerFor({ provider: 'openai', key, baseUrl: fake.url, allowHttp: true }),
     workerTools: [...buildWorkerToolset({ store: db }), ...(options.tools ?? [])],
     deliver: (note) => {
@@ -352,6 +353,60 @@ describe('helpers on another brain', () => {
     expect(pc.delivered[0]).toContain('Ran here in the end.')
   })
 
+  // 23 Oct 2026: the tunnel to the server dropped and came back every few seconds. The PC took back two helpers the
+  // server was running (their lease had not reached it yet, and the link was down at that instant), ran them a
+  // second time, and they held two of its four slots while their cards said they ran on the server.
+  it('a link that drops and comes back does not take back a helper the server is running', async () => {
+    const step = gate()
+    let skew = 0
+    const now = (): number => Date.now() + skew
+    const { pc, mesh, cut } = await twoNodes({
+      pc: { now, script: () => ({ text: 'PC ran it' }) },
+      server: { tools: [step.tool], script: () => ({ toolCalls: [{ name: 'slow_step', input: {} }] }) },
+    })
+    const id = idOf(await pc.helpers.delegate([{ label: 'Long job', brief: 'Crawl every page of the catalogue' }]))
+    await waitFor(() => step.started() === 1, 8000)
+    // Replication stalls before the server's lease reaches the PC.
+    cut()
+    await pc.db.remove('turn_lease', `job-${id}`)
+    // A minute passes while the link is up (the tunnel flaps, but it is up when the PC looks).
+    skew += 60_000
+    expect(await pc.helpers.takeBack(45_000)).toBe(0)
+    // Then it drops for a moment: not a brain that went away.
+    mesh.down.add('dev_srv')
+    expect(await pc.helpers.takeBack(45_000)).toBe(0)
+    expect(pc.fake.requests).toHaveLength(0)
+    expect(pc.helpers.slots().running).toBe(0)
+    // Gone for the whole window: now it is taken back and run here.
+    skew += 60_000
+    expect(await pc.helpers.takeBack(45_000)).toBe(1)
+    await waitFor(() => pc.delivered.length === 1, 8000)
+    expect(pc.delivered[0]).toContain('PC ran it')
+  })
+
+  it('a helper placed on the server works with the commands-and-files choice of the computer that placed it', async () => {
+    const seen: Array<string | undefined> = []
+    const probe: Tool = {
+      spec: { name: 'probe_shell', description: 'Says the shell policy.', schema: schema([], {}) },
+      run: async (_input, ctx) => {
+        seen.push(ctx.shell)
+        return `PROBED-${ctx.shell ?? 'own'}`
+      },
+    }
+    const { pc, srv } = await twoNodes({
+      pc: { settings: { shell: 'always' }, script: () => ({ text: 'PC should not think' }) },
+      server: { settings: { shell: 'ask' }, tools: [probe], script: (body) => (text(body).includes('PROBED-') ? { text: 'Checked.' } : { toolCalls: [{ name: 'probe_shell', input: {} }] }) },
+    })
+    const id = idOf(await pc.helpers.delegate([{ label: 'Probe', brief: 'Research which rules apply' }]))
+    await waitFor(() => pc.delivered.length === 1, 8000)
+    expect(seen).toEqual(['always'])
+    expect(JSON.parse((await pc.db.get('chat_item', id))?.meta ?? '{}')).toMatchObject({ placerShell: 'always', runOn: 'dev_srv' })
+    // The server's own helpers keep the server's own choice.
+    await srv.helpers.delegate([{ label: 'Own', brief: 'Research on the server itself', device: 'here' }])
+    await waitFor(() => srv.delivered.length === 1, 8000)
+    expect(seen).toEqual(['always', undefined])
+  })
+
   it('with Devices off (no self id) or no other brain, every helper runs here as before', async () => {
     const mesh: Mesh = { down: new Set(), up: () => true }
     const alone = await makeNode('dev_pc', 'desktop', mesh, { script: () => ({ text: 'Alone and fine.' }) })
@@ -416,6 +471,18 @@ describe('routines on one brain only', () => {
     expect(await late.claimRoutine('r1', '1', req, 0)).toBe(true)
   })
 
+  it('a project chat placed here carries the commands-and-files choice of the computer that placed it', async () => {
+    const db = new Store(':memory:')
+    cleanups.push(() => db.close())
+    const make = (self: string): Offload =>
+      new Offload({ store: db, selfId: () => self, isSelf: (id) => id === self, reachable: () => true, capacity: () => ({ name: self, kind: 'server', accounts: [], cap: 1, active: 0, browser: false }), mode: () => 'best', handle: async () => true })
+    await make('dev_pc').placeChat('pc1', 'dev_srv', JSON.stringify({ shell: 'always' }))
+    expect(await make('dev_srv').placedChatShell('pc1')).toBe('always')
+    // The computer that placed it uses its own setting; a chat nobody placed has none.
+    expect(await make('dev_pc').placedChatShell('pc1')).toBeUndefined()
+    expect(await make('dev_srv').placedChatShell('pc2')).toBeUndefined()
+  })
+
   it('the scheduler skips a due routine another brain runs', async () => {
     const db = new Store(':memory:')
     cleanups.push(() => db.close())
@@ -446,11 +513,18 @@ describe('routines on one brain only', () => {
 })
 
 describe('settings', () => {
-  it('helpersRunOn and devicesJobCap are kept per computer and cleaned', () => {
+  it('helpersRunOn and devicesJobLimit are kept per computer and cleaned; no limit by default', () => {
     expect(DEFAULT_SETTINGS.helpersRunOn).toBe('best')
-    expect(DEFAULT_SETTINGS.devicesJobCap).toBe(4)
-    expect(loadSettings({ helpersRunOn: 'here', devicesJobCap: 2 })).toMatchObject({ helpersRunOn: 'here', devicesJobCap: 2 })
-    expect(loadSettings({ helpersRunOn: 'dev_N4f-abc', devicesJobCap: 99 })).toMatchObject({ helpersRunOn: 'dev_N4f-abc', devicesJobCap: 16 })
-    expect(loadSettings({ helpersRunOn: '../x y', devicesJobCap: 'lots' })).toMatchObject({ helpersRunOn: 'best', devicesJobCap: 4 })
+    expect(DEFAULT_SETTINGS.devicesJobLimit).toBe(0)
+    expect(loadSettings({ helpersRunOn: 'here', devicesJobLimit: 2 })).toMatchObject({ helpersRunOn: 'here', devicesJobLimit: 2 })
+    expect(loadSettings({ helpersRunOn: 'dev_N4f-abc', devicesJobLimit: 99 })).toMatchObject({ helpersRunOn: 'dev_N4f-abc', devicesJobLimit: 99 })
+    expect(loadSettings({ helpersRunOn: '../x y', devicesJobLimit: 'lots' })).toMatchObject({ helpersRunOn: 'best', devicesJobLimit: 0 })
+    // The old setting: its stored 4 was the old default and goes; "none" was a real choice and stays.
+    expect(loadSettings({ devicesJobCap: 4 })).toMatchObject({ devicesJobLimit: 0 })
+    expect(loadSettings({ devicesJobCap: 0 })).toMatchObject({ devicesJobLimit: -1 })
+    expect(loadSettings({ devicesJobLimit: -5 })).toMatchObject({ devicesJobLimit: -1 })
+    // Helpers, steps and routines at once: 0 or blank = no limit, the default.
+    expect(DEFAULT_SETTINGS).toMatchObject({ helpersAtOnce: 0, helperMaxSteps: 0, routinesAtOnce: 0 })
+    expect(loadSettings({ helpersAtOnce: 12, helperMaxSteps: '', routinesAtOnce: -3 })).toMatchObject({ helpersAtOnce: 12, helperMaxSteps: 0, routinesAtOnce: 0 })
   })
 })

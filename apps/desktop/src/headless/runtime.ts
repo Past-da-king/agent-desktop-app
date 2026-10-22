@@ -384,6 +384,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     store,
     workers,
     desk: helpers,
+    maxRuns: () => settings.get().routinesAtOnce,
     onChange: () => broadcast(WORKERS_CHANGED, null),
     workerName: (id) => {
       try {
@@ -401,6 +402,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const theRunner = new Runner({
     devices: {
       leases,
+      shellFor: (chat) => offloadWire?.shellFor(chat),
       selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },

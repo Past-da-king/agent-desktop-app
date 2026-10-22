@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { hostname as osHostname } from 'node:os'
 import { dirname } from 'node:path'
 
-import { DEFAULT_SETTINGS, VOICES, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings, cleanRoster, knownRoster } from '@agent/core'
+import { DEFAULT_SETTINGS, NO_LIMIT_CAP, VOICES, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings, cleanRoster, knownRoster } from '@agent/core'
 
 import { upgradeHotkeys } from './hotkeys'
 
@@ -136,6 +136,9 @@ function mergeSettings(raw: Record<string, unknown> | null): Settings {
     const coerced = coerce(key, raw[key])
     if (coerced !== INVALID) target[key] = coerced
   }
+  // Up to 0.2.56 `devicesJobCap` defaulted to 4 (0 = none). Only "none" was ever a real choice worth keeping:
+  // every other stored value was the old default, and work for other devices now has no limit unless asked.
+  if (!('devicesJobLimit' in raw) && raw['devicesJobCap'] === 0) merged.devicesJobLimit = -1
   return merged
 }
 
@@ -175,9 +178,17 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     const clean = value.trim()
     return clean === 'best' || clean === 'here' || /^[A-Za-z0-9_-]{1,64}$/.test(clean) ? clean : INVALID
   }
-  if (key === 'devicesJobCap') {
+  if (key === 'devicesJobLimit') {
+    if (value === null || value === '') return 0
     if (typeof value !== 'number' || !Number.isFinite(value)) return INVALID
-    return Math.max(0, Math.min(16, Math.round(value)))
+    return value < 0 ? -1 : Math.min(NO_LIMIT_CAP, Math.round(value))
+  }
+  // 0 or blank = no limit; any positive whole number = at most that many. Never a ceiling of our own.
+  if (key === 'helpersAtOnce' || key === 'helperMaxSteps' || key === 'routinesAtOnce') {
+    if (value === null || value === '') return 0
+    const number = typeof value === 'string' ? Number(value.trim()) : value
+    if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
+    return number <= 0 ? 0 : Math.min(NO_LIMIT_CAP, Math.round(number))
   }
 
   const expected = DEFAULT_SETTINGS[key]

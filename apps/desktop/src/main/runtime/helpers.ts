@@ -18,6 +18,7 @@ import {
   PROVIDERS,
   accountById,
   findRosterEntry,
+  limitOf,
   msgFromJson,
   msgToJson,
   repair,
@@ -155,10 +156,13 @@ export interface HelperManagerDeps {
   platform?: string
   timeZone?: string
   now?: () => number
-  /** Four at a time; the rest wait their turn. */
-  maxConcurrent?: number
-  /** A helper may take many steps, but not forever. */
-  maxSteps?: number
+  /**
+   * How many helpers run here at once; the rest wait their turn. Unset: Settings > This computer > Helpers at once,
+   * which is no limit unless the person sets one (rule of 23 Oct 2026: never a ceiling of our own).
+   */
+  maxConcurrent?: number | (() => number)
+  /** How many steps one helper may take. Unset: Settings > Steps per helper, no limit unless the person sets one. */
+  maxSteps?: number | (() => number)
   emit?: (event: ChatEvent) => void
   notify?: (title: string, body: string) => void
   /** On the person's own plan, every helper is its own Claude Agent SDK / Codex SDK session. */
@@ -206,6 +210,17 @@ interface HelperRun {
   tools?: Tool[]
   /** The brain that placed it here, when that is another brain: its result goes back there (s12). '' = here. */
   origin?: string
+  /**
+   * Commands and files for this run, when another brain placed it here: the choice of the computer that placed it
+   * (the person chose it there), not this brain's own. Absent: this brain's own setting.
+   */
+  shell?: ShellPolicy
+}
+
+type ShellPolicy = 'always' | 'ask' | 'never'
+
+function shellPolicy(value: unknown): ShellPolicy | undefined {
+  return value === 'always' || value === 'ask' || value === 'never' ? value : undefined
 }
 
 /** A helper this brain placed on another brain, as long as it works there. */
@@ -260,11 +275,8 @@ interface Batch {
 export const GAVE_UP =
   /(^\s*(unable|couldn't|could not|can't|cannot|failed)\b)|\b(I|we)\s+(can't|cannot|can not|couldn't|could not|was unable|were unable|am unable|wasn't able|weren't able|am not able|don't have access|do not have access|have no access|wasn't allowed|got blocked|was blocked)\b/i
 
-const MAX_CONCURRENT = 4
-const MAX_HELPER_STEPS = 120
 /** How long a helper's passing summary may wait before it is written. */
 const META_FLUSH_MS = 150
-const MAX_TASKS = 5
 const MAX_RESULT_CHARS = 12_000
 const MAX_META_RESULT_CHARS = 6_000
 
@@ -284,8 +296,8 @@ export class HelperManager implements HelperHost {
   private readonly platform: string
   private readonly timeZone: string | undefined
   private readonly now: () => number
-  private readonly maxConcurrent: number
-  private readonly maxSteps: number
+  private readonly maxConcurrent: () => number
+  private readonly maxSteps: () => number
   private readonly emit: (event: ChatEvent) => void
   private readonly notifyUser: (title: string, body: string) => void
   private readonly leases: LeaseHook | undefined
@@ -323,8 +335,12 @@ export class HelperManager implements HelperHost {
     this.platform = deps.platform ?? process.platform
     this.timeZone = deps.timeZone
     this.now = deps.now ?? Date.now
-    this.maxConcurrent = deps.maxConcurrent ?? MAX_CONCURRENT
-    this.maxSteps = deps.maxSteps ?? MAX_HELPER_STEPS
+    const atOnce = deps.maxConcurrent
+    this.maxConcurrent =
+      typeof atOnce === 'function' ? () => limitOf(atOnce()) : atOnce !== undefined ? () => limitOf(atOnce) : () => limitOf(this.settings.get().helpersAtOnce)
+    const steps = deps.maxSteps
+    this.maxSteps =
+      typeof steps === 'function' ? () => limitOf(steps()) : steps !== undefined ? () => limitOf(steps) : () => limitOf(this.settings.get().helperMaxSteps)
     this.emit = deps.emit ?? (() => undefined)
     this.notifyUser = deps.notify ?? (() => undefined)
     this.leases = deps.leases
@@ -356,7 +372,8 @@ export class HelperManager implements HelperHost {
 
   async delegate(tasks: HelperTask[], together = false, origin: HelperOrigin = {}): Promise<string> {
     const chat = origin.chat ?? MAIN_CHAT
-    const clean = tasks.filter((task) => task.brief.trim() !== '').slice(0, MAX_TASKS)
+    // Every brief given runs: there is no cap on how many one call starts.
+    const clean = tasks.filter((task) => task.brief.trim() !== '')
     if (clean.length === 0) return 'No tasks given.'
 
     // Each job runs on the helper model it names from the chat's list (its project's, else the main thread's),
@@ -403,7 +420,11 @@ export class HelperManager implements HelperHost {
       const use = picked[index]!
       const link = this.link()
       const placed = link === null ? null : await link.place({ text: `${label}\n${task.brief}`, account: use.pick.account, ...(task.device === undefined ? {} : { device: task.device }) })
-      const where = link === null ? {} : { placedBy: link.selfId(), runOn: placed?.device ?? link.selfId(), ...(placed?.device ? { runsOnName: placed.name } : {}) }
+      // Placed on another brain: it carries this computer's choice for commands and files, which the person made here.
+      const where =
+        link === null
+          ? {}
+          : { placedBy: link.selfId(), runOn: placed?.device ?? link.selfId(), ...(placed?.device ? { runsOnName: placed.name, placerShell: settings.shell } : {}) }
       const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name, ...where })
       if (link !== null && placed !== null && placed.device !== null) {
         this.remote.set(id, { id, label, brief: task.brief, chat, profile: profile.name, startedAt: this.now(), device: placed.device, sentAt: this.now(), pick: use.pick, profileId: profile.id, model: use.model })
@@ -511,6 +532,7 @@ export class HelperManager implements HelperHost {
     if (brain.kind === 'plan') {
       await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now(), ...here })
       this.runs.set(id, {
+        ...this.placerShell(meta, origin),
         origin,
         chat,
         pick,
@@ -545,6 +567,7 @@ export class HelperManager implements HelperHost {
       ...here,
     })
     this.runs.set(id, {
+      ...this.placerShell(meta, origin),
       origin,
       chat,
       pick,
@@ -836,10 +859,13 @@ export class HelperManager implements HelperHost {
 
   async restore(): Promise<void> {
     const rows = await this.store.list('chat_item')
+    const waiting: string[] = []
     for (const row of rows) {
       if (row.kind !== 'helper') continue
       const meta = parseMeta(row.meta)
       if (meta['state'] !== 'working') continue
+      // Already taken up again on this start (a start another brain sent, a lease resumed): it is ours and running.
+      if (this.runs.has(row.id)) continue
       // A project agent's row (runtime/project-agents.ts, it carries projectChat) is not a helper run: its project
       // chat resumes from its turn lease, and ProjectAgentRows.restore follows it again and closes it when that chat
       // is done. Failing it here left the card dead while the project's own helpers carried on (22 Oct 2026).
@@ -857,6 +883,11 @@ export class HelperManager implements HelperHost {
         const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
         if (lease !== null && lease.status === 'running' && lease.brainId !== '' && !this.offload.isSelf(lease.brainId)) continue
       }
+      // Still waiting its turn when the app closed: it never started, so it simply starts now.
+      if (meta['queued'] === true && meta['side'] !== true && meta['desk'] !== true) {
+        waiting.push(row.id)
+        continue
+      }
       await this.updateMeta(row.id, {
         state: 'failed',
         summary: 'Interrupted when the app closed.',
@@ -865,29 +896,56 @@ export class HelperManager implements HelperHost {
         queued: false,
       })
     }
-    this.runs.clear()
-    this.queue.length = 0
-    this.active.clear()
-    // Keep the helpers placed elsewhere that were just followed again.
-    this.inbox.clear()
-    this.batches.clear()
-    this.batchOf.clear()
+    // Runs taken up on this start stay (clearing them left their cards stuck on "Waiting its turn"); only
+    // bookkeeping for runs that are not here any more goes.
+    for (const id of [...this.inbox.keys()]) if (!this.runs.has(id)) this.inbox.delete(id)
+    for (const id of waiting) {
+      const row = await this.store.get('chat_item', id)
+      await this.adopt(id, row === null ? '' : this.originOf(parseMeta(row.meta)))
+    }
   }
 
   // ---- running a helper --------------------------------------------------------------------
 
+  /** Helpers running here now, and how many may (Infinity: no limit, the default). */
+  slots(): { running: number; limit: number; waiting: number } {
+    return { running: this.active.size, limit: this.maxConcurrent(), waiting: this.queue.length }
+  }
+
   private pump(): void {
-    while (this.active.size < this.maxConcurrent && this.queue.length > 0) {
+    const limit = this.maxConcurrent()
+    while (this.active.size < limit && this.queue.length > 0) {
       const id = this.queue.shift()
       if (id === undefined) return
       const run = this.runs.get(id)
       if (run === undefined) continue
+      // Already running (the same helper queued twice): never a second run of it.
+      if (this.active.has(id)) continue
       this.active.add(id)
       this.leases?.begin({ kind: 'job', chatId: run.chat, messageId: id, prompt: run.brief })
       // A helper still finishing when the store closes (the app quitting, a test ending) has nowhere to write its
       // last state; that must not surface as an unhandled rejection. Its lease resumes it on the next start.
-      this.runHelper(run).catch(() => undefined)
+      this.runHelper(run)
+        .catch(() => undefined)
+        .finally(() => this.release(run))
     }
+  }
+
+  /**
+   * After a run settles: if it never reached finish (it threw before its first step, or the plan was not there),
+   * its slot and card are freed here, so a slot is never held by a helper that is no longer running.
+   */
+  private release(run: HelperRun): void {
+    if (this.runs.get(run.id) !== run) return
+    this.runs.delete(run.id)
+    this.active.delete(run.id)
+    this.inbox.delete(run.id)
+    this.leases?.end(`job-${run.id}`, 'failed')
+    const result = 'It stopped before it could start. Send it back to try again.'
+    void this.updateMeta(run.id, { state: 'failed', summary: result, result, endedAt: this.now(), queued: false })
+      .then(() => this.emit({ type: 'chat_changed' }))
+      .catch(() => undefined)
+    this.pump()
   }
 
   private async runHelper(run: HelperRun): Promise<void> {
@@ -917,7 +975,7 @@ export class HelperManager implements HelperHost {
         provider: ready.provider,
         model: run.model === '' ? ready.model : run.model,
         tools: run.tools ?? this.workerTools,
-        maxSteps: this.maxSteps,
+        maxSteps: this.maxSteps(),
       })
       const out = await loop.run(system, history, this.context(run, controller.signal), {
         onEvent: (event) => this.onEvent(run, event),
@@ -1120,6 +1178,7 @@ export class HelperManager implements HelperHost {
     }
     await this.updateMeta(id, { runOn: link?.selfId() ?? '', queued: true, summary: 'Waiting its turn' })
     this.runs.set(id, {
+      ...this.placerShell(meta, from),
       origin: from,
       chat,
       pick,
@@ -1172,6 +1231,13 @@ export class HelperManager implements HelperHost {
     if (link === null) return 0
     let taken = 0
     for (const run of [...this.remote.values()]) {
+      // Only a brain that stayed away the whole time loses it: a link that drops and comes back (a flapping
+      // tunnel, a restart) starts the clock again. Taking a helper back from a brain that is in fact running it
+      // ran it twice, and held slots here while its card said it ran there (23 Oct 2026).
+      if (link.up(run.device)) {
+        run.sentAt = this.now()
+        continue
+      }
       if (this.now() - run.sentAt < after) continue
       const holder = await link.leaseHolder(run.id)
       if (holder.device !== '') continue
@@ -1187,6 +1253,17 @@ export class HelperManager implements HelperHost {
     if (placed !== undefined) return placed.label
     const row = await this.store.get('chat_item', id)
     return row === null ? 'Helper' : stringField(parseMeta(row.meta)['label']) || 'Helper'
+  }
+
+  /**
+   * Placed here by another brain: it works with the commands-and-files choice of the computer that placed it, which
+   * that computer wrote on the helper's card when it placed it. Run for this brain itself: this brain's own choice.
+   */
+  private placerShell(meta: Record<string, unknown>, origin: string | undefined): { shell?: ShellPolicy } {
+    const link = this.link()
+    if (origin === undefined || origin === '' || (link !== null && link.isSelf(origin))) return {}
+    const policy = shellPolicy(meta['placerShell'])
+    return policy === undefined ? {} : { shell: policy }
   }
 
   /** The brain a helper's result goes back to: the one that placed it, when that is another brain. */
@@ -1348,6 +1425,7 @@ export class HelperManager implements HelperHost {
       },
       ask: (question, options) => this.ask(run, question, options, signal),
       approve: (summary, details, scope) => this.approve(run, summary, details, signal, scope),
+      ...(run.shell === undefined ? {} : { shell: run.shell }),
       notify: async (title, body) => {
         if (!this.settings.get().notifications) return
         try {
@@ -1563,8 +1641,9 @@ export class HelperManager implements HelperHost {
     ])
     // Started from a project chat: it works for that project, reads its memory first and keeps it.
     const project = projects.find((each) => each.chats.includes(run.chat))
+    const own = this.settings.get()
     return buildSystemPrompt({
-      settings: this.settings.get(),
+      settings: run.shell === undefined ? own : { ...own, shell: run.shell },
       now: new Date(this.now()),
       platform: this.platform,
       memories,

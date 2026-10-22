@@ -95,6 +95,11 @@ export interface RunnerDevices {
   selfOrigin?: () => object | null
   /** The prompt's one line about which device the newest message came from. */
   originLine?: (chat: string) => Promise<string>
+  /**
+   * A project chat another computer placed here works with that computer's commands-and-files choice (the person
+   * made it there). Undefined: this computer's own setting.
+   */
+  shellFor?: (chat: string) => 'always' | 'ask' | 'never' | undefined
 }
 
 export interface RunnerDeps {
@@ -1009,7 +1014,7 @@ export class Runner {
     }
     if (brain.kind === 'plan') return this.runCliTurn(line, text, images, signal, brain)
     const { provider, model } = brain
-    const current = this.settings.get()
+    const current = this.settingsFor(chat)
 
     const memories = await this.store.list('memory')
     const goals = await this.store.list('goal')
@@ -1092,8 +1097,15 @@ export class Runner {
     }
   }
 
+  /** This computer's settings, with the placing computer's commands-and-files choice for a chat placed here. */
+  private settingsFor(chat: string): Settings {
+    const own = this.settings.get()
+    const shell = chat === MAIN_CHAT ? undefined : this.devices?.shellFor?.(chat)
+    return shell === undefined ? own : { ...own, shell }
+  }
+
   private async cliSystem(text: string, role: 'main' | 'routine', routineName: string | undefined, chat: string, cli: CliId): Promise<string> {
-    const current = this.settings.get()
+    const current = role === 'main' ? this.settingsFor(chat) : this.settings.get()
     return buildSystemPrompt({
       settings: current,
       now: new Date(this.now()),
@@ -1434,7 +1446,14 @@ export class Runner {
         role === 'routine' ? this.approveInRoutine(summary, details) : this.approve(summary, details, signal, scope, chat),
       notify: async (title, body) => this.sendNotification(title, body, false),
       signal,
+      ...this.placedShell(role, chat),
     }
+  }
+
+  private placedShell(role: 'main' | 'routine', chat: string): { shell?: 'always' | 'ask' | 'never' } {
+    if (role !== 'main' || chat === MAIN_CHAT) return {}
+    const shell = this.devices?.shellFor?.(chat)
+    return shell === undefined ? {} : { shell }
   }
 
   private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT, card?: JsonObject): Promise<string | null> {

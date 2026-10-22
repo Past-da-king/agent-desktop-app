@@ -255,7 +255,9 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       const command = text(input['command']).trim()
       if (command === '') return 'Pass the command to run.'
 
-      if (deps.settings.get().shell === 'never') {
+      // A helper another computer placed here works with that computer's choice (ctx.shell).
+      const policy = ctx.shell ?? deps.settings.get().shell
+      if (policy === 'never') {
         recordRun(input, declinedRun(command, 'Shell commands are turned off in Settings.'))
         return 'Shell commands are turned off in Settings, so I did not run it.'
       }
@@ -283,7 +285,7 @@ function shellRunTool(deps: ShellToolDeps): Tool {
 
       // The person chose "Run without asking" for this computer.
       const approved =
-        deps.settings.get().shell === 'always' ||
+        policy === 'always' ||
         (await ctx.approve(
         `Run: ${command}`,
         `${cwd === undefined ? '' : `In ${cwd}\n`}Shell: ${plan.label}\nThis runs a real command on this computer. It stops after ${timeoutSec} seconds.`,

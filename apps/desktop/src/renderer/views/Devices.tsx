@@ -313,12 +313,13 @@ function DeviceItem({
   )
 }
 
-/** The cap a computer may set for helpers it runs for the person's other devices (s12). */
+/** How many helpers a computer runs for the person's other devices (s12): no limit unless the person picks one. */
 const CAP_OPTIONS = [
-  { value: '0', label: 'None' },
-  { value: '2', label: '2' },
+  { value: '0', label: 'No limit' },
   { value: '4', label: '4' },
   { value: '8', label: '8' },
+  { value: '16', label: '16' },
+  { value: '-1', label: 'None' },
 ]
 
 /**
@@ -336,8 +337,8 @@ function HelperPlacement({ brains, selfId }: { brains: DeviceRow[]; selfId: stri
     { value: 'here', label: 'This computer' },
     ...others.map((device) => ({ value: device.id, label: device.name })),
   ]
-  const cap = String(settings?.devicesJobCap ?? 4)
-  const capValue = CAP_OPTIONS.some((option) => option.value === cap) ? cap : '4'
+  const cap = String(settings?.devicesJobLimit ?? 0)
+  const capValue = CAP_OPTIONS.some((option) => option.value === cap) ? cap : '0'
   const change = (patch: Parameters<typeof save>[0]): void => {
     void save(patch).catch((cause: unknown) => toast(message(cause, 'Could not change that.')))
   }
@@ -354,9 +355,9 @@ function HelperPlacement({ brains, selfId }: { brains: DeviceRow[]; selfId: stri
       <div className="dv-place-row">
         <span>
           Run for your other devices
-          <small>How many of their helpers this computer runs at once.</small>
+          <small>How many of their helpers this computer runs at once. No limit unless you pick one.</small>
         </span>
-        <Segmented ariaLabel="Run for your other devices" options={CAP_OPTIONS} value={capValue} onChange={(next) => change({ devicesJobCap: Number(next) })} />
+        <Segmented ariaLabel="Run for your other devices" options={CAP_OPTIONS} value={capValue} onChange={(next) => change({ devicesJobLimit: Number(next) })} />
       </div>
     </div>
   )

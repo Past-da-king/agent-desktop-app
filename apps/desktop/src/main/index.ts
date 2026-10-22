@@ -859,6 +859,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     store,
     workers,
     desk: helpers,
+    maxRuns: () => settings.get().routinesAtOnce,
     onChange: workersChanged,
     workerName: (id) => {
       try {
@@ -875,6 +876,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   runner = new Runner({
     devices: {
       leases,
+      shellFor: (chat) => offloadWire?.shellFor(chat),
       selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },
