@@ -19,6 +19,8 @@ import type { MessageOrigin } from '../src/main/devices/types'
 import { registerIpc, type ChatRunner } from '../src/main/ipc'
 import { Secrets, type SafeStorageLike } from '../src/main/secrets'
 import { SettingsStore } from '../src/main/settings'
+import { registerVoiceIpc } from '../src/main/voice/ipc'
+import { VoiceService } from '../src/main/voice/service'
 import { connectRpc, pinnedRequest } from './devices-client'
 
 const storage: SafeStorageLike = {
@@ -39,6 +41,9 @@ let store: Store
 let service: DevicesService
 let dispose: (() => void) | null = null
 let calls: string[]
+let ipcRef: ReturnType<typeof recordHandlers>
+let settingsRef: SettingsStore
+let secretsRef: Secrets
 let sends: Array<{ text: string; chat?: string; origin?: MessageOrigin }>
 
 beforeEach(async () => {
@@ -94,6 +99,9 @@ beforeEach(async () => {
     pasted: { save: async (name, mime) => ({ path: join(dir, 'attachments', name), name, mime }), clipboardFiles: async () => [] },
   })
   service.registerIpc(ipcMain)
+  ipcRef = ipcMain
+  settingsRef = settings
+  secretsRef = secrets
   await service.start()
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await service.configure({ listen: '127.0.0.1', port: 20000 + Math.floor(Math.random() * 30000) })
@@ -192,5 +200,56 @@ describe('the phone app against the node', () => {
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(phone.events.some((e) => e.name === 'agent:evt:window.maximized')).toBe(false)
     phone.close()
+  })
+})
+
+describe('a call from a phone with no Google key', () => {
+  it('gets a one-use Live token from this computer over the link, never the key, and saves the call here', async () => {
+    const google: string[] = []
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      google.push(url)
+      const body = url.includes('/models') ? { models: [{ name: 'models/gemini-3.8-live' }] } : { name: 'auth_tokens/one-use' }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    const voice = new VoiceService({
+      secrets: secretsRef,
+      settings: settingsRef,
+      store,
+      runner: { send: async () => undefined, state: () => ({ running: false, waiting: [] }) },
+      emit: () => undefined,
+      fetchImpl,
+      platform: 'linux',
+    })
+    registerVoiceIpc(voice, ipcRef)
+    const status = service.status()
+    const base = `https://127.0.0.1:${status.port}`
+    const pair = await pinnedRequest(`${base}/v1/pair`, status.fp, { method: 'POST', body: { code: service.offer().shortCode, device: PHONE } })
+    const { pass } = pair.json() as { pass: string }
+    const phone = await connectRpc(base, status.fp, pass, PHONE, PHONE_TOOLS)
+
+    // No key on the computer: the phone is told to add it there, and Google is not asked.
+    expect(await phone.call('voice.liveToken')).toMatchObject({ ok: false, needsKey: true })
+    expect(google).toEqual([])
+
+    voice.setKey('the-real-key')
+    const token = (await phone.call('voice.liveToken')) as Record<string, unknown>
+    expect(token).toMatchObject({ ok: true, token: 'auth_tokens/one-use', model: 'gemini-3.8-live' })
+    expect(String(token['url'])).toMatch(/^wss:\/\/generativelanguage\.googleapis\.com\/.*BidiGenerateContentConstrained$/)
+    expect(JSON.stringify(token)).not.toContain('the-real-key')
+    // The key cannot be read or changed from the phone.
+    await expect(phone.call('voice.setKey', 'other')).rejects.toThrow('not available')
+
+    const saved = (await phone.call('voice.callSave', {
+      startedAt: 1_700_000_000_000,
+      durationMs: 20_000,
+      lines: [
+        { who: 'you', text: 'Remind me about the dentist', at: 1_700_000_001_000 },
+        { who: 'agent', text: 'Done, tomorrow at nine.', at: 1_700_000_002_000 },
+      ],
+    })) as { itemId: string }
+    const row = await store.get('chat_item', saved.itemId)
+    expect(row).toMatchObject({ kind: 'call', text: 'Call, 20 s' })
+    await expect(phone.call('voice.callSave', { startedAt: 'soon', durationMs: 1, lines: [] })).rejects.toThrow()
   })
 })

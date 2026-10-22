@@ -378,3 +378,48 @@ export function stripWav(bytes: Buffer): Buffer {
   }
   return bytes.subarray(44)
 }
+
+/**
+ * Where a device with no key of its own opens a Live call: the constrained endpoint takes a short-lived token
+ * (`access_token=`) instead of the key. Verified against Google 22 Oct 2026: the plain endpoint refuses tokens.
+ */
+export const LIVE_TOKEN_URL = `${LIVE_URL}Constrained`
+
+/** A token lasts this long; Google resumes a call on the same token within it. */
+export const LIVE_TOKEN_TTL_MS = 30 * 60_000
+/** And a new call must start within this. */
+export const LIVE_TOKEN_START_MS = 2 * 60_000
+
+/**
+ * A one-use Gemini Live token (auth_tokens, uses 1), locked to `model`, for a paired device that has no key of its
+ * own. The key stays here; the token cannot list models, call any other API, or start a second call.
+ */
+export async function mintLiveToken(
+  deps: GeminiDeps,
+  model: string,
+  now: number,
+): Promise<{ token: string; expiresAt: number }> {
+  const key = deps.key()
+  if (key === null || key.trim() === '') throw new GeminiError(401, 'no key')
+  const fetcher = deps.fetchImpl ?? fetch
+  const expiresAt = now + LIVE_TOKEN_TTL_MS
+  let response: Response
+  try {
+    response = await fetcher(`${GEMINI_BASE}/v1beta/auth_tokens`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key.trim(), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        uses: 1,
+        expireTime: new Date(expiresAt).toISOString(),
+        newSessionExpireTime: new Date(now + LIVE_TOKEN_START_MS).toISOString(),
+        bidiGenerateContentSetup: { model: model.startsWith('models/') ? model : `models/${model}` },
+      }),
+    })
+  } catch {
+    throw new GeminiError(0, 'network')
+  }
+  if (!response.ok) throw new GeminiError(response.status, errorMessage(await response.text()))
+  const body = (await response.json().catch(() => ({}))) as { name?: unknown }
+  if (typeof body.name !== 'string' || body.name === '') throw new GeminiError(502, 'no token')
+  return { token: body.name, expiresAt }
+}

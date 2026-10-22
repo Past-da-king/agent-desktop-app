@@ -24,6 +24,8 @@ import { HandlerRegistry, recordHandlers } from '../main/devices/registry'
 import { devicesState, ownBrainIds, type DevicesSyncDeps } from '../main/devices/sync'
 import { TurnLeases } from '../main/runtime/turns'
 import { registerWorkersIpc } from '../main/workers/ipc'
+import { registerVoiceIpc } from '../main/voice/ipc'
+import { VoiceService } from '../main/voice/service'
 import { EventRouter } from '../main/workers/router'
 import { killLeftover, killTree, spawnWorker } from '../main/workers/spawn'
 import { WorkerStore } from '../main/workers/store'
@@ -488,6 +490,19 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     supervisor.start()
   }
   registerWorkersIpc(ipcMain, { store: workers, supervisor, openPath: async () => '' })
+
+  // Voice: a paired phone with no Google key of its own gets a one-use Live token from the key the bundle brought
+  // here, and its call lands in this chat. Live calls held on this node itself need a screen, so none start here.
+  const voice = new VoiceService({
+    secrets,
+    settings,
+    store,
+    runner: theRunner,
+    emit: (event) => broadcast(EVENTS.voiceCall, event),
+    platform: process.platform,
+    notesDir: join(dir, 'voice-notes'),
+  })
+  registerVoiceIpc(voice, ipcMain)
 
   const disposeIpc = registerIpc({
     store,

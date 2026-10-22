@@ -42,6 +42,7 @@ import type {
   WorkerInfo,
   WorkerLogLine,
 } from '@agent/core'
+import type { LiveTokenResult } from '@agent/core'
 import type { DeviceRow, DevicesStatus, HelperCardsSnapshot, PairingOfferInfo } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
@@ -233,6 +234,8 @@ const api: AgentApi = {
     transcribe: (pcm) => call<VoiceResult<{ text: string }>>(CHANNELS.voice.transcribe, pcm),
     speak: (text) => call<VoiceResult<{ data: string }>>(CHANNELS.voice.speak, text),
     noteAudio: (file) => call<Uint8Array | null>(CHANNELS.voice.noteAudio, file),
+    liveToken: () => call<LiveTokenResult>(CHANNELS.voice.liveToken),
+    callSave: (record) => call<{ itemId: string } | null>(CHANNELS.voice.callSave, record),
     callStart: () => call<{ ok: boolean; message: string }>(CHANNELS.voice.callStart),
     callAudio: (pcm) => {
       ipcRenderer.send(CHANNELS.voice.callAudio, pcm)
