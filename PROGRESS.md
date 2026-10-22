@@ -74,6 +74,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 05:00 A FINAL devices-node c9d76c0: phone frames pinned by test/devices-phone.test.ts (bare/lowercase code, hello tools, allowlist, events). Full suite 1154.
 
+- 05:10 B devices-sync f97101c: ask_user on another node; live harness scripts/devices-e2e.mjs (+ fake AI, devices-e2e-local.sh). Self-test vs old headless build: a, d PASS; b, e, f, g fail only because B is not merged yet; c needs the project helper row (B building it now).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
