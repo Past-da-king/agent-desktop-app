@@ -8,6 +8,19 @@ export type DeviceKind = 'phone' | 'tablet' | 'desktop' | 'server'
 export type DevicePlatform = 'android' | 'ios' | 'windows' | 'macos' | 'linux'
 export type DeviceRole = 'screen' | 'brain' | 'hands'
 
+/** What kind of thing a shared device tool does (s11); each group can be switched off per device. */
+export type DeviceToolGroup = 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'other'
+
+/** One tool a device lets other devices use (s11), as it advertises it in its hello. */
+export interface DeviceTool {
+  name: string
+  description: string
+  /** JSON schema of its arguments. */
+  params: Record<string, unknown>
+  group: DeviceToolGroup
+  readOnly: boolean
+}
+
 export interface DeviceFacts {
   name: string
   kind: DeviceKind
@@ -19,7 +32,22 @@ export interface DeviceFacts {
   /** Fingerprint of the device's own node certificate (nodes only, else ''). */
   fingerprint: string
   urls: string[]
+  /** The tools this device lets other devices use (protocol s11), as sent in its hello. */
+  tools?: DeviceTool[]
 }
+
+/** A device command of kind "tool" (protocol s5.2 and s11): run `tool` with `args`, answer with device.result. */
+export interface DeviceToolCommand {
+  kind: 'tool'
+  id: string
+  tool: string
+  args: Record<string, unknown>
+  chatId: string
+  deadlineMs: number
+}
+
+/** What device.result(id, ok, value | error) carries back to the brain. */
+export type DeviceToolResult = { ok: true; value: unknown } | { ok: false; error: string }
 
 /** A synced `device` row's payload (protocol s4). */
 export interface DeviceRecord {
@@ -36,6 +64,8 @@ export interface DeviceRecord {
   pairedAt: number
   lastSeen: number
   revoked: boolean
+  /** Its tool catalogue from its latest hello (protocol s11); absent on rows from before s11. */
+  tools?: DeviceTool[]
 }
 
 export interface BrainRef {
@@ -73,10 +103,14 @@ export interface RouteRequest {
   signal: AbortSignal
 }
 
-export type RouteReply =
+export type RouteReply = (
   | { status: number; json: unknown }
   | { status: number; file: string; contentType?: string }
   | { status: number; text: string; contentType?: string }
+) & {
+  /** Extra response headers (Set-Cookie, Location, Cache-Control). Added by workstream A. */
+  headers?: Record<string, string>
+}
 
 export interface DevicesRoute {
   method: 'GET' | 'POST'
@@ -100,6 +134,11 @@ export interface DevicesHost {
   isConnected(deviceId: string): boolean
   /** This node's own id and facts. */
   self(): { id: string; facts: DeviceFacts }
+  /**
+   * Hears every RPC device.result(id, ok, value | error) a connected device sends (protocol s11). The brain-side
+   * router registers here and matches `id` to the command it sent. Returns the unsubscribe.
+   */
+  onDeviceResult(listener: (deviceId: string, id: string, result: DeviceToolResult) => void): () => void
 }
 
 /** Pass hashes (never the passes). Kept in the secrets store; shared with brains through the bundle (s6). */

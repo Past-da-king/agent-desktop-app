@@ -33,6 +33,11 @@ export interface CliTurnRequest {
   thread: string
   /** The tools this run may use (the main agent's set, or a helper's worker set). */
   tools: Tool[]
+  /**
+   * A helper thread that was given delegate on purpose (a routine's desk, workers/router.ts). Without it, a
+   * helper's session never sees delegate or helper_*, whatever its tool list says.
+   */
+  delegates?: boolean
   system: string
   prompt: string
   images?: string[]
@@ -63,6 +68,16 @@ export function threadDelegates(thread: string): boolean {
   return !thread.startsWith('helper:') && thread !== 'routine'
 }
 
+/** The tools a plan session is given: no delegate for a helper unless it was granted on purpose (a desk). */
+export function toolsForTurn(request: Pick<CliTurnRequest, 'tools' | 'thread' | 'cli' | 'delegates'>): Tool[] {
+  return request.tools.filter(
+    (tool) =>
+      (request.delegates === true || threadDelegates(request.thread) || !NOT_ON_CLI.test(tool.spec.name)) &&
+      // Claude brings its own (better) shell and file tools, asked through the app; Codex keeps the app's.
+      !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name)),
+  )
+}
+
 /** A native binary inside app.asar cannot be started; electron-builder unpacks it next to the archive. */
 function unpacked(path: string): string {
   return path.replace(`app.asar${sep}`, `app.asar.unpacked${sep}`)
@@ -88,6 +103,9 @@ export class CliHost {
   /** The engine binary the SDK ships for this computer, or null to let the SDK find it itself. */
   engine(cli: CliId): string | null {
     const exe = process.platform === 'win32' ? '.exe' : ''
+    // A build without the bundled engines (the headless node) names an installed one: AGENT_CLAUDE_PATH / AGENT_CODEX_PATH.
+    const override = process.env[cli === 'claude' ? 'AGENT_CLAUDE_PATH' : 'AGENT_CODEX_PATH']?.trim() ?? ''
+    if (override !== '' && existsSync(override)) return override
     try {
       if (cli === 'claude') {
         const pkg = this.require.resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/package.json`)
@@ -190,12 +208,7 @@ export class CliHost {
   async turn(request: CliTurnRequest): Promise<{ text: string; error?: string }> {
     const server = await this.ensureServer()
     const token = server.open({
-      tools: request.tools.filter(
-        (tool) =>
-          (threadDelegates(request.thread) || !NOT_ON_CLI.test(tool.spec.name)) &&
-          // Claude brings its own (better) shell and file tools, asked through the app; Codex keeps the app's.
-          !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name)),
-      ),
+      tools: toolsForTurn(request),
       context: request.context,
       onCall: request.onCall,
       onResult: request.onResult,

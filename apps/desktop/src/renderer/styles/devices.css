@@ -1,0 +1,48 @@
+/* Settings > Devices (views/Devices.tsx). Tokens only; the QR keeps light-theme tones so it always scans. */
+.dv .dv-add{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:4px 18px 12px}
+.dv .dv-note{flex-basis:100%}
+.dv .dv-fp{font-family:ui-monospace,'Cascadia Mono',Menlo,monospace;font-weight:600;color:var(--on-bg);letter-spacing:.02em}
+.dv .dv-sep{height:1px;background:var(--outline-v);margin:4px 14px 6px}
+.dv .dv-row{align-items:flex-start}
+.dv .dv-row .rt{flex:1 1 220px;min-width:0}
+.dv .dv-row .rt b,.dv .dv-row .rt span{overflow-wrap:anywhere}
+.dv .dv-roles{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.dv .dv-role{height:30px;padding:0 12px;font-size:12px;gap:6px}
+.dv .dv-role:disabled{cursor:default;opacity:.85}
+.dv .dv-acts{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.dv .dv-order{display:inline-flex;gap:2px}
+.dv .dv-up svg{transform:rotate(180deg)}
+.dv .dv-addresses{padding:12px 18px 10px;display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--outline-v);margin-top:6px}
+.dv .dv-address-form{display:flex;gap:8px;align-items:center}
+.dv .dv-input{height:44px;padding:0 14px;font-size:14px;flex:1;min-width:0}
+.dv-urls{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.dv-urls li{display:flex;align-items:center;justify-content:space-between;gap:8px;font:500 13px/1.4 ui-monospace,'Cascadia Mono',Menlo,monospace;color:var(--on-sv);overflow-wrap:anywhere}
+.dv-error-line{color:var(--err)}
+.dv-error{color:var(--err);margin:0}
+.dv-dialog{width:min(640px,calc(100% - 32px))}
+.dv-offer{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.dv-qr-wrap{padding:10px;border-radius:var(--r-md);background:#FEFDFB;box-shadow:0 0 0 1px var(--outline-v);line-height:0}
+.dv-qr-wrap.expired{opacity:.25}
+.dv-qr{display:block;width:232px;height:232px;max-width:100%}
+.dv-code-side{flex:1 1 220px;min-width:0;display:flex;flex-direction:column;gap:6px}
+.dv-code{font:600 32px/1.1 ui-monospace,'Cascadia Mono',Menlo,monospace;letter-spacing:.08em;color:var(--on-bg)}
+.dv-done{display:flex;align-items:center;gap:12px}
+.dv-done .ri{width:44px;height:44px;border-radius:14px;display:grid;place-items:center}
+.dv-done .ri.ok{background:var(--okc);color:var(--ok)}
+@media (max-width:820px){
+  .dv-offer{flex-direction:column;align-items:center}
+  .dv-code-side{align-items:center;text-align:center}
+  .dv-qr{width:184px;height:184px}
+  .dv-dialog .lead{font-size:15px}
+  .dv-code{font-size:28px}
+  .dv .dv-acts{width:100%;justify-content:flex-start;padding-left:58px}
+}
+/* The node's web UI on another device (bridge/remote.ts). */
+.remote .wc{display:none}
+/* Live calls stream audio on the computer itself for now; shortcut hints mean nothing on a touch screen. */
+.remote .talk-btn{display:none}
+@media (pointer:coarse){.remote .cmdbar kbd{display:none}}
+.br-remote{display:flex;gap:12px;align-items:flex-start;padding:18px;color:var(--on-sv);font-size:14px;line-height:1.45}
+.dv .dv-firewall .ri.warn{background:var(--tc);color:var(--on-tc)}
+.dv .dv-share{padding:12px 18px 8px;display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--outline-v);margin-top:6px}
+.dv .dv-share-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;font-size:14px;color:var(--on-bg)}

@@ -67,7 +67,7 @@ export function DictateButton({
       capture.current = await startCapture((pcm) => chunks.current.push(pcm))
       setPhase('recording')
     } catch (error) {
-      if (agent.platform === 'web') {
+      if (agent.platform === 'web' && agent.remote === undefined) {
         // The preview has no real microphone: show the recording state and let the mock transcribe.
         capture.current = { level: () => 0.3 + 0.3 * Math.abs(Math.sin(performance.now() / 120)), setMuted: () => undefined, stop: () => undefined }
         setPhase('recording')

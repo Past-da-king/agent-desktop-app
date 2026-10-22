@@ -22,6 +22,7 @@ import { HotkeySettings } from './HotkeySettings'
 import { MemorySettings } from './MemorySettings'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
+import { DevicesSettings } from './Devices'
 
 function ResetDialog({ onClose }: { onClose: () => void }): JSX.Element {
   const navigate = useUi((state) => state.navigate)
@@ -198,6 +199,8 @@ export function Settings(): JSX.Element {
   }
 
   const folders = settings?.grantedFolders ?? []
+  // The node's web UI on another device: only what that device may change (its look) and the device list.
+  const remote = agent.remote !== undefined
 
   return (
     <div className="page">
@@ -205,12 +208,13 @@ export function Settings(): JSX.Element {
         <div>
           <span className="eyebrow">SETTINGS</span>
           <h1 className="h1">Settings</h1>
-          <p className="lead">Account, AI, look and this computer.</p>
+          <p className="lead">{remote ? `Your agent on ${agent.remote?.nodeName ?? 'your computer'}, and how it looks here.` : 'Account, AI, look and this computer.'}</p>
         </div>
       </div>
 
       <div className="two">
         <div className="stack">
+          {remote ? null : (
           <section>
             <SectionHeader eyebrow="ACCOUNT AND SYNC" line="One agent across your devices" />
             <div className="card" style={{ padding: 10 }}>
@@ -242,16 +246,6 @@ export function Settings(): JSX.Element {
                   </Button>
                 )}
               </div>
-              <div className="rowc" title="Coming soon">
-                <div className="ri">
-                  <Icon name="phone" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Your phone</b>
-                  <span>Sync with the Android app arrives after the desktop is done.</span>
-                </div>
-                <Pill tone="mute">Coming soon</Pill>
-              </div>
               <div className="rowc">
                 <div className="ri">
                   <Icon name="monitor" size={22} />
@@ -281,12 +275,20 @@ export function Settings(): JSX.Element {
             </div>
           </section>
 
+          )}
+
+          <DevicesSettings />
+
+          {remote ? null : (
+            <>
           <section>
             <SectionHeader eyebrow="YOUR AI" line="Your plans and keys, and who thinks for what" />
             <AiAccounts />
           </section>
 
           <VoiceSettings />
+            </>
+          )}
         </div>
 
         <div className="stack">
@@ -355,6 +357,8 @@ export function Settings(): JSX.Element {
             </div>
           </section>
 
+          {remote ? null : (
+            <>
           <section>
             <SectionHeader eyebrow="THIS COMPUTER" line="How the app behaves here" />
             <div className="card" style={{ padding: 10 }}>
@@ -526,6 +530,8 @@ export function Settings(): JSX.Element {
               </Button>
             </div>
           </section>
+            </>
+          )}
         </div>
       </div>
 

@@ -25,6 +25,8 @@ export class SyncException extends Error {
 export interface Pulled {
   changes: Change[]
   cursor: number
+  /** A node (docs/devices-protocol.md s7) also says which version of its state bundle it has; the service does not. */
+  bundle?: string
 }
 
 export interface AuthResult {
@@ -70,7 +72,9 @@ export class SyncClient {
       const change = changeFromJson(item)
       if (change !== null) changes.push(change)
     }
-    return { changes, cursor: numberOr(json.cursor, sinceValue) }
+    const pulled: Pulled = { changes, cursor: numberOr(json.cursor, sinceValue) }
+    if (typeof json.bundle === 'string' && json.bundle !== '') pulled.bundle = json.bundle
+    return pulled
   }
 
   /** Create an account. Throws [SyncException] 409 when the email is taken. */
