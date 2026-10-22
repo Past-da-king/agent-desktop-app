@@ -69,6 +69,8 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'voice.noteAudio',
   'voice.liveToken',
   'voice.callSave',
+  'voice.callTargets',
+  'voice.callHandoff',
   'app.info',
   'memory.newChat',
   'memory.retrySave',

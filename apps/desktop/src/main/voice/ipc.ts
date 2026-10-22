@@ -5,7 +5,9 @@
 import { CHANNELS, EVENTS } from '../../shared/channels'
 import type { DeviceCall } from '@agent/core'
 
+import { messageOrigin } from '../devices/origin'
 import type { IpcMainLike } from '../ipc'
+import { callHandoff, callTargets, type CallHandoffDeps } from './handoff'
 import type { VoiceService } from './service'
 
 export interface IpcMainOnLike {
@@ -20,6 +22,8 @@ const MAX_CHUNK = 64 * 1024
 export function registerVoiceIpc(
   voice: VoiceService,
   ipcMain: IpcMainLike & Partial<IpcMainOnLike>,
+  /** Where a paired device's call hands its work (voice.callTargets, voice.callHandoff). */
+  handoff?: CallHandoffDeps,
 ): void {
   ipcMain.handle(CHANNELS.voice.setKey, async (_event, key) => {
     if (typeof key !== 'string' || key.length > MAX_KEY) throw new Error('key must be text')
@@ -38,6 +42,12 @@ export function registerVoiceIpc(
   })
   ipcMain.handle(CHANNELS.voice.liveToken, async () => voice.liveToken())
   ipcMain.handle(CHANNELS.voice.callSave, async (_event, record) => voice.callSave(deviceCall(record)))
+  ipcMain.handle(CHANNELS.voice.callTargets, async () => (handoff === undefined ? [] : callTargets(handoff)))
+  ipcMain.handle(CHANNELS.voice.callHandoff, async (event, raw) => {
+    const input = handoffInput(raw)
+    if (handoff === undefined) return { ok: false, error: 'This computer cannot take work from a call.', ambiguous: [] }
+    return callHandoff(handoff, input, messageOrigin(event))
+  })
   ipcMain.handle(CHANNELS.voice.callStart, async () => voice.callStart())
   ipcMain.handle(CHANNELS.voice.callMute, async (_event, muted) => {
     voice.callMute(muted === true)
@@ -84,4 +94,22 @@ export function deviceCall(value: unknown): DeviceCall {
     return [{ who, text: text.slice(0, MAX_LINE), at: Number.isFinite(Number(at)) ? Number(at) : startedAt }] as DeviceCall['lines']
   })
   return { startedAt, durationMs, lines }
+}
+
+const MAX_HANDOFF = 20_000
+
+/** A call's hand-off from the wire, checked. */
+function handoffInput(raw: unknown): { target: string; message: string; kind: 'main' | 'project' | 'helper' | ''; newChat: boolean } {
+  if (typeof raw !== 'object' || raw === null) throw new Error('hand-off must be an object')
+  const record = raw as Record<string, unknown>
+  const target = typeof record['target'] === 'string' ? record['target'].slice(0, 200) : ''
+  const message = record['message']
+  if (typeof message !== 'string' || message.trim() === '' || message.length > MAX_HANDOFF) throw new Error('message must be text')
+  const kind = record['kind']
+  return {
+    target,
+    message,
+    kind: kind === 'main' || kind === 'project' || kind === 'helper' ? kind : '',
+    newChat: record['newChat'] === true,
+  }
 }

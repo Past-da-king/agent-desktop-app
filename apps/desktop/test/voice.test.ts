@@ -511,7 +511,7 @@ describe('Live tokens for a paired device with no key', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it('mints a one-use token locked to the Live model, key in a header only', async () => {
+  it('mints a one-use token locking only the Live model (the device keeps its tools), key in a header only', async () => {
     const fetch = fakeFetch(() => ({ status: 200, body: { name: 'auth_tokens/abc123' } }))
     const minted = await mintLiveToken({ key: () => 'secret-key', fetchImpl: fetch.impl }, 'gemini-3.8-live', 1_000_000)
     expect(minted).toEqual({ token: 'auth_tokens/abc123', expiresAt: 1_000_000 + LIVE_TOKEN_TTL_MS })
@@ -522,6 +522,8 @@ describe('Live tokens for a paired device with no key', () => {
     const body = JSON.parse(String(call.init.body)) as Record<string, any>
     expect(body['uses']).toBe(1)
     expect(body['bidiGenerateContentSetup']).toEqual({ model: 'models/gemini-3.8-live' })
+    // Only the model is locked: without a field mask Google drops the device's tools and instructions.
+    expect(body['fieldMask']).toBe('model')
     expect(Date.parse(body['expireTime'])).toBe(1_000_000 + LIVE_TOKEN_TTL_MS)
     expect(Date.parse(body['newSessionExpireTime'])).toBe(1_000_000 + LIVE_TOKEN_START_MS)
     expect(LIVE_TOKEN_URL).toMatch(/BidiGenerateContentConstrained$/)
