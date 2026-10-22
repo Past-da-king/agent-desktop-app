@@ -56,7 +56,8 @@ function useCountdown(until: number): number {
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [until])
-  return Math.max(0, until - now)
+  // The clock may be older than the offer it counts down (it starts before the offer arrives).
+  return Math.max(0, until - Math.max(now, Date.now()))
 }
 
 function clock(ms: number): string {
@@ -210,7 +211,7 @@ function RevokeDialog({ device, onClose }: { device: DeviceRow; onClose: () => v
 }
 
 function seenLine(device: DeviceRow, self: boolean, connected: boolean): string {
-  if (self) return 'This device'
+  if (self) return 'You are on it now'
   if (connected) return 'Connected now'
   if (device.lastSeen <= 0) return 'Not seen yet'
   const ago = timeAgo(device.lastSeen)
