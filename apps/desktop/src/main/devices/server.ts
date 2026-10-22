@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
 
 import { RPC_EVENTS } from '../../shared/rpc-methods'
+import { ConnectionLog, peerOf } from './conn-log'
 import { compilePath, matchPath, passFrom, type CompiledPath } from './router'
 import { RpcSession } from './rpc'
 import type { DeviceFacts, DeviceRole, DevicesHost, DevicesRoute, DeviceToolResult, RouteReply, RpcMethod } from './types'
@@ -45,9 +46,21 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** A short machine word for why (no-pass, unknown-pass, revoked), sent beside the message and logged. */
+    readonly reason?: string,
   ) {
     super(message)
   }
+}
+
+/** Why a request's pass let nobody in. */
+export type RefusedReason = 'no-pass' | 'unknown-pass' | 'revoked'
+
+/** What a device is told when its pass is refused, by reason. Its app shows its own words for 401. */
+export const REFUSED_MESSAGES: Record<RefusedReason, string> = {
+  'no-pass': 'This device is not paired with this computer.',
+  'unknown-pass': 'This computer does not know this device any more. Pair it again.',
+  revoked: 'This device was taken out of this computer. Pair it again.',
 }
 
 export const CONTENT_TYPES: Record<string, string> = {
@@ -108,8 +121,10 @@ export class DevicesServer implements DevicesHost {
   private readonly sessions = new Set<RpcSession>()
   private server: Server | null = null
   private readonly resultListeners = new Set<(deviceId: string, id: string, result: DeviceToolResult) => void>()
+  private readonly connLog: ConnectionLog
 
   constructor(private readonly options: DevicesServerOptions) {
+    this.connLog = new ConnectionLog(options.log)
     // s11: a device answers a tool command with device.result(id, ok, value | error); whoever sent it listens.
     this.addRpc('device.result', async (deviceId, args) => {
       const [id, ok, value] = args
@@ -185,11 +200,18 @@ export class DevicesServer implements DevicesHost {
 
   /** The device a request's pass belongs to, when that device is still paired. */
   deviceFor(headers: Record<string, string | string[] | undefined>): string | null {
+    const who = this.whoIs(headers)
+    return 'id' in who ? who.id : null
+  }
+
+  /** The device a pass belongs to, or why it lets nobody in (for the log and the answer; never the pass itself). */
+  whoIs(headers: Record<string, string | string[] | undefined>): { id: string } | { reason: RefusedReason; device?: string } {
     const pass = passFrom(headers)
-    if (pass === '') return null
+    if (pass === '') return { reason: 'no-pass' }
     const id = this.options.deviceForPass(pass)
-    if (id === null || this.options.rolesOf(id) === null) return null
-    return id
+    if (id === null) return { reason: 'unknown-pass' }
+    if (this.options.rolesOf(id) === null) return { reason: 'revoked', device: id }
+    return { id }
   }
 
   get running(): boolean {
@@ -207,7 +229,16 @@ export class DevicesServer implements DevicesHost {
       void this.onRequest(req, res)
     })
     server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => this.onUpgrade(req, socket, head))
-    server.on('tlsClientError', () => undefined)
+    // A device that gives up during the handshake (a pin mismatch on its side, a wrong port) shows here.
+    server.on('tlsClientError', (error: Error & { code?: string }, socket: { remoteAddress?: string }) => {
+      const from = peerOf(socket)
+      this.connLog.note(`tls:${error.code ?? error.message}:${from}`, 'Devices TLS handshake failed', { code: error.code ?? '', message: error.message.slice(0, 200), from })
+    })
+    server.on('clientError', (error: Error & { code?: string }, socket: Duplex & { remoteAddress?: string }) => {
+      const from = peerOf(socket)
+      if (error.code !== 'ECONNRESET') this.connLog.note(`http-bad:${error.code ?? ''}:${from}`, 'Devices bad request', { code: error.code ?? '', from })
+      if (!socket.destroyed) socket.destroy()
+    })
     this.server = server
     return new Promise((resolve, reject) => {
       const fail = (error: Error): void => {
@@ -226,6 +257,7 @@ export class DevicesServer implements DevicesHost {
   async stop(): Promise<void> {
     for (const session of [...this.sessions]) session.close(1001, 'node stopping')
     this.sessions.clear()
+    this.connLog.stop()
     const server = this.server
     this.server = null
     if (server === null) return
@@ -248,8 +280,9 @@ export class DevicesServer implements DevicesHost {
 
   private authorise(auth: DevicesRoute['auth'], headers: IncomingMessage['headers']): string | null {
     if (auth === 'none') return null
-    const id = this.deviceFor(headers)
-    if (id === null) throw new HttpError(401, 'This device is not paired with this computer.')
+    const who = this.whoIs(headers)
+    if (!('id' in who)) throw new HttpError(401, REFUSED_MESSAGES[who.reason], who.reason)
+    const id = who.id
     if (auth === 'node') {
       const roles = this.options.rolesOf(id) ?? []
       if (!roles.includes('brain') && !roles.includes('hands')) throw new HttpError(403, 'Only another agent can do that.')
@@ -283,8 +316,13 @@ export class DevicesServer implements DevicesHost {
       await this.send(req, res, reply)
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500
+      const reason = error instanceof HttpError ? error.reason : undefined
       if (status === 500) this.options.log?.('Devices request failed', { message: error instanceof Error ? error.message : String(error) })
-      if (!res.headersSent) sendJson(res, status, { error: status === 500 ? 'Something went wrong on the node.' : (error as Error).message })
+      if (status === 401 || status === 403) {
+        const from = peerOf(req.socket)
+        this.connLog.note(`http:${status}:${reason ?? ''}:${from}`, 'Devices request refused', { status, reason: reason ?? 'not allowed', path: safePath(req.url), from })
+      }
+      if (!res.headersSent) sendJson(res, status, { error: status === 500 ? 'Something went wrong on the node.' : (error as Error).message, ...(reason !== undefined ? { reason } : {}) })
       else res.destroy()
     }
   }
@@ -335,18 +373,32 @@ export class DevicesServer implements DevicesHost {
 
   private onUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = new URL(req.url ?? '/', 'https://node.invalid')
+    const from = peerOf(req.socket)
     if (url.pathname !== '/v1/rpc') {
+      this.connLog.note(`ws-404:${from}`, 'Devices link refused', { reason: 'not-found', path: safePath(req.url), from })
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
       return
     }
-    const deviceId = this.deviceFor(req.headers)
-    if (deviceId === null) {
-      socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+    const who = this.whoIs(req.headers)
+    if (!('id' in who)) {
+      // Say why, in the log and to the device: an old pass after a reset, a revoked device, or no pass at all.
+      this.connLog.note(`ws-401:${who.reason}:${from}`, 'Devices link refused', { reason: who.reason, ...(who.device !== undefined ? { device: who.device } : {}), from })
+      const body = JSON.stringify({ error: REFUSED_MESSAGES[who.reason], reason: who.reason })
+      socket.end(
+        'HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Type: application/json; charset=utf-8\r\n' +
+          `X-Agent-Refused: ${who.reason}\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+      )
       return
     }
+    const deviceId = who.id
     const conn = acceptUpgrade(req, socket, head)
-    if (conn === null) return
+    if (conn === null) {
+      this.connLog.note(`ws-400:${from}`, 'Devices link refused', { reason: 'not-a-websocket', device: deviceId, from })
+      return
+    }
     this.options.onSeen?.(deviceId)
+    const openedAt = Date.now()
+    this.connLog.note(`ws-open:${deviceId}`, 'Device connected', { device: deviceId, from })
     const session = new RpcSession(conn, {
       deviceId,
       call: (from, method, args) => this.options.callRpc(from, method, args),
@@ -355,14 +407,20 @@ export class DevicesServer implements DevicesHost {
         this.options.onSeen?.(deviceId)
         this.options.onConnections?.()
       },
-      onClose: (closed) => {
+      onClose: (closed, code) => {
         this.sessions.delete(closed)
+        this.connLog.linkEnded(deviceId, Date.now() - openedAt, { code, hello: closed.facts !== null, from })
         this.options.onConnections?.()
       },
     })
     this.sessions.add(session)
     this.options.onConnections?.()
   }
+}
+
+/** A request path for the log, without its query (a pass may ride in one). */
+function safePath(url: string | undefined): string {
+  return (url ?? '/').split('?')[0]?.slice(0, 120) ?? '/'
 }
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
