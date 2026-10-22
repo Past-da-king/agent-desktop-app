@@ -33,6 +33,17 @@ for (const f of files) {
       const cp = ch.codePointAt(0) ?? 0
       if (cp > 0x2122 && /\p{Extended_Pictographic}/u.test(ch)) { problems.push(`${at} contains an emoji/pictograph (${ch})`); break }
     }
+    // Product rule (22 Oct 2026): nothing customised to one machine. A user folder is a placeholder (You, sam, me) and
+    // a private address is a range or lives in the window's demo data; never someone's real home folder or host.
+    const userDir = /[A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/)([A-Za-z0-9._-]+)/.exec(line)
+    if (userDir !== null && !/^(You|sam|me|user|name|Public|Default)$/i.test(userDir[1])) problems.push(`${at} names a real user folder (${userDir[0]})`)
+    if (/\/home\/(?!user\/|you\/|me\/)[a-z][a-z0-9_-]*\/|\/mnt\/[a-z]\/Users\//.test(line)) problems.push(`${at} names a home folder on one machine`)
+    if (!/renderer\/bridge\//.test(r)) {
+      for (const m of line.matchAll(/\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))(?:\.\d{1,3}){2,3}\b/g)) {
+        const parts = m[0].split('.')
+        if (parts.length === 4 && !/^(0|255)$/.test(parts[3])) problems.push(`${at} names one machine's private address (${m[0]})`)
+      }
+    }
     if (/@ts-ignore|@ts-nocheck/.test(line)) problems.push(`${at} uses a ts-ignore`)
     if (/nodeIntegration:\s*true|contextIsolation:\s*false|sandbox:\s*false/.test(line) && !/\/\/ allow:/.test(line)) problems.push(`${at} weakens Electron security`)
     if (/renderer\//.test(r) && /\b(alert|confirm|prompt)\s*\(/.test(line) && !/\.(alert|confirm|prompt)\(/.test(line) && !/^\s*(\/\/|\*)/.test(line)) problems.push(`${at} uses a native dialog`)
