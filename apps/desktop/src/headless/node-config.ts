@@ -1,10 +1,9 @@
 /**
- * The headless node's own small files in its data dir: who it is (node.json), its TLS certificate (devices/), and
- * the brains it paired with. Secrets (device passes, AI keys) never go here; they live in the secrets store.
+ * The headless node's own small file in its data dir (node.json): its name, where it listens, and the brains it
+ * paired with. Its identity and certificate are the Devices ones (main/devices/identity.ts, in devices/). Secrets (device passes, AI keys) never go here; they live in the secrets store.
  */
-import { execFileSync } from 'node:child_process'
-import { createHash, randomBytes, X509Certificate } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 
@@ -66,43 +65,4 @@ export function writeConfig(dataDir: string, config: NodeConfig): void {
   const temp = `${file}.tmp`
   writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 })
   renameSync(temp, file)
-}
-
-/** base64url(sha256(cert DER)), the fingerprint clients pin (protocol s2). */
-export function fingerprintOf(der: Buffer): string {
-  return createHash('sha256').update(der).digest('base64url')
-}
-
-export interface NodeCert {
-  cert: string
-  key: string
-  fp: string
-}
-
-/**
- * The node's self-signed ECDSA P-256 certificate, made once on first start. Node has no certificate builder, so it
- * uses the openssl tool, which every Linux server and macOS has. Git for Windows ships one too.
- */
-export function ensureCert(dataDir: string, commonName: string): NodeCert {
-  const dir = join(dataDir, 'devices')
-  const certFile = join(dir, 'cert.pem')
-  const keyFile = join(dir, 'key.pem')
-  if (!existsSync(certFile) || !existsSync(keyFile)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 })
-    const cn = commonName.replace(/[^A-Za-z0-9 ._-]/g, '').slice(0, 60) || 'agent-node'
-    execFileSync(
-      'openssl',
-      ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-days', '3650',
-        '-subj', `/CN=${cn}`, '-keyout', keyFile, '-out', certFile],
-      { stdio: 'ignore' },
-    )
-    try {
-      chmodSync(keyFile, 0o600)
-    } catch {
-      // Windows has no POSIX mode.
-    }
-  }
-  const cert = readFileSync(certFile, 'utf8')
-  const der = new X509Certificate(cert).raw
-  return { cert, key: readFileSync(keyFile, 'utf8'), fp: fingerprintOf(der) }
 }
