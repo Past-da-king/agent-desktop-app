@@ -65,13 +65,11 @@ describe('helper cards for linked devices', () => {
     // A new step: the live line moves, and the device hears the whole new list.
     await store.upsert('chat_item', { id: 'a3', kind: 'activity', text: 'Comparing prices', meta: JSON.stringify({ helper: 'h-proj', chat: 'pc1', status: 'running' }) })
     await waitFor(() => heard.some((s) => s.cards.find((c) => c.id === 'h-proj')?.line === 'Comparing prices'))
-    // It finishes: one line saying what it did.
+    // It finishes: its card leaves the device's list at once (the list is what works right now).
     await store.upsert('chat_item', { id: 'h-proj', kind: 'helper', text: 'Find seeds', meta: JSON.stringify({ id: 'h-proj', chat: 'pc1', label: 'Seeds', state: 'done', startedAt: t - 200, endedAt: Date.now(), result: '## Found\nThree shops sell **heirloom** seeds.\nMore detail' }) })
-    await waitFor(() => heard.some((s) => s.cards.find((c) => c.id === 'h-proj')?.state === 'done'))
+    await waitFor(() => heard.length > 0 && heard[heard.length - 1]!.cards.every((c) => c.id !== 'h-proj'))
     const last = heard[heard.length - 1]!
-    const done = last.cards.find((c) => c.id === 'h-proj')!
-    expect(done.done).toBe('Found')
-    expect(done.depth).toBe(1)
+    expect(last.cards.map((c) => c.id)).toEqual(['h-main', 'pa-pc1'])
     expect(last.seq).toBeGreaterThan(first.seq)
     // Nothing changed: nothing is sent.
     const count = heard.length
@@ -80,15 +78,14 @@ describe('helper cards for linked devices', () => {
     expect(heard.length).toBe(count)
   })
 
-  it('a stopped helper leaves at once; a finished one leaves when its time is up', async () => {
-    let clock = Date.now()
-    const { store, feed, heard } = await setup(() => clock)
+  it('stopped, done and failed helpers are not on the list at all', async () => {
+    const clock = Date.now()
+    const { store, feed } = await setup(() => clock)
     await store.upsert('chat_item', { id: 'h1', kind: 'helper', text: 'x', meta: JSON.stringify({ id: 'h1', label: 'One', state: 'stopped', startedAt: clock - 10, endedAt: clock }) })
     await store.upsert('chat_item', { id: 'h2', kind: 'helper', text: 'y', meta: JSON.stringify({ id: 'h2', label: 'Two', state: 'done', startedAt: clock - 10, endedAt: clock, result: 'All good' }) })
-    expect((await feed.snapshot()).cards.map((c) => c.id)).toEqual(['h2'])
-    clock += 21 * 60_000
-    await store.upsert('chat_item', { id: 'a', kind: 'activity', text: 'tick', meta: JSON.stringify({ helper: 'h2' }) })
-    await waitFor(() => heard.length > 0 && heard[heard.length - 1]!.cards.length === 0)
+    await store.upsert('chat_item', { id: 'h3', kind: 'helper', text: 'z', meta: JSON.stringify({ id: 'h3', label: 'Three', state: 'failed', startedAt: clock - 10, endedAt: clock }) })
+    await store.upsert('chat_item', { id: 'h4', kind: 'helper', text: 'w', meta: JSON.stringify({ id: 'h4', label: 'Four', state: 'working', startedAt: clock - 10 }) })
+    expect((await feed.snapshot()).cards.map((c) => c.id)).toEqual(['h4'])
   })
 
   it('the side panel model by default: working helpers only', () => {
@@ -99,7 +96,7 @@ describe('helper cards for linked devices', () => {
     expect(helperCards(rows as never, []).map((c) => c.id)).toEqual(['w'])
   })
 
-  it('side panel project card: live step while it works, its newest steps, and its last answer once idle', () => {
+  it('side panel project card: live step while it works, its newest steps, and gone once idle', () => {
     const now = Date.now()
     const row = (id: string, kind: string, text: string, meta: Record<string, unknown>, at: number): unknown => ({ id, kind, text, meta: JSON.stringify(meta), createdAt: at, updatedAt: at })
     const working = [
@@ -109,17 +106,14 @@ describe('helper cards for linked devices', () => {
       row('hs', 'activity', 'A helper step', { chat: 'c', helper: 'other', status: 'running' }, now - 6),
       row('d1', 'helper', 'old', { id: 'd1', label: 'Old helper', state: 'done', endedAt: now - 5, result: 'x' }, now - 20),
     ]
-    const opts = { keepFinishedMs: 20 * 60_000, finishedProjectsOnly: true, now }
-    const live = helperCards(working as never, [], opts)
+    const live = helperCards(working as never, [])
     expect(live.map((c) => c.id)).toEqual(['pa-c'])
     expect(live[0]!.line).toBe('Running the tests')
     expect(live[0]!.steps.map((s) => s.text)).toEqual(['Read the repo', 'Running the tests'])
     const idle = [
       row('pa-c', 'helper', 'brief', { id: 'pa-c', label: 'Site', state: 'done', projectChat: 'c', startedAt: now - 9, endedAt: now - 1, result: 'Shipped the gallery fix.\nDetails' }, now - 9),
     ]
-    const after = helperCards(idle as never, [], opts)
-    expect(after[0]!.line).toBe('Shipped the gallery fix.')
-    expect(helperCards(idle as never, [], { ...opts, now: now + 21 * 60_000 })).toEqual([])
+    expect(helperCards(idle as never, [])).toEqual([])
   })
 
   it('starts after a restart with the cards a device had (snapshot on reconnect)', async () => {
