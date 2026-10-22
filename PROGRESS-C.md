@@ -52,9 +52,23 @@ Branch `devices-headless` (off `devices`), worktree `~/agent-desktop-wt/devices-
 - The service on the server runs with a ChatGPT plan account (so it is ready before pairing); pairing replaces
   accounts with the desktop's.
 
+## Server browser (scope item 6, part 1) DONE (22 Oct, 02:30)
+- `headless/browser.ts` HeadlessBrowser: BrowserDriver + BrowserProDriver over CDP on the machine's Chromium
+  (findChromium: AGENT_CHROMIUM_PATH, Playwright cache, chromium/google-chrome on PATH). Reuses the desktop page
+  scripts (outline, read, type, snapshot, resolve, evalWrapper) and the trusted-input `Cdp` class. One tab per agent
+  (browserOwner), max 6. Starts on first use (sandbox, then --no-sandbox fallback), closes after 10 min idle and on
+  stop; one Chromium profile folder per partition. Network devtools tools (browser_network etc.) are not wired
+  (devtoolsOf needs Electron webContents): they answer as having no page.
+- `test/headless-browser.test.ts` (3, real Chromium, skipped where none): open + outline, trusted type + click +
+  eval, snapshot, screenshot; separate tabs per agent; close and restart. Saw it fail with typing broken.
+- Server: redeployed; log "Browser available 1"; a real turn (`agent-node ask`, ChatGPT plan) opened example.com
+  in the server's own Chromium and answered "Example Domain" in 10 s. Chromium closed after the turn.
+- Full suite: 1123 passed, 9 skipped. One intermittent unhandled rejection comes from the existing
+  helpers.test.ts "runs two helpers at the same time" (teardown closes the store while a helper still writes its
+  meta); not in this lane, seen on and off, left as is.
+
 ## In flight / next
-- Scope correction item 6: the server's own headless browser (CDP driver over the Playwright Chromium already in
-  ~/.cache/ms-playwright), then relay through a linked device (needs A's RPC).
+- Relay through a linked device (scope item 6, part 2): needs A's /v1/rpc and device commands.
 
 ## Merge notes
 - Wire A's server into `headless/node-server.ts` `startNodeServer` (deps: runtime with `ipc` HandlerTable,
