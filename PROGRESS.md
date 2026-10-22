@@ -78,6 +78,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 05:25 B FINAL devices-sync 3158f1f (+66c2d1d): main-chat project agent row (pa-<chat>, kind helper, project icon, live status, closes done/failed); harness check c PASS on a scratch merge. Full suite 1155. Waiting on C wiring B into headless.
 
+- 05:45 C merged A+B+design on devices-headless-int 92de9b1 (full suite 1242 pass): attach.ts wires B onto A service (desktop + headless), relay line, SOCKS for uplink/pinnedFetch, headless runs leases/device hub/workers. Fixed: joining node id, double pass, extraPeers, helpers flake. Two real headless processes pair + bundle + replicate. Missing B 66c2d1d and A c9d76c0: sent back to merge, then harness local + redeploy + cross-machine.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
