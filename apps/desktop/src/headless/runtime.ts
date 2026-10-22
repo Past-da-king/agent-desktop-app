@@ -25,6 +25,7 @@ import { devicesState, ownBrainIds, type DevicesSyncDeps } from '../main/devices
 import { TurnLeases } from '../main/runtime/turns'
 import { registerWorkersIpc } from '../main/workers/ipc'
 import { registerVoiceIpc } from '../main/voice/ipc'
+import { HelperFeed } from '../main/devices/helper-feed'
 import { VoiceService } from '../main/voice/service'
 import { EventRouter } from '../main/workers/router'
 import { killLeftover, killTree, spawnWorker } from '../main/workers/spawn'
@@ -508,7 +509,20 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     platform: process.platform,
     notesDir: join(dir, 'voice-notes'),
   })
-  registerVoiceIpc(voice, ipcMain)
+  // A linked phone's call hands its work to the main agent, a project chat or a helper here (main/voice/handoff.ts).
+  const callStore = store
+  const callRunner = theRunner
+  const callHelpers = helpers
+  const callFeed = new HelperFeed({ store: callStore, emit: () => undefined })
+  registerVoiceIpc(voice, ipcMain, {
+    store: callStore,
+    send: (text, chat, origin) => callRunner.send(text, [], chat, origin as never),
+    steer: (id, message) => callHelpers.steer(id, message),
+    cards: () => callFeed.snapshot(),
+    state: (chat) => callRunner.state(chat),
+    agentName: () => settings.get().agentName,
+    delegated: (chat, project, brief) => projectAgents.delegated(chat, project, brief),
+  })
 
   const disposeIpc = registerIpc({
     store,
