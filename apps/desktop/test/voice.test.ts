@@ -309,6 +309,33 @@ describe('Gemini REST: check, speak, transcribe', () => {
     expect(text).toBe('Call the bank tomorrow.')
   })
 
+  it('tells the one-call transcription the names to spell, and moves on from a busy model', async () => {
+    const fetch = fakeFetch((url, init) => {
+      if (url.includes('gemini-3.5-flash-lite')) return { status: 503, body: { error: { message: 'high demand' } } }
+      const prompt = (JSON.parse(String(init.body)) as Record<string, any>)['contents'][0].parts[0].text as string
+      expect(prompt).toContain('LondaCorp, Mthashana')
+      return { status: 200, body: { candidates: [{ content: { parts: [{ text: 'Call Mthashana at LondaCorp.' }] } }] } }
+    })
+    const text = await transcribe({ key: () => 'k', fetchImpl: fetch.impl }, Buffer.alloc(3200), DEFAULT_CHOICE, { names: ['LondaCorp', 'Mthashana'] })
+    expect(text).toBe('Call Mthashana at LondaCorp.')
+    expect(fetch.calls).toHaveLength(2)
+  })
+
+  it('a transcription that never answers gives up at its time limit with plain words', async () => {
+    const hanging: typeof fetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+      })
+    const started = Date.now()
+    await expect(transcribe({ key: () => 'k', fetchImpl: hanging }, Buffer.alloc(3200), DEFAULT_CHOICE, { signal: AbortSignal.timeout(150) })).rejects.toMatchObject({
+      status: -1,
+    })
+    expect(Date.now() - started).toBeLessThan(2000)
+    const { explain } = await import('../src/main/voice/gemini')
+    const { GeminiError } = await import('../src/main/voice/gemini')
+    expect(explain(new GeminiError(-1, 'timeout'))).toBe('Gemini took too long to answer.')
+  })
+
   it('reads markdown as plain speech and leaves bare PCM alone', () => {
     expect(plainForSpeech('# Plan\n- **one** item\n- `two`')).toBe('Plan one item two')
     const raw = Buffer.from([5, 6, 7, 8])

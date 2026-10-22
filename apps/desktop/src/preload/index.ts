@@ -259,6 +259,10 @@ const api: AgentApi = {
     ready: () => call<void>(CHANNELS.dictation.ready),
     onCommand: (callback) => on<DictationCommand>(EVENTS.dictationCommand, callback),
     onView: (callback) => on<DictationView>(EVENTS.dictationView, callback),
+    toggle: (mode) => call<void>(CHANNELS.dictation.toggle, mode),
+    cancel: () => call<void>(CHANNELS.dictation.cancel),
+    retry: () => call<void>(CHANNELS.dictation.retry),
+    onDraft: (callback) => on<DictationView>(EVENTS.dictationDraft, callback),
   },
 
   app: {

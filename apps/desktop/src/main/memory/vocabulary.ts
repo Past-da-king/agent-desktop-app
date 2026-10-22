@@ -4,7 +4,7 @@
  * without clean-up ("Londercorp" -> "LondaCorp"); clean-up is also told the names so it spells them as written.
  * Only page titles and aliases go out, never bodies, and anything that looks like a secret is left out.
  */
-import type { MemoryRow } from '@agent/core'
+import type { MemoryRow, ProjectRow } from '@agent/core'
 
 import { aliasList } from './history'
 import { redactSecrets } from './redact'
@@ -72,4 +72,21 @@ export function vocabularyBrief(vocabulary: Vocabulary): string {
     lines.push(vocabulary.aliases.map((alias) => `${alias.heard} = ${alias.name}`).join('; '))
   }
   return lines.join('\n')
+}
+
+/**
+ * Project names and the other names they answer to, for the recogniser: visible projects first, the newest first.
+ * Only names go out, and anything that looks like a secret is left out.
+ */
+export function dictationWordsFromProjects(rows: ProjectRow[]): string[] {
+  const usable = (value: string): boolean => value.length >= 2 && value.length <= MAX_NAME && redactSecrets(value).text === value
+  const ordered = [...rows].sort((a, b) => Number(a.hidden === true) - Number(b.hidden === true) || b.createdAt - a.createdAt)
+  const out: string[] = []
+  for (const row of ordered) {
+    for (const name of [row.name, ...(row.aliases ?? [])]) {
+      const clean = name.trim()
+      if (usable(clean)) out.push(clean)
+    }
+  }
+  return out
 }

@@ -410,6 +410,111 @@ describe('DictationController', () => {
   })
 })
 
+describe('DictationController: never an endless wait', () => {
+  /** A live session that drops, so the stop goes to the whole recording, which `batch` decides. */
+  async function droppedWithAudio(h: Harness): Promise<number> {
+    const session = await listening(h)
+    h.controller.audio(session, LOUD)
+    h.controller.audio(session, LOUD)
+    h.transcriber().drop('dropped')
+    return session
+  }
+
+  it('a transcription that never answers ends at the limit with an error, the seconds counter and Retry', async () => {
+    const signals: AbortSignal[] = []
+    let answer = false
+    const h = harness({
+      finishLimitMs: () => 20_000,
+      batch: (pcm, signal) => {
+        signals.push(signal)
+        if (answer) return Promise.resolve({ ok: true, text: 'Second time lucky.' })
+        return new Promise(() => undefined)
+      },
+    })
+    await droppedWithAudio(h)
+    h.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(0)
+    const finishing = h.views.at(-1)
+    expect(finishing).toMatchObject({ phase: 'finishing', limitMs: 20_000, message: 'Esc to cancel' })
+    expect(typeof finishing?.since).toBe('number')
+    expect(h.held.has('Escape')).toBe(true)
+    await vi.advanceTimersByTimeAsync(19_000)
+    expect(h.controller.phase).toBe('finishing')
+    await vi.advanceTimersByTimeAsync(1_500)
+    expect(signals[0]?.aborted).toBe(true)
+    expect(h.controller.phase).toBe('idle')
+    expect(h.typed).toEqual([])
+    expect(h.views.at(-1)).toMatchObject({ phase: 'error', canRetry: true, message: 'The words did not come back within 20 seconds. Nothing was typed.' })
+    expect(h.controller.canRetry).toBe(true)
+
+    // Retry sends the kept recording again and types it.
+    answer = true
+    await h.controller.retry()
+    expect(h.typed).toEqual(['Second time lucky.'])
+    expect(h.views.at(-1)).toMatchObject({ phase: 'done', message: 'Typed' })
+    expect(h.controller.canRetry).toBe(false)
+    expect(h.held.size).toBe(0)
+  })
+
+  it('Esc while the words are worked out stops waiting, types nothing, and keeps the recording', async () => {
+    const lengths: number[] = []
+    let answer = false
+    const h = harness({
+      batch: (pcm) => {
+        lengths.push(pcm.length)
+        return answer ? Promise.resolve({ ok: true, text: 'Kept and typed.' }) : new Promise(() => undefined)
+      },
+    })
+    await droppedWithAudio(h)
+    h.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(3000)
+    h.held.get('Escape')?.()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.controller.phase).toBe('idle')
+    expect(h.typed).toEqual([])
+    expect(h.views.at(-1)).toMatchObject({ phase: 'notice', message: 'Cancelled. Nothing was typed.', canRetry: true })
+
+    // Clicking the pill retries.
+    answer = true
+    h.controller.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(lengths).toEqual([LOUD.length * 2, LOUD.length * 2])
+    expect(h.typed).toEqual(['Kept and typed.'])
+  })
+
+  it('a failed transcription offers Retry; Esc puts the error away; a new dictation drops the kept recording', async () => {
+    const h = harness({ batch: async () => ({ ok: false, error: 'Gemini is busy right now. Try again in a moment.' }) })
+    await droppedWithAudio(h)
+    h.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.views.at(-1)).toMatchObject({ phase: 'error', canRetry: true, message: 'Gemini is busy right now. Try again in a moment. Nothing was typed.' })
+    expect(h.held.has('Escape')).toBe(true)
+    h.held.get('Escape')?.()
+    expect(h.pill.at(-1)).toBe('hide')
+    expect(h.held.size).toBe(0)
+    expect(h.controller.canRetry).toBe(true)
+    await listening(h)
+    expect(h.controller.canRetry).toBe(false)
+  })
+
+  it('a microphone that never reports in ends the dictation instead of waiting', async () => {
+    const h = harness({ micStartMs: 5000 })
+    h.controller.toggle('plain')
+    expect(h.controller.phase).toBe('starting')
+    await vi.advanceTimersByTimeAsync(5500)
+    expect(h.controller.phase).toBe('idle')
+    expect(h.views.at(-1)).toMatchObject({ phase: 'error', message: 'The microphone did not start. Try again.' })
+    expect(h.held.size).toBe(0)
+  })
+
+  it('the default limit grows with the recording and has a ceiling', async () => {
+    const { defaultFinishLimitMs } = await import('../src/main/dictation/controller')
+    expect(defaultFinishLimitMs(0)).toBe(30_000)
+    expect(defaultFinishLimitMs(16_000 * 2 * 60)).toBe(60_000)
+    expect(defaultFinishLimitMs(16_000 * 2 * 600)).toBe(100_000)
+  })
+})
+
 describe('loudness', () => {
   it('is the RMS of the samples, 0 to 1', () => {
     expect(loudness(QUIET)).toBe(0)

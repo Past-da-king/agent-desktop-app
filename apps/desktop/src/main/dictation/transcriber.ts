@@ -35,6 +35,11 @@ export interface TranscriberOptions {
   socket: SocketFactory
   /** BCP-47 hints; empty lets the model detect the language. */
   languageCodes?: string[]
+  /**
+   * Names and words to bias recognition towards (people, companies, projects the person talks about). A function
+   * is read when the socket opens, so a list still being read as the dictation starts is in time.
+   */
+  vocabulary?: string[] | (() => string[])
   /** The words so far: settled text and the guess still being heard. */
   onUpdate: (text: string, interim: string) => void
   /** The socket dropped after it was up. The caller can fall back to the recorded audio. */
@@ -52,6 +57,8 @@ export class LiveTranscriber {
   private interim = ''
   private settle: (() => void) | null = null
   private settleTimer: ReturnType<typeof setTimeout> | null = null
+  /** Waiting for a settled stretch after the stream ended (a replayed recording): quiet alone is not enough. */
+  private needFinal = false
 
   constructor(options: TranscriberOptions) {
     this.options = options
@@ -82,7 +89,10 @@ export class LiveTranscriber {
       }
       socket.binaryType = 'arraybuffer'
       this.socket = socket
-      socket.onopen = () => socket.send(JSON.stringify(setupMessage(this.options)))
+      socket.onopen = () => {
+        const words = this.options.vocabulary
+        socket.send(JSON.stringify(setupMessage({ ...this.options, vocabulary: typeof words === 'function' ? words() : (words ?? []) })))
+      }
       socket.onerror = () => {
         // The close event that follows carries the code.
       }
@@ -143,12 +153,13 @@ export class LiveTranscriber {
    * The person stopped: tell Google the stream ended and wait for the last words to settle, at most `waitMs`.
    * Resolves with the whole text (a guess that never settled is kept). Rejects when the session never started.
    */
-  async finish(waitMs: number): Promise<string> {
+  async finish(waitMs: number, options: { needFinal?: boolean } = {}): Promise<string> {
     if (!this.ready) {
       this.close()
       throw new Error('Gemini was not listening yet.')
     }
     this.ended = true
+    this.needFinal = options.needFinal === true
     try {
       this.socket?.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }))
     } catch {
@@ -200,10 +211,11 @@ export class LiveTranscriber {
       this.committed = joinSegment(this.committed, settled)
       this.interim = ''
       changed = true
+      if (this.ended) this.needFinal = false
     }
     if (changed) this.options.onUpdate(this.committed, this.interim)
     if (this.ended) {
-      if (content['turnComplete'] === true && this.interim === '') this.finishSettling()
+      if (content['turnComplete'] === true && this.interim === '' && !this.needFinal) this.finishSettling()
       else this.armSettle()
     }
   }
@@ -213,7 +225,7 @@ export class LiveTranscriber {
     if (this.settleTimer !== null) clearTimeout(this.settleTimer)
     this.settleTimer = setTimeout(() => {
       this.settleTimer = null
-      if (this.interim === '') this.finishSettling()
+      if (this.interim === '' && !this.needFinal) this.finishSettling()
     }, SETTLE_MS)
   }
 
@@ -228,15 +240,38 @@ export class LiveTranscriber {
   }
 }
 
-export function setupMessage(options: Pick<TranscriberOptions, 'model' | 'languageCodes'>): JsonObject {
+/** Google takes up to 1,000 terms and does best with about 100 or fewer. */
+export const MAX_VOCABULARY = 100
+
+export function setupMessage(options: { model: string; languageCodes?: string[]; vocabulary?: string[] }): JsonObject {
   const model = options.model.startsWith('models/') ? options.model : `models/${options.model}`
+  const vocabulary = cleanVocabulary(options.vocabulary ?? [])
   return {
     setup: {
       model,
       generationConfig: { responseModalities: ['TEXT'] },
-      inputAudioTranscription: { languageCodes: options.languageCodes ?? [], mode: 'VERBATIM' },
+      inputAudioTranscription: {
+        languageCodes: options.languageCodes ?? [],
+        mode: 'VERBATIM',
+        ...(vocabulary.length > 0 ? { customVocabulary: vocabulary } : {}),
+      },
     },
   }
+}
+
+/** Distinct, trimmed, short terms, at most MAX_VOCABULARY, in the order given (the most relevant first). */
+export function cleanVocabulary(terms: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of terms) {
+    const term = raw.replace(/\s+/g, ' ').trim()
+    const key = term.toLowerCase()
+    if (term.length < 2 || term.length > 60 || seen.has(key)) continue
+    seen.add(key)
+    out.push(term)
+    if (out.length >= MAX_VOCABULARY) break
+  }
+  return out
 }
 
 /**
@@ -289,4 +324,56 @@ function closeReason(code: number): string {
   if (code === 1007) return 'Gemini did not accept the transcription setup.'
   if (code === 1011) return 'Gemini had a problem listening. Try again.'
   return 'Could not reach Gemini. Check the connection.'
+}
+
+const REPLAY_CHUNK = 3200 // 100 ms of 16 kHz PCM16
+/** A kept recording goes through at twice the speed it was said: faster than that, Google runs out of quota. */
+const REPLAY_CHUNKS_PER_TICK = 2
+const REPLAY_TICK_MS = 100
+/** After the last chunk, how long to wait for the last settled words. */
+const REPLAY_FINAL_WAIT_MS = 8000
+
+export interface ReplayOptions extends Omit<TranscriberOptions, 'onUpdate' | 'onDrop'> {
+  pcm: Buffer
+  signal: AbortSignal
+  onUpdate?: (text: string, interim: string) => void
+}
+
+/**
+ * A whole recording through the live model, for a dictation whose live session failed and for Retry: quicker and
+ * steadier than one generateContent call with the audio, and the vocabulary applies here too. Rejects when the
+ * session cannot start, drops, or `signal` aborts.
+ */
+export async function replayRecording(options: ReplayOptions): Promise<string> {
+  let dropped: string | null = null
+  const transcriber = new LiveTranscriber({
+    ...options,
+    onUpdate: (text, interim) => options.onUpdate?.(text, interim),
+    onDrop: (reason) => {
+      dropped = reason
+    },
+  })
+  const abort = (): void => transcriber.close()
+  options.signal.addEventListener('abort', abort, { once: true })
+  try {
+    await transcriber.start()
+    for (let offset = 0; offset < options.pcm.length; offset += REPLAY_CHUNK * REPLAY_CHUNKS_PER_TICK) {
+      if (options.signal.aborted) throw new Error('Cancelled.')
+      if (dropped !== null) throw new Error(dropped)
+      for (let index = 0; index < REPLAY_CHUNKS_PER_TICK; index += 1) {
+        const start = offset + index * REPLAY_CHUNK
+        if (start < options.pcm.length) transcriber.audio(options.pcm.subarray(start, start + REPLAY_CHUNK))
+      }
+      await new Promise((resolve) => setTimeout(resolve, REPLAY_TICK_MS))
+    }
+    if (options.signal.aborted) throw new Error('Cancelled.')
+    if (dropped !== null) throw new Error(dropped)
+    const text = await transcriber.finish(REPLAY_FINAL_WAIT_MS, { needFinal: true })
+    if (options.signal.aborted) throw new Error('Cancelled.')
+    if (dropped !== null && text.trim() === '') throw new Error(dropped)
+    return text
+  } finally {
+    options.signal.removeEventListener('abort', abort)
+    transcriber.close()
+  }
 }

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
 import { Icon } from '../ui/Icon'
+import { clock, useTicker } from './clock'
 import { MicError, startCapture, type Capture } from '../voice/audio'
 import './dictation.css'
 
@@ -75,6 +76,10 @@ export function DictationPill(): JSX.Element {
   }, [])
 
   const listening = view.phase === 'listening' || view.phase === 'starting'
+  const working = view.phase === 'finishing' || view.phase === 'cleaning'
+  const timed = (listening || working) && view.since !== undefined
+  const now = useTicker(timed)
+  const time = timed && view.since !== undefined ? clock(now - view.since, view.phase) : ''
 
   useEffect(() => {
     if (!listening) return
@@ -144,9 +149,18 @@ export function DictationPill(): JSX.Element {
     line = (
       <span className={`dpill-words${words.length < 44 ? ' short' : ''}`}>
         {view.phase === 'cleaning' ? <span className="dpill-hint">Cleaning up </span> : null}
-        {view.phase === 'finishing' && words === '' ? <span className="dpill-hint">Finishing</span> : null}
+        {view.phase === 'finishing' && words === '' ? <span className="dpill-hint">Transcribing · Esc to cancel</span> : null}
         <span className="said">{said}</span>
         {guess !== '' ? <span className="guess">{guess}</span> : null}
+      </span>
+    )
+  } else if (view.canRetry === true) {
+    line = (
+      <span className="dpill-message">
+        {view.message}
+        <span className="dpill-retry"> Click to retry</span>
+        <span className="dpill-sep"> · </span>
+        <span className="dpill-hint">Esc</span>
       </span>
     )
   } else {
@@ -156,17 +170,19 @@ export function DictationPill(): JSX.Element {
   return (
     <div className={`dpill-stage${preview ? ' dpill-preview' : ''}`}>
       <div
-        className={`dpill is-${view.phase}`}
+        className={`dpill is-${view.phase}${view.canRetry === true ? ' can-retry' : ''}`}
         role="status"
         aria-live="polite"
-        title={listening ? 'Click to stop and type' : undefined}
+        title={listening ? 'Click to stop and type' : view.canRetry === true ? 'Click to transcribe the recording again' : undefined}
         onClick={() => {
           if (listening) void agent.dictation.stop()
+          else if (view.canRetry === true) void agent.dictation.retry()
         }}
       >
         {lead}
         {line}
         {view.clean ? <span className="dpill-badge">Clean up</span> : null}
+        {time !== '' ? <span className={`dpill-time${working ? ' working' : ''}`}>{time}</span> : null}
       </div>
     </div>
   )

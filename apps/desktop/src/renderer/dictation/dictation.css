@@ -34,6 +34,10 @@ html.pill-window,html.pill-window body,html.pill-window #root{background:transpa
 .dpill-message{font-weight:500}
 
 .dpill-badge{flex:none;height:26px;display:inline-flex;align-items:center;padding:0 10px;border-radius:999px;background:var(--primary);color:var(--on-primary);font:600 12px/1 var(--font);letter-spacing:.01em}
+.dpill-time{flex:none;font:600 12px/1 var(--font);font-variant-numeric:tabular-nums;color:var(--pill-mute);min-width:30px;text-align:right}
+.dpill-time.working{color:var(--pc)}
+.dpill-retry{font-weight:700;color:var(--pc);text-decoration:underline;text-underline-offset:3px}
+.dpill.can-retry{cursor:pointer}
 .dpill-icon{flex:none;width:28px;height:28px;border-radius:50%;display:grid;place-items:center}
 .dpill-icon.ok{background:var(--okc);color:var(--ok)}
 .dpill-icon.error{background:var(--ec);color:var(--on-ec)}

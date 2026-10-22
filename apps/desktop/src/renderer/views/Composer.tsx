@@ -9,6 +9,7 @@ import { useUi } from '../state/useUi'
 import { IconButton, Kbd } from '../ui/bits'
 import { Icon } from '../ui/Icon'
 import { DictateButton } from '../voice/DictateButton'
+import { DictationDraft } from '../voice/DictationDraft'
 import { AttachmentChip } from './AttachmentChip'
 
 /** Pasted text longer than this goes along as a text file instead of filling the composer (and the message limit). */
@@ -215,6 +216,7 @@ export const Composer = memo(
             ) : null}
           </div>
         ) : null}
+        <DictationDraft />
         <div className="compose-in">
           <IconButton
             icon="clip"
@@ -241,6 +243,7 @@ export const Composer = memo(
           />
           <DictateButton
             hasKey={hasVoiceKey}
+            focusBox={() => composer.current?.focus()}
             onText={(words) => {
               setText((current) => (current.trim() === '' ? words : `${current.replace(/\s+$/, '')} ${words}`))
               composer.current?.focus()
