@@ -80,7 +80,9 @@ export function parseArgs(argv: string[]): Args {
       }
     } else positional.push(arg)
   }
-  return { command: positional.shift() ?? 'help', positional, flags }
+  // `agent-node --version` and `--help` work like the commands of the same name.
+  const command = positional.shift() ?? (flags.has('version') ? 'version' : 'help')
+  return { command, positional, flags }
 }
 
 function flag(args: Args, name: string): string {
