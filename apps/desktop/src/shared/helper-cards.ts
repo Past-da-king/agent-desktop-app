@@ -68,10 +68,51 @@ export function helperIdOf(item: ChatItem): string {
   return id === '' ? item.id : id
 }
 
+/**
+ * One pass over a row list: every helper's steps by helper id, and every side chat's own lines (its agent's steps and
+ * replies, not its helpers' steps) by chat id, each oldest first. Kept per list object, so the side panel, the thread
+ * and the device feed read a 17,000-row list once per change instead of once per helper (a list is never changed in
+ * place: a change makes a new list, src/renderer/lib/patch.ts).
+ */
+interface RowIndex {
+  length: number
+  steps: Map<string, ChatItem[]>
+  lines: Map<string, ChatItem[]>
+}
+
+const indexCache = new WeakMap<readonly ChatItem[], RowIndex>()
+const NONE: readonly ChatItem[] = Object.freeze([])
+
+function byTime(a: ChatItem, b: ChatItem): number {
+  return a.createdAt - b.createdAt
+}
+
+function rowIndex(items: readonly ChatItem[]): RowIndex {
+  const hit = indexCache.get(items)
+  if (hit !== undefined && hit.length === items.length) return hit
+  const steps = new Map<string, ChatItem[]>()
+  const lines = new Map<string, ChatItem[]>()
+  const add = (map: Map<string, ChatItem[]>, key: string, item: ChatItem): void => {
+    const list = map.get(key)
+    if (list === undefined) map.set(key, [item])
+    else list.push(item)
+  }
+  for (const item of items) {
+    if (item.kind !== 'activity' && item.kind !== 'agent') continue
+    const helper = metaText(metaOf(item), 'helper')
+    if (helper === '') add(lines, chatOfRow(item), item)
+    else if (item.kind === 'activity') add(steps, helper, item)
+  }
+  // A stable sort keeps the list's own order for rows created at the same moment, as filter-then-sort did.
+  for (const list of steps.values()) list.sort(byTime)
+  for (const list of lines.values()) list.sort(byTime)
+  const index = { length: items.length, steps, lines }
+  indexCache.set(items, index)
+  return index
+}
+
 export function helperActivities(items: ChatItem[], id: string): ChatItem[] {
-  return items
-    .filter((item) => item.kind === 'activity' && metaText(metaOf(item), 'helper') === id)
-    .sort((a, b) => a.createdAt - b.createdAt)
+  return [...(rowIndex(items).steps.get(id) ?? NONE)]
 }
 
 export function helperView(item: ChatItem, items: ChatItem[]): HelperView {
@@ -160,9 +201,7 @@ export function helperLine(helper: HelperView): string {
 
 /** A project chat's own lines (its agent's steps and replies; helpers' steps are on their own cards), oldest first. */
 export function projectChatLines(items: ChatItem[], chat: string): ChatItem[] {
-  return items
-    .filter((item) => (item.kind === 'activity' || item.kind === 'agent') && chatOfRow(item) === chat && metaText(metaOf(item), 'helper') === '')
-    .sort((a, b) => a.createdAt - b.createdAt)
+  return [...(rowIndex(items).lines.get(chat) ?? NONE)]
 }
 
 /**
@@ -186,7 +225,8 @@ export function projectLine(view: HelperView, lines: ChatItem[]): string {
  */
 export function helperCards(items: ChatItem[], projects: ProjectRow[]): HelperCard[] {
   const working = items
-    .filter((item) => item.kind === 'helper')
+    // Only working rows are built: a finished helper never shows here, and most helper rows are finished ones.
+    .filter((item) => item.kind === 'helper' && helperState(metaText(metaOf(item), 'state')) === 'working')
     .map((item): HelperCard => {
       const view = helperView(item, items)
       const projectChat = metaText(metaOf(item), 'projectChat')

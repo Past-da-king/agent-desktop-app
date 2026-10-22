@@ -19,19 +19,21 @@ export function useRunInfo(items: ChatItem[]): RunInfo {
   useEffect(() => startChatTracking(), [])
   const running = useAnyRunning()
 
-  const activity =
-    [...items]
-      .filter((item) => item.kind === 'activity')
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .map((item) => metaText(parseMeta(item.meta), 'summary') || item.text)[0] ?? ''
+  // One pass for the newest step: Home redraws on every row change, and a long-used install has thousands of steps.
+  const step = newest(items, (item) => item.kind === 'activity')
+  const activity = step === null ? '' : metaText(parseMeta(step.meta), 'summary') || step.text
 
   return { running, activity }
 }
 
+/** The newest row that matches (the first listed of those made at the same moment), without sorting the list. */
+function newest(items: readonly ChatItem[], match: (item: ChatItem) => boolean): ChatItem | null {
+  let best: ChatItem | null = null
+  for (const item of items) if (match(item) && (best === null || item.createdAt > best.createdAt)) best = item
+  return best
+}
+
 /** The last piece of written work the agent finished, for the idle Home hero. */
 export function lastAgentWork(items: ChatItem[]): ChatItem | null {
-  const written = items
-    .filter((item) => item.kind === 'agent' || item.kind === 'report')
-    .sort((a, b) => b.createdAt - a.createdAt)
-  return written[0] ?? null
+  return newest(items, (item) => item.kind === 'agent' || item.kind === 'report')
 }
