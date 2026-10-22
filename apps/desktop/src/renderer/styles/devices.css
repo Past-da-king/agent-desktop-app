@@ -52,8 +52,8 @@
 .dv .dv-share{padding:12px 18px 8px;display:flex;flex-direction:column;gap:4px;border-top:1px solid var(--outline-v);margin-top:6px}
 .dv .dv-share-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;font-size:14px;color:var(--on-bg)}
 
-/* Where helpers run (s12) */
-.dv .dv-place-row{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;font-size:14px;color:var(--on-bg);flex-wrap:wrap}
-.dv .dv-place-row>span{display:flex;flex-direction:column;gap:2px;min-width:180px;flex:1}
-.dv .dv-place-row small{font-size:12px;color:var(--on-bg-mute,var(--on-bg));opacity:.75}
-.dv .dv-place-row .seg{flex-wrap:wrap}
+/* Where helpers run (s12): the question on top, its choices full width under it. */
+.dv .dv-place-row{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:8px 0 10px;font-size:14px;color:var(--on-bg)}
+.dv .dv-place-row>span{display:flex;flex-direction:column;gap:2px}
+.dv .dv-place-row small{font-size:12px;line-height:1.4;color:var(--on-sv)}
+.dv .dv-place-row .seg button{min-width:56px;padding:0 12px;white-space:nowrap}
