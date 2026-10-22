@@ -7,16 +7,18 @@ import { existsSync, realpathSync, statSync } from 'node:fs'
 import { join, normalize, resolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 
-import type { DeviceRow, DevicesStatus, PairingOfferInfo } from '@agent/core'
+import type { DeviceJoinResult, DeviceRow, DevicesStatus, PairingOfferInfo } from '@agent/core'
 
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../../shared/devices-channels'
 import { qrMatrix } from '../../shared/qr'
-import { DevicesConfigFile, advertisedUrls, normaliseUrl, type DevicesConfig } from './config'
+import { DevicesConfigFile, advertisedUrls, normaliseUrl, type DevicesConfig, type JoinedPeer } from './config'
 import { cleanRoles, platformOf } from './facts'
-import { loadIdentity, type NodeIdentity } from './identity'
+import { joinMesh, loadIdentity, type NodeIdentity } from './identity'
 import { OverlayNet, setOverlayNet } from './net'
 import { originFrom, setLocalOrigin } from './origin'
-import { formatShortCode, handlePair, pairUri, PairingOffers } from './pairing'
+import { formatShortCode, handlePair, pairUri, parsePairUri, PairingOffers } from './pairing'
+import { pinnedFetch } from './pinned-fetch'
+import { devicesState } from './sync'
 import { SecretPassTable, hashPass, newPass, type SecretsLike } from './passes'
 import { DEFAULT_SHARE, SHARE_GROUPS, type DeviceToolHost, type ShareGroup } from './device-tool-host'
 import type { FirewallState, WindowsFirewall } from './firewall'
@@ -32,6 +34,8 @@ const COOKIE_DAYS = 400
 /** The bits of the Store this service uses (main/db.ts). */
 export interface DeviceStoreLike {
   list(entity: 'device'): Promise<DeviceRow[]>
+  /** Deletes a row (a tombstone that replicates). Without it a taken-out device's row stays, marked revoked. */
+  remove?(entity: 'device', id: string): Promise<void>
   list(entity: 'chat_item'): Promise<Array<{ text: string; meta: string }>>
   list(entity: 'project'): Promise<Array<{ path: string }>>
   get(entity: 'device', id: string): Promise<DeviceRow | null>
@@ -86,6 +90,12 @@ export interface DevicesServiceDeps {
 }
 
 const SELF_PASS = 'devicesSelfPass'
+/** headless/pair.ts PASS_SECRET: the pass a headless node got from `agent-node pair`. */
+const PAIRED_PASS = 'devicePass'
+/** How long one address of the node in a pairing link gets to answer /v1/health before the next is preferred. */
+const JOIN_PROBE_MS = 3_000
+
+export type { DeviceJoinResult }
 
 function toRecord(row: DeviceRow): DeviceRecord {
   const { createdAt: _createdAt, ...rest } = row
@@ -188,7 +198,8 @@ export class DevicesService {
         deviceForPass: (pass) => this.passes.deviceFor(pass),
         rolesOf: (id) => {
           const row = this.rows.get(id)
-          if (row === undefined) return this.deps.knownPeer?.(id) ?? null
+          // A brain this computer joined (join) is trusted until its row arrives, like a headless node's (knownPeer).
+          if (row === undefined) return this.deps.knownPeer?.(id) ?? (this.config.get().peers.some((peer) => peer.id === id) ? ['brain', 'hands'] : null)
           return row.revoked ? null : row.roles
         },
         self: () => ({ id: this.identity.nodeId, facts: this.selfFacts() }),
@@ -498,6 +509,22 @@ export class DevicesService {
     await this.saveRow({ ...row, roles, priority })
   }
 
+  /** Puts a brain at a place in the order its devices try them in (0 = first). */
+  async setPosition(id: string, index: number): Promise<void> {
+    const brains = this.list().filter((row) => row.roles.includes('brain') && !row.revoked)
+    const at = brains.findIndex((row) => row.id === id)
+    if (at < 0) throw new Error('Only devices that answer can be put in order.')
+    const [moved] = brains.splice(at, 1)
+    if (moved === undefined) return
+    const to = Math.max(0, Math.min(brains.length, Math.floor(Number.isFinite(index) ? index : 0)))
+    brains.splice(to, 0, moved)
+    for (let i = 0; i < brains.length; i += 1) {
+      const row = brains[i]
+      if (row !== undefined && row.priority !== i) await this.saveRow({ ...row, priority: i })
+    }
+    this.changed()
+  }
+
   async move(id: string, direction: 'up' | 'down'): Promise<void> {
     const brains = this.list().filter((row) => row.roles.includes('brain') && !row.revoked)
     const at = brains.findIndex((row) => row.id === id)
@@ -520,9 +547,136 @@ export class DevicesService {
     const row = this.rows.get(id)
     if (row === undefined) throw new Error('That device is not paired.')
     this.passes.remove(id)
+    this.dropPeer(id)
     await this.saveRow({ ...row, revoked: true })
     this.srv?.closeDevice(id)
     this.changed()
+  }
+
+  /**
+   * Deletes a device's row for good, so lists stop showing it (a taken-out device leaves a revoked row behind). A
+   * device still in is taken out first. The delete replicates, so every brain forgets it.
+   */
+  async forget(id: string): Promise<void> {
+    if (id === this.identity.nodeId) throw new Error('This computer cannot take itself out.')
+    const row = this.rows.get(id)
+    if (row === undefined) throw new Error('That device is not paired.')
+    if (!row.revoked) await this.revoke(id)
+    this.dropPeer(id)
+    if (this.deps.store.remove === undefined) return
+    await this.deps.store.remove('device', id)
+    this.rows.delete(id)
+    this.changed()
+  }
+
+  /** Forgets every taken-out device's row; gives back the ids it cleared. */
+  async clearRevoked(): Promise<string[]> {
+    const gone = this.list().filter((row) => row.revoked && row.id !== this.identity.nodeId).map((row) => row.id)
+    for (const id of gone) await this.forget(id)
+    return gone
+  }
+
+  /** The brains this computer joined from their pairing links, until their rows arrive (attach.ts replicates with them). */
+  joinedPeers(): JoinedPeer[] {
+    return this.config.get().peers
+  }
+
+  private dropPeer(id: string): void {
+    const peers = this.config.get().peers
+    if (peers.some((peer) => peer.id === id)) this.config.save({ peers: peers.filter((peer) => peer.id !== id) })
+  }
+
+  /**
+   * Joins the person's devices from a pairing link another node made (its Add a device, or `agent-node offer`): the
+   * same POST /v1/pair a phone or a headless node sends, pinned to the certificate the link names. This computer keeps
+   * its id and certificate, takes that node's mesh, trusts the brains it hands back until their rows arrive and
+   * replicates with them from then on. `takeBundle`: also take that node's settings, accounts and keys now (a fresh
+   * install joining); without it the newer side wins, as on every later change.
+   */
+  async join(link: string, options: { takeBundle?: boolean } = {}): Promise<DeviceJoinResult> {
+    const parts = parsePairUri(link.trim())
+    if (parts === null) throw new Error('That is not a pairing link. It starts with agent://pair?v=1')
+    if (parts.urls.length === 0) throw new Error('The pairing link has no address to reach the other device.')
+    if (!this.enabled) await this.setEnabled(true)
+    if (parts.nodeId === this.identity.nodeId) throw new Error('That link was made on this computer. Use it on the other device instead.')
+    const body = JSON.stringify({ code: parts.secret, device: this.selfFacts(), wantRoles: ['brain', 'hands'], nodeId: this.identity.nodeId })
+    const failures: string[] = []
+    for (const url of await this.reachableFirst(parts.urls, parts.fp)) {
+      const base = url.replace(/\/+$/, '')
+      let status = 0
+      let json: unknown = null
+      try {
+        const res = await pinnedFetch(parts.fp, 20_000)(`${base}/v1/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body })
+        status = res.status
+        json = await res.json().catch(() => null)
+      } catch (error) {
+        failures.push(`${base}: ${error instanceof Error ? error.message : String(error)}`)
+        continue
+      }
+      const answer = (typeof json === 'object' && json !== null ? json : {}) as Record<string, unknown>
+      if (status !== 200) {
+        const why = typeof answer['error'] === 'string' ? answer['error'] : 'no reason given'
+        throw new Error(`The other device said no (${status}): ${why}`)
+      }
+      const pass = typeof answer['pass'] === 'string' ? answer['pass'] : ''
+      if (pass === '') throw new Error('The other device did not hand back a pass.')
+      const node = (typeof answer['node'] === 'object' && answer['node'] !== null ? answer['node'] : {}) as Record<string, unknown>
+      const nodeId = typeof node['id'] === 'string' && node['id'] !== '' ? node['id'] : parts.nodeId
+      const nodeName = typeof node['name'] === 'string' && node['name'] !== '' ? node['name'] : parts.name
+      const meshId = typeof answer['meshId'] === 'string' && answer['meshId'] !== '' ? answer['meshId'] : parts.meshId
+      // The pass that node gave us is this computer's own pass in the mesh from now on (selfPass): every link to a
+      // brain signs in with it, and its hash replaces the old one in the pass table that replicates.
+      this.deps.secrets.set(SELF_PASS, pass)
+      // A headless node keeps the pass from `agent-node pair` under its own name too (headless/pair.ts PASS_SECRET).
+      if ((this.deps.secrets.get(PAIRED_PASS) ?? '') !== '') this.deps.secrets.set(PAIRED_PASS, pass)
+      this.selfPass()
+      if (meshId !== '' && meshId !== this.identity.meshId) this.ident = joinMesh(this.dir, this.identity, meshId)
+      const peers = new Map(this.config.get().peers.map((peer) => [peer.id, peer]))
+      const listed = Array.isArray(answer['brains']) ? (answer['brains'] as unknown[]) : []
+      for (const raw of listed) {
+        if (typeof raw !== 'object' || raw === null) continue
+        const b = raw as Record<string, unknown>
+        const id = typeof b['id'] === 'string' ? b['id'] : ''
+        const fp = typeof b['fp'] === 'string' ? b['fp'] : ''
+        const urls = Array.isArray(b['urls']) ? b['urls'].filter((u): u is string => typeof u === 'string') : []
+        if (id === '' || id === this.identity.nodeId || fp === '') continue
+        peers.set(id, { id, name: typeof b['name'] === 'string' ? b['name'] : '', urls, fp })
+      }
+      // The node we paired with, at the address that answered first.
+      const known = peers.get(nodeId)
+      peers.set(nodeId, { id: nodeId, name: nodeName, fp: parts.fp, urls: [base, ...(known?.urls ?? parts.urls).filter((u) => u.replace(/\/+$/, '') !== base)] })
+      this.config.save({ peers: [...peers.values()] })
+      await this.writeSelf()
+      this.uplink.refresh()
+      this.changed()
+      this.deps.log?.('Joined devices from a pairing link', { node: nodeId })
+      let tookBundle = false
+      if (options.takeBundle === true) tookBundle = (await devicesState.sync?.joinFrom(base, parts.fp).catch(() => false)) ?? false
+      return {
+        node: { id: nodeId, name: nodeName },
+        url: base,
+        deviceId: typeof answer['deviceId'] === 'string' ? answer['deviceId'] : this.identity.nodeId,
+        meshId: this.identity.meshId,
+        brains: [...peers.values()].map((peer) => ({ id: peer.id, name: peer.name })),
+        tookBundle,
+      }
+    }
+    throw new Error(`Could not reach the other device. ${failures.join('; ')}`)
+  }
+
+  /** The link's addresses, those that answer /v1/health (pinned, all at once) first. */
+  private async reachableFirst(urls: string[], fp: string): Promise<string[]> {
+    const answers = await Promise.all(
+      urls.map(async (url) => {
+        try {
+          const res = await pinnedFetch(fp, JOIN_PROBE_MS)(`${url.replace(/\/+$/, '')}/v1/health`, { signal: AbortSignal.timeout(JOIN_PROBE_MS) })
+          return res.status === 200
+        } catch {
+          return false
+        }
+      }),
+    )
+    return [...urls.filter((_, i) => answers[i] === true), ...urls.filter((_, i) => answers[i] !== true)]
   }
 
   registerIpc(ipc: IpcHandleLike): void {
@@ -545,6 +699,11 @@ export class DevicesService {
     ipc.handle(DEVICES_CHANNELS.setRoles, async (_event, raw, roles) => this.setRoles(id(raw), roles))
     ipc.handle(DEVICES_CHANNELS.move, async (_event, raw, direction) => this.move(id(raw), direction === 'up' ? 'up' : 'down'))
     ipc.handle(DEVICES_CHANNELS.revoke, async (_event, raw) => this.revoke(id(raw)))
+    ipc.handle(DEVICES_CHANNELS.forget, async (_event, raw) => this.forget(id(raw)))
+    ipc.handle(DEVICES_CHANNELS.join, async (_event, link, takeBundle) => {
+      if (typeof link !== 'string' || link.length > 4000) throw new Error('Paste the pairing link (agent://pair?...).')
+      return this.join(link, { takeBundle: takeBundle === true })
+    })
     ipc.handle(DEVICES_CHANNELS.setShareGroup, async (_event, group, on) => this.setShareGroup(String(group), on === true))
     ipc.handle(DEVICES_CHANNELS.allowFirewall, async () => this.allowFirewall())
   }

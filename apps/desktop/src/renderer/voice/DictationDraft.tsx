@@ -10,6 +10,8 @@ export function dictationHere(): boolean {
 }
 
 const MAX_SHOWN = 420
+/** The quick chat box has one line for it. */
+const MAX_SHOWN_COMPACT = 70
 
 /** The end of `text`, at most `max` characters, starting on a word with an ellipsis when cut. */
 export function lastWords(text: string, max: number): string {
@@ -34,7 +36,7 @@ export function useDictationDraft(): DictationView | null {
  * shows them: settled words, then the guess still being heard in a lighter tone. While the words are worked out
  * it counts the seconds; when they could not be had it says why and offers Retry with the kept recording.
  */
-export function DictationDraft(): JSX.Element | null {
+export function DictationDraft({ compact = false }: { compact?: boolean } = {}): JSX.Element | null {
   const view = useDictationDraft()
   const active = view !== null && view.since !== undefined && ['starting', 'listening', 'finishing', 'cleaning'].includes(view.phase)
   const now = useTicker(active)
@@ -42,7 +44,7 @@ export function DictationDraft(): JSX.Element | null {
   const time = active && view.since !== undefined ? clock(now - view.since, view.phase) : ''
   // The newest words stay in view: a long dictation shows its last few lines.
   const guess = view.interim.trim()
-  const said = lastWords(view.text.trim(), Math.max(0, MAX_SHOWN - guess.length))
+  const said = lastWords(view.text.trim(), Math.max(0, (compact ? MAX_SHOWN_COMPACT : MAX_SHOWN) - guess.length))
   const listening = view.phase === 'listening' || view.phase === 'starting'
   const working = view.phase === 'finishing' || view.phase === 'cleaning'
 
@@ -68,7 +70,7 @@ export function DictationDraft(): JSX.Element | null {
   }
 
   return (
-    <div className={`dictation-draft is-${view.phase}`} role="status" aria-live="polite" data-testid="dictation-draft">
+    <div className={`dictation-draft is-${view.phase}${compact ? ' compact' : ''}`} role="status" aria-live="polite" data-testid="dictation-draft">
       {listening ? <span className="dd-dot" aria-hidden="true" /> : working ? <span className="dd-spin" aria-hidden="true" /> : null}
       {body}
       {time !== '' ? <span className={`dd-time${working ? ' working' : ''}`}>{time}</span> : null}

@@ -81,6 +81,9 @@ import { Supervisor } from './workers/supervisor'
 import { WORKER_EVENTS } from '../shared/workers-channels'
 import { recordHandlers, handlerRegistry } from './devices/registry'
 import { DevicesService, setDevicesService } from './devices/service'
+import { SelfUpdater, resumeNote } from './self-update'
+import type { AppControlDeps } from './tools/app-control'
+import { registryInvoker } from './tools/app-actions'
 import { findSidecar } from './devices/net'
 import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tool-host'
 import { WindowsFirewall } from './devices/firewall'
@@ -734,7 +737,26 @@ async function startServices(win: BrowserWindow): Promise<void> {
     state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
     changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
   })
+  // The app's own controls as tools (tools/app-control.ts): what Settings does by clicking, the agent can do too.
+  const selfUpdater = new SelfUpdater({
+    userData: dir,
+    currentVersion: app.getVersion(),
+    productName: 'Agent',
+    execPath: process.execPath,
+    platform: process.platform,
+    packaged: app.isPackaged,
+    busy: (chat) => runner?.state(chat).running ?? false,
+    quit: () => app.quit(),
+    log: (message, detail) => logger.info(message, detail),
+  })
+  const appControl: AppControlDeps = {
+    devices: () => devices,
+    links: () => devicesState.sync?.replicator.status() ?? [],
+    settings,
+    invoker: () => registryInvoker(handlerRegistry),
+  }
   const helperToolset = buildWorkerToolset({
+    appControl,
     deviceHub: () => devicesState.sync?.tools ?? null,
     store,
     settings,
@@ -779,6 +801,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     learnedNames,
   })
   const tools = buildToolset({
+    appControl: { ...appControl, update: selfUpdater },
     store,
     settings,
     filePicks,
@@ -889,6 +912,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
     void projectAgents.restore().catch(() => undefined)
     // After the repairs: what a crash cut off runs again, once (runtime/turns.ts).
     void leases?.recover().catch(() => 0)
+    // Back from an update the agent started (app_update): it hears so in the chat that asked, and carries on.
+    const updated = selfUpdater.resume()
+    if (updated !== null) {
+      logger.info('Update finished', { from: updated.from, now: updated.now, ok: updated.ok })
+      void runner?.deliver(resumeNote(updated), updated.chat).catch(() => undefined)
+    }
     // Helpers left working are now marked interrupted, so desks can start: anything that arrived meanwhile,
     // or was cut short when the app closed, goes to its routine now.
     try {

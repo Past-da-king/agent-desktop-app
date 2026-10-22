@@ -7,6 +7,8 @@ import { useSettings } from '../state/useSettings'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 import { plainText } from '../openui/lang'
+import { DictationDraft, useDictationDraft } from '../voice/DictationDraft'
+import '../voice/voice.css'
 
 /**
  * The small frameless window the global Quick chat shortcut opens (`#/quick-window`), over whatever app is in
@@ -92,6 +94,8 @@ export function QuickWindow(): JSX.Element {
     }
   }, [agentName])
 
+  const dictating = useDictationDraft() !== null
+
   const send = (): void => {
     const value = text.trim()
     if (value === '') return
@@ -132,7 +136,10 @@ export function QuickWindow(): JSX.Element {
       </div>
 
       <div className="qw-line">
-        {problem !== '' ? (
+        {/* The shortcut pressed here dictates into this box: the words show on this line, never in the pill. */}
+        {dictating ? (
+          <DictationDraft compact />
+        ) : problem !== '' ? (
           <span className="qw-problem" role="alert">
             {problem}
           </span>

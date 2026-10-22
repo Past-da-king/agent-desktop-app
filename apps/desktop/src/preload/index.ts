@@ -43,7 +43,7 @@ import type {
   WorkerLogLine,
 } from '@agent/core'
 import type { LiveTokenResult } from '@agent/core'
-import type { DeviceRow, DevicesStatus, HelperCardsSnapshot, PairingOfferInfo } from '@agent/core'
+import type { DeviceJoinResult, DeviceRow, DevicesStatus, HelperCardsSnapshot, PairingOfferInfo } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
 import { CHANNELS, EVENTS } from '../shared/channels'
@@ -304,6 +304,8 @@ const api: AgentApi = {
     setRoles: (id, roles) => call<void>(DEVICES_CHANNELS.setRoles, id, roles),
     move: (id, direction) => call<void>(DEVICES_CHANNELS.move, id, direction),
     revoke: (id) => call<void>(DEVICES_CHANNELS.revoke, id),
+    forget: (id) => call<void>(DEVICES_CHANNELS.forget, id),
+    join: (link, takeBundle) => call<DeviceJoinResult>(DEVICES_CHANNELS.join, link, takeBundle === true),
     setShareGroup: (group, on) => call<DevicesStatus>(DEVICES_CHANNELS.setShareGroup, group, on),
     allowFirewall: () => call<DevicesStatus>(DEVICES_CHANNELS.allowFirewall),
     onChanged: (callback) => on<null>(DEVICES_EVENTS.changed, () => callback()),

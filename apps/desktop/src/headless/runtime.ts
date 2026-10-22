@@ -49,6 +49,9 @@ import { Runner } from '../main/runtime/runner'
 import { ProjectAgentRows } from '../main/runtime/project-agents'
 import { Scheduler } from '../main/runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from '../main/runtime/toolset'
+import { getDevicesService } from '../main/devices/service'
+import type { AppControlDeps } from '../main/tools/app-control'
+import { registryInvoker } from '../main/tools/app-actions'
 import { Secrets } from '../main/secrets'
 import { SettingsStore } from '../main/settings'
 import { EVENTS } from '../shared/channels'
@@ -305,7 +308,9 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     },
   })
   const deviceHub = (): NonNullable<typeof devicesState.sync>['tools'] | null => devicesState.sync?.tools ?? null
-  const workerToolList = [...browserTools(buildWorkerToolset({ store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps })), ...nodeTools]
+  // The node's own controls as tools (tools/app-control.ts): Devices (once started) and Settings. No self update here.
+  const appControl: AppControlDeps = { devices: () => getDevicesService(), links: () => devicesState.sync?.replicator.status() ?? [], settings, invoker: () => registryInvoker(registry) }
+  const workerToolList = [...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps })), ...nodeTools]
   const helpers = new HelperManager({
     leases,
     store,
@@ -328,6 +333,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   })
   const tools = browserTools([
     ...buildToolset({
+      appControl,
       store,
       settings,
       ...browserDep,

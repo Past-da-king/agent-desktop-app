@@ -14,14 +14,19 @@
  * Finishing never waits for ever: it has a hard limit that grows with the recording, the pill counts the seconds,
  * and when the words cannot be had (an error, the limit, Esc) the recording is kept so Retry can send it again.
  *
- * The microphone lives in the pill's window (it never takes focus, so the app in front keeps the keyboard);
- * this class only sees its audio. Words stream from Google's live transcription model; every chunk is also kept,
+ * The pill is only for dictating into OTHER apps. A dictation into one of the app's own windows (its message box
+ * microphone, or the shortcut while that window is in front) shows only that window's strip: the pill never
+ * shows for it, not while listening, finishing, failing or retrying (see target.ts for the rule).
+ *
+ * The microphone lives in the pill's window (it never takes focus, so the app in front keeps the keyboard); it
+ * runs there hidden for an in-app dictation. This class only sees its audio. Words stream from Google's live transcription model; every chunk is also kept,
  * so a live session that cannot start or drops falls back to the whole recording.
  * Everything with side effects is injected, so tests run the whole flow with fakes and fake timers.
  */
 import type { DictationCommand, DictationPhase, DictationView } from '@agent/core'
 
 import type { TypeOutcome } from './paste'
+import type { DictationSurface } from './target'
 
 export type DictationMode = 'plain' | 'clean'
 
@@ -77,6 +82,11 @@ export interface DictationDeps {
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** Called as a dictation starts, before anything else moves (the app notes where the cursor is). */
   began?: () => void
+  /**
+   * Asked right after began: 'app' when the words go into one of the app's own windows, which shows them in
+   * its own strip, so the pill never shows; 'pill' (the default) for any other app.
+   */
+  surface?: () => DictationSurface
 }
 
 type State = 'idle' | 'starting' | 'listening' | 'finishing' | 'cleaning' | 'typing'
@@ -119,6 +129,7 @@ interface Kept {
   chunks: Buffer[]
   bytes: number
   clean: boolean
+  surface: DictationSurface
 }
 
 /** The recording a retried dictation reads from: no live session behind it. */
@@ -143,6 +154,8 @@ export class DictationController {
   private kept: Kept | null = null
   private dismissRelease: (() => void) | null = null
   private lastView: DictationView = { phase: 'hidden', clean: false, text: '', interim: '', message: '', switchKeys: '' }
+  /** What shows the current (or last) dictation: the pill, or the app window's own strip. */
+  private surface: DictationSurface = 'pill'
 
   constructor(deps: DictationDeps) {
     this.deps = deps
@@ -246,6 +259,7 @@ export class DictationController {
     this.clearHide()
     this.releaseDismiss()
     this.kept = null
+    this.surface = kept.surface
     this.sequence += 1
     const now = this.now()
     const session: Session = {
@@ -273,7 +287,7 @@ export class DictationController {
     this.state = 'finishing'
     this.log('Dictation retried', { bytes: kept.bytes })
     session.escape = this.deps.hold('Escape', () => this.cancel())
-    this.deps.pill.show()
+    this.showPill()
     await this.complete(session)
   }
 
@@ -325,13 +339,19 @@ export class DictationController {
   private start(mode: DictationMode): void {
     this.clearHide()
     this.releaseDismiss()
+    // Whatever an earlier dictation still shows (a pill, a strip) goes before this one picks where it goes.
+    if (this.lastView.phase !== 'hidden') {
+      this.view({ ...this.lastView, phase: 'hidden', canRetry: false })
+      this.deps.pill.hide()
+    }
+    this.deps.began?.()
+    this.surface = this.deps.surface?.() ?? 'pill'
     if (!this.deps.hasKey()) {
       this.flash('notice', 'Add a Gemini key in Settings, Voice, to dictate.', 5000)
       return
     }
     // A new dictation replaces whatever an earlier one kept for Retry.
     this.kept = null
-    this.deps.began?.()
     this.sequence += 1
     const id = this.sequence
     const transcriber = this.deps.transcriber({
@@ -378,7 +398,8 @@ export class DictationController {
     this.state = 'starting'
     this.log('Dictation started', { clean: session.clean })
     this.show('starting')
-    this.deps.pill.show()
+    this.showPill()
+    // The microphone starts in the pill's window whether or not the pill shows.
     this.deps.pill.command({ type: 'start', session: id })
 
     transcriber.start().then(
@@ -555,7 +576,7 @@ export class DictationController {
 
   private keep(session: Session): void {
     if (session.bytes === 0) return
-    this.kept = { chunks: session.chunks, bytes: session.bytes, clean: session.clean }
+    this.kept = { chunks: session.chunks, bytes: session.bytes, clean: session.clean, surface: this.surface }
   }
 
   private dismiss(): void {
@@ -619,7 +640,7 @@ export class DictationController {
   private flash(phase: 'done' | 'notice' | 'error', message: string, ms: number, retry = false): void {
     const canRetry = retry && this.kept !== null
     this.view({ phase, clean: false, text: '', interim: '', message, switchKeys: '', ...(canRetry ? { canRetry: true } : {}) })
-    this.deps.pill.show()
+    this.showPill()
     this.clearHide()
     this.releaseDismiss()
     if (canRetry) this.dismissRelease = this.deps.hold('Escape', () => this.cancel())
@@ -630,6 +651,11 @@ export class DictationController {
       this.view({ ...this.lastView, phase: 'hidden', canRetry: false })
       this.deps.pill.hide()
     }, ms)
+  }
+
+  /** The only way the pill is shown: never for a dictation into one of the app's own windows. */
+  private showPill(): void {
+    if (this.surface === 'pill') this.deps.pill.show()
   }
 
   private clearHide(): void {
