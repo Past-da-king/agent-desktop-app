@@ -1,47 +1,37 @@
 # Workstream A: desktop node (progress)
 
-Branch `devices-node`, worktree `~/agent-desktop-wt/devices-node`. Status: DONE (22 Oct 2026, about 02:40).
+Branch `devices-node`, worktree `~/agent-desktop-wt/devices-node`. Status: DONE including s11 and the firewall step
+(22 Oct 2026, about 02:55). Scope per Ayanda 01:45: desktop stays standalone, Devices off by default, minimal UI.
 
 ## Done and proven
-- `main/devices/`: `cert.ts` (self-signed ECDSA P-256 X.509, own DER writer, no dependency), `identity.ts`
-  (nodeId, meshId, key and cert in `<userData>/devices/`), `config.ts` (devices.enabled/port/listen/extraUrls in
-  `<userData>/devices/config.json`, advertised urls), `passes.ts` (PassTable over the secrets module, sha256 only),
-  `router.ts`, `ws.ts` (RFC 6455 server and client framing, no dependency), `server.ts` (DevicesHost: routes with
-  :params and trailing *, auth none/device/node, Bearer or cookie, JSON caps, files with ranges, RPC upgrade),
-  `pairing.ts` (offers 10 min, single use, 5 tries; agent://pair URI; short code), `facts.ts`, `registry.ts`
-  (every ipcMain.handle kept by channel through `recordHandlers`), `rpc.ts` (sessions, allowlist), `origin.ts`
-  (meta.origin), `service.ts` (wires it all; routes /v1/health, /v1/pair, /v1/devices, /v1/devices/:id/revoke,
-  /v1/file, /app/*; Settings IPC; `getDevicesHost()` for workstream B).
-- `shared/rpc-methods.ts` (method map, RPC_ALLOWED, RPC_EVENTS, $b64 codec), `shared/qr.ts` (QR encoder, no
-  dependency; matrices equal python-qrcode's for versions 1, 9, 15 and all masks; the live QR decodes with OpenCV),
-  `shared/devices-channels.ts`.
-- Core: entity `device` (DeviceRow), `DevicesApi`, `DevicesStatus`, `PairingOfferInfo`, `AgentApi.devices`,
-  `AgentApi.remote`. Preload, mock bridge (`bridge/mock-devices.ts`) updated.
-- Renderer: `bridge/remote.ts` (AgentApi over /v1/rpc, reconnects, re-reads lists after a reconnect, look settings
-  kept on the device), picked in `bridge/index.ts` when the page carries `<meta name="agent-remote">`.
-  `views/Devices.tsx` + `styles/devices.css` (switch, Add a device with QR, short code, countdown, paired
-  confirmation; device list with roles, brain order, last seen, this device, connected, Take out with a real
-  dialog; addresses and extra address field; Windows firewall hint). Remote degrade: Settings shows Devices and
-  Look only; no window controls, no call button, no shortcut hint on touch, no browser demo page.
-- Hooks: `main/index.ts` (ipcMain through recordHandlers, broadcast to devices, service start, AGENT_USER_DATA
-  for a test copy), `main/ipc.ts` (chat.send passes the origin), `runtime/runner.ts` (send(..., origin) puts
-  meta.origin on the user row).
-- Tests: `test/devices-unit.test.ts` (23), `test/devices-node.test.ts` (7, real server on 127.0.0.1 and ::1, real
-  registerIpc, pinned client). Typecheck and lint clean. Full suite: 1141 passed; one unhandled rejection from
-  `helpers.test.ts` "runs two helpers at the same time" that also happens on the base commit 3df8a89 (pre-existing).
-- Live proof on Windows: Electron 44.9.1 running this build from `C:\temp\devices-node-run` with
-  AGENT_USER_DATA=`C:\temp\devices-node-run\userdata`, port 7797, DevTools 9341 (`scripts/devices-cdp.mjs`).
-  Devices switched on through the UI; Add a device QR decoded by OpenCV; `scripts/devices-client.mjs` paired from
-  WSL with the fingerprint pinned, called RPC, heard the data event, uploaded and fetched a file; revoke through the
-  real dialog closed its line (4003) and its pass got 401. Screenshots in `C:\temp\devices-node-run\shots` and
-  `C:\temp\shots-devices` (mock and remote at 390, 412, 1280).
+- Node: identity and self-signed cert (lazy: made only when Devices is switched on or a part asks for the host),
+  HTTPS server, pairing (QR + short code, 10 min, single use, 5 tries), pass table in the secrets store,
+  /v1/health, /v1/pair, /v1/devices, /v1/devices/:id/revoke, /v1/file, /v1/rpc with the allowlist
+  (`shared/rpc-methods.ts`: chat.send with meta.origin, data.list/get/upsert/remove incl. projects for icons,
+  memory.*, tasks via data.*, chat events). Dual-stack listen.
+- Devices off = as before: no identity files, no device row, no origin, nothing listens or links out (test
+  "the desktop node with Devices off").
+- s11 (`devices/device-tools.ts`, `devices/uplink.ts`): hello `tools` stored on the device row; RPC device.result
+  routed to `DevicesHost.onDeviceResult` listeners; this node serves its own tools (browser_*, notify_user,
+  ask_user/request_approval shown in this app via `Runner.deviceToolContext`, files_*, file_send, file_receive,
+  shell_run) per share group (browser/files/notifications/approval on, shell off); it links OUT to the answering
+  brain with its own pass and serves commands there. Proven with two real nodes in `test/devices-tools.test.ts`.
+- Windows Firewall (`devices/firewall.ts`): netsh check (no elevation), state blocked/missing/allowed, ONE elevated
+  command (Start-Process -Verb RunAs, script base64) to allow; tested without running it. Live: the test copy found
+  the real Block rules and showed "Allow connections" (shots `C:\temp\shots-devices\live-firewall-step-*.png`).
+  No UAC prompt was triggered.
+- Settings > Devices (minimal): switch, Add a device (QR, short code, countdown), list with roles chips, brain order,
+  Take out with a real dialog, Allow connections (Windows, when needed), share switches. Address list and extra
+  address field removed from the UI.
+- Kept from before (no runtime cost with Devices off; no more work on it): web UI at /app/ with the remote bridge.
+- Tests: devices-unit (23), devices-node (7), devices-tools (12). Typecheck and lint clean.
 
 ## Not done / limits
-- Inbound from other LAN devices on Windows needs the person to allow the firewall prompt (Windows added Block
-  rules for the test binary when the prompt went unanswered). WSL (mirrored networking) cannot reach the host's LAN
-  or VPN addresses; tested over 127.0.0.1 from WSL and ::1 / the VPN IPv6 address from Windows.
-- Headless build: serve `out/renderer` as `rendererDir` (DevicesService takes it as a dependency).
-- Live calls over the wire (callAudio streaming) are not offered remotely; the Talk button hides.
+- Test Block rules Windows made for `C:\temp\devices-node-run\electron\electron.exe` (two inbound rules named
+  "Electron", TCP and UDP, Private+Public) need elevation to delete; left in place.
+- `helpers.test.ts` has a pre-existing unhandled rejection (also on base 3df8a89).
+- Entity names: B adds device, device_command, turn_lease; A's 'device' lines differ slightly (typed DeviceRow);
+  C resolves at merge.
 
 ## Last commit
 - see `git log -1` on devices-node

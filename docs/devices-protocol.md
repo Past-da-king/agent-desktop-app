@@ -37,7 +37,11 @@ names or keys in source or defaults.
   (then it stops advertising IPv6 addresses) where the system has no IPv6.
 - Windows: the first time the node listens, Windows Firewall asks whether the app may use the network. Unanswered
   or refused, Windows adds a Block rule and other devices on the LAN cannot connect (loopback still works).
-  Settings > Devices says so on Windows. A per-user installer cannot add an Allow rule without admin rights.
+  A per-user installer cannot add an Allow rule without admin rights, so Settings > Devices shows "Allow
+  connections" when the check (`netsh advfirewall firewall show rule name=all dir=in verbose`, no elevation) finds
+  a Block rule for the app or no Allow rule for the app or the port. It runs ONE elevated PowerShell (one UAC
+  prompt) that removes the app's inbound rules and adds "Agent devices" (program) and "Agent devices (port N)"
+  (TCP), profiles private and domain (`main/devices/firewall.ts`).
 
 ## 3. Pairing (QR + short code)
 
@@ -203,6 +207,28 @@ reach C. Replication is initiated by whichever side can reach the other, so a no
   DeviceFacts (object or JSON text); the web UI's remote bridge sends it in every hello (and again on resize).
   Without it the page guesses its facts from the user agent and screen.
 - Local mode (its own key / subscription on the phone) keeps working as before.
+
+### 11.1 As built on the desktop node (workstream A)
+
+- **Hello**: `{"type":"hello","device":DeviceFacts,"tools":DeviceTool[]}` (tools may also sit inside `device`). The
+  node keeps them on the device row as `tools` (names `^[a-z][a-z0-9_]{1,63}$`, at most 80, schema up to 8 KB).
+- **device.result(id, ok, valueOrError)** is answered by the node server itself (`DevicesHost.onDeviceResult`
+  hears every one, with the calling deviceId); with `ok:false` the third argument is the error text.
+- **What this desktop shares** (`main/devices/device-tools.ts`): its `browser_*` tools (the agent browser, its own
+  tab), `notify_user`, `ask_user` and `request_approval` (the card shows in this app's main chat, the answer is
+  returned), `files_list/read/find/write`, `file_send {path}` (bytes back inline, up to 16 MB) and
+  `file_receive {name, data}` (saved under `<userData>/attachments/received`), and `shell_run` (group shell, off by
+  default). Groups switch in Settings > Devices (`devices/config.json` `shareGroups`).
+- **Value shape**: `{ text }`, plus `images: [{ type: "image", mime, data }]` when the tool showed pictures;
+  file_send and file_receive answer `{ type: "file", name, mime, size, data }` and `{ type: "file", path, size }`.
+  Deadline: `deadlineMs` clamped to 1 s .. 120 s (browser 600 s), default 120 s.
+- **Linking out**: with Devices on, when the first brain in the order is another device, this node opens
+  `/v1/rpc` to it as a device (its cert pinned from the brain's row, the node's own pass `devicesSelfPass` whose hash
+  is in the pass table under the node's id, so the bundle carries it to the brains), says hello with its tools,
+  runs `device.command` kind `tool` and answers `device.result`; `open_url` and `notify` commands act here and
+  answer `device.ack(id, ok, note)`. It re-checks every 15 s and when device rows change. A brain-side router that
+  targets the answering brain itself can call `DevicesService.runTool(command)`.
+- **Devices off**: no identity files, no device row, no origin on messages, nothing listens or links out.
 
 ## 10. Overlay network (optional, pluggable)
 

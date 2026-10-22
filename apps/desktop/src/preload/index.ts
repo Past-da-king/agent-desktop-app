@@ -290,6 +290,8 @@ const api: AgentApi = {
     setRoles: (id, roles) => call<void>(DEVICES_CHANNELS.setRoles, id, roles),
     move: (id, direction) => call<void>(DEVICES_CHANNELS.move, id, direction),
     revoke: (id) => call<void>(DEVICES_CHANNELS.revoke, id),
+    setShareGroup: (group, on) => call<DevicesStatus>(DEVICES_CHANNELS.setShareGroup, group, on),
+    allowFirewall: () => call<DevicesStatus>(DEVICES_CHANNELS.allowFirewall),
     onChanged: (callback) => on<null>(DEVICES_EVENTS.changed, () => callback()),
   },
 }
