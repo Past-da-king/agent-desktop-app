@@ -52,6 +52,8 @@ async function bootRuntime(dataDir: string): Promise<HeadlessRuntime> {
     appDir: root,
     version: '9.9.9',
     quiet: true,
+    // As on a machine with no Chromium: the browser tools stay listed and say so (headless-browser.test.ts has one).
+    chromium: null,
     providerFactory: (_current, key) => (fake === null ? null : providerFor({ provider: 'openai', key, baseUrl: fake.url, allowHttp: true })),
   })
   closers.push(() => runtime.stop(0))
