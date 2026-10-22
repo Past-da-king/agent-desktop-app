@@ -66,6 +66,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 04:10 B s11 brain side DONE devices-sync 645ec03 (11 device-tools tests, full suite 1152): device_tool/devices_list, router (origin first, preferred, priority, phones last), ask_user/request_approval/notify on another device, offline queue, blocked-browser hint, node-to-node tools over replicated device_command rows, shell off by default. Bundle projects include icons; helper status lines are replicated chat_item rows. B next: ask_user on another node (context), then scripts/devices-e2e.mjs live harness (phone protocol client, checks a-g, stop/start hooks).
 
+- 04:25 D DONE: C:\Users\past9\Downloads\agent\Agent-0.14.0.apk (versionCode 90, same key). Server ~/phone-aos/app-remote feature/remote 218e1ed (base 0.13.0 3811400). Native screens mirror the brain (linked.db over /v1/rpc), QR (zxing)/link/short code, pinned TLS, failover strip, device commands, 22 lent tools. RemoteLinkTest 22/22, full 538/540 (2 old OpenUi failures). Proven on redroid against a fake node (18 shots ~/phone-aos/proof-0140/). NOT proven vs real node or real camera. Node-side needs sent to A (dashless code, hello tools top level, allowlist incl. device.ack/result, event names); main-chat project helper row with icon sent to B. TODO lead: check APK size (thin, must be ~30-60 MB).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
