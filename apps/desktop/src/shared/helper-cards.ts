@@ -107,6 +107,11 @@ export interface HelperCard extends HelperView {
   depth: 0 | 1
   /** For a project agent row: the project chat it stands for ('' otherwise). */
   projectChat: string
+  /**
+   * Its steps, oldest first: a helper's own activity rows, or for a project agent's card the lines of its project
+   * chat (the project agent's steps and replies, not its helpers' steps, which sit on their own cards).
+   */
+  steps: ChatItem[]
 }
 
 function projectMetaOf(meta: Meta): { id: string; name: string; icon: ProjectIcon } | null {
@@ -151,9 +156,30 @@ export function helperLine(helper: HelperView): string {
 }
 
 export interface HelperCardOptions {
-  /** Also keep helpers that finished at most this long ago (the device feed shows their done line). Default 0. */
+  /** Also keep helpers that finished at most this long ago, with their done line. Default 0. */
   keepFinishedMs?: number
+  /** Keep only project agent cards once finished (the side panel); the device feed keeps every one. */
+  finishedProjectsOnly?: boolean
   now?: number
+}
+
+/** A project chat's own lines (its agent's steps and replies; helpers' steps are on their own cards), oldest first. */
+export function projectChatLines(items: ChatItem[], chat: string): ChatItem[] {
+  return items
+    .filter((item) => (item.kind === 'activity' || item.kind === 'agent') && chatOfRow(item) === chat && metaText(metaOf(item), 'helper') === '')
+    .sort((a, b) => a.createdAt - b.createdAt)
+}
+
+/**
+ * A project agent card's line: while it works, the step its project chat is on (else its newest step or reply);
+ * once idle, its last answer. Falls back to the row's own status line.
+ */
+export function projectLine(view: HelperView, lines: ChatItem[]): string {
+  if (view.state !== 'working') return oneLine(view.result) || oneLine(view.summary) || 'Done'
+  const running = [...lines].reverse().find((line) => line.kind === 'activity' && metaText(metaOf(line), 'status') === 'running')
+  const newest = running ?? lines[lines.length - 1]
+  const text = newest === undefined ? '' : oneLine(stepText(newest))
+  return text !== '' ? text : view.summary.trim() !== '' ? view.summary : 'Starting'
 }
 
 /**
@@ -165,14 +191,17 @@ export interface HelperCardOptions {
 export function helperCards(items: ChatItem[], projects: ProjectRow[], options: HelperCardOptions = {}): HelperCard[] {
   const keep = options.keepFinishedMs ?? 0
   const now = options.now ?? Date.now()
-  const shown = (card: HelperView): boolean =>
-    card.state === 'working' || (keep > 0 && card.state !== 'stopped' && card.endedAt !== null && now - card.endedAt <= keep)
+  const shown = (card: HelperCard): boolean =>
+    card.state === 'working' ||
+    (keep > 0 && card.state !== 'stopped' && card.endedAt !== null && now - card.endedAt <= keep && (options.finishedProjectsOnly !== true || card.projectChat !== ''))
   const working = items
     .filter((item) => item.kind === 'helper')
-    .map((item) => {
+    .map((item): HelperCard => {
       const view = helperView(item, items)
       const projectChat = metaText(metaOf(item), 'projectChat')
-      return { ...view, row: item, owner: helperOwner(item, projects), line: helperLine(view), depth: 0 as 0 | 1, projectChat }
+      const lines = projectChat === '' ? view.activity : projectChatLines(items, projectChat)
+      const line = projectChat === '' ? helperLine(view) : projectLine(view, lines)
+      return { ...view, row: item, owner: helperOwner(item, projects), line, depth: 0, projectChat, steps: lines }
     })
     .filter(shown)
     .sort((a, b) => Number(a.queued) - Number(b.queued) || a.startedAt - b.startedAt)
@@ -187,6 +216,9 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
   }
   return out
 }
+
+/** How long a finished card stays, with its done line (the device feed; the side panel for project agent cards). */
+export const FINISHED_CARD_MS = 20 * 60_000
 
 const MAX_LINE = 160
 const MAX_BRIEF = 600
@@ -205,11 +237,10 @@ export function oneLine(text: string, max = MAX_LINE): string {
 
 /**
  * A card as a linked device gets it (HelperCardInfo, packages/core ipc.ts): plain data, no chat rows. `steps` are a
- * helper's newest steps, or for a project agent's card the newest lines of its project chat (`chatSteps`).
+ * helper's newest steps, or for a project agent's card the newest lines of its project chat.
  */
-export function cardInfo(card: HelperCard, chatSteps: ChatItem[] = []): HelperCardInfo {
-  const source = card.projectChat !== '' ? chatSteps : card.activity
-  const steps = source.slice(-MAX_STEPS).map((step) => ({
+export function cardInfo(card: HelperCard): HelperCardInfo {
+  const steps = card.steps.slice(-MAX_STEPS).map((step) => ({
     text: oneLine(stepText(step), 240),
     status: metaText(metaOf(step), 'status') || 'done',
     at: step.createdAt,

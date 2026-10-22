@@ -54,7 +54,8 @@ describe('helper cards for linked devices', () => {
     ])
     const pa = first.cards[1]!
     expect(pa.owner).toMatchObject({ kind: 'project', name: 'Garden', icon: { glyph: 'heart', color: 'teal' } })
-    expect(pa.line).toBe('Reading the plan')
+    // Its line is the step its project chat is on now, not the row's older status line.
+    expect(pa.line).toBe('Opened the plan')
     expect(pa.brief).toBe('Plan the spring beds')
     expect(pa.steps.map((s) => s.text)).toEqual(['Opened the plan'])
     expect(first.cards[2]!.line).toBe('Searching seed shops')
@@ -90,12 +91,35 @@ describe('helper cards for linked devices', () => {
     await waitFor(() => heard.length > 0 && heard[heard.length - 1]!.cards.length === 0)
   })
 
-  it('the side panel model is unchanged: working helpers only', () => {
+  it('the side panel model by default: working helpers only', () => {
     const rows = [
       { id: 'w', kind: 'helper', text: '', meta: JSON.stringify({ state: 'working' }), createdAt: 1, updatedAt: 1 },
       { id: 'd', kind: 'helper', text: '', meta: JSON.stringify({ state: 'done', endedAt: Date.now() }), createdAt: 2, updatedAt: 2 },
     ]
     expect(helperCards(rows as never, []).map((c) => c.id)).toEqual(['w'])
+  })
+
+  it('side panel project card: live step while it works, its newest steps, and its last answer once idle', () => {
+    const now = Date.now()
+    const row = (id: string, kind: string, text: string, meta: Record<string, unknown>, at: number): unknown => ({ id, kind, text, meta: JSON.stringify(meta), createdAt: at, updatedAt: at })
+    const working = [
+      row('pa-c', 'helper', 'brief', { id: 'pa-c', label: 'Site', state: 'working', summary: 'Starting', projectChat: 'c', startedAt: now - 9 }, now - 9),
+      row('s1', 'activity', 'Read the repo', { chat: 'c', status: 'done' }, now - 8),
+      row('s2', 'activity', 'Running the tests', { chat: 'c', status: 'running' }, now - 7),
+      row('hs', 'activity', 'A helper step', { chat: 'c', helper: 'other', status: 'running' }, now - 6),
+      row('d1', 'helper', 'old', { id: 'd1', label: 'Old helper', state: 'done', endedAt: now - 5, result: 'x' }, now - 20),
+    ]
+    const opts = { keepFinishedMs: 20 * 60_000, finishedProjectsOnly: true, now }
+    const live = helperCards(working as never, [], opts)
+    expect(live.map((c) => c.id)).toEqual(['pa-c'])
+    expect(live[0]!.line).toBe('Running the tests')
+    expect(live[0]!.steps.map((s) => s.text)).toEqual(['Read the repo', 'Running the tests'])
+    const idle = [
+      row('pa-c', 'helper', 'brief', { id: 'pa-c', label: 'Site', state: 'done', projectChat: 'c', startedAt: now - 9, endedAt: now - 1, result: 'Shipped the gallery fix.\nDetails' }, now - 9),
+    ]
+    const after = helperCards(idle as never, [], opts)
+    expect(after[0]!.line).toBe('Shipped the gallery fix.')
+    expect(helperCards(idle as never, [], { ...opts, now: now + 21 * 60_000 })).toEqual([])
   })
 
   it('starts after a restart with the cards a device had (snapshot on reconnect)', async () => {
