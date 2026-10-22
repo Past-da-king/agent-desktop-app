@@ -62,6 +62,7 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 03:50 C: devices-headless-int 55f5882 = headless + A, headless node runs A's DevicesService as kind server, CLI offer (terminal QR)/devices/roles/move/revoke/config --url; 10 headless tests, full suite 1153. Server redeployed; a WSL node paired with the server over the tailnet by short code, then revoked. C now merging B in (A/B conflict on DeviceRow, db, runner, ipc, origin, change, seed, useData), wiring B on both sides, redeploy. Then lead fast-forwards devices and A/B merge devices for s11.
 - Note: the server node listens on 127.0.0.1; its reachable url is added at runtime with `agent-node config --url` (not in source).
+- 04:00 design moved to 307888a (workers, 0.2.39 to 0.2.41). C merges design into devices-headless-int after A+B. Devices release version will be 0.2.42.
 
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
