@@ -104,6 +104,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 08:50 FINAL: installer Downloads/agent/Agent-0.2.42-setup.exe (322,717,883 bytes, sha256 D69CCBE9...9B6F) from devices 408a97d (url ranking + parallel probe, alias fix e14cca8, firewall a8302c7). Lead verified head bc3b0bd: typecheck, lint, full suite 1254 pass. design fast-forwarded to bc3b0bd. Phone Agent-0.14.2.apk 35.6 MB. START-HERE.md written. C redeploying the clean server from the head.
 
+- 09:00 C: server already on bc3b0bd (current head), clean, unpaired. E had finished at 03:05 (devices-net 9c767eb: agent-net tsnet sidecar, Headscale live e2e, Settings Network row, headless net command) but its report never arrived. E now merging devices, wiring peer dialling, 0.2.43; then A rebuilds installer as 0.2.43, C redeploys.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
