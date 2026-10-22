@@ -9,6 +9,15 @@ import { execFile, spawn } from 'node:child_process'
 
 export const RULE_NAME = 'Agent devices'
 
+/**
+ * Where a VPN reaches this computer from, for the Public profile: many PCs class a VPN adapter (Tailscale, Headscale,
+ * WireGuard) as a Public network, so a Private-only rule leaves the phone and the server out. On Public the rules let
+ * in only these, never the whole internet: this computer's own subnet, the shared address range overlay networks
+ * hand out (100.64.0.0/10, RFC 6598), and the IPv6 range Tailscale-compatible networks use. Private and Domain
+ * networks are the person's own, so any address there.
+ */
+export const VPN_REMOTE = 'LocalSubnet,100.64.0.0/10,fd7a:115c:a1e0::/48'
+
 export interface FirewallRule {
   name: string
   enabled: boolean
@@ -18,6 +27,8 @@ export interface FirewallRule {
   localPort: string
   protocol: string
   profiles: string
+  /** RemoteIP as netsh prints it ("Any", "LocalSubnet,100.64.0.0/10,..."). */
+  remoteIp: string
 }
 
 export type FirewallState = 'allowed' | 'missing' | 'blocked' | 'unknown' | 'not-needed'
@@ -33,7 +44,7 @@ export function parseFirewallRules(text: string): FirewallRule[] {
     const key = line.slice(0, at).trim().toLowerCase()
     const value = line.slice(at + 1).trim()
     if (key === 'rule name') {
-      current = { name: value, enabled: false, direction: '', action: '', program: '', localPort: '', protocol: '', profiles: '' }
+      current = { name: value, enabled: false, direction: '', action: '', program: '', localPort: '', protocol: '', profiles: '', remoteIp: '' }
       rules.push(current)
       continue
     }
@@ -45,24 +56,37 @@ export function parseFirewallRules(text: string): FirewallRule[] {
     else if (key === 'localport') current.localPort = value
     else if (key === 'protocol') current.protocol = value
     else if (key === 'profiles') current.profiles = value
+    else if (key === 'remoteip') current.remoteIp = value
   }
   return rules
 }
 
 const samePath = (a: string, b: string): boolean => a.replace(/\//g, '\\').toLowerCase() === b.replace(/\//g, '\\').toLowerCase()
 
+/** The profiles a rule covers ("Domain,Private", "Public", "Any" or "All" for every one). */
+function profilesOf(rule: FirewallRule): Set<'domain' | 'private' | 'public'> {
+  const words = rule.profiles.toLowerCase().split(',').map((w) => w.trim())
+  if (words.includes('any') || words.includes('all') || words.every((w) => w === '')) return new Set(['domain', 'private', 'public'])
+  return new Set(words.filter((w): w is 'domain' | 'private' | 'public' => w === 'domain' || w === 'private' || w === 'public'))
+}
+
 /**
  * What the rules mean for this program and port. A Block rule for the program wins over any Allow rule (that is
- * how Windows Firewall works), so it counts first.
+ * how Windows Firewall works), so it counts first. "Allowed" needs every profile covered, Public too (a VPN adapter
+ * is often Public): an older Private-only rule counts as missing, so the one-prompt step comes back and widens it.
  */
 export function firewallState(rules: FirewallRule[], program: string, port: number): FirewallState {
   const inbound = rules.filter((rule) => rule.enabled && rule.direction === 'in')
   if (inbound.some((rule) => rule.action === 'block' && samePath(rule.program, program))) return 'blocked'
-  const allowsProgram = inbound.some((rule) => rule.action === 'allow' && samePath(rule.program, program))
-  const allowsPort = inbound.some(
-    (rule) => rule.action === 'allow' && (rule.program === '' || rule.program.toLowerCase() === 'any') && rule.localPort.split(',').map((p) => p.trim()).includes(String(port)),
+  const allowing = inbound.filter(
+    (rule) =>
+      rule.action === 'allow' &&
+      (samePath(rule.program, program) ||
+        ((rule.program === '' || rule.program.toLowerCase() === 'any') && rule.localPort.split(',').map((p) => p.trim()).includes(String(port)))),
   )
-  return allowsProgram || allowsPort ? 'allowed' : 'missing'
+  const covered = new Set<string>()
+  for (const rule of allowing) for (const profile of profilesOf(rule)) covered.add(profile)
+  return covered.has('domain') && covered.has('private') && covered.has('public') ? 'allowed' : 'missing'
 }
 
 /** Single quotes for a PowerShell string. */
@@ -70,16 +94,32 @@ function ps(text: string): string {
   return `'${text.replace(/'/g, "''")}'`
 }
 
-/** The script the elevated PowerShell runs: drop this program's inbound rules, then allow it and the port. */
+/** The names of the rules this app adds, for a port. */
+export function ruleNames(port: number): { program: string; programVpn: string; port: string; portVpn: string } {
+  return {
+    program: RULE_NAME,
+    programVpn: `${RULE_NAME} (VPN)`,
+    port: `${RULE_NAME} (port ${port})`,
+    portVpn: `${RULE_NAME} (port ${port}, VPN)`,
+  }
+}
+
+/**
+ * The script the elevated PowerShell runs: drop this program's inbound rules (Block ones too) and our own named
+ * rules, then allow the program and the port: on Private and Domain from anywhere, on Public only from VPN_REMOTE.
+ */
 export function allowScript(program: string, port: number): string {
   const p = ps(program)
+  const names = ruleNames(port)
+  const vpn = `profile=public remoteip=${VPN_REMOTE}`
   return [
     "$ErrorActionPreference = 'Continue'",
     `Get-NetFirewallApplicationFilter -Program ${p} -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction -eq 'Inbound' } | Remove-NetFirewallRule`,
-    `netsh advfirewall firewall delete rule name=${ps(RULE_NAME)} | Out-Null`,
-    `netsh advfirewall firewall delete rule name=${ps(`${RULE_NAME} (port ${port})`)} | Out-Null`,
-    `netsh advfirewall firewall add rule name=${ps(RULE_NAME)} dir=in action=allow program=${p} enable=yes profile=private,domain`,
-    `netsh advfirewall firewall add rule name=${ps(`${RULE_NAME} (port ${port})`)} dir=in action=allow protocol=TCP localport=${port} enable=yes profile=private,domain`,
+    ...Object.values(names).map((name) => `netsh advfirewall firewall delete rule name=${ps(name)} | Out-Null`),
+    `netsh advfirewall firewall add rule name=${ps(names.program)} dir=in action=allow program=${p} enable=yes profile=private,domain`,
+    `netsh advfirewall firewall add rule name=${ps(names.programVpn)} dir=in action=allow program=${p} enable=yes ${vpn}`,
+    `netsh advfirewall firewall add rule name=${ps(names.port)} dir=in action=allow protocol=TCP localport=${port} enable=yes profile=private,domain`,
+    `netsh advfirewall firewall add rule name=${ps(names.portVpn)} dir=in action=allow protocol=TCP localport=${port} enable=yes ${vpn}`,
   ].join('\n')
 }
 
