@@ -60,6 +60,8 @@ export interface OffloadWire {
   placeChat(chat: string, project: ProjectRow, brief: string, device?: string): Promise<PlaceResult | null>
   /** Whether this brain runs a due routine slot. */
   claimRoutine(trigger: TriggerRow): Promise<boolean>
+  /** Whether this brain runs a day's End of day memory pass (the person's own computer first). */
+  claimDaily(day: string): Promise<boolean>
   /** The chat runner as the window and other devices use it: placed chats go to their brain. */
   wrapRunner<T extends object>(runner: T): T
   /** A chat's state with what runs on other brains for it. */
@@ -230,6 +232,12 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     claimRoutine: async (trigger) => {
       const pick = resolvePick(settings.get(), undefined, 'main')
       return offload.claimRoutine(trigger.id, String(trigger.lastRunAt ?? 0), { text: `${trigger.name}\n${trigger.prompt}`, account: pick.account, ...(trigger.device === undefined || trigger.device === '' ? {} : { device: trigger.device }) })
+    },
+    // The pass's report and its Undo live on the computer that ran it, so the person's own computer goes first and
+    // a server does it only when no computer claimed the day within the grace.
+    claimDaily: async (day) => {
+      const pick = resolvePick(settings.get(), undefined, 'main')
+      return offload.claimRoutine('memory-daily', day, { text: 'End of day memory pass', account: pick.account, localFolder: true })
     },
     wrapRunner: <T extends object>(runner: T): T =>
       new Proxy(runner, {

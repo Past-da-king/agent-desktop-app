@@ -982,6 +982,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     emitUpkeep: (report) => broadcast(MEMORY_EVENTS.upkeep, report),
     dailyAt: () => dailyRoutineSlot(memoryStore),
     onDaily: (report) => recordDailyRun(memoryStore, report),
+    claimDaily: (day) => placedWire.claimDaily(day),
     log: (message, detail) => logger.info(message, detail),
   })
   // Tidying a memory bank with the agent (Settings > Memory > Import), on the same model as chat filing.

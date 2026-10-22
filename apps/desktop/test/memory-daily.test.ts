@@ -154,6 +154,16 @@ describe('end-of-day pass', () => {
     expect(memory.upkeepState().lastDay).toBe('')
   })
 
+  it('leaves a day another brain claimed to that brain', async () => {
+    await talk('Plan the Lisbon trip for March', 'Here are three flight options.')
+    const asked: string[] = []
+    const memory = new MemoryService({ store, index, upkeep, complete: async () => where('x'), dailyAt: () => '23:30', now: () => clock, claimDaily: async (day) => (asked.push(day), false) })
+    clock = new Date(2026, 9, 21, 23, 45).getTime()
+    expect(await memory.tick()).toBeNull()
+    expect(asked).toEqual(['2026-10-21'])
+    expect(memory.upkeepState().lastDay).toBe('')
+  })
+
   it('finds duplicate groups by kind and title', () => {
     const now = Date.now()
     const row = (id: string, title: string, kind: MemoryRow['kind'] = 'how-to', updatedAt = now): MemoryRow => ({ id, title, body: id, kind, topics: '', pinned: false, source: 'agent', createdAt: now, updatedAt })
