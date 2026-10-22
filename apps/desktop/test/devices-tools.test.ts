@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { SyncClient, schema, str, type DeviceRow, type Tool } from '@agent/core'
 
 import { Store } from '../src/main/db'
-import { DeviceToolHub, DeviceToolRunner, catalogueOf, deviceAgentTools, shareOf, withDeviceArg } from '../src/main/devices/device-tools'
+import { DeviceToolHub, DeviceToolRunner, canonTool, catalogueOf, deviceAgentTools, offers, shareOf, withDeviceArg } from '../src/main/devices/device-tools'
 import { Replicator, registerSyncRoutes } from '../src/main/devices/replicate'
 import { Runner } from '../src/main/runtime/runner'
 import { buildWorkerToolset } from '../src/main/runtime/toolset'
@@ -208,6 +208,47 @@ describe('shared device tools: a phone', () => {
     expect(out).toContain('Linked devices with a browser: Test Phone (online)')
     const fine: Tool[] = [{ spec: { name: 'browser_open', description: 'open', schema: schema([], {}) }, run: async () => 'Opened. Outline: [1] Buy' }]
     expect(await withDeviceArg(fine, () => hub)[0]!.run({}, testContext())).toBe('Opened. Outline: [1] Buy')
+  })
+})
+
+describe('tool names a device may spell its own way', () => {
+  it('matches every alias pair in both directions, and nothing else', () => {
+    const pairs: Array<[string, string]> = [
+      ['notify_user', 'notify'],
+      ['notify_user', 'notification_post'],
+      ['notify_user', 'notifications_post'],
+      ['notify_user', 'notify_post'],
+      ['send_file', 'file_send'],
+      ['send_file', 'files_receive'],
+      ['send_file', 'file_receive'],
+      ['open_url', 'url_open'],
+      ['open_url', 'link_open'],
+    ]
+    for (const [a, b] of pairs) {
+      expect(offers(a, b)).toBe(true)
+      expect(offers(b, a)).toBe(true)
+    }
+    // Two aliases of the same tool match each other too.
+    expect(offers('notify', 'notification_post')).toBe(true)
+    expect(offers('notify', 'open_url')).toBe(false)
+    expect(offers('browser_open', 'browser_look')).toBe(false)
+    expect(canonTool('file_send')).toBe('send_file')
+    expect(canonTool('browser_open')).toBe('browser_open')
+  })
+
+  it('device_tool "notify" reaches a device that offers notify_user, and "notify_user" reaches one that offers notify', async () => {
+    const { host, hub, store } = await setup()
+    cleanups.push(phone(host, (tool) => (tool === 'notify_user' || tool === 'notify' ? { ok: true, value: `Shown by ${tool}` } : { ok: false, value: 'no' })))
+    // The phone in setup() offers `notify`.
+    expect(await hub.call('best', 'notify_user', { title: 't', body: 'b' }, 'main')).toMatchObject({ state: 'done', text: 'Shown by notify' })
+    // Now it offers `notify_user` instead.
+    host.facts.set('dev_phone', { ...facts('Test Phone', { kind: 'phone', platform: 'android' }), tools: [{ name: 'notify_user', description: 'n', params: { type: 'object', properties: {} }, group: 'notifications', readOnly: false }] })
+    await hub.refresh()
+    expect(((await store.get('device', 'dev_phone')) as DeviceRow).tools?.map((t) => t.name)).toEqual(['notify_user'])
+    const out = await toolNamed(deviceAgentTools({ hub: () => hub }), 'device_tool').run({ device: 'best', tool: 'notify', args: { title: 't', body: 'b' } }, testContext())
+    expect(out).toBe('On Test Phone: Shown by notify_user')
+    const sent = host.events.filter((e) => e.name === 'device.command').map((e) => (e.payload as { tool: string }).tool)
+    expect(sent).toEqual(['notify', 'notify_user'])
   })
 })
 
