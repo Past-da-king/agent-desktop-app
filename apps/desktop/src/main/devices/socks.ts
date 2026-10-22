@@ -12,6 +12,12 @@ export interface SocksProxy {
   port: number
 }
 
+/** True for this machine's own addresses: those never go through a proxy. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase()
+  return h === 'localhost' || h === '::1' || /^127\./.test(h)
+}
+
 /** "socks5://host:port" (or socks5h://) to a proxy, null for anything else or empty. */
 export function parseSocksProxy(raw: string | undefined): SocksProxy | null {
   const text = (raw ?? '').trim()
@@ -115,6 +121,10 @@ export function proxyAgent(): Agent | false {
     done: (error: Error | null, socket?: Socket) => void,
   ): undefined => {
     const host = (options.host ?? 'localhost').replace(/^\[|\]$/g, '')
+    if (isLoopbackHost(host)) {
+      done(null, tlsConnect({ ...options, host }))
+      return undefined
+    }
     socksConnect(proxy, host, Number(options.port ?? 443)).then(
       (raw) => done(null, tlsConnect({ ...options, socket: raw })),
       (error: Error) => done(error),

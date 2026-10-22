@@ -32,6 +32,8 @@ export interface LeaseHook {
   /** A turn or job starts. Returns the lease id. `id` resumes a lease that already exists. */
   begin(info: { kind: 'turn' | 'job'; chatId: string; messageId: string; prompt: string; id?: string }): string
   end(id: string, status: 'done' | 'failed'): void
+  /** Resolves once the lease writes queued so far are stored (so other brains can see a turn the moment it starts). */
+  settled?(): Promise<void>
 }
 
 export interface TurnLeasesDeps {

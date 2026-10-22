@@ -8,7 +8,7 @@ import { request } from 'node:http'
 import { connect, type TLSSocket } from 'node:tls'
 
 import { fingerprintOf } from '../main/devices/cert'
-import { devicesProxy, setDevicesProxy, socksConnect, type SocksProxy } from '../main/devices/socks'
+import { devicesProxy, isLoopbackHost, setDevicesProxy, socksConnect, type SocksProxy } from '../main/devices/socks'
 
 /** Node-to-node connections go through this SOCKS5 proxy when set (agent-node config --proxy, or AGENT_NODE_PROXY). */
 export function setNodeProxy(next: SocksProxy | null): void {
@@ -39,7 +39,8 @@ export async function pinnedSocket(target: URL, fp: string, timeoutMs = 15_000):
   if (target.protocol !== 'https:') throw new Error('Nodes only talk over https.')
   const port = target.port === '' ? 443 : Number(target.port)
   const host = target.hostname.replace(/^\[|\]$/g, '')
-  const proxy = devicesProxy()
+  // Never through the proxy to this machine itself (the CLI's own health check).
+  const proxy = isLoopbackHost(host) ? null : devicesProxy()
   const tunnel = proxy === null ? null : await socksConnect(proxy, host, port, timeoutMs)
   const socket = await new Promise<TLSSocket>((resolve, reject) => {
     const isName = !/^[\d.]+$/.test(host) && !host.includes(':')
