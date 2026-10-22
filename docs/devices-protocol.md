@@ -99,7 +99,7 @@ Entity `device` rows (they sync like every other row, HLC last-writer-wins):
 | GET | `/v1/file?path=<abs>` | pass | a local file named in a chat (images in cards, attachments). Only paths that appear in a chat row, the user's attachments folder, or project folders. `Content-Type` by extension. Range requests for big files. |
 | GET | `/v1/bundle` | pass | section 6 |
 | POST | `/v1/sync/push` | pass (node) | same body/answer as `packages/core/src/sync/client.ts` |
-| GET | `/v1/sync/pull?cursor=&wait=` | pass (node) | same as above (long-poll up to 55 s) |
+| GET | `/v1/sync/pull?since=&wait=` | pass (node) | same as above (long-poll up to 55 s); `cursor=` is accepted for `since=`; the answer also carries `bundle` (the node's bundle version, section 6) |
 | GET | `/v1/devices` | pass | the device rows plus which brain is answering |
 | POST | `/v1/devices/:id/revoke` | pass (node) | revoke |
 
@@ -126,6 +126,12 @@ If the target is not connected, the command waits in a `device_command` row (syn
 connects, or expires after 10 minutes with a note back to the agent.
 `send_file` gives `url: /v1/file?path=...` for the client to download with its pass.
 
+The row (entity `device_command`, synced): `{ id, target, kind, url?, path?, name?, title?, body?, status, note, chat,
+brainId, expiresAt, updatedAt }`, `status` = `queued` (target offline) | `sent` (delivered, no ack yet) | `done` |
+`failed` (the ack said so) | `expired`. Any brain the target is connected to delivers a `queued` row (checked every
+3 s); only the brain that made it (`brainId`) writes the expiry note into `chat`. Only the target device may ack.
+`/v1/file` must also serve a path named in a `device_command` row whose `target` is the caller.
+
 ## 6. State bundle
 
 `GET /v1/bundle` returns what a new device needs that is not in synced rows:
@@ -142,6 +148,17 @@ connects, or expires after 10 minutes with a note back to the agent.
 its own secrets store (Electron safeStorage, or a 0600 key file on the headless node). Bundle changes are pushed to
 connected brains as event `devices.bundle` so a key added on one brain reaches the others.
 
+As built (apps/desktop/src/main/devices/bundle.ts):
+- The bundle also has `version` and `changedAt`. `secrets` = `{ keys: { "apiKey-<account>": key }, composioKey?,
+  composioUserId?, geminiKey?, passes }`. `settings` is only the person's settings (names, theme, AI picks...), never
+  per-machine ones (hotkeys, folders, start-up, sync account). `projects` are the project rows (they also replicate).
+- The `devices.bundle` event payload is `{ version }` only, never the bundle: the brain reads `GET /v1/bundle` again.
+  Brains that are not on RPC to each other see the version on every replication pull answer (`bundle` field) and
+  read the bundle when it changes, and on the first pull after connecting.
+- The newest `changedAt` wins; the receiver keeps the sender's `changedAt`, so two brains never bounce a bundle. A
+  fresh install starts at `changedAt` 0. Right after pairing a node takes the brain's bundle regardless (join).
+- An account missing from a newer bundle takes its key with it on the receiver.
+
 ## 7. Replication between brains
 
 All brains hold the full row set. Each node keeps a change log (every applied row change gets a local sequence
@@ -149,6 +166,13 @@ number, with the originating device). A node replicates with every other reachab
 push/pull protocol: it pushes changes the peer has not seen (per-peer cursor) and pulls the peer's log from its
 cursor. Applying a change is idempotent (HLC). Changes are relayed, so A <-> B <-> C converges even if A cannot
 reach C. Replication is initiated by whichever side can reach the other, so a node behind a firewall still syncs.
+
+As built (db.ts `change_log`, devices/replicate.ts): the log holds one entry per row (its newest change) with a local
+`seq` and `via` (the node that handed it over, '' for local writes and the sync service). A pull or push never hands
+a change back to the node it came from (`via`). Per-peer cursors (`peer_push:<id>`, `peer_pull:<id>`) live in the
+local kv. A peer whose cursor is ahead of our log (our database was reset) is started again from 0. A link pushes
+first, then long-polls; a local write cuts the long poll short so it goes out within about 200 ms. The existing
+single sync service (`syncUrl`) is unchanged and runs beside it; what it brings in is relayed to peers too.
 
 ## 8. Turns, origin, failover, crash resume
 
@@ -160,14 +184,19 @@ reach C. Replication is initiated by whichever side can reach the other, so a no
   revoked, by `priority`). It probes `/v1/health` (3 s timeout) in order and connects to the first `ready` one;
   re-probes every 15 s and on any failure, and moves back up when a higher brain returns, between turns only. The UI
   always shows "Answered by <name>". Only when every brain fails: "No agents available" with Retry.
-- **Turn lease**: when a brain starts a turn it writes a `turn` row
-  `{ id, chatId, messageId, brainId, status: "running|done|failed|interrupted", attempt, heartbeatAt, startedAt }`
-  and updates `heartbeatAt` every 10 s. Helper jobs do the same with `kind: "job"`.
+- **Turn lease**: when a brain starts a turn it writes a `turn_lease` row (entity `turn` is already the model
+  transcript) `{ id, kind: "turn|job", chatId, messageId, brainId, status: "running|done|failed|interrupted",
+  attempt, heartbeatAt, startedAt, prompt }` and updates `heartbeatAt` every 10 s. Helper jobs do the same with
+  `kind: "job"` and id `job-<helper id>`. A quit mid-turn leaves the lease `running` (resumed on the next start), like
+  a crash. Before resuming its own leases a node with Devices on waits for one replication pass (up to 10 s), so a
+  turn a peer took over while it was down is seen as the peer's.
 - **Crash resume**: on start, a brain marks its own `running` turns `interrupted` and resumes them (re-runs the turn
   from the persisted chat history, telling the model it was interrupted and to continue without repeating finished
   side effects). A different brain claims a `running` turn whose `heartbeatAt` is older than 45 s and whose brain
   fails `/v1/health`, but only if it is the highest-ranked healthy brain it knows of; it bumps `attempt` and sets
-  `brainId` to itself. Max 3 attempts, then `failed` with a visible note in the chat.
+  `brainId` to itself. Max 3 attempts, then `failed` with a visible note in the chat. "Fails" = no answer from any
+  of its addresses within 3 s (pinned); "healthy" when ranking = answers with `ready: true`. A brain whose lease was
+  taken (it was cut off, not dead) stops beating it, stops its own run of it, and does not end it.
 
 ## 9. Phone (screen) app
 

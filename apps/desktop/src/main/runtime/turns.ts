@@ -44,6 +44,8 @@ export interface TurnLeasesDeps {
   resumeTurn: (chat: string, leaseId: string, note: string) => Promise<void> | void
   /** Send a helper back to work with a note. */
   resumeJob: (helperId: string, note: string) => Promise<void> | void
+  /** Another brain took this lease over (we were thought dead, e.g. cut off from the others): stop our run of it. */
+  lost?: (lease: TurnLeaseRow) => void
   /** A visible note in a chat. Default: a notice row in that chat. */
   notice?: (chat: string, text: string) => Promise<void> | void
   /** Is that brain up? Injectable for tests; the node passes a pinned /v1/health probe. */
@@ -120,9 +122,10 @@ export class TurnLeases implements LeaseHook {
     const beat = setInterval(() => {
       this.write(async () => {
         const row = await this.deps.store.get('turn_lease', id)
-        // Taken over by another brain (we were thought dead): stop claiming it.
+        // Taken over by another brain (we were thought dead): stop claiming it, and stop our run of it.
         if (row === null || row.status !== 'running' || !this.isOwn(row.brainId)) {
           this.stopBeat(id)
+          if (row !== null && row.status === 'running') this.deps.lost?.(row)
           return
         }
         await this.deps.store.upsert('turn_lease', { id, heartbeatAt: this.now() })

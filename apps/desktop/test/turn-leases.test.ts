@@ -5,8 +5,9 @@ import { DEFAULT_SETTINGS, providerFor, schema, type DeviceRow, type JsonObject,
 import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { waitFor } from '../../../packages/core/test/helpers'
 import { Store } from '../src/main/db'
+import { HelperManager } from '../src/main/runtime/helpers'
 import { Runner } from '../src/main/runtime/runner'
-import { buildToolset } from '../src/main/runtime/toolset'
+import { buildToolset, buildWorkerToolset } from '../src/main/runtime/toolset'
 import { GAVE_UP_NOTE, RESUME_NOTE, TurnLeases, rankedBrains, type LeaseHook } from '../src/main/runtime/turns'
 import { secretsView, settingsView } from './support'
 
@@ -152,6 +153,60 @@ describe('crash resume', () => {
     expect((await store.list('turn_lease'))[0]?.status).toBe('running')
   })
 
+  it('a real helper cut off mid-run is sent back to work on the next start and reports its result', async () => {
+    const store = new Store(':memory:')
+    cleanups.push(() => store.close())
+    const fake = await startFakeAi((body, index) => {
+      if (index === 0) return { toolCalls: [{ name: 'slow_step', input: {} }] }
+      return { text: messagesText(body).includes('was interrupted') ? 'Prices found after the restart.' : 'Fresh.' }
+    })
+    cleanups.push(() => fake.close())
+    const managerFor = (leases: LeaseHook, delivered: string[], extra: Tool[] = []): HelperManager =>
+      new HelperManager({
+        store,
+        settings: settingsView({ ...DEFAULT_SETTINGS, ...READY }),
+        secrets: secretsView('test-key'),
+        providerFactory: (_s, key) => providerFor({ provider: 'openai', key, baseUrl: fake.url, allowHttp: true }),
+        workerTools: [...buildWorkerToolset({ store }), ...extra],
+        deliver: (note) => {
+          delivered.push(note)
+        },
+        platform: 'linux',
+        timeZone: 'UTC',
+        leases,
+      })
+
+    const started = { count: 0 }
+    const first = new TurnLeases({ store, selfId: () => 'brain-1', resumeTurn: () => undefined, resumeJob: () => undefined })
+    const life1 = crashable(first)
+    const manager1 = managerFor(life1.hook, [], [slowTool(started)])
+    await manager1.delegate([{ label: 'Prices', brief: 'Find three prices.' }])
+    await waitFor(() => started.count === 1, 5000)
+    await first.settled()
+    const [lease] = await store.list('turn_lease')
+    expect(lease).toMatchObject({ kind: 'job', status: 'running', attempt: 1 })
+    life1.crash()
+
+    const delivered: string[] = []
+    let manager2: HelperManager | null = null
+    const second = new TurnLeases({
+      store,
+      selfId: () => 'brain-1',
+      resumeTurn: () => undefined,
+      resumeJob: async (id, note) => {
+        await manager2?.push(id, note)
+      },
+    })
+    cleanups.push(() => second.stop())
+    manager2 = managerFor(second, delivered)
+    await manager2.restore()
+    expect(await second.recover()).toBe(1)
+    await waitFor(() => delivered.some((note) => note.includes('Prices found after the restart.')), 5000)
+    await waitFor(async () => (await store.get('turn_lease', lease?.id ?? ''))?.status === 'done', 5000)
+    expect(await store.get('turn_lease', lease?.id ?? '')).toMatchObject({ status: 'done', attempt: 2 })
+    expect(await second.recover()).toBe(0)
+  })
+
   it('a helper job cut off is sent back to work; after 3 attempts it gives up with a note', async () => {
     const store = new Store(':memory:')
     cleanups.push(() => store.close())
@@ -248,6 +303,33 @@ describe('failover', () => {
     expect(await store.get('turn_lease', id)).toMatchObject({ brainId: 'dev_b', status: 'running', attempt: 2, prompt: 'Plan the trip' })
     b.stop()
     c.stop()
+  })
+
+  it('a brain that was only cut off stops its own run once another brain has taken the lease', async () => {
+    const now = { t: 3_000_000 }
+    const store = new Store(':memory:')
+    cleanups.push(() => store.close())
+    const lost: string[] = []
+    const a = new TurnLeases({
+      store,
+      selfId: () => 'dev_a',
+      now: () => now.t,
+      heartbeatMs: 20,
+      resumeTurn: () => undefined,
+      resumeJob: () => undefined,
+      lost: (lease) => lost.push(lease.id),
+    })
+    cleanups.push(() => a.stop())
+    const id = a.begin({ kind: 'turn', chatId: 'main', messageId: 'm1', prompt: 'x' })
+    await a.settled()
+    // B took it over while A was unreachable.
+    await store.upsert('turn_lease', { id, brainId: 'dev_b', attempt: 2 })
+    await waitFor(() => lost.length === 1, 2000)
+    expect(lost).toEqual([id])
+    // A's end does not overwrite B's lease.
+    a.end(id, 'done')
+    await a.settled()
+    expect(await store.get('turn_lease', id)).toMatchObject({ brainId: 'dev_b', status: 'running' })
   })
 
   it('leaves it alone while its brain still answers health (only slow to sync)', async () => {
