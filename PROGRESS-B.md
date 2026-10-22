@@ -25,9 +25,16 @@ s4-s8 (updated in this branch where the build had to decide something; see the "
 - runtime/turns.ts: `TurnLeases` (begin/end + 10 s heartbeat, recover on start, failover claim with injectable health
   and ranking, max 3 attempts then a visible note, a lost lease stops our run). Hooks: runner.begin/resumeTurn,
   helpers pump/finish (jobs resume through helpers.push). Wired in index.ts, so it works with Devices off.
+- s11 shared device tools, brain side (devices/device-tools.ts): `DeviceToolHub` (tools on device rows from hello,
+  `call` with forgiving match or "best", router origin > preferred > priority with phones last for heavy work,
+  `device.result` RPC, offline queue, late result to chat, images to files), `DeviceToolRunner` (a node runs tools
+  other brains ask of it via synced rows, refuses groups it does not share), agent tools `devices_list` and
+  `device_tool`, `withDeviceArg` (optional `device` on browser tools, notify_user, ask_user, request_approval,
+  send_file, open_url; notify defaults to the origin; a blocked local browser call names the linked browsers).
+  Settings `devicesPreferred`, `devicesShareGroups`. Tests: apps/desktop/test/devices-tools.test.ts (11).
 - devices/sync.ts: `registerDevicesSync(host, deps)` and `devicesState` (the one place the app asks "is Devices on").
 
-## Proof (last full run: 1141 passed, 9 skipped, exit 0)
+## Proof (last full run: 1152 passed, 9 skipped, exit 0)
 - `npx vitest run apps/desktop/test/devices-replicate.test.ts apps/desktop/test/devices-bundle.test.ts
   apps/desktop/test/devices-commands.test.ts apps/desktop/test/turn-leases.test.ts apps/desktop/test/devices-tls.test.ts
   apps/desktop/test/devices-sync.test.ts`
@@ -40,6 +47,9 @@ s4-s8 (updated in this branch where the build had to decide something; see the "
   store.list('project') }, leases: <index.ts leases>, noteBack: (chat, text) => runner.deliver(text, chat) })`;
   on switch-off `devicesState.sync?.stop(); devicesState.sync = null`. After pairing as a node:
   `devicesState.sync.joinFrom(brainUrl, brainFp)`.
+- registerDevicesSync deps for s11: `localTools: () => <the helpers' worker toolset>`, `shareGroups: () =>
+  settings.get().devicesShareGroups`, `preferred: () => settings.get().devicesPreferred`, optional `context` for
+  ask_user on this node. A's hello cleaner must keep `device.tools`.
 - RPC chat.send: call `runner.send(text, attachments, chat, origin)` with the caller's MessageOrigin.
 - /v1/file must also allow paths named in `device_command` rows whose target is the caller.
 - The first node of a mesh needs a pass of its own (to call peers); without one its replicator idles, and peers that

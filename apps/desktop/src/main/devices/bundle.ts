@@ -47,6 +47,7 @@ export const SHARED_SETTINGS = [
   'baseUrl',
   'allowHttp',
   'ai',
+  'devicesPreferred',
 ] as const satisfies ReadonlyArray<keyof Settings>
 
 export type SharedSettings = Partial<Pick<Settings, (typeof SHARED_SETTINGS)[number]>>

@@ -664,6 +664,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     secrets,
     providerFactory: factory,
     workerTools: buildWorkerToolset({
+      deviceHub: () => devicesState.sync?.tools ?? null,
       store,
       settings,
       browser: agentBrowser,
@@ -698,6 +699,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     learned,
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
+    deviceHub: () => devicesState.sync?.tools ?? null,
     devices: {
       selfId: () => devicesState.sync?.selfId() ?? '',
       commands: () => devicesState.sync?.commands ?? null,

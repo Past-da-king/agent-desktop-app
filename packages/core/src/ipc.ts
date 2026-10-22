@@ -124,6 +124,10 @@ export interface Settings {
   accounts: AiAccount[]
   /** What the main thread thinks with: its agent, and its helpers. Routines and the memory pass use `main`. */
   ai: AiPicks
+  /** Devices (s11): the device to use first for a group of shared tools ({ browser: deviceId }). Shared by brains. */
+  devicesPreferred: Record<string, string>
+  /** Devices (s11): which groups of this computer's tools other devices may use. Missing = the default. */
+  devicesShareGroups: Record<string, boolean>
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -159,6 +163,8 @@ export const DEFAULT_SETTINGS: Settings = {
   dailyMemoryAt: '23:30',
   accounts: [],
   ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
+  devicesPreferred: {},
+  devicesShareGroups: {},
 }
 
 export interface ModelOption {
@@ -421,12 +427,19 @@ export interface DeviceRow extends RowBase {
   pairedAt: number
   lastSeen: number
   revoked: boolean
+  /** The tools it lets other devices use (s11), from its hello; a node lists its own. */
+  tools?: Array<{ name: string; description: string; params: Record<string, unknown>; group: string; readOnly: boolean }>
 }
 
 /** A command for one device (open a link, take a file) waiting to be delivered or acknowledged (s5.2). */
 export interface DeviceCommandRow extends RowBase {
   target: string
-  kind: 'open_url' | 'send_file' | 'notify' | 'show_image'
+  kind: 'open_url' | 'send_file' | 'notify' | 'show_image' | 'tool'
+  /** kind 'tool' (s11): the device's tool name, its arguments (JSON), the result (JSON), how long it may take. */
+  tool?: string
+  args?: string
+  result?: string
+  deadlineMs?: number
   url?: string
   path?: string
   name?: string
