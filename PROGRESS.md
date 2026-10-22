@@ -76,6 +76,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 05:10 B devices-sync f97101c: ask_user on another node; live harness scripts/devices-e2e.mjs (+ fake AI, devices-e2e-local.sh). Self-test vs old headless build: a, d PASS; b, e, f, g fail only because B is not merged yet; c needs the project helper row (B building it now).
 
+- 05:25 B FINAL devices-sync 3158f1f (+66c2d1d): main-chat project agent row (pa-<chat>, kind helper, project icon, live status, closes done/failed); harness check c PASS on a scratch merge. Full suite 1155. Waiting on C wiring B into headless.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
