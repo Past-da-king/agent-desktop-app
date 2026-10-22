@@ -56,7 +56,7 @@ export function JoinRow(): JSX.Element {
           spellCheck={false}
           value={link}
           onChange={(event) => setLink(event.target.value)}
-          placeholder="agent://pair?... from another computer or a server"
+          placeholder="agent://pair?..."
           aria-label="Pairing link"
           maxLength={4000}
         />
