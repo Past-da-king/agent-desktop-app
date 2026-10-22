@@ -6,6 +6,7 @@ import { MAIN_CHAT, type ChatItem, type ProjectRow } from '@agent/core'
 
 import type { IconName } from '../ui/Icon'
 import { parseMeta } from './meta'
+import { senderLine, viaFromMeta, type SenderKind } from '../../shared/sender'
 
 /** The project a chat belongs to; null for the main thread or a chat no project holds. */
 export function projectOfChat(projects: ProjectRow[], chat: string): ProjectRow | null {
@@ -58,18 +59,29 @@ export function singleEmoji(text: string): string {
   return chars.length <= 4 && /\p{Extended_Pictographic}/u.test(trimmed) ? trimmed : ''
 }
 
-/** Rows a message from another chat carries (tools/projects.ts): who sent it. */
+/** Who sent a message row that is not the person's (shared/sender.ts): a project, the main agent, a call, a helper. */
 export interface Via {
-  from: 'main' | 'project'
+  from: SenderKind
   name: string
   chat: string
   title: string
+  /** The line drawn above it: "From your call", "From Hina, the main agent". */
+  line: string
 }
 
+/** The sender of a row, or null when the person wrote it himself. */
 export function viaOf(item: ChatItem): Via | null {
-  const value = parseMeta(item.meta)['via']
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  const v = value as Record<string, unknown>
-  if ((v['from'] !== 'main' && v['from'] !== 'project') || typeof v['name'] !== 'string') return null
-  return { from: v['from'], name: v['name'], chat: typeof v['chat'] === 'string' ? v['chat'] : '', title: typeof v['title'] === 'string' ? v['title'] : '' }
+  const via = viaFromMeta(parseMeta(item.meta))
+  if (via === null) return null
+  return { from: via.from, name: via.name, chat: via.chat, title: via.title ?? '', line: senderLine(via) }
+}
+
+/** The icon beside who sent it. */
+export function viaIcon(via: Via): IconName {
+  if (via.from === 'call') return 'phone'
+  if (via.from === 'main') return 'person'
+  if (via.from === 'routine') return 'clock'
+  if (via.from === 'worker' || via.from === 'system') return 'bolt'
+  if (via.from === 'helper') return 'tasks'
+  return 'folder'
 }

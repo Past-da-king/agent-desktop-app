@@ -69,7 +69,7 @@ export function mockVoice(deps: MockVoiceDeps): VoiceApi {
     {
       after: 4900,
       run: () => {
-        const line: CallLine = { id: 'mock-note', who: 'note', text: 'Handed to your agent: Draft the Thursday update', at: Date.now() }
+        const line: CallLine = { id: 'mock-note', who: 'note', text: 'Started: Draft the Thursday update', at: Date.now() }
         lines.push(line)
         emit({ type: 'caption', line, final: true })
         void deps.send('From our voice call: Draft the Thursday update from this week\'s notes and tasks.')

@@ -345,14 +345,20 @@ export class Runner {
    * routed: about the same task, it joins the running work; different work, it runs alongside as its own run
    * and leaves a summary block. Either way the person's row says which.
    */
-  async send(text: string, attachments: Attachment[] = [], chat: string = MAIN_CHAT, origin?: MessageOrigin | JsonObject): Promise<void> {
+  async send(text: string, attachments: Attachment[] = [], chat: string = MAIN_CHAT, origin?: MessageOrigin | JsonObject, via?: ChatVia): Promise<void> {
     const clean = text.trim()
     if (clean === '' && attachments.length === 0) return
     // The person handed these files over: the agent may open them without asking again.
     if (attachments.length > 0) this.allowFiles(attachments.map((attachment) => attachment.path))
     const prepared = await prepareMessage(clean, attachments)
     // Which device it was sent from (docs/devices-protocol.md s8): the wire caller's, else this node's own.
-    const meta: JsonObject = { attachments: attachments as unknown as JsonObject[], ...chatTag(chat), ...this.originMeta(origin as JsonObject | undefined) }
+    // Not the person's own words (a call handing over its work): the row says who, so no window draws it as his.
+    const meta: JsonObject = {
+      attachments: attachments as unknown as JsonObject[],
+      ...chatTag(chat),
+      ...this.originMeta(origin as JsonObject | undefined),
+      ...(via === undefined ? {} : { via: via as unknown as JsonObject }),
+    }
     const line = this.line(chat)
 
     if (!line.running) {

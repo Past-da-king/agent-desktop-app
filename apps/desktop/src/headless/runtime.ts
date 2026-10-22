@@ -516,7 +516,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const callFeed = new HelperFeed({ store: callStore, emit: () => undefined })
   registerVoiceIpc(voice, ipcMain, {
     store: callStore,
-    send: (text, chat, origin) => callRunner.send(text, [], chat, origin as never),
+    send: (text, chat, origin, via) => callRunner.send(text, [], chat, origin as never, via),
     steer: (id, message) => callHelpers.steer(id, message),
     cards: () => callFeed.snapshot(),
     state: (chat) => callRunner.state(chat),

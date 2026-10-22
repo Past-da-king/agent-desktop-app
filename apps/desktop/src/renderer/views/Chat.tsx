@@ -8,7 +8,7 @@ import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
 import { branchFrom, startProjectChat } from '../lib/chat-actions'
-import { projectOfChat, viaOf } from '../lib/projects'
+import { projectOfChat, viaIcon, viaOf } from '../lib/projects'
 import { ProjectTile } from '../ui/ProjectTile'
 import { chatTitleOf, isSideRun, itemsOfChat, routeLine } from '../lib/chats'
 import { MAIN_CHAT } from '@agent/core'
@@ -520,8 +520,8 @@ function UserRow({ item }: { item: ChatItem }): JSX.Element {
     <div className={`u-row${via === null ? '' : ' via'}`}>
       {via === null ? null : (
         <div className="u-via">
-          <Icon name={via.from === 'main' ? 'person' : 'folder'} size={14} />
-          {via.from === 'main' ? `From ${via.name}, the main agent` : `From ${via.name}${via.title === '' ? '' : ` · ${via.title}`}`}
+          <Icon name={viaIcon(via)} size={14} />
+          {via.line}
         </div>
       )}
       {item.text !== '' ? <div className="u-msg">{item.text}</div> : null}
