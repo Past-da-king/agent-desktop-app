@@ -108,7 +108,7 @@ export function NetworkRow({ status, onStatus }: { status: DevicesStatus; onStat
               spellCheck={false}
               value={key}
               onChange={(event) => setKey(event.target.value)}
-              placeholder={net.hasKey ? 'Auth key saved. Paste a new one to replace it' : 'Auth key'}
+              placeholder={net.hasKey ? 'Auth key saved (paste to replace)' : 'Auth key'}
               aria-label="Auth key"
               maxLength={500}
             />

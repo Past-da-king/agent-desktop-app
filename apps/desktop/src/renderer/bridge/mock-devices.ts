@@ -59,7 +59,9 @@ function changed(): void {
 }
 
 function status(): DevicesStatus {
-  const urls = enabled ? ['https://192.0.2.10:7787', ...extraUrls] : extraUrls
+  const net = networkNow()
+  const overlay = net.state === 'running' ? [`https://${net.addresses[0] ?? ''}:7787`, `https://${net.dnsName}:7787`] : []
+  const urls = enabled ? ['https://192.0.2.10:7787', ...extraUrls, ...overlay] : extraUrls
   return {
     enabled,
     running: enabled,
@@ -73,7 +75,7 @@ function status(): DevicesStatus {
     fpWords: 'Prev iewF inge rpri',
     connected: enabled ? ['dev_preview_phone'] : [],
     error: '',
-    network: networkNow(),
+    network: net,
   }
 }
 

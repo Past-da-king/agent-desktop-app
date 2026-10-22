@@ -241,3 +241,40 @@ approvals). General for any devices; nothing assumes a phone or a particular mac
 A sidecar (`agent-net`, Go, tsnet) can join a Tailscale-compatible control server (Tailscale or the user's own
 Headscale) with an auth key the user pastes, and expose the node port on the overlay. Settings > Devices >
 Network: None (LAN or direct address), Tailscale, Headscale (URL). The feature never depends on it.
+
+As built (workstream E, branch `devices-net`):
+- **Sidecar** `tools/agent-net` (Go module, `tailscale.com/tsnet`, CGO off; about 21 MB per platform, built for
+  linux-amd64/arm64, windows-amd64, darwin-arm64/amd64 by `tools/agent-net/build.sh`). Flags: `--control-url`
+  (empty = Tailscale), `--authkey-stdin` (or env `AGENT_NET_AUTHKEY`; never argv in the app), `--hostname`,
+  `--state-dir`, `--forward <localPort>` + `--listen-port <port>` (overlay TCP on that port is piped to
+  `127.0.0.1:<localPort>`), `--socks 127.0.0.1:0` (local SOCKS5 and HTTP CONNECT proxy that dials through the
+  overlay; MagicDNS names resolve there), `--status <addr>` (GET /status), `--stdin-control` (after the key line:
+  `quit`, `logout`; stdin closing also quits, so it dies with its parent and works on Windows without signals),
+  `--ephemeral`, `--logout-on-exit`. Stdout: one JSON line per change,
+  `{type:"status", state, authURL?, tailnetIPs[], dnsName, socks, forward, peers[{name, dnsName, ips, online}]}`,
+  `{type:"error", error}`, `{type:"exit"}`.
+- **Node** `main/devices/net.ts` (`OverlayNet`, owned by DevicesService): settings in `<userData>/devices/net.json`
+  (`network: none|tailscale|headscale`, `controlUrl`), the key only in the secrets module (`devicesNetAuthKey`).
+  The sidecar runs while Devices listens and a network is picked; it forwards the overlay node port (same number as
+  `devices.port`) to the local server. Its addresses are appended to the advertised urls (`https://<100.x>:port`,
+  `https://<magicdns>:port`, `https://[fd7a:...]:port`), so they reach the device row and pairing links. It restarts
+  with backoff (1 s to 60 s) if it dies. Picking None sends `logout`, so the node leaves the tailnet.
+- **Dialling peers**: `peerRequestOptions(host)` gives `{ agent: false }` normally and `{ createConnection }` (TLS over
+  the sidecar's SOCKS port) for overlay hosts (100.64.0.0/10, fd7a:115c:a1e0::/48, *.ts.net or the overlay's own DNS
+  suffix) when the OS has no overlay route of its own (no Tailscale app). The caller's TLS options and fingerprint
+  pin apply unchanged. Spread it into `https.request` options (Node ignores `createConnection` when `agent` is set).
+- **Packaging**: electron-builder `extraResources` takes `tools/agent-net/dist/electron/${os}-${arch}` to
+  `<resources>/agent-net/`; missing binaries only warn. The headless tarball packs `agent-net` beside
+  `agent-node.mjs`; `agent-node net none|tailscale|headscale URL < keyfile` sets it.
+- **Settings > Devices > Network**: one row: None / Tailscale / Headscale, the Headscale address, an auth key field
+  (password, never read back; the window only learns `hasKey`), and one status line (joined as, sign in link,
+  error). Not offered over the wire (`devices.setNetwork` is not in RPC_ALLOWED).
+
+Phone, later (not built): the Android app would embed Tailscale's `libtailscale` (the Go code behind the Tailscale
+Android app, built with gomobile into an `.aar`), in userspace-networking mode so it needs no VpnService: start it
+with the same control URL and auth key (kept in Android Keystore-encrypted prefs, pasted or carried in the pairing
+QR as an optional, short-lived pre-auth key from the brain), and give OkHttp a SOCKS5 proxy or a custom
+`SocketFactory` that dials through it for overlay urls only. Same rule as the desktop: LAN and direct urls are tried
+without it, and a phone without it keeps working on any url it can reach. About 15 to 25 MB per ABI, so it would be a
+download-on-first-use runtime in the thin app, like the other runtimes.
+
