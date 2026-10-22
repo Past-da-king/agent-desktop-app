@@ -14,9 +14,11 @@ export interface DevicesConfig {
   listen: string
   /** Addresses the person typed that reach this node (a public name, a VPN address), as host or https URL. */
   extraUrls: string[]
+  /** Protocol s11: which groups of this node's tools other devices may use. Missing groups take their default. */
+  shareGroups: Partial<Record<'browser' | 'files' | 'notifications' | 'approval' | 'shell', boolean>>
 }
 
-export const DEFAULT_DEVICES_CONFIG: DevicesConfig = { enabled: false, port: 7787, listen: '0.0.0.0', extraUrls: [] }
+export const DEFAULT_DEVICES_CONFIG: DevicesConfig = { enabled: false, port: 7787, listen: '0.0.0.0', extraUrls: [], shareGroups: {} }
 
 const MAX_EXTRA = 12
 
@@ -49,7 +51,12 @@ export function cleanConfig(raw: unknown): DevicesConfig {
     if (url !== null && !extraUrls.includes(url)) extraUrls.push(url)
     if (extraUrls.length >= MAX_EXTRA) break
   }
-  return { enabled: value['enabled'] === true, port, listen, extraUrls }
+  const groups = typeof value['shareGroups'] === 'object' && value['shareGroups'] !== null ? (value['shareGroups'] as Record<string, unknown>) : {}
+  const shareGroups: DevicesConfig['shareGroups'] = {}
+  for (const key of ['browser', 'files', 'notifications', 'approval', 'shell'] as const) {
+    if (typeof groups[key] === 'boolean') shareGroups[key] = groups[key]
+  }
+  return { enabled: value['enabled'] === true, port, listen, extraUrls, shareGroups }
 }
 
 export class DevicesConfigFile {
@@ -66,7 +73,7 @@ export class DevicesConfigFile {
   }
 
   get(): DevicesConfig {
-    return { ...this.state, extraUrls: [...this.state.extraUrls] }
+    return { ...this.state, extraUrls: [...this.state.extraUrls], shareGroups: { ...this.state.shareGroups } }
   }
 
   save(patch: Partial<DevicesConfig>): DevicesConfig {

@@ -9,6 +9,8 @@ export const DEVICES_CHANNELS = {
   setRoles: 'agent:devices.setRoles',
   move: 'agent:devices.move',
   revoke: 'agent:devices.revoke',
+  setShareGroup: 'agent:devices.setShareGroup',
+  allowFirewall: 'agent:devices.allowFirewall',
 } as const
 
 export const DEVICES_EVENTS = {

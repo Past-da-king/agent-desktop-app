@@ -3,7 +3,7 @@
  * Add a device dialog (QR code, short code, 10-minute countdown), the paired devices with their roles and brain
  * order, and the addresses this computer gives out. In the remote window (a phone) it is read-only.
  */
-import type { DeviceRole, DeviceRow, DevicesStatus, PairingOfferInfo } from '@agent/core'
+import type { DeviceRole, DeviceRow, DeviceShareGroup, DevicesStatus, PairingOfferInfo } from '@agent/core'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
@@ -22,6 +22,14 @@ const ROLE_HINT: Record<DeviceRole, string> = {
   brain: 'Runs the agent with its own plan or key',
   hands: 'Opens links, takes files and runs tools on itself',
 }
+/** The groups of this computer's tools other devices may use (protocol s11); shell starts off. */
+const SHARE_ROWS: ReadonlyArray<readonly [DeviceShareGroup, string]> = [
+  ['browser', 'The browser'],
+  ['files', 'Files'],
+  ['notifications', 'Notifications'],
+  ['approval', 'Questions and approvals'],
+  ['shell', 'Commands'],
+]
 const KIND_LABEL: Record<DeviceRow['kind'], string> = { phone: 'Phone', tablet: 'Tablet', desktop: 'Computer', server: 'Server' }
 const KIND_ICON: Record<DeviceRow['kind'], IconName> = { phone: 'phone', tablet: 'phone', desktop: 'monitor', server: 'server' }
 
@@ -308,7 +316,7 @@ export function DevicesSettings(): JSX.Element {
   const [adding, setAdding] = useState(false)
   const [revoking, setRevoking] = useState<DeviceRow | null>(null)
   const [switching, setSwitching] = useState(false)
-  const [address, setAddress] = useState('')
+  const [allowing, setAllowing] = useState(false)
 
   const refresh = useCallback(() => {
     void agent.devices.status().then(setStatus).catch(() => undefined)
@@ -344,25 +352,23 @@ export function DevicesSettings(): JSX.Element {
       .finally(() => setSwitching(false))
   }
 
-  const addAddress = (): void => {
-    const value = address.trim()
-    if (value === '' || status === null) return
+  const allowFirewall = (): void => {
+    setAllowing(true)
     agent.devices
-      .setExtraUrls([...status.extraUrls, value])
+      .allowFirewall()
       .then((next) => {
-        if (next.extraUrls.length === status.extraUrls.length) toast('That does not look like an address. Try a name like my-computer.example.com.')
-        else setAddress('')
         setStatus(next)
+        if (next.firewall !== 'allowed') toast('Windows did not let it through. Try again and choose Yes when Windows asks.')
       })
-      .catch((cause: unknown) => toast(message(cause, 'Could not add that address.')))
+      .catch((cause: unknown) => toast(message(cause, 'Could not change that.')))
+      .finally(() => setAllowing(false))
   }
 
-  const removeAddress = (url: string): void => {
-    if (status === null) return
+  const share = (group: DeviceShareGroup, on: boolean): void => {
     void agent.devices
-      .setExtraUrls(status.extraUrls.filter((item) => item !== url))
+      .setShareGroup(group, on)
       .then(setStatus)
-      .catch(() => undefined)
+      .catch((cause: unknown) => toast(message(cause, 'Could not change that.')))
   }
 
   const line = status === null
@@ -406,16 +412,21 @@ export function DevicesSettings(): JSX.Element {
               <Icon name="plus" size={16} />
               Add a device
             </Button>
-            {status !== null ? (
-              <span className="small muted">
-                Security words for this computer: <b className="dv-fp">{status.fpWords}</b>
-              </span>
-            ) : null}
-            {agent.platform === 'win32' ? (
-              <span className="small muted dv-note">
-                If Windows asks whether Agent may use your network, choose Allow. Otherwise your other devices cannot reach it.
-              </span>
-            ) : null}
+          </div>
+        ) : null}
+
+        {enabled && !readOnly && (status?.firewall === 'blocked' || status?.firewall === 'missing') ? (
+          <div className="rowc dv-firewall">
+            <div className="ri warn">
+              <Icon name="shield" size={22} />
+            </div>
+            <div className="rt">
+              <b>Windows is keeping other devices out</b>
+              <span>Allow connections once and your phone on the same network can reach this computer. Windows asks you to confirm.</span>
+            </div>
+            <Button variant="fill" size="sm" disabled={allowing} onClick={allowFirewall}>
+              {allowing ? 'Waiting for Windows...' : 'Allow connections'}
+            </Button>
           </div>
         ) : null}
 
@@ -434,42 +445,15 @@ export function DevicesSettings(): JSX.Element {
           />
         ))}
 
-        {!readOnly && status !== null ? (
-          <div className="dv-addresses">
-            <span className="eyebrow mute">ADDRESSES THIS COMPUTER GIVES OUT</span>
-            {status.urls.length === 0 ? (
-              <p className="small muted">{enabled ? 'None found. Add the address your devices can reach.' : 'Shown when Devices is on.'}</p>
-            ) : (
-              <ul className="dv-urls">
-                {status.urls.map((url) => (
-                  <li key={url}>
-                    <span>{url}</span>
-                    {status.extraUrls.includes(url) ? (
-                      <IconButton icon="x" label={`Remove ${url}`} size={16} onClick={() => removeAddress(url)} />
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <form
-              className="dv-address-form"
-              onSubmit={(event) => {
-                event.preventDefault()
-                addAddress()
-              }}
-            >
-              <input
-                className="input dv-input"
-                value={address}
-                onChange={(event) => setAddress(event.target.value)}
-                placeholder="Another address, like my-computer.example.com"
-                aria-label="Another address for this computer"
-                maxLength={300}
-              />
-              <Button variant="tonal" size="sm" type="submit" disabled={address.trim() === ''}>
-                Add
-              </Button>
-            </form>
+        {enabled && !readOnly && status !== null ? (
+          <div className="dv-share">
+            <span className="eyebrow mute">WHAT YOUR OTHER DEVICES MAY USE HERE</span>
+            {SHARE_ROWS.map(([group, label]) => (
+              <div className="dv-share-row" key={group}>
+                <span>{label}</span>
+                <Switch on={status.shareGroups[group]} label={`Let other devices use ${label.toLowerCase()} on this computer`} onToggle={(on) => share(group, on)} />
+              </div>
+            ))}
           </div>
         ) : null}
       </div>

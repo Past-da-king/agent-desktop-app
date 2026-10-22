@@ -1280,6 +1280,14 @@ export class Runner {
 
   // ---- questions and approvals ------------------------------------------------------------
 
+  /**
+   * A tool run for an agent on another device (docs/devices-protocol.md s11): its questions and approvals show here
+   * in the main chat and the answer goes back; its browser work gets a tab of its own.
+   */
+  deviceToolContext(signal: AbortSignal): ToolContext {
+    return { ...this.toolContext(signal, 'main', MAIN_CHAT), agentLabel: 'another device', owner: 'device' }
+  }
+
   private toolContext(signal: AbortSignal, role: 'main' | 'routine' = 'main', chat: string = MAIN_CHAT): ToolContext {
     return {
       agentLabel: role === 'routine' ? 'routine' : 'main',
