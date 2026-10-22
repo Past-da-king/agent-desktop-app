@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:https'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -249,5 +249,37 @@ describe('headless bundle', () => {
     expect(ran.stdout).toContain('agent-node 0.')
     const bundle = readFileSync(join(root, 'dist-headless', 'agent-node.mjs'), 'utf8')
     expect(bundle).not.toMatch(/from ["']electron["']/)
+  }, 60_000)
+})
+
+function cli(args: string[], stdin = ''): Promise<{ code: number; out: string; err: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [join(root, 'dist-headless', 'agent-node.mjs'), ...args], { cwd: tmpdir() })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (d: Buffer) => (out += d.toString()))
+    child.stderr.on('data', (d: Buffer) => (err += d.toString()))
+    child.on('close', (code) => resolve({ code: code ?? -1, out, err }))
+    child.stdin.end(stdin)
+  })
+}
+
+describe('headless CLI, end to end', () => {
+  it('adds an API account from stdin and answers one turn through the built bundle', async () => {
+    const built = spawnSync(process.execPath, [join(root, 'scripts', 'build-headless.mjs'), '--bundle'], { cwd: root, encoding: 'utf8' })
+    expect(built.status, built.stderr).toBe(0)
+    fake = await startFakeAi(() => ({ text: 'Hello from the server.' }))
+    const dataDir = temp()
+    const added = await cli(['account', 'add', 'api', '--provider', 'openai', '--base-url', fake.url, '--allow-http', '--model', 'fake-model', '--data-dir', dataDir], 'sk-cli-test' + String.fromCharCode(10))
+    expect(added.code, added.err).toBe(0)
+    // The key is in the encrypted store, nowhere in plain text.
+    expect(readFileSync(join(dataDir, 'settings.json'), 'utf8')).not.toContain('sk-cli-test')
+    const listed = await cli(['account', 'list', '--data-dir', dataDir])
+    expect(listed.out).toMatch(/api\/openai {2}key saved {2}\(main\)/)
+
+    const asked = await cli(['ask', 'Say hello', '--data-dir', dataDir])
+    expect(asked.code, asked.err + asked.out).toBe(0)
+    expect(asked.out).toContain('Hello from the server.')
+    expect(fake.requests[0]?.headers['authorization']).toBe('Bearer sk-cli-test')
   }, 60_000)
 })
