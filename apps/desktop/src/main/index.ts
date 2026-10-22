@@ -1084,6 +1084,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     cards: () => callFeed.snapshot(),
     state: (chat) => callRunner.state(chat),
     agentName: () => settings.get().agentName,
+    delegated: (chat, project, brief) => projectAgents.delegated(chat, project, brief),
   })
 
   // Dictation anywhere: the pill window holds the microphone, the words are typed into the app in front.

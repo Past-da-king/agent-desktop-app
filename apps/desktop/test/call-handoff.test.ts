@@ -32,6 +32,7 @@ function setup() {
   ]
   const sent: Array<{ text: string; chat: string; origin: unknown }> = []
   const steered: Array<{ id: string; message: string }> = []
+  const shown: string[] = []
   const running = new Set(['pc222222'])
   const deps: CallHandoffDeps = {
     store: {
@@ -49,23 +50,35 @@ function setup() {
       steered.push({ id, message })
       return 'Sent to the helper.'
     },
-    cards: async () => ({ seq: 1, at: 1, cards: [card('h1', 'Desktop dictation fix', 'working', 'Building the installer'), card('pa-pc222222', 'Agent Desktop App', 'working', '')] }),
+    cards: async () => ({ seq: 1, at: 1, cards: [{ ...card('h0', 'Desktop dictation fix', 'failed', ''), endedAt: Date.now() - 1000 }, card('h1', 'Desktop dictation fix', 'working', 'Building the installer'), card('pa-pc222222', 'Agent Desktop App', 'working', '')] }),
     state: (chat) => ({ running: running.has(chat), waiting: [] }),
     agentName: () => 'Hina',
+    delegated: async (chat, project) => {
+      shown.push(`${project.name}:${chat}`)
+    },
   }
-  return { deps, sent, steered, projects }
+  return { deps, sent, steered, projects, shown }
 }
 
 describe('a call hands work to the agent it names', () => {
   it('lists the main agent, each project with its chats and what they do, and the helpers at work', async () => {
     const { deps } = setup()
     const targets = await callTargets(deps)
-    expect(targets.map((t) => `${t.kind}:${t.name}`)).toEqual(['main:Hina', 'project:Agent Desktop App', 'project:Strat Edge Website', 'project:Strat Edge Solutions', 'helper:Desktop dictation fix'])
+    expect(targets.map((t) => `${t.kind}:${t.name}`)).toEqual(['main:Hina', 'project:Agent Desktop App', 'project:Strat Edge Website', 'project:Strat Edge Solutions', 'helper:Desktop dictation fix', 'helper:Desktop dictation fix'])
     const ada = targets[1]!
     expect(ada.running).toBe(true)
     expect(ada.doing).toBe('Wiring the hand-off RPC')
     expect(ada.chats.map((c) => c.title)).toEqual(['Fix the dictation timeout', 'Phone call routing'])
-    expect(targets[4]!.doing).toBe('Building the installer')
+    expect(targets[4]!).toMatchObject({ id: 'h1', running: true, doing: 'Building the installer' })
+  })
+
+  it('answers at once, without waiting for the turn it started (it may wait minutes on an approval)', async () => {
+    const { deps } = setup()
+    const never = { ...deps, send: () => new Promise<void>(() => undefined) }
+    const result = await Promise.race([callHandoff(never, { target: 'main', message: 'Email Ben' }), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
+    expect(result).toMatchObject({ ok: true, kind: 'main' })
+    const project = await Promise.race([callHandoff(never, { target: 'Kitchen', message: 'x' }).catch(() => 'none'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
+    expect(project).not.toBe('blocked')
   })
 
   it('sends anything unnamed to the main agent', async () => {
@@ -77,8 +90,10 @@ describe('a call hands work to the agent it names', () => {
   })
 
   it('sends to a project by a forgiving name, into its working chat', async () => {
-    const { deps, sent } = setup()
+    const { deps, sent, shown } = setup()
     const result = await callHandoff(deps, { target: 'the agent desktop app project', message: 'Ship 0.2.51' })
+    // It shows in the main chat as that project's agent, like work the main agent hands over.
+    expect(shown).toEqual(['Agent Desktop App:pc222222'])
     expect(result).toMatchObject({ ok: true, kind: 'project', name: 'Agent Desktop App', chat: 'pc222222', said: 'Sent to the Agent Desktop App project.' })
     expect(sent.at(-1)).toMatchObject({ chat: 'pc222222', text: 'Ship 0.2.51' })
     expect(await callHandoff(deps, { target: 'strategic website', message: 'hi' })).toMatchObject({ ok: true, name: 'Strat Edge Website', chat: 'pc333333' })
@@ -96,7 +111,7 @@ describe('a call hands work to the agent it names', () => {
     expect(empty).toMatchObject({ ok: true, said: 'Started a new chat in the Strat Edge Solutions project.' })
   })
 
-  it('steers a helper by its label', async () => {
+  it('steers a helper by its label, the one at work when two share it', async () => {
     const { deps, steered, sent } = setup()
     const result = await callHandoff(deps, { target: 'the dictation helper', message: 'Use the 30 second limit' })
     expect(result).toMatchObject({ ok: true, kind: 'helper', id: 'h1', said: 'Sent to the helper "Desktop dictation fix".' })

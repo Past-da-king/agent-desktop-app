@@ -29,7 +29,10 @@ export interface CallHandoffDeps {
     list(entity: 'chat_item'): Promise<ChatItem[]>
     upsert(entity: 'project', row: Partial<ProjectRow> & { id: string }): Promise<unknown>
   }
-  /** A message in a chat as if the person typed it there (runner.send, with the calling device as its origin). */
+  /**
+   * A message in a chat as if the person typed it there (runner.send, with the calling device as its origin). It
+   * resolves when that chat's turn ENDS, which can be minutes (an approval it waits on), so it is never awaited here.
+   */
   send(text: string, chat: string, origin?: unknown): Promise<void>
   /** More for a helper at work, or sends a finished one back to work (helper_steer). */
   steer(id: string, message: string): Promise<string>
@@ -37,6 +40,11 @@ export interface CallHandoffDeps {
   cards(): Promise<HelperCardsSnapshot>
   state(chat: string): RunState
   agentName(): string
+  /**
+   * Work handed to a project chat shows in the main chat as that project's agent (runtime/project-agents.ts), as when
+   * the main agent hands it over: the call, the window and the phone follow it there and hear when it is done.
+   */
+  delegated?(chat: string, project: ProjectRow, brief: string): Promise<void>
 }
 
 /** Words that name no one in particular: "tell the dictation helper", "ask the chat in ...". */
@@ -67,6 +75,15 @@ function short(text: string, limit: number): string {
   return flat.length <= limit ? flat : `${flat.slice(0, limit - 3)}...`
 }
 
+/**
+ * Starts the turn and returns at once: the call is told where it went now, and hears the outcome when it lands (its
+ * rows and cards). Awaiting it held the phone's tool call until the turn ended (22 Oct 2026: 30 s timeout while the
+ * turn waited on an approval the call itself had to put to him).
+ */
+function start(deps: CallHandoffDeps, message: string, chat: string, origin: unknown): void {
+  void deps.send(message, chat, origin).catch(() => undefined)
+}
+
 /** Everyone the call can talk to, main agent first. */
 export async function callTargets(deps: CallHandoffDeps, now: number = Date.now()): Promise<CallTarget[]> {
   const [projects, rows, cards] = await Promise.all([deps.store.list('project'), deps.store.list('chat_item'), deps.cards().catch(() => null)])
@@ -95,7 +112,9 @@ export async function callTargets(deps: CallHandoffDeps, now: number = Date.now(
     const busy = chats.find((chat) => chat.running)
     out.push({ kind: 'project', id: project.id, name: project.name, glyph: project.icon.glyph, running: busy !== undefined, doing: busy?.doing ?? '', chats })
   }
-  for (const card of cards?.cards ?? []) {
+  // Working helpers first: of two with the same name, the one at work is the one he means.
+  const helperCards = [...(cards?.cards ?? [])].sort((a, b) => Number(b.state === 'working') - Number(a.state === 'working'))
+  for (const card of helperCards) {
     if (card.id.startsWith('pa-') || card.projectChat !== '') continue
     const live = card.state === 'working'
     if (!live && (card.endedAt === null || now - card.endedAt > RECENT_MS)) continue
@@ -120,7 +139,7 @@ export async function callHandoff(deps: CallHandoffDeps, input: CallHandoffInput
   const wanted = said.toLowerCase()
   const mainName = deps.agentName().trim() || 'Your agent'
   if (kind === 'main' || MAIN_NAMES.has(wanted) || wanted === mainName.toLowerCase()) {
-    await deps.send(message, MAIN_CHAT, origin)
+    start(deps, message, MAIN_CHAT, origin)
     return { ok: true, kind: 'main', id: MAIN_CHAT, name: mainName, chat: MAIN_CHAT, said: 'Sent to your main agent.', detail: '' }
   }
 
@@ -159,6 +178,8 @@ export async function callHandoff(deps: CallHandoffDeps, input: CallHandoffInput
     if (hit === null && first?.project !== undefined && picked.close.every((c) => c.item.project?.id === first.project?.id)) {
       hit = { kind: 'project', id: first.project.id, name: first.project.name, project: first.project }
     }
+    // Two with the very same name (a helper that failed and its retry): the first, which is the one at work.
+    if (hit === null && first !== undefined && picked.close.every((c) => c.item.kind === first.kind && c.item.name.toLowerCase() === first.name.toLowerCase())) hit = first
     if (hit === null) {
       const close = picked.close.map((c) => ({ kind: c.item.kind, id: c.item.id, name: c.item.name }))
       if (close.length > 1) return { ok: false, error: `"${said}" could be ${close.map((c) => c.name).join(' or ')}. Ask which one.`, ambiguous: close }
@@ -182,7 +203,8 @@ export async function callHandoff(deps: CallHandoffDeps, input: CallHandoffInput
     chat = newProjectChatId()
     await deps.store.upsert('project', { id: project.id, chats: [...project.chats, chat] })
   }
-  await deps.send(message, chat, origin)
+  start(deps, message, chat, origin)
+  await deps.delegated?.(chat, project, message).catch(() => undefined)
   return {
     ok: true,
     kind: hit.kind === 'chat' ? 'chat' : 'project',

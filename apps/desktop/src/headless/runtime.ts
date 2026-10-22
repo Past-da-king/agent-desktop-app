@@ -515,6 +515,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     cards: () => callFeed.snapshot(),
     state: (chat) => callRunner.state(chat),
     agentName: () => settings.get().agentName,
+    delegated: (chat, project, brief) => projectAgents.delegated(chat, project, brief),
   })
 
   const disposeIpc = registerIpc({
