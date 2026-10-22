@@ -419,7 +419,8 @@ export const LIVE_TOKEN_START_MS = 2 * 60_000
 
 /**
  * A one-use Gemini Live token (auth_tokens, uses 1), locked to `model`, for a paired device that has no key of its
- * own. The key stays here; the token cannot list models, call any other API, or start a second call.
+ * own. The key stays here; the token cannot list models, call any other API, or start a second call. Only the model
+ * is locked (fieldMask): the device's setup (tools, system instruction, voice, transcripts) still applies.
  */
 export async function mintLiveToken(
   deps: GeminiDeps,
@@ -440,6 +441,10 @@ export async function mintLiveToken(
         expireTime: new Date(expiresAt).toISOString(),
         newSessionExpireTime: new Date(now + LIVE_TOKEN_START_MS).toISOString(),
         bidiGenerateContentSetup: { model: model.startsWith('models/') ? model : `models/${model}` },
+        // Lock ONLY the model. With no field mask Google takes the whole setup from this token and ignores the
+        // device's own (its tools, system instruction, voice and transcripts): a linked phone's call then had no
+        // delegate tool and answered "I can't send that, do it yourself" (22 Oct 2026, verified on the real API).
+        fieldMask: 'model',
       }),
     })
   } catch {
