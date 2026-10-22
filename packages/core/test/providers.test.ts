@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { userMsg, type JsonObject, type Msg } from '../src/model'
 import { AnthropicProvider } from '../src/providers/anthropic'
 import { providerFor } from '../src/providers/factory'
-import { OpenAiCompatProvider } from '../src/providers/openai-compat'
+import {
+  OpenAiCompatProvider,
+  REASONING_PLACEHOLDER,
+  wantsReasoningBack,
+} from '../src/providers/openai-compat'
 import { startFakeAi, type FakeAi } from './fake-ai'
 
 const servers: FakeAi[] = []
@@ -206,6 +210,87 @@ describe('OpenAiCompatProvider', () => {
     const messages = fake.requests[0]!.body.messages as JsonObject[]
     const calls = messages[2]!.tool_calls as JsonObject[]
     expect(calls[0]!.extra_content).toBeUndefined()
+  })
+
+  it('sends reasoning_content on every assistant turn for thinking providers', async () => {
+    // DeepSeek thinking mode (behind OpenCode Go/Zen too) answers 400 "The reasoning_content in the
+    // thinking mode must be passed back to the API" when any assistant turn lacks it.
+    const history: Msg[] = [
+      userMsg('hello'),
+      {
+        role: 'ASSISTANT',
+        blocks: [
+          { t: 'reasoning', text: 'look first' },
+          { t: 'call', id: 'c1', name: 'now', input: {} },
+        ],
+      },
+      { role: 'USER', blocks: [{ t: 'result', id: 'c1', content: '{"a":1}', err: false }] },
+      // A tool turn where the model thought nothing (the browser_eval crash).
+      { role: 'ASSISTANT', blocks: [{ t: 'call', id: 'c2', name: 'now', input: {} }] },
+      { role: 'USER', blocks: [{ t: 'result', id: 'c2', content: '{"b":2}', err: false }] },
+      // A plain answer with no reasoning (or written by another model before a switch).
+      { role: 'ASSISTANT', blocks: [{ t: 'text', text: 'done' }] },
+      userMsg('again'),
+    ]
+    for (const provider of ['opencode_go', 'opencode_zen', 'deepseek'] as const) {
+      const fake = await fakeAi(() => ({ text: 'ok' }))
+      await providerFor({ provider, key: 'k', baseUrl: fake.url }).complete(
+        'sys',
+        history,
+        [{ name: 'now', description: 'Current time', schema: { type: 'object' } }],
+        'm',
+      )
+      const assistants = (fake.requests[0]!.body.messages as JsonObject[]).filter(
+        (m) => m.role === 'assistant',
+      )
+      expect(assistants.map((m) => m.reasoning_content)).toEqual([
+        'look first',
+        REASONING_PLACEHOLDER,
+        REASONING_PLACEHOLDER,
+      ])
+      for (const m of assistants) expect(String(m.reasoning_content).length).toBeGreaterThan(0)
+    }
+  })
+
+  it('echoes reasoning on any provider once the model has reasoned, and never invents it otherwise', async () => {
+    const reasoned: Msg[] = [
+      userMsg('hello'),
+      {
+        role: 'ASSISTANT',
+        blocks: [
+          { t: 'reasoning', text: 'hm' },
+          { t: 'call', id: 'c1', name: 'now', input: {} },
+        ],
+      },
+      { role: 'USER', blocks: [{ t: 'result', id: 'c1', content: 'one', err: false }] },
+      { role: 'ASSISTANT', blocks: [{ t: 'call', id: 'c2', name: 'now', input: {} }] },
+      { role: 'USER', blocks: [{ t: 'result', id: 'c2', content: 'two', err: false }] },
+    ]
+    const custom = await fakeAi(() => ({ text: 'ok' }))
+    await providerFor({ provider: 'openrouter', key: 'k', baseUrl: custom.url }).complete(
+      'sys',
+      reasoned,
+      [],
+      'm',
+    )
+    const sent = (custom.requests[0]!.body.messages as JsonObject[]).filter((m) => m.role === 'assistant')
+    expect(sent.map((m) => m.reasoning_content)).toEqual(['hm', REASONING_PLACEHOLDER])
+
+    const plain = await fakeAi(() => ({ text: 'ok' }))
+    await providerFor({ provider: 'openai', key: 'k', baseUrl: plain.url }).complete(
+      'sys',
+      [
+        userMsg('hello'),
+        { role: 'ASSISTANT', blocks: [{ t: 'call', id: 'c1', name: 'now', input: {} }] },
+        { role: 'USER', blocks: [{ t: 'result', id: 'c1', content: 'one', err: false }] },
+      ],
+      [],
+      'm',
+    )
+    const openai = (plain.requests[0]!.body.messages as JsonObject[]).find((m) => m.role === 'assistant')!
+    expect('reasoning_content' in openai).toBe(false)
+    expect(wantsReasoningBack('openai', [])).toBe(false)
+    expect(wantsReasoningBack('opencode_go', [])).toBe(true)
   })
 
   it('adds DeepSeek extra body fields', async () => {
