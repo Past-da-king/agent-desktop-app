@@ -18,8 +18,8 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { Script } from 'node:vm'
 
-import { session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
-import type { BrowserWindow, DownloadItem, Session, WebContents, WebPreferences } from 'electron'
+import { BrowserWindow, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
+import type { DownloadItem, Session, WebContents, WebPreferences } from 'electron'
 
 import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
 
@@ -67,6 +67,7 @@ import {
   type Resolved,
 } from './snapshot'
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, ViewRequest } from './types'
+import { planWindowOpen, popupSize } from './popup'
 import { pickTab } from './tab-pick'
 import { checkBrowserUrl } from './url-policy'
 import { EMBED_WAIT_MS, guardWebview, isEmbeddedGuest } from './embed'
@@ -161,6 +162,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** How many agent actions are under way per tab with the guard lifted. */
   private readonly lifted = new Map<string, number>()
   private guardSeq = 0
+  /** Windows a page opened with window.open (a sign-in popup), kept alive while their flow runs. */
+  private readonly popups = new Set<BrowserWindow>()
+  /** When each tab last had a real click, tap or key, so a window.open with no click behind it stays refused. */
+  private readonly lastGesture = new Map<string, number>()
   private readonly downloads: string[] = []
   private readonly sessionCleanups: Array<() => void> = []
 
@@ -366,6 +371,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       if (handedOver) this.onHandoffClosed()
     }
     this.inputCss.delete(tab.id)
+    this.lastGesture.delete(tab.id)
     // An embedded page ends when the renderer drops its <webview> (it no longer sees the tab); an offscreen one is closed here.
     if (tab.view !== null) {
       try {
@@ -498,6 +504,15 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         // A session listener that cannot be removed is harmless at shutdown.
       }
     }
+    for (const popup of this.popups) {
+      if (popup.isDestroyed()) continue
+      try {
+        popup.destroy()
+      } catch {
+        // Already gone with the window.
+      }
+    }
+    this.popups.clear()
     this.detach()
     for (const waiting of [...this.pending.values()]) waiting.resolve('closed')
     for (const tab of this.tabs.splice(0)) {
@@ -1663,26 +1678,48 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     wc.on('will-navigate', guard)
     wc.on('will-redirect', guard)
 
-    wc.setWindowOpenHandler(({ url }) => {
-      const policy = checkBrowserUrl(url, { personTyped: tab.id === this.personTab })
+    // A click, a tap or a key of the person's is what makes a window.open a window they asked for.
+    wc.on('input-event', (_event, input) => {
+      const types = ['mouseDown', 'mouseUp', 'keyDown', 'rawKeyDown', 'gestureTap']
+      if (types.includes(input.type)) this.lastGesture.set(tab.id, Date.now())
+    })
+
+    const persons = tab.id === this.personTab
+    wc.setWindowOpenHandler((details) => {
+      const policy = checkBrowserUrl(details.url, { personTyped: persons })
       if (!policy.ok) {
         this.blockedReason = policy.reason
         this.emit()
         return { action: 'deny' }
       }
-      const persons = tab.id === this.personTab
-      if (this.tabs.length + this.pending.size >= this.maxTabs) {
-        // The person clicked a link that wants a new tab, but the tabs are full: open it right here, as a click would.
-        if (persons) {
-          void tab.wc.loadURL(policy.url).catch(() => undefined)
-          return { action: 'deny' }
-        }
-        this.blockedReason = 'There are already five browser tabs open.'
+      const plan = planWindowOpen({
+        url: policy.url,
+        disposition: details.disposition,
+        features: details.features,
+        gestureAgeMs: Date.now() - (this.lastGesture.get(tab.id) ?? Number.NEGATIVE_INFINITY),
+        tabsOpen: this.tabs.length + this.pending.size,
+        maxTabs: this.maxTabs,
+        persons,
+      })
+      if (plan.action === 'popup') {
+        // "Continue with Google" (and Facebook's and Apple's buttons) calls window.open from the click itself;
+        // the flow ends by posting back to the opener and closing the window. That needs a real window, so it
+        // gets one: the tab's own session, its opener kept, and it closes itself when the flow is done.
+        if (this.window === null || this.window.isDestroyed()) return { action: 'deny' }
+        return { action: 'allow', createWindow: (options) => this.openPopup(tab, options, details.features) }
+      }
+      if (plan.action === 'same-tab') {
+        // The tabs are full: open it right here, as a click would.
+        void tab.wc.loadURL(plan.url).catch(() => undefined)
+        return { action: 'deny' }
+      }
+      if (plan.action === 'deny') {
+        this.blockedReason = plan.reason
         this.emit()
         return { action: 'deny' }
       }
-      // A popup opens with its opener's sign-ins; one the person opened is theirs to use.
-      void this.createTab(policy.url, tab.partition).then((made) => {
+      // A checked tab in the app; one the person opened is theirs to use.
+      void this.createTab(plan.url, tab.partition).then((made) => {
         if (made === null || !persons) return
         this.personTab = made.id
         for (const each of this.tabs) void this.refreshInputGuard(each)
@@ -1740,6 +1777,62 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     wc.on('render-process-gone', () => this.emit())
     // The renderer went away (a reload, a crash) and took the <webview> with it: the tab is gone too.
     wc.on('destroyed', () => this.closeTab(tab.id))
+  }
+
+  /**
+   * A window a page opened with window.open: a real child window of the app, so the opener stays intact
+   * (window.opener.postMessage, and the form_post that ends Google's sign-in, land back in the tab), it runs in
+   * the tab's own session, so the sign-in carries over, and it closes itself when the flow closes it.
+   */
+  private openPopup(opener: Tab, options: Electron.BrowserWindowConstructorOptions, features: string): WebContents {
+    const size = popupSize(features)
+    const child = new BrowserWindow({
+      ...options,
+      parent: this.window ?? undefined,
+      width: size.width,
+      height: size.height,
+      minWidth: 360,
+      minHeight: 420,
+      center: true,
+      autoHideMenuBar: true,
+      backgroundColor: '#ffffff',
+      webPreferences: {
+        ...options.webPreferences,
+        // An ordinary page like the tab that opened it: the same sign-ins, the same lockdown.
+        partition: opener.partition,
+        preload: undefined,
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        sandbox: true,
+        webSecurity: true,
+        webviewTag: false,
+      },
+    })
+    this.popups.add(child)
+    child.on('closed', () => this.popups.delete(child))
+    const wc = child.webContents
+    // Still this computer's rules: no local or private address, whatever the page asks for.
+    const guard = (event: Electron.Event, url: string): void => {
+      const policy = checkBrowserUrl(url, { personTyped: true })
+      if (policy.ok) return
+      event.preventDefault()
+      this.blockedReason = policy.reason
+      this.emit()
+    }
+    wc.on('will-navigate', guard)
+    wc.on('will-redirect', guard)
+    // A window opened from inside a sign-in window becomes a checked tab, never a second window.
+    wc.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url)) void this.createTab(url, opener.partition)
+      return { action: 'deny' }
+    })
+    child.once('ready-to-show', () => {
+      if (child.isDestroyed()) return
+      child.show()
+      child.focus()
+    })
+    return wc
   }
 
   private configureSession(session: Session, partition: string): void {
