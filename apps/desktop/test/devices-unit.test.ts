@@ -282,10 +282,10 @@ describe('facts and config', () => {
       ],
     } as unknown as Parameters<typeof advertisedUrls>[1]
     const config = { enabled: true, port: 7787, listen: '0.0.0.0', extraUrls: ['https://my-node.example.net:7787'] }
-    expect(advertisedUrls(config, interfaces)).toEqual(['https://192.0.2.10:7787', 'https://[2001:db8::5]:7787', 'https://my-node.example.net:7787'])
+    expect(advertisedUrls(config, interfaces)).toEqual(['https://my-node.example.net:7787', 'https://192.0.2.10:7787', 'https://[2001:db8::5]:7787'])
     expect(advertisedUrls({ ...config, listen: '127.0.0.1' }, interfaces)).toEqual(['https://my-node.example.net:7787'])
     // A node that could only listen on IPv4 does not hand out IPv6 addresses that would not answer.
-    expect(advertisedUrls(config, interfaces, false)).toEqual(['https://192.0.2.10:7787', 'https://my-node.example.net:7787'])
+    expect(advertisedUrls(config, interfaces, false)).toEqual(['https://my-node.example.net:7787', 'https://192.0.2.10:7787'])
   })
 })
 
