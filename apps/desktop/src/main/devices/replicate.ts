@@ -154,6 +154,29 @@ export async function peersFromRows(store: ReplicaStore, selfId: string): Promis
     .map((row) => ({ id: row.id, name: row.name, urls: [...row.urls], fp: row.fp }))
 }
 
+/**
+ * The device rows' peers plus the peers known from pairing (headless node.json brains, joined peers). A row wins on
+ * who the peer is (revoked stays revoked, its fingerprint, its name), but the addresses known from pairing are still
+ * tried after the row's own. Without that, a row written while the peer's VPN was down (LAN address only) cuts this
+ * node off for good: the fresh row can only come from the peer it can no longer reach.
+ */
+export function mergePeers(rows: DeviceRow[], extra: PeerTarget[], selfId: string): PeerTarget[] {
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  const given = new Map<string, PeerTarget>()
+  for (const peer of extra) if (peer.id !== selfId && peer.fp !== '' && peer.urls.length > 0 && !given.has(peer.id)) given.set(peer.id, peer)
+  const out: PeerTarget[] = []
+  for (const row of [...rows].sort((a, b) => a.priority - b.priority)) {
+    if (row.revoked || row.id === selfId || !(row.roles.includes('brain') || row.roles.includes('hands'))) continue
+    const known = given.get(row.id)
+    const sameKey = known !== undefined && known.fp === row.fp
+    const urls = [...row.urls, ...(sameKey ? known.urls.filter((url) => !row.urls.includes(url)) : [])]
+    if (urls.length === 0) continue
+    out.push({ id: row.id, name: row.name, urls, fp: row.fp })
+  }
+  for (const peer of given.values()) if (!byId.has(peer.id)) out.push({ ...peer, urls: [...peer.urls] })
+  return out
+}
+
 export class Replicator {
   private readonly links = new Map<string, PeerLink>()
   private timer: ReturnType<typeof setInterval> | null = null

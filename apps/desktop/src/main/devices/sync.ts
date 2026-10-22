@@ -17,7 +17,7 @@ import { DeviceCommands } from './commands'
 import { DeviceToolHub, DeviceToolRunner } from './device-tools'
 import { originFromFacts, originLine, latestOrigin } from './origin'
 import { pinnedFetch } from './pinned-fetch'
-import { peersFromRows, Replicator, registerSyncRoutes, type PeerTarget, type ReplicaStore } from './replicate'
+import { mergePeers, Replicator, registerSyncRoutes, type PeerTarget, type ReplicaStore } from './replicate'
 import type { DevicesHost, MessageOrigin } from './types'
 
 export interface DevicesSyncDeps {
@@ -43,7 +43,7 @@ export interface DevicesSyncDeps {
   log?: (line: string) => void
   /**
    * Peers known before their device rows arrive: the brain a node just paired with. Replicating with it brings the
-   * rows; once a row is here it wins over this.
+   * rows; once a row is here its addresses go first, and these are still tried after them (mergePeers).
    */
   extraPeers?: () => PeerTarget[]
 }
@@ -102,12 +102,7 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
     ...(deps.extraPeers === undefined
       ? {}
       : {
-          peers: async () => {
-            const fromRows = await peersFromRows(store, host.self().id)
-            const known = new Set(fromRows.map((peer) => peer.id))
-            const extra = (deps.extraPeers?.() ?? []).filter((peer) => !known.has(peer.id) && peer.id !== host.self().id && peer.urls.length > 0 && peer.fp !== '')
-            return [...fromRows, ...extra]
-          },
+          peers: async () => mergePeers(await store.list('device'), deps.extraPeers?.() ?? [], host.self().id),
         }),
     pass: deps.pass,
     onBundleVersion: (peer, _version, url) => {
