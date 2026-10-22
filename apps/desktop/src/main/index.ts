@@ -651,6 +651,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
     resumeJob: async (id, note) => {
       await helpers.push(id, note)
     },
+    lost: (lease) => {
+      if (lease.kind === 'job') void helpers.stop(lease.messageId)
+      else runner?.stop(lease.chatId)
+    },
   })
   const helpers = new HelperManager({
     leases,
