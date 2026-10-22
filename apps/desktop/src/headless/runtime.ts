@@ -44,6 +44,7 @@ import { CliHost } from '../main/runtime/cli-host'
 import { hostEnvironment } from '../main/runtime/environment-host'
 import { HelperManager } from '../main/runtime/helpers'
 import { Runner } from '../main/runtime/runner'
+import { ProjectAgentRows } from '../main/runtime/project-agents'
 import { Scheduler } from '../main/runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from '../main/runtime/toolset'
 import { Secrets } from '../main/secrets'
@@ -248,6 +249,12 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const cliHost = new CliHost(join(dir, 'cli'), () => settings.get(), options.appDir)
   // Late-bound: the runner needs the tools, the tools need the helpers, the helpers deliver to the runner.
   let runner: Runner | null = null
+  // A project agent the main agent hands work to shows as a helper row in the main chat, with the project's icon.
+  const projectAgents = new ProjectAgentRows({
+    store,
+    state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
+    changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
+  })
   let memory: MemoryService | null = null
   const notify = (title: string, body: string): void => actions.notify(title, body)
 
@@ -339,6 +346,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
         },
       },
       projects: {
+        agents: projectAgents,
         post: async (chat, text, via) => {
           if (runner !== null) await runner.receive(chat, text, via)
         },
@@ -414,7 +422,10 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   }
   // What a crash or a restart cut off runs again, once (runtime/turns.ts). With Devices on, the failover side is set
   // by devices/attach.ts and the recovery waits for one replication pass first.
-  if (options.quiet !== true) void leases.recover().catch(() => 0)
+  if (options.quiet !== true) {
+    void projectAgents.restore().catch(() => undefined)
+    void leases.recover().catch(() => 0)
+  }
   // Events that arrived while the node was down (or were cut short) go to their routines now.
   if (options.quiet !== true) await router.start().catch((error: unknown) => logger.warn('Event router did not start', { message: error instanceof Error ? error.message : String(error) }))
 
