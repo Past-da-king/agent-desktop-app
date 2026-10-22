@@ -78,7 +78,7 @@ createServer((req, res) => {
       if (res.destroyed) return
       return reply(res, say(`A short paragraph for the test.\n${slow[1]}`))
     }
-    const brief = /^Reply with (e2e-\S+) and stop\.$/.exec(user.trim())
+    const brief = /Reply with (e2e-\S+) and stop\./.exec(user)
     if (brief) return reply(res, say(brief[1]))
     return reply(res, say('ok'))
   })
