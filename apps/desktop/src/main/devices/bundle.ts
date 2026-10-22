@@ -289,6 +289,22 @@ export function registerBundle(host: DevicesHost, deps: BundleRouteDeps): () => 
       return { status: 200, json: await deps.keeper.build(isBrainRow(caller)) }
     },
   })
+  // A brain that can reach this node when this node cannot reach it hands its bundle over (devices/sync.ts
+  // afterPull). Taken only from a brain, and only when it is newer, exactly as a pulled one.
+  host.addRoute({
+    method: 'POST',
+    path: '/v1/bundle',
+    auth: 'node',
+    async handle(req) {
+      const rows = await deps.devices()
+      const caller = rows.find((row) => row.id === req.deviceId)
+      // No row yet: a brain this node paired with (knownPeer let it in as a brain).
+      if (caller !== undefined && !isBrainRow(caller)) return { status: 403, json: { error: 'Only another brain can do that.' } }
+      const parsed = parseBundle(req.body)
+      if (parsed === null) return { status: 400, json: { error: 'That is not a bundle.' } }
+      return { status: 200, json: { applied: deps.keeper.apply(parsed) } }
+    },
+  })
   return deps.keeper.onChanged((version) => {
     void deps.devices().then((rows) => {
       for (const row of rows) {
@@ -305,6 +321,19 @@ export async function pullBundle(keeper: BundleKeeper, url: string, pass: string
   if (!res.ok) return false
   const parsed = parseBundle(await res.json())
   return parsed === null ? false : keeper.apply(parsed, force)
+}
+
+/** Give a peer this node's bundle (with secrets: only brains replicate). True when it took it (it was newer). */
+export async function pushBundle(keeper: BundleKeeper, url: string, pass: string, fetchImpl: typeof fetch): Promise<boolean> {
+  const body = JSON.stringify(await keeper.build(true))
+  const res = await fetchImpl(`${url.replace(/\/+$/, '')}/v1/bundle`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${pass}`, 'content-type': 'application/json' },
+    body,
+  })
+  if (!res.ok) return false
+  const answer = (await res.json()) as { applied?: unknown }
+  return answer.applied === true
 }
 
 /** A bundle as read off the wire, or null when it is not one. Only known shapes go further. */
