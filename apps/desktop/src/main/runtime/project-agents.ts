@@ -13,6 +13,8 @@ import type { DataStore } from './data'
 
 const MAX_SUMMARY = 140
 const CHECK_MS = 2_000
+/** After a restart, how long a followed project chat gets for its turn lease to resume it before it can be closed. */
+const RESUME_GRACE_MS = 30_000
 
 export interface ProjectAgentDeps {
   store: DataStore & { onChange(listener: (change: DataChange) => void): () => void }
@@ -22,6 +24,7 @@ export interface ProjectAgentDeps {
   changed?: () => void
   now?: () => number
   checkMs?: number
+  resumeGraceMs?: number
 }
 
 export interface ProjectMeta {
@@ -46,6 +49,8 @@ export const rowIdFor = (chat: string): string => `pa-${chat}`
 
 export class ProjectAgentRows {
   private readonly tracked = new Set<string>()
+  /** Chats followed again after a restart, and until when they may not be closed (their lease is resuming them). */
+  private readonly resuming = new Map<string, number>()
   private readonly offChange: () => void
   private timer: ReturnType<typeof setInterval> | null = null
   private writing: Promise<unknown> = Promise.resolve()
@@ -65,7 +70,10 @@ export class ProjectAgentRows {
   async restore(): Promise<void> {
     for (const row of await this.deps.store.listWhere?.('chat_item', { kind: 'helper', chat: MAIN_CHAT }) ?? []) {
       const meta = parse(row.meta)
-      if (row.id.startsWith('pa-') && meta['state'] === 'working' && typeof meta['projectChat'] === 'string') this.follow(meta['projectChat'])
+      if (row.id.startsWith('pa-') && meta['state'] === 'working' && typeof meta['projectChat'] === 'string') {
+        this.resuming.set(meta['projectChat'], this.now() + (this.deps.resumeGraceMs ?? RESUME_GRACE_MS))
+        this.follow(meta['projectChat'])
+      }
     }
   }
 
@@ -129,7 +137,12 @@ export class ProjectAgentRows {
   private async checkAll(): Promise<void> {
     for (const chat of [...this.tracked]) {
       const state = this.deps.state(chat)
-      if (state.running || state.waiting.length > 0) continue
+      if (state.running || state.waiting.length > 0) {
+        this.resuming.delete(chat)
+        continue
+      }
+      if ((this.resuming.get(chat) ?? 0) > this.now()) continue
+      this.resuming.delete(chat)
       const rows = (await this.deps.store.listWhere?.('chat_item', { chat })) ?? (await this.deps.store.list('chat_item')).filter((row) => chatOf(row) === chat)
       if (rows.some((row) => row.kind === 'helper' && parse(row.meta)['state'] === 'working')) continue
       const last = [...rows].reverse().find((row) => row.kind === 'agent' || row.kind === 'notice')

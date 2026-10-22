@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as R
 import { agent, chat } from '../bridge'
 import { skyHopDemo } from '../bridge/seed'
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, browserTucked, displayUrl, openedMode } from '../lib/panel'
+import { openChat } from '../lib/chat-actions'
 import { parseMeta, metaStrings } from '../lib/meta'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -641,9 +642,14 @@ function MiniStrip({ onOpen }: { onOpen: () => void }): JSX.Element {
           key={helper.id}
           type="button"
           className="mini-helper"
-          title={`${helper.label}: working`}
+          title={`${helper.label}: ${helper.line}`}
           aria-label={`Open ${helper.label}, working`}
           onClick={() => {
+            // A project agent's face opens its project chat; a helper's opens it full size.
+            if (helper.projectChat !== '') {
+              openChat(helper.projectChat)
+              return
+            }
             onOpen()
             openHelper(helper.id)
           }}

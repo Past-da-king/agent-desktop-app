@@ -1,13 +1,12 @@
-import { MAIN_CHAT, type ChatItem } from '@agent/core'
+import { type ChatItem, type MascotId } from '@agent/core'
 import { useEffect, useMemo, useState } from 'react'
 
 import { agent } from '../bridge'
-import { helperView, isHelper, type HelperView } from '../lib/helpers'
+import { openChat } from '../lib/chat-actions'
+import { helperCards, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
 import { metaText, parseMeta } from '../lib/meta'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
-import { chatOf } from '../lib/chats'
-import { projectOfChat } from '../lib/projects'
 import { useSettings } from '../state/useSettings'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
@@ -23,29 +22,34 @@ function stateLabel(helper: HelperView): { label: string; tone: string; icon: Ic
   return { label: 'Stopped', tone: 'mute', icon: 'stop' }
 }
 
-/**
- * Whose helper it is, as its picture: the agent's own for the main chat's helpers, the project's icon for a
- * project's helpers. A hidden project shows nothing of itself, so its helpers get the plain helper icon.
- */
-export function HelperAvatar({ row, helper, size = 32 }: { row: ChatItem | undefined; helper: HelperView; size?: number }): JSX.Element {
-  const projects = useEntity('project')
-  const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
-  const s = stateLabel(helper)
-  const chat = row === undefined ? MAIN_CHAT : chatOf(row)
-  const project = projectOfChat(projects, chat)
-  if (chat === MAIN_CHAT) {
+/** A helper's picture from whose it is: the agent's own, the project's icon, or the plain helper icon. */
+export function OwnerAvatar({ owner, helper, mascot, size = 32 }: { owner: HelperOwner; helper: HelperView; mascot: MascotId; size?: number }): JSX.Element {
+  if (owner.kind === 'main') {
     return (
       <span className="hp-av" aria-hidden="true">
         <Mascot id={mascot} size={size} />
       </span>
     )
   }
-  if (project !== null && !project.hidden) return <ProjectTile icon={project.icon} size={size} />
+  if (owner.kind === 'project') return <ProjectTile icon={owner.icon} size={size} />
+  const s = stateLabel(helper)
   return (
-    <span className={`hp-ic ${s.tone}`}>
+    <span className={`hp-ic ${s.tone}`} aria-hidden="true">
       <Icon name={s.icon} size={16} />
     </span>
   )
+}
+
+/**
+ * Whose helper it is, as its picture: the agent's own for the main chat's helpers, the project's icon for a
+ * project's helpers and for a project agent's own row. A hidden project shows nothing of itself, so its helpers
+ * get the plain helper icon.
+ */
+export function HelperAvatar({ row, helper, size = 32 }: { row: ChatItem | undefined; helper: HelperView; size?: number }): JSX.Element {
+  const projects = useEntity('project')
+  const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
+  const owner: HelperOwner = row === undefined ? { kind: 'main' } : helperOwner(row, projects)
+  return <OwnerAvatar owner={owner} helper={helper} mascot={mascot} size={size} />
 }
 
 function stepText(item: ChatItem): string {
@@ -64,48 +68,46 @@ function useStop(): { stopping: string | null; stop: (id: string) => void } {
 }
 
 /**
- * The helpers working right now, under the agent's browser in the side panel. A helper is here only while it
- * runs and goes as soon as it stops. A click opens it full size (HelperStage).
+ * Every helper working right now, from any chat (the main thread, any project, hidden ones too), each with its chat
+ * row, whose it is and its one line. A project agent's card comes first with its project's helpers under it.
  */
-/** The helpers working right now, oldest first, each with its chat row. */
-export function useWorkingHelpers(): Array<HelperView & { row: ChatItem }> {
+export function useWorkingHelpers(): HelperCard[] {
   const items = useEntity('chat_item')
-  return useMemo(
-    () =>
-      items
-        .filter((item) => isHelper(item))
-        .map((item) => ({ ...helperView(item, items), row: item }))
-        .filter((helper) => helper.state === 'working')
-        .sort((a, b) => Number(a.queued) - Number(b.queued) || a.startedAt - b.startedAt),
-    [items],
-  )
+  const projects = useEntity('project')
+  return useMemo(() => helperCards(items, projects), [items, projects])
 }
 
-export function HelpersPanel(): JSX.Element | null {
-  const openHelper = usePanel((store) => store.openHelper)
-  const helpers = useWorkingHelpers()
-  if (helpers.length === 0) return null
-
+/**
+ * The helpers working right now, under the agent's browser in the side panel, drawn from the cards it is given.
+ * Every working helper is here and nothing is cut off: the side panel scrolls. A project agent's card opens its
+ * project chat; a helper's card opens it full size (HelperStage).
+ */
+export function HelperCardList({ cards, mascot, onOpen }: { cards: HelperCard[]; mascot: MascotId; onOpen: (card: HelperCard) => void }): JSX.Element | null {
+  if (cards.length === 0) return null
   return (
     <section className="hp" aria-label="Helpers working now">
       <div className="hp-title">
         <span className="eyebrow">HELPERS</span>
-        <span className="small muted">{helpers.length} working</span>
+        <span className="small muted">{cards.length} working</span>
       </div>
       <ul className="hp-list">
-        {helpers.map((helper) => {
-          const s = stateLabel(helper)
-          const last = helper.activity[helper.activity.length - 1]
+        {cards.map((card) => {
+          const s = stateLabel(card)
+          // A project agent's card already reads as its project, and a helper under it sits in its group; any other
+          // project helper says which project it works in.
+          const where = card.owner.kind === 'project' && card.projectChat === '' && card.depth === 0 ? card.owner.name : ''
+          const opens = card.projectChat !== '' ? `Open the ${card.label} chat` : `Open ${card.label} full size`
           return (
-            <li key={helper.id}>
-              <button type="button" className="hp-card" onClick={() => openHelper(helper.id)} aria-label={`Open ${helper.label} full size`}>
-                <HelperAvatar row={helper.row} helper={helper} />
+            <li key={card.id} className={card.depth === 1 ? 'hp-sub' : undefined}>
+              <button type="button" className="hp-card" onClick={() => onOpen(card)} aria-label={opens} title={card.line}>
+                <OwnerAvatar owner={card.owner} helper={card} mascot={mascot} size={card.depth === 1 ? 28 : 32} />
                 <span className="hp-t">
                   <b>
-                    {helper.label}
-                    {helper.model !== '' ? <span className="hp-model" title={`Runs on ${helper.model}`}>{helper.model}</span> : null}
+                    {card.label}
+                    {card.model !== '' ? <span className="hp-model" title={`Runs on ${card.model}`}>{card.model}</span> : null}
                   </b>
-                  <span>{last !== undefined ? stepText(last) : 'Starting'}</span>
+                  {where !== '' ? <span className="hp-where">{where}</span> : null}
+                  <span>{card.line}</span>
                 </span>
                 <span className={`pill ${s.tone}`}>{s.label}</span>
               </button>
@@ -114,6 +116,22 @@ export function HelpersPanel(): JSX.Element | null {
         })}
       </ul>
     </section>
+  )
+}
+
+export function HelpersPanel(): JSX.Element | null {
+  const openHelper = usePanel((store) => store.openHelper)
+  const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
+  const cards = useWorkingHelpers()
+  return (
+    <HelperCardList
+      cards={cards}
+      mascot={mascot}
+      onOpen={(card) => {
+        if (card.projectChat !== '') openChat(card.projectChat)
+        else openHelper(card.id)
+      }}
+    />
   )
 }
 
