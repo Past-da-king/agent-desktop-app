@@ -26,7 +26,7 @@ interface CallStore {
 let capture: Capture | null = null
 let player: Player | null = null
 let off: (() => void) | null = null
-const preview = agent.platform === 'web'
+const preview = agent.platform === 'web' && agent.remote === undefined
 
 /** How loud the call is right now, 0 to 1: the agent while it talks, otherwise the person. */
 export function callLevel(now: number = performance.now()): number {
