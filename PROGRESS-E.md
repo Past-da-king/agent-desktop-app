@@ -36,8 +36,6 @@ the headless node could be wired), worktree `~/agent-desktop-wt/devices-net`. St
 ## Not done
 - No auth key for the owner's Tailscale was found (searched ~ on the server, WSL home, Windows home config files for
   'tskey-'), so no live join on Tailscale's own control plane; the live proof is against Headscale.
-- Peer dialling is offered, not yet used: B's `pinnedFetch` (devices-sync) should spread `peerRequestOptions(host)`
-  in place of `agent: false` at merge.
 - Android libtailscale: note only (s10).
 
 ## Merge notes
@@ -49,3 +47,14 @@ the headless node could be wired), worktree `~/agent-desktop-wt/devices-net`. St
   `electron-builder.yml`.
 - Binaries are not committed (`tools/agent-net/dist/` is ignored). Build with Go 1.25+ via `tools/agent-net/build.sh`
   before packaging; without them the app works and says the helper is missing when a network is picked.
+
+## Release merge (22 Oct, about 04:45)
+- Merged `devices` (A, B, C, device tools, firewall, url ranking) into devices-net. Overlay urls come FIRST in the
+  advertised list while the overlay is up.
+- Peer dialling wired: `socks.ts proxyFor(host)`: loopback never proxied; a set proxy (agent-node config --proxy,
+  AGENT_NODE_PROXY) wins; else the overlay's SOCKS port for overlay hosts the OS cannot route. Used by pinnedFetch
+  (replication), the uplink (A) and the headless pinned client (C). Test: real pinnedFetch to a pinned TLS peer
+  through the overlay (fails without the wiring), wrong pin still refused.
+- The overlay never writes the node's row or identity while Devices is off.
+- Proven: typecheck, lint, full vitest 1270 passed; `bash scripts/devices-e2e-local.sh dist-headless/agent-node.mjs`
+  7/7 with Network = None; binaries rebuilt on the server; tarball carries agent-net.

@@ -40,8 +40,8 @@ export interface UplinkDeps {
 export function connectPinned(url: string, fp: string, pass: string, timeoutMs = 8000): Promise<WsConnection> {
   return new Promise((resolve, reject) => {
     const req = request(`${url}/v1/rpc`, {
-      // Through the devices proxy when one is set (devices/socks.ts), else direct as before.
-      agent: proxyAgent(),
+      // Through the devices proxy when one is set, or the built-in overlay for its hosts (devices/socks.ts proxyFor).
+      agent: proxyAgent(new URL(url).hostname),
       rejectUnauthorized: false,
       timeout: timeoutMs,
       headers: {
