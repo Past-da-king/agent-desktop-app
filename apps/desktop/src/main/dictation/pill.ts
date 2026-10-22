@@ -74,6 +74,9 @@ export class PillWindow implements PillLike {
   }
 
   command(command: DictationCommand): void {
+    // The microphone lives here even when the pill does not show (a dictation into the app's own window), so the
+    // window must exist, hidden, for a start to reach it; a command sent before it loads waits for rendererReady.
+    if (command.type === 'start') this.ensure()
     this.pendingCommand = command
     this.send(EVENTS.dictationCommand, command)
   }
