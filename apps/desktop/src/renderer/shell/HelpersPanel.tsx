@@ -1,6 +1,8 @@
 import { type ChatItem, type MascotId } from '@agent/core'
 import { useEffect, useMemo, useState } from 'react'
 
+import { FINISHED_CARD_MS } from '../../shared/helper-cards'
+
 import { agent } from '../bridge'
 import { openChat } from '../lib/chat-actions'
 import { helperCards, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
@@ -78,6 +80,24 @@ export function useWorkingHelpers(): HelperCard[] {
 }
 
 /**
+ * The side panel's cards: every working helper, plus a project agent's card for a while after its project chat went
+ * idle, showing its last answer. The minute tick lets an idle card leave on time.
+ */
+export function usePanelCards(): HelperCard[] {
+  const items = useEntity('chat_item')
+  const projects = useEntity('project')
+  const [tick, setTick] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setTick(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  return useMemo(() => helperCards(items, projects, { keepFinishedMs: FINISHED_CARD_MS, finishedProjectsOnly: true, now: Math.max(tick, Date.now()) }), [items, projects, tick])
+}
+
+/** A project agent's newest steps under its card while it works (the line above already says the one it is on). */
+const CARD_STEPS = 3
+
+/**
  * The helpers working right now, under the agent's browser in the side panel, drawn from the cards it is given.
  * Every working helper is here and nothing is cut off: the side panel scrolls. A project agent's card opens its
  * project chat; a helper's card opens it full size (HelperStage).
@@ -88,7 +108,7 @@ export function HelperCardList({ cards, mascot, onOpen }: { cards: HelperCard[];
     <section className="hp" aria-label="Helpers working now">
       <div className="hp-title">
         <span className="eyebrow">HELPERS</span>
-        <span className="small muted">{cards.length} working</span>
+        <span className="small muted">{cards.filter((card) => card.state === 'working').length} working</span>
       </div>
       <ul className="hp-list">
         {cards.map((card) => {
@@ -107,7 +127,17 @@ export function HelperCardList({ cards, mascot, onOpen }: { cards: HelperCard[];
                     {card.model !== '' ? <span className="hp-model" title={`Runs on ${card.model}`}>{card.model}</span> : null}
                   </b>
                   {where !== '' ? <span className="hp-where">{where}</span> : null}
-                  <span>{card.line}</span>
+                  <span className={card.state === 'working' ? 'hp-line' : 'hp-line idle'}>{card.line}</span>
+                  {card.projectChat !== '' && card.state === 'working' && card.steps.length > 1 ? (
+                    <span className="hp-steps-mini" aria-label="Its newest steps">
+                      {card.steps
+                        .slice(-CARD_STEPS - 1, -1)
+                        .reverse()
+                        .map((step) => (
+                          <span key={step.id}>{stepText(step)}</span>
+                        ))}
+                    </span>
+                  ) : null}
                 </span>
                 <span className={`pill ${s.tone}`}>{s.label}</span>
               </button>
@@ -122,7 +152,7 @@ export function HelperCardList({ cards, mascot, onOpen }: { cards: HelperCard[];
 export function HelpersPanel(): JSX.Element | null {
   const openHelper = usePanel((store) => store.openHelper)
   const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
-  const cards = useWorkingHelpers()
+  const cards = usePanelCards()
   return (
     <HelperCardList
       cards={cards}

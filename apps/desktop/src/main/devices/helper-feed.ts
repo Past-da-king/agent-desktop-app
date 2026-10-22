@@ -10,11 +10,11 @@
  */
 import { MAIN_CHAT, type ChatItem, type DataChange, type HelperCardsSnapshot, type ProjectRow } from '@agent/core'
 
-import { cardInfo, helperCards } from '../../shared/helper-cards'
+import { FINISHED_CARD_MS, cardInfo, helperCards } from '../../shared/helper-cards'
 import type { Store } from '../db'
 
 /** How long a finished helper keeps its card, with its done line. */
-export const FINISHED_KEEP_MS = 20 * 60_000
+export const FINISHED_KEEP_MS = FINISHED_CARD_MS
 const DEBOUNCE_MS = 250
 /** Steps older than this are not read at start (a helper still working that long has newer ones). */
 const LOOKBACK_MS = 48 * 3_600_000
@@ -166,12 +166,12 @@ export class HelperFeed {
     const rows = [...this.helpers.values()]
     const items: ChatItem[] = [...rows]
     for (const row of rows) {
-      const id = text(metaOf(row), 'id') || row.id
-      items.push(...(this.steps.get(id) ?? []))
+      const meta = metaOf(row)
+      items.push(...(this.steps.get(text(meta, 'id') || row.id) ?? []))
+      const projectChat = text(meta, 'projectChat')
+      if (projectChat !== '') items.push(...(this.chatLines.get(projectChat) ?? []))
     }
-    const cards = helperCards(items, this.projects, { keepFinishedMs: keep, now }).map((card) =>
-      cardInfo(card, card.projectChat === '' ? [] : (this.chatLines.get(card.projectChat) ?? [])),
-    )
+    const cards = helperCards(items, this.projects, { keepFinishedMs: keep, now }).map((card) => cardInfo(card))
     const json = JSON.stringify(cards)
     if (json !== this.lastJson) {
       this.lastJson = json
