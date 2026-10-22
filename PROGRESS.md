@@ -70,6 +70,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 04:35 C relay DONE devices-headless-int 32dc26e: RPC relay.fetch (web_fetch with its checks, brain/hands only), headless tool web_fetch_via_device, live: server agent fetched via a WSL node. FINDING: server tailscaled is userspace, so outbound to tailnet peers only via its local SOCKS5; added main/devices/socks.ts + `agent-node config --proxy`. Server redeployed 5588626. C told (again) to do the A+B(+design) merge itself, with socks for pinned-fetch/probes and the desktop registerRelay line.
 
+- 04:50 A DONE devices-node 374139b: serves its own tools (browser, notify, ask/approval in its main chat, files, file_send/receive, shell off), device.result to onDeviceResult, links OUT to a higher brain with its own pass; firewall check + one-UAC "Allow connections" (not triggered); Devices off = nothing changes (tested); Settings > Devices trimmed. Full suite 1153. Two test Block rules "Electron" for C:\temp\devices-node-run\electron\electron.exe need elevation to delete (left). Asked A to confirm D's node-side list.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
