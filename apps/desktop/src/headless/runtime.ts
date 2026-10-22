@@ -22,6 +22,7 @@ import { FileBrainLocks } from '../main/brain-locks'
 import { Store } from '../main/db'
 import { HandlerRegistry, recordHandlers } from '../main/devices/registry'
 import { devicesState, type DevicesSyncDeps } from '../main/devices/sync'
+import { ProjectAgentRows } from '../main/runtime/project-agents'
 import { TurnLeases } from '../main/runtime/turns'
 import { registerWorkersIpc } from '../main/workers/ipc'
 import { EventRouter } from '../main/workers/router'
@@ -140,6 +141,8 @@ export interface HeadlessRuntime {
   connectedApps: ConnectedAppsFile
   /** Background workers (agent-written scripts kept running) and the router that hands their events to routines. */
   supervisor: Supervisor
+  /** The main agent's toolset: what this node lends to the agents on other devices (shared device tools, s11). */
+  mainTools: Tool[]
   /** The node's own headless browser, or null when this machine has no Chromium. */
   browser: HeadlessBrowser | null
   /** The app contract by channel, for tests and local calls. */
@@ -283,7 +286,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const leases = new TurnLeases({
     store,
     selfId: () => devicesState.sync?.selfId() ?? store.deviceId,
-    ownIds: () => [store.deviceId],
+    // Its install id and, with Devices on, its device id: a lease written under either is this node's.
+    ownIds: () => [store.deviceId, ...(devicesState.sync === null ? [] : [devicesState.sync.selfId()])],
     resumeTurn: (chat, id, note) => runner?.resumeTurn(chat, id, note),
     resumeJob: async (id, note) => {
       await helpers.push(id, note)
@@ -314,6 +318,12 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     notify,
     profiles: apps.profiles,
     learnedNames,
+  })
+  // A project agent the main agent hands work to shows as a helper row in the main chat (runtime/project-agents.ts).
+  const projectAgents = new ProjectAgentRows({
+    store,
+    state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
+    changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
   })
   const tools = browserTools([
     ...buildToolset({
@@ -349,6 +359,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
         open: (projectId) => broadcast(EVENTS.route, { view: 'project', id: projectId }),
         // No image library without Electron: a picture icon falls back to the glyph.
         imageIcon: async () => null,
+        agents: projectAgents,
       },
     }),
     ...nodeTools,
@@ -414,7 +425,9 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   }
   // What a crash or a restart cut off runs again, once (runtime/turns.ts). With Devices on, the failover side is set
   // by devices/attach.ts and the recovery waits for one replication pass first.
-  if (options.quiet !== true) void leases.recover().catch(() => 0)
+  // Leases are recovered once the node's Devices side is up (headless/devices.ts), so the turns it ran under its
+  // device id are found as its own and a peer's takeover is seen first.
+  void projectAgents.restore().catch(() => undefined)
   // Events that arrived while the node was down (or were cut short) go to their routines now.
   if (options.quiet !== true) await router.start().catch((error: unknown) => logger.warn('Event router did not start', { message: error instanceof Error ? error.message : String(error) }))
 
@@ -527,6 +540,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     apps,
     learned,
     browser,
+    mainTools: tools,
     supervisor,
     leases,
     devicesHooks: {

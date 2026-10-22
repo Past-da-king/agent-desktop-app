@@ -24,7 +24,7 @@ export interface ReplicaStore {
   changesAfter(seq: number, limit?: number, skipVia?: string): { changes: Change[]; cursor: number }
   applyRemote(changes: Change[], via?: string): Promise<void>
   logSeq(): number
-  onChange(listener: () => void): () => void
+  onChange(listener: (change?: { entity?: string }) => void): () => void
   localValue(key: string): string | null
   setLocalValue(key: string, value: string): void
   list(entity: 'device'): Promise<DeviceRow[]>
@@ -153,6 +153,7 @@ export class Replicator {
   private readonly links = new Map<string, PeerLink>()
   private timer: ReturnType<typeof setInterval> | null = null
   private offChange: (() => void) | null = null
+  private peersTimer: ReturnType<typeof setTimeout> | null = null
   private running = false
 
   constructor(private readonly deps: ReplicatorDeps) {}
@@ -160,8 +161,16 @@ export class Replicator {
   start(): void {
     if (this.running) return
     this.running = true
-    this.offChange = this.deps.store.onChange(() => {
+    this.offChange = this.deps.store.onChange((change) => {
       for (const link of this.links.values()) link.nudge()
+      // A device paired, changed or was taken out: read the peers again now, not at the next 15 s check, so a brain
+      // that just joined is replicated with from its first turn.
+      if (change?.entity === 'device' && this.peersTimer === null) {
+        this.peersTimer = setTimeout(() => {
+          this.peersTimer = null
+          if (this.running) void this.reconcile(true)
+        }, 100)
+      }
     })
     void this.reconcile(true)
     this.timer = setInterval(() => void this.reconcile(true), this.deps.refreshMs ?? 15_000)
@@ -169,6 +178,8 @@ export class Replicator {
 
   stop(): void {
     this.running = false
+    if (this.peersTimer !== null) clearTimeout(this.peersTimer)
+    this.peersTimer = null
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
     this.offChange?.()
@@ -223,6 +234,8 @@ class PeerLink {
   private stopped = false
   private pullController: AbortController | null = null
   private nudgeTimer: ReturnType<typeof setTimeout> | null = null
+  /** Local changes not yet pushed (set by nudge, cleared as a push starts). */
+  private dirty = false
   private wake: (() => void) | null = null
   private lock: Promise<unknown> = Promise.resolve()
   private lastError: string | null = null
@@ -250,11 +263,19 @@ class PeerLink {
     this.wake?.()
   }
 
-  /** A local change: cut the long poll short so it is pushed within a moment. */
+  /**
+   * A local change: cut the long poll short so it is pushed now. The first change after a quiet spell goes at once
+   * (a brain that dies right after starting a turn has still handed its lease on); more changes within 200 ms are
+   * pushed together right after.
+   */
   nudge(): void {
+    this.dirty = true
     if (this.nudgeTimer !== null) return
+    this.pullController?.abort()
+    this.wake?.()
     this.nudgeTimer = setTimeout(() => {
       this.nudgeTimer = null
+      if (!this.dirty) return
       this.pullController?.abort()
       this.wake?.()
     }, 200)
@@ -312,12 +333,13 @@ class PeerLink {
       const url = this.peer.urls[index] ?? ''
       try {
         const client = this.client(url, pass)
+        this.dirty = false
         await this.pushAll(client)
         if (this.stopped) return false
         const controller = new AbortController()
         this.pullController = controller
         // A nudge that landed while we pushed: do not sit in a long poll with fresh local work waiting.
-        const wait = this.nudgeTimer !== null ? 0 : waitSeconds
+        const wait = this.dirty ? 0 : waitSeconds
         let pulled
         try {
           pulled = await client.pull(this.cursorOf('pull'), { wait, signal: controller.signal })

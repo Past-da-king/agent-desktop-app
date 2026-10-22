@@ -45,6 +45,7 @@ import { clipboardAttachments } from './clipboard-files'
 import { savePastedFile } from './pasted'
 import { Runner } from './runtime/runner'
 import { TurnLeases } from './runtime/turns'
+import { ProjectAgentRows } from './runtime/project-agents'
 import { devicesState, type DevicesSyncDeps } from './devices/sync'
 import { attachDevicesSync } from './devices/attach'
 import { registerRelay, rolesFromStore } from './devices/relay'
@@ -726,6 +727,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
       else runner?.stop(lease.chatId)
     },
   })
+  // A project agent the main agent hands work to shows as a helper row in the main chat, with the project's icon.
+  const projectAgents = new ProjectAgentRows({
+    store,
+    state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
+    changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
+  })
   const helperToolset = buildWorkerToolset({
     deviceHub: () => devicesState.sync?.tools ?? null,
     store,
@@ -794,6 +801,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       },
     },
     projects: {
+      agents: projectAgents,
       post: async (chat, text, via) => {
         if (runner !== null) await runner.receive(chat, text, via)
       },
@@ -877,6 +885,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     } catch {
       // Startup repair is best effort: the app must still open if a row cannot be rewritten.
     }
+    void projectAgents.restore().catch(() => undefined)
     // After the repairs: what a crash cut off runs again, once (runtime/turns.ts).
     void leases?.recover().catch(() => 0)
     // Helpers left working are now marked interrupted, so desks can start: anything that arrived meanwhile,
