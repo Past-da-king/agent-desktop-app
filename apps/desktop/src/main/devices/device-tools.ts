@@ -112,8 +112,16 @@ const ALIASES: Record<string, string[]> = {
   open_url: ['url_open', 'link_open'],
 }
 
-function offers(name: string, tool: string): boolean {
-  return name === tool || (ALIASES[tool] ?? []).includes(name)
+/** One name for every spelling of a tool: the key whose aliases include it, else the name itself. */
+export function canonTool(name: string): string {
+  if (name in ALIASES) return name
+  for (const [key, others] of Object.entries(ALIASES)) if (others.includes(name)) return key
+  return name
+}
+
+/** Does a device tool called `name` do what was asked for as `tool`? Either side may use any spelling. */
+export function offers(name: string, tool: string): boolean {
+  return name === tool || canonTool(name) === canonTool(tool)
 }
 
 function toolsOfRow(row: DeviceRow): DeviceTool[] {
@@ -283,7 +291,7 @@ export class DeviceToolHub {
     if ('error' in found) return { ok: false, state: 'failed', text: found.error, device: '' }
     const row = found.row
     const offered = toolsOfRow(row)
-    const spec = offered.find((t) => t.name === tool) ?? offered.find((t) => (ALIASES[tool] ?? []).includes(t.name))
+    const spec = offered.find((t) => t.name === tool) ?? offered.find((t) => offers(t.name, tool))
     if (spec !== undefined) tool = spec.name
     if (spec === undefined) {
       const names = offered.map((t) => t.name)
