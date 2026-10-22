@@ -1268,6 +1268,8 @@ export class HelperManager implements HelperHost {
         cli: brain.cli,
         thread: `helper:${run.id}`,
         tools: run.tools ?? this.workerTools,
+        // A desk hands work out itself; every other helper's session keeps the no-delegate guard.
+        ...(run.desk === true ? { delegates: true } : {}),
         system: await this.buildHelperPrompt(run),
         prompt: run.pushMessage ?? run.brief,
         ...(run.pushMessage === undefined && (run.images ?? []).length > 0 ? { images: run.images } : {}),
