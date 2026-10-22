@@ -56,6 +56,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 - 03:00 C: server has its own browser (CDP on the server's Chromium, devices-headless 88ee83e), real turn on the server opened a page and answered. Full suite 1123 pass. A core done (devices-node fb428a1: server, pairing, rpc, Settings > Devices; finishing live proof + s11). B core done (devices-sync 1b4c93d: change log + replication, pinned fetch, bundle, origin line, device commands, open_url/send_file, turn leases wired in index.ts; finishing s11 brain side).
 - 03:05 C made INTEGRATOR: branch devices-headless-int merging node+sync+headless, wiring seams, two-node + scripted phone test; then relay. Lead merges devices-int into devices, then design.
 
+- 03:20 B core DONE devices-sync 9f797ac (31 devices tests, full suite 1141 pass): replication 3 nodes with relay + conflict + no echo + TLS pin, bundle (secrets brain only), origin line, open_url/send_file device commands, turn leases with crash resume exactly once + failover claim, works with Devices off. Merge notes in PROGRESS-B.md, forwarded to C. B now on s11 device tools brain side (was missed).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
