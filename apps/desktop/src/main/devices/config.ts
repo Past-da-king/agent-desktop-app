@@ -101,7 +101,35 @@ export function isAdvertisable(address: string, family: string | number, interna
 }
 
 /** The addresses this node advertises: interface addresses plus the person's extra addresses (protocol s2). */
-/** `ipv6`: false when the server could only listen on IPv4, so IPv6 addresses would not answer. */
+/** Adapters that are a virtual switch on this machine (containers, VMs), which other devices rarely reach. */
+const VIRTUAL_ADAPTER = /^(docker|br-|veth|virbr|vmnet|vboxnet|vethernet|hyper-v|lxc|lxd|podman|cni|flannel)/i
+
+/**
+ * How likely another device reaches this address, best first: a VPN or overlay range (100.64.0.0/10, RFC 6598, and
+ * fd7a:115c:a1e0::/48 that Tailscale-compatible networks use), then a home or office LAN (192.168/16, 10/8), then
+ * the other private range (172.16/12, often a virtual switch), other IPv4, other unique-local IPv6, global IPv6.
+ * A virtual-switch adapter goes after all of those.
+ */
+export function addressRank(address: string, v6: boolean, adapter = ''): number {
+  const virtual = VIRTUAL_ADAPTER.test(adapter.trim()) ? 100 : 0
+  if (!v6) {
+    const [a = 0, b = 0] = address.split('.').map(Number)
+    if (a === 100 && b >= 64 && b <= 127) return virtual + 0
+    if (a === 192 && b === 168) return virtual + 2
+    if (a === 10) return virtual + 3
+    if (a === 172 && b >= 16 && b <= 31) return virtual + 5
+    return virtual + 6
+  }
+  const lower = address.toLowerCase()
+  if (lower.startsWith('fd7a:115c:a1e0:')) return virtual + 1
+  if (lower.startsWith('fc') || lower.startsWith('fd')) return virtual + 7
+  return virtual + 8
+}
+
+/**
+ * The addresses this node advertises (protocol s2): the person's own first, then interface addresses best first
+ * (addressRank). `ipv6`: false when the server could only listen on IPv4, so IPv6 addresses would not answer.
+ */
 export function advertisedUrls(config: DevicesConfig, interfaces: InterfaceMap = networkInterfaces(), ipv6 = true): string[] {
   const out: string[] = []
   const add = (url: string): void => {
@@ -112,15 +140,18 @@ export function advertisedUrls(config: DevicesConfig, interfaces: InterfaceMap =
   for (const url of config.extraUrls) add(url)
   const loopbackOnly = config.listen.startsWith('127.') || config.listen === '::1'
   if (!loopbackOnly) {
-    for (const list of Object.values(interfaces)) {
+    const found: Array<{ url: string; rank: number; order: number }> = []
+    for (const [adapter, list] of Object.entries(interfaces)) {
       for (const entry of list ?? []) {
         if (!isAdvertisable(entry.address, entry.family, entry.internal)) continue
         const v6 = entry.family === 'IPv6' || (entry.family as unknown) === 6
         if (v6 && !ipv6) continue
         const host = v6 ? `[${entry.address.split('%')[0]}]` : entry.address
-        add(`https://${host}:${config.port}`)
+        found.push({ url: `https://${host}:${config.port}`, rank: addressRank(entry.address, v6, adapter), order: found.length })
       }
     }
+    found.sort((x, y) => x.rank - y.rank || x.order - y.order)
+    for (const item of found) add(item.url)
   }
   return out
 }
