@@ -1,8 +1,6 @@
 import { type ChatItem, type MascotId } from '@agent/core'
 import { useEffect, useMemo, useState } from 'react'
 
-import { FINISHED_CARD_MS } from '../../shared/helper-cards'
-
 import { agent } from '../bridge'
 import { openChat } from '../lib/chat-actions'
 import { helperCards, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
@@ -80,18 +78,11 @@ export function useWorkingHelpers(): HelperCard[] {
 }
 
 /**
- * The side panel's cards: every working helper, plus a project agent's card for a while after its project chat went
- * idle, showing its last answer. The minute tick lets an idle card leave on time.
+ * The side panel's cards: what is working right now and nothing else. A card that finished (done, failed or
+ * stopped) leaves the moment it does; a project agent's last answer is in its project chat.
  */
 export function usePanelCards(): HelperCard[] {
-  const items = useEntity('chat_item')
-  const projects = useEntity('project')
-  const [tick, setTick] = useState(() => Date.now())
-  useEffect(() => {
-    const timer = setInterval(() => setTick(Date.now()), 60_000)
-    return () => clearInterval(timer)
-  }, [])
-  return useMemo(() => helperCards(items, projects, { keepFinishedMs: FINISHED_CARD_MS, finishedProjectsOnly: true, now: Math.max(tick, Date.now()) }), [items, projects, tick])
+  return useWorkingHelpers()
 }
 
 /** A project agent's newest steps under its card while it works (the line above already says the one it is on). */
