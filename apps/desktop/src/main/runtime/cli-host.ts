@@ -33,6 +33,11 @@ export interface CliTurnRequest {
   thread: string
   /** The tools this run may use (the main agent's set, or a helper's worker set). */
   tools: Tool[]
+  /**
+   * A helper thread that was given delegate on purpose (a routine's desk, workers/router.ts). Without it, a
+   * helper's session never sees delegate or helper_*, whatever its tool list says.
+   */
+  delegates?: boolean
   system: string
   prompt: string
   images?: string[]
@@ -61,6 +66,16 @@ const NOT_ON_CLI = /^(delegate|helper_|helpers_)/
 /** Whether a thread may hand work to helpers: not a helper's own session, not a routine. */
 export function threadDelegates(thread: string): boolean {
   return !thread.startsWith('helper:') && thread !== 'routine'
+}
+
+/** The tools a plan session is given: no delegate for a helper unless it was granted on purpose (a desk). */
+export function toolsForTurn(request: Pick<CliTurnRequest, 'tools' | 'thread' | 'cli' | 'delegates'>): Tool[] {
+  return request.tools.filter(
+    (tool) =>
+      (request.delegates === true || threadDelegates(request.thread) || !NOT_ON_CLI.test(tool.spec.name)) &&
+      // Claude brings its own (better) shell and file tools, asked through the app; Codex keeps the app's.
+      !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name)),
+  )
 }
 
 /** A native binary inside app.asar cannot be started; electron-builder unpacks it next to the archive. */
@@ -190,12 +205,7 @@ export class CliHost {
   async turn(request: CliTurnRequest): Promise<{ text: string; error?: string }> {
     const server = await this.ensureServer()
     const token = server.open({
-      tools: request.tools.filter(
-        (tool) =>
-          (threadDelegates(request.thread) || !NOT_ON_CLI.test(tool.spec.name)) &&
-          // Claude brings its own (better) shell and file tools, asked through the app; Codex keeps the app's.
-          !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name)),
-      ),
+      tools: toolsForTurn(request),
       context: request.context,
       onCall: request.onCall,
       onResult: request.onResult,
