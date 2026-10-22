@@ -234,7 +234,12 @@ export class CliHost {
           signal: request.signal,
           onEvent: request.onEvent,
           permission: sdkPermission({
-            settings: this.settings,
+            // A helper another computer placed here works with that computer's commands-and-files choice.
+            settings: () => {
+              const own = this.settings()
+              const shell = request.context.shell
+              return shell === undefined ? own : { ...own, shell }
+            },
             approve: (summary, details) => request.context.approve(summary, details, 'computer'),
             alsoAllowed: [dir],
           }),

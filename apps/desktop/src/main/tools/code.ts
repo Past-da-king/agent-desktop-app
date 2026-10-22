@@ -104,7 +104,7 @@ function runCodeTool(deps: CodeToolDeps): Tool {
         return 'Python is not installed on this computer (no py, python or python3 found), so I could not run that. I did not try to install anything.'
       }
 
-      const choice = deps.settings?.get().shell ?? 'ask'
+      const choice = ctx.shell ?? deps.settings?.get().shell ?? 'ask'
       const declined = (note: string): void =>
         recordRun(input, { kind: 'code', input: code, label: language, stdout: '', stderr: '', exitCode: null, ms: 0, state: 'declined', trimmed: false, note })
       if (choice === 'never') {

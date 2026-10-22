@@ -374,7 +374,43 @@ describe('HelperManager', () => {
     expect(delivered).toHaveLength(0)
   })
 
-  it('runs at most four helpers and queues the rest', async () => {
+  // Rule of 23 Oct 2026: "who decided I can only run four agents at once?" No ceiling of our own: every brief a
+  // delegate call gives runs, all at once. Up to 0.2.56 this ran 5 of 9 and at most 4 at a time.
+  it('runs every helper it is given at once by default, however many', async () => {
+    let current = 0
+    let peak = 0
+    let open: (() => void) | null = null
+    const all = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    const slowTool: Tool = {
+      spec: { name: 'slow_tool', description: 'Takes a while.', schema: { type: 'object', properties: {} } },
+      run: async () => {
+        current++
+        peak = Math.max(peak, current)
+        if (current === 9) open?.()
+        await Promise.race([all, sleep(1_500)])
+        current--
+        return 'done'
+      },
+    }
+    fake = await startFakeAi((body) =>
+      hasToolResult(body) ? { text: 'Finished.' } : { toolCalls: [{ name: 'slow_tool', input: {} }] },
+    )
+    const { manager, delivered, store: db } = makeManager({ extraWorkerTools: [slowTool] })
+
+    const tasks = Array.from({ length: 9 }, (_, index) => ({ label: `Job ${index + 1}`, brief: `Do job number ${index + 1}.` }))
+    await manager.delegate(tasks)
+
+    expect(manager.live()).toHaveLength(9)
+    await waitFor(() => delivered.length === 9, 8_000)
+    expect(peak).toBe(9)
+    expect(manager.slots().limit).toBe(Number.POSITIVE_INFINITY)
+    const rows = (await db.list('chat_item')).filter((row) => row.kind === 'helper')
+    expect(rows).toHaveLength(9)
+  })
+
+  it('Settings > Helpers at once limits them only when the person sets a number', async () => {
     let current = 0
     let peak = 0
     const slowTool: Tool = {
@@ -390,17 +426,43 @@ describe('HelperManager', () => {
     fake = await startFakeAi((body) =>
       hasToolResult(body) ? { text: 'Finished.' } : { toolCalls: [{ name: 'slow_tool', input: {} }] },
     )
-    const { manager, delivered } = makeManager({ extraWorkerTools: [slowTool] })
+    const db = database()
+    const delivered: string[] = []
+    const manager = new HelperManager({
+      store: db,
+      settings: settingsView({ ...READY, helpersAtOnce: 2 }),
+      secrets: secretsView('test-key'),
+      providerFactory: () => providerFactory(),
+      workerTools: [...buildWorkerToolset({ store: db }), slowTool],
+      deliver: (note) => {
+        delivered.push(note)
+      },
+      platform: 'linux',
+      timeZone: 'UTC',
+    })
+    managers.push(manager)
 
-    const tasks = Array.from({ length: 5 }, (_, index) => ({
-      label: `Job ${index + 1}`,
-      brief: `Do job number ${index + 1}.`,
-    }))
-    await manager.delegate(tasks)
-
+    await manager.delegate(Array.from({ length: 5 }, (_, index) => ({ label: `Job ${index + 1}`, brief: `Do job number ${index + 1}.` })))
     expect(manager.live()).toHaveLength(5)
     await waitFor(() => delivered.length === 5, 8_000)
-    expect(peak).toBe(4)
+    expect(peak).toBe(2)
+  })
+
+  it('a helper still waiting its turn when the app closed starts on the next start', async () => {
+    fake = await startFakeAi(() => ({ text: 'Did the waiting job.' }))
+    const db = database()
+    const row = await db.upsert('chat_item', {
+      kind: 'helper',
+      text: 'Do the waiting job.',
+      meta: JSON.stringify({ id: '', label: 'Waiting', state: 'working', summary: 'Waiting its turn', queued: true }),
+    })
+    const { manager, delivered } = makeManager()
+
+    await manager.restore()
+
+    await waitFor(() => delivered.length === 1, 5_000)
+    expect(delivered[0]).toContain('Did the waiting job.')
+    expect(meta((await db.get('chat_item', row.id)) as ChatItem)).toMatchObject({ state: 'done', queued: false })
   })
 
   it('nudges the main agent to push a helper that gave up', async () => {

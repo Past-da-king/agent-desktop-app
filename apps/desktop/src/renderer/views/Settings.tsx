@@ -23,6 +23,7 @@ import { MemorySettings } from './MemorySettings'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
 import { DevicesSettings } from './Devices'
+import { WorkLimits } from './WorkLimits'
 
 function ResetDialog({ onClose }: { onClose: () => void }): JSX.Element {
   const navigate = useUi((state) => state.navigate)
@@ -505,6 +506,7 @@ export function Settings(): JSX.Element {
                   ]}
                 />
               </div>
+              <WorkLimits />
             </div>
           </section>
 

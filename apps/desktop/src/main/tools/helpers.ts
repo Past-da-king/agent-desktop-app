@@ -25,7 +25,7 @@ function delegateTool(host: HelperHost): Tool {
       schema: schema(['tasks'], {
         tasks: {
           type: 'array',
-          description: '1 to 5 self-contained briefs, one per helper',
+          description: 'Self-contained briefs, one per helper, as many as the work needs. They all start at once.',
           items: {
             type: 'object',
             properties: {

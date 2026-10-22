@@ -25,8 +25,6 @@ export const NODE_BEAT_MS = 20_000
 /** A node row older than this is a brain that is gone or switched off: nothing is placed on it. */
 export const NODE_FRESH_MS = 75_000
 export const SCAN_MS = 3_000
-/** How many helpers a brain takes from other devices at once, unless the person sets another number. */
-export const DEFAULT_JOB_CAP = 4
 /** A start nobody took within this long (no job lease) is run where it was placed from. */
 export const TAKE_BACK_MS = 45_000
 /** A routine slot the preferred brain has not claimed within this long is run by whichever brain sees it next. */
@@ -39,7 +37,7 @@ export interface NodeCapacity {
   kind: string
   /** The AI accounts (ids) this brain can run now: a key it holds, or a plan it is signed in to. */
   accounts: string[]
-  /** Most helpers it takes from other devices at once; 0 = none. */
+  /** Most helpers it takes from other devices at once; 0 = none, NO_LIMIT_CAP = no limit (the default). */
   cap: number
   /** Helpers running on it now. */
   active: number
@@ -330,8 +328,21 @@ export class Offload {
     return { device: row.device, from: row.from }
   }
 
-  async placeChat(chat: string, device: string): Promise<void> {
-    await this.deps.store.upsert('job', { id: `chat-${chat}`, kind: 'claim', device, from: this.deps.selfId(), helper: chat, op: 'chat', status: 'on', at: this.now() })
+  /** `info`: what the chat carries from this brain, as JSON ({ shell }: this computer's commands-and-files choice). */
+  async placeChat(chat: string, device: string, info = ''): Promise<void> {
+    await this.deps.store.upsert('job', { id: `chat-${chat}`, kind: 'claim', device, from: this.deps.selfId(), helper: chat, op: 'chat', status: 'on', info, at: this.now() })
+  }
+
+  /** A project chat another brain placed here: the commands-and-files choice it carries, or undefined. */
+  async placedChatShell(chat: string): Promise<'always' | 'ask' | 'never' | undefined> {
+    const row = await this.deps.store.get('job', `chat-${chat}`)
+    if (row === null || row.kind !== 'claim' || !this.isSelf(row.device) || row.from === '' || this.isSelf(row.from)) return undefined
+    try {
+      const shell = (JSON.parse(row.info) as { shell?: unknown }).shell
+      return shell === 'always' || shell === 'ask' || shell === 'never' ? shell : undefined
+    } catch {
+      return undefined
+    }
   }
 
   /**

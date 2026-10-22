@@ -6,11 +6,11 @@
  *
  * Off (no effect at all) while Devices is off, and while no other brain beats a node row.
  */
-import { MAIN_CHAT, accountsOf, resolvePick, type AiAccount, type ChatEvent, type ChatItem, type ChatRunInfo, type DataChange, type JobRow, type ProjectRow, type RunState, type Settings, type TriggerRow, type TurnLeaseRow } from '@agent/core'
+import { MAIN_CHAT, NO_LIMIT_CAP, accountsOf, resolvePick, type AiAccount, type ChatEvent, type ChatItem, type ChatRunInfo, type DataChange, type JobRow, type ProjectRow, type RunState, type Settings, type TriggerRow, type TurnLeaseRow } from '@agent/core'
 
 import { brainFor, isBrain, type ProviderFactory } from '../runtime/brains'
 import type { HelperManager, OffloadLink } from '../runtime/helpers'
-import { DEFAULT_JOB_CAP, Offload, TAKE_BACK_MS, type NodeCapacity, type PlaceResult } from '../runtime/offload'
+import { Offload, TAKE_BACK_MS, type NodeCapacity, type PlaceResult } from '../runtime/offload'
 import type { ChatVia } from '../tools/projects'
 import { devicesState, ownBrainIds } from './sync'
 
@@ -66,6 +66,8 @@ export interface OffloadWire {
   wrapRunner<T extends object>(runner: T): T
   /** A chat's state with what runs on other brains for it. */
   state(local: RunState, chat: string): RunState
+  /** A project chat another computer placed here: that computer's commands-and-files choice, or undefined. */
+  shellFor(chat: string): 'always' | 'ask' | 'never' | undefined
   stop(): void
 }
 
@@ -101,12 +103,13 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     return isBrain(brainFor({ settings, secrets: deps.secrets, providerFactory: deps.providerFactory, hasCli: deps.cli !== null }, { account: account.id, model: '' }))
   }
   const capacity = (): NodeCapacity => {
-    const cap = settings.get().devicesJobCap
+    // Settings > Devices > Run for your other devices: no limit (the default), none, or at most a number.
+    const limit = settings.get().devicesJobLimit
     return {
       name: deps.name(),
       kind: deps.kind,
       accounts: accountsOf(settings.get()).filter(canRun).map((account) => account.id),
-      cap: typeof cap === 'number' && Number.isFinite(cap) ? Math.max(0, Math.min(16, Math.round(cap))) : DEFAULT_JOB_CAP,
+      cap: limit < 0 ? 0 : limit === 0 ? NO_LIMIT_CAP : Math.min(NO_LIMIT_CAP, limit),
       active: helpers.activeCount(),
       browser: deps.browser(),
     }
@@ -123,6 +126,8 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     if (msg.op === 'post') {
       const runner = deps.runner()
       if (runner === null) return false
+      // Its commands-and-files choice is known before its turn builds any tools.
+      await learnChatShell(msg.helper)
       let via: ChatVia | null = null
       try {
         via = msg.info === '' ? null : (JSON.parse(msg.info) as ChatVia)
@@ -167,6 +172,29 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     },
   }
   helpers.setOffload(link)
+
+  // Project chats other computers placed here, with the commands-and-files choice each carries (read when a turn
+  // builds its tools, so kept here as rows arrive).
+  const chatShells = new Map<string, 'always' | 'ask' | 'never'>()
+  const learnChatShell = (chat: string): Promise<void> =>
+    offload
+      .placedChatShell(chat)
+      .then((shell) => {
+        if (shell === undefined) chatShells.delete(chat)
+        else chatShells.set(chat, shell)
+      })
+      .catch(() => undefined)
+  void store
+    .list('job')
+    .then((rows) => {
+      for (const row of rows) if (row.kind === 'claim' && row.op === 'chat') void learnChatShell(row.helper)
+    })
+    .catch(() => undefined)
+  const offClaims = store.onChange((change: DataChange) => {
+    if (change.entity !== 'job' || change.row === undefined) return
+    const row = change.row as JobRow
+    if (row.kind === 'claim' && row.op === 'chat') void learnChatShell(row.helper)
+  })
 
   // A start nobody took is run here; a placed chat's turn shows as running here.
   const takeBack = setInterval(() => void helpers.takeBack(TAKE_BACK_MS).catch(() => 0), 10_000)
@@ -236,7 +264,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
       const pick = resolvePick(settings.get(), project.ai, 'main')
       const placed = await offload.place({ text: brief, account: pick.account, ...(device === undefined ? {} : { device }), localFolder: (project.path ?? '') !== '' })
       if (placed.device !== null) {
-        await offload.placeChat(chat, placed.device)
+        await offload.placeChat(chat, placed.device, JSON.stringify({ shell: settings.get().shell }))
         placedChats.add(chat)
       }
       return placed
@@ -286,9 +314,11 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
         },
       }),
     state,
+    shellFor: (chat) => chatShells.get(chat),
     stop: () => {
       clearInterval(takeBack)
       offLeases()
+      offClaims()
       offCards()
       offload.stop()
       helpers.setOffload(null)
