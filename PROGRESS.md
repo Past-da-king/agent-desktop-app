@@ -108,6 +108,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 09:30 E merged into devices 5c7ca3a (0.2.43): overlay urls first, proxyFor (proxy setting, else overlay SOCKS for overlay hosts, loopback never), overlay never writes rows with Devices off. Full suite 1270, harness 7/7. design fast-forwarded to 5c7ca3a. A rebuilding installer 0.2.43 with agent-net.exe; C redeploying server.
 
+- 10:00 DELIVERED: Downloads/agent = Agent-0.2.43-setup.exe (329,167,551 bytes, sha256 C6FA029C...3430, from 5c7ca3a, agent-net.exe in resources), Agent-0.14.2.apk, START-HERE.md. Server 0.2.43 (2a242b5) clean, unpaired. design = devices. All helpers finished. Open for Ayanda: install, Allow connections, scan, pair server; real camera scan unproven; server Claude login.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
