@@ -432,6 +432,16 @@ describe('routines on one brain only', () => {
     const mine = new Scheduler({ store: db, runner: { runRoutine: async (t: TriggerRow) => (ran.push(t.id), { text: 'ok', waiting: false }) }, claim: async () => true })
     await mine.tick()
     expect(ran).toEqual([trigger.id])
+
+    // Another brain ran a slot: its result arrives by replication and is announced here once.
+    const other = await db.upsert('trigger', { name: 'Digest', kind: 'interval', spec: '15', prompt: 'Do it', enabled: true, lastRunAt: 0, lastResult: '' })
+    const heard: string[] = []
+    const watching = new Scheduler({ store: db, runner: { runRoutine: async () => ({ text: 'x', waiting: false }) }, claim: async () => false, notifyRoutine: (_id, name, result) => heard.push(`${name}: ${result}`) })
+    await watching.tick()
+    await db.upsert('trigger', { id: other.id, lastRunAt: Date.now(), lastResult: 'Sent the digest.' })
+    await watching.tick()
+    await watching.tick()
+    expect(heard).toEqual(['Digest: Sent the digest.'])
   })
 })
 
