@@ -33,6 +33,11 @@ export interface SchedulerDeps {
   runBuiltin?: (trigger: TriggerRow) => Promise<RoutineRunResult>
   /** "Run now" on an event routine: its desk looks at what is waiting (workers/router.ts). */
   runEvent?: (trigger: TriggerRow) => Promise<RoutineRunResult>
+  /**
+   * Devices (s12): every brain holds the same routines, so a due one runs on exactly one of them. False: another
+   * brain runs this slot (its lastRunAt arrives by replication). Absent: this brain runs every routine (alone).
+   */
+  claim?: (trigger: TriggerRow) => Promise<boolean>
 }
 
 export const SCHEDULER_INTERVAL_MS = 30_000
@@ -47,6 +52,9 @@ export class Scheduler {
   private readonly notifyRoutine: RoutineResultNotice
   private readonly runBuiltin: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
   private readonly runEvent: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
+  private readonly claim: ((trigger: TriggerRow) => Promise<boolean>) | null
+  /** Slots another brain took (claim said no), by routine id, with the lastRunAt they were due at. */
+  private readonly elsewhere = new Map<string, number | null>()
 
   private timer: ReturnType<typeof setInterval> | null = null
   private chain: Promise<void> = Promise.resolve()
@@ -61,6 +69,7 @@ export class Scheduler {
     this.notifyRoutine = deps.notifyRoutine ?? (() => undefined)
     this.runBuiltin = deps.runBuiltin ?? null
     this.runEvent = deps.runEvent ?? null
+    this.claim = deps.claim ?? null
   }
 
   /** Look for due routines now, then again every interval. Safe to call more than once. */
@@ -108,10 +117,21 @@ export class Scheduler {
     if (this.stopped) return
     const now = this.now()
     const triggers = await this.store.list('trigger')
+    // A slot another brain ran has come back with its result: the person hears it here as if it ran here.
+    for (const trigger of triggers) {
+      if (!this.elsewhere.has(trigger.id)) continue
+      if (trigger.lastRunAt === this.elsewhere.get(trigger.id)) continue
+      this.elsewhere.delete(trigger.id)
+      if (trigger.lastResult !== '' && trigger.lastResult !== WAITING_RESULT) this.notifyRoutine(trigger.id, trigger.name, trigger.lastResult)
+    }
     for (const trigger of triggers) {
       if (this.stopped) return
       if (isBuiltin(trigger) || !trigger.enabled || !isDue(trigger, now)) continue
       try {
+        if (this.claim !== null && !(await this.claim(trigger))) {
+          this.elsewhere.set(trigger.id, trigger.lastRunAt)
+          continue
+        }
         await this.runExclusive(() => this.execute(trigger, false))
       } catch {
         // A routine that cannot be recorded must not stop the scheduler for every other routine.

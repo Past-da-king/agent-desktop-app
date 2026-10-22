@@ -217,6 +217,7 @@ export function HelperStage(): JSX.Element | null {
             <div className="hp-brief a-prose">
               <Markdown text={helper.brief} />
             </div>
+            {helper.where !== '' ? <p className="small muted hp-where">{helper.state === 'working' ? 'Runs on' : 'Ran on'} {helper.where}</p> : null}
           </section>
           {current !== undefined ? (
             <div className="hp-now">

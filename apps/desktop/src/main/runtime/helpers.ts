@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   AgentLoop,
+  type JobRow,
   MAIN_CHAT,
   PROVIDERS,
   accountById,
@@ -40,6 +41,7 @@ import { buildSystemPrompt } from './prompt'
 import { finishRun, runStarted } from './run-detail'
 import { redactSecrets } from '../logger'
 import type { LeaseHook } from './turns'
+import { CANNOT_RUN_HERE, type JobOp, type PlaceRequest, type PlaceResult } from './offload'
 import { helperTools } from '../tools/helpers'
 import {
   describeCall,
@@ -58,6 +60,25 @@ export interface HelperTask {
   model?: string
   /** The profile it works in, by name or id. None named: General, which has none of the person's accounts. */
   profile?: string
+  /** Where it runs (s12): '' or 'best', 'here', or a linked brain by name. */
+  device?: string
+}
+
+/**
+ * What the helper manager needs to place helpers on another brain (runtime/offload.ts). Absent, or with no self id
+ * (Devices off), every helper runs here as before.
+ */
+export interface OffloadLink {
+  selfId(): string
+  isSelf(id: string): boolean
+  /** Is that brain reachable now? */
+  up(id: string): boolean
+  place(req: PlaceRequest): Promise<PlaceResult>
+  send(to: string, op: JobOp, helper: string, extra?: { text?: string; item?: string; info?: string }): Promise<void>
+  leaseHolder(helperId: string): Promise<{ device: string; running: boolean }>
+  deviceName(id: string): Promise<string>
+  /** This brain could not run that AI account (its plan is signed out, its key refused): stop offering it. */
+  cannotRun?(account: string, why: string): void
 }
 
 /** What the helper manager needs from the profiles: finding one by name or id, and General. */
@@ -115,6 +136,8 @@ export interface HelperLive {
   chat?: string
   /** True for a separate run started from a message sent while the chat was busy. */
   side?: boolean
+  /** It runs on another of the person's brains (s12). */
+  remote?: boolean
 }
 
 export interface HelperManagerDeps {
@@ -146,6 +169,8 @@ export interface HelperManagerDeps {
   learnedNames?: () => Record<string, string>
   /** Turn leases (runtime/turns.ts): a helper cut off by a crash is sent back to work on the next start. */
   leases?: LeaseHook
+  /** Placing helpers on another brain (s12). Can also be set later with setOffload. */
+  offload?: OffloadLink
 }
 
 interface Ready {
@@ -179,6 +204,25 @@ interface HelperRun {
   desk?: boolean
   /** Its tools when they differ from the worker toolset (a desk adds delegate). */
   tools?: Tool[]
+  /** The brain that placed it here, when that is another brain: its result goes back there (s12). '' = here. */
+  origin?: string
+}
+
+/** A helper this brain placed on another brain, as long as it works there. */
+interface RemoteRun {
+  id: string
+  label: string
+  brief: string
+  chat: string
+  profile: string
+  startedAt: number
+  /** The brain it was sent to. */
+  device: string
+  /** When the start went out; a start nobody took is run here after a while. */
+  sentAt: number
+  pick: AiPick
+  profileId: string
+  model: string
 }
 
 /** What an event routine hands its desk. */
@@ -245,8 +289,11 @@ export class HelperManager implements HelperHost {
   private readonly emit: (event: ChatEvent) => void
   private readonly notifyUser: (title: string, body: string) => void
   private readonly leases: LeaseHook | undefined
+  private offload: OffloadLink | null
 
   private readonly runs = new Map<string, HelperRun>()
+  /** Helpers this brain placed on another brain that still work there (s12). */
+  private readonly remote = new Map<string, RemoteRun>()
   private readonly queue: string[] = []
   private readonly active = new Set<string>()
   private readonly inbox = new Map<string, string[]>()
@@ -281,6 +328,28 @@ export class HelperManager implements HelperHost {
     this.emit = deps.emit ?? (() => undefined)
     this.notifyUser = deps.notify ?? (() => undefined)
     this.leases = deps.leases
+    this.offload = deps.offload ?? null
+  }
+
+  /** Devices came up (or went away): placing helpers on other brains (runtime/offload.ts), or not. */
+  setOffload(link: OffloadLink | null): void {
+    this.offload = link
+  }
+
+  /** This brain placed that helper on another brain, and it still works there. */
+  isPlacedElsewhere(id: string): boolean {
+    return this.remote.has(id)
+  }
+
+  /** Helpers running on this brain now (the node row's `active`). */
+  activeCount(): number {
+    return this.runs.size
+  }
+
+  /** The link when it is on: Devices on, with an id. */
+  private link(): OffloadLink | null {
+    const link = this.offload
+    return link !== null && link.selfId() !== '' ? link : null
   }
 
   // ---- the main agent's side ---------------------------------------------------------------
@@ -332,7 +401,17 @@ export class HelperManager implements HelperHost {
       const label = (task.label.trim() || labelFromBrief(task.brief)).slice(0, 40)
       const profile = chosen[index] ?? this.generalProfile()
       const use = picked[index]!
-      const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name })
+      const link = this.link()
+      const placed = link === null ? null : await link.place({ text: `${label}\n${task.brief}`, account: use.pick.account, ...(task.device === undefined ? {} : { device: task.device }) })
+      const where = link === null ? {} : { placedBy: link.selfId(), runOn: placed?.device ?? link.selfId(), ...(placed?.device ? { runsOnName: placed.name } : {}) }
+      const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name, ...where })
+      if (link !== null && placed !== null && placed.device !== null) {
+        this.remote.set(id, { id, label, brief: task.brief, chat, profile: profile.name, startedAt: this.now(), device: placed.device, sentAt: this.now(), pick: use.pick, profileId: profile.id, model: use.model })
+        if (batch !== null) this.batchOf.set(id, batch)
+        await link.send(placed.device, 'start', id)
+        started.push({ id, label })
+        continue
+      }
       this.runs.set(id, {
         chat,
         pick: use.pick,
@@ -367,7 +446,15 @@ export class HelperManager implements HelperHost {
 
   async steer(id: string, message: string): Promise<string> {
     const run = this.runs.get(id)
-    if (run === undefined) return this.push(id, message)
+    if (run === undefined) {
+      const elsewhere = await this.runningElsewhere(id)
+      if (elsewhere !== '') {
+        await this.link()?.send(elsewhere, 'steer', id, { text: message })
+        await this.addActivity(id, await this.labelOf(id), `Told it: ${clip(message, 140)}`)
+        return `Helper #${id} gets your message before its next step and keeps going.`
+      }
+      return this.push(id, message)
+    }
     if (brainFor(this.brainDeps(), run.pick).kind === 'plan') {
       // An SDK session cannot read a note mid-turn: stop it where it is and send it back with the note.
       await this.stop(id)
@@ -387,6 +474,24 @@ export class HelperManager implements HelperHost {
     if (row === null || row.kind !== 'helper') return `No helper #${id}.`
 
     const meta = parseMeta(row.meta)
+    // It ran on another brain (s12): it goes back to work there, where its session and steps are, while that brain
+    // is up. A lease this brain holds (a takeover, a resume after a restart) always runs here.
+    const link = this.link()
+    if (link !== null) {
+      const holder = await link.leaseHolder(id)
+      const there = holder.device !== '' ? holder.device : stringField(meta['runOn'])
+      if (there !== '' && !link.isSelf(there)) {
+        if (holder.running && link.up(there)) return `Helper #${id} is still working. Wait for its result.`
+        if (link.up(there) && meta['side'] !== true && meta['desk'] !== true) {
+          this.remote.set(id, { id, label: stringField(meta['label']) || 'Helper', brief: row.text, chat: stringField(meta['chat']) || MAIN_CHAT, profile: stringField(meta['profile']), startedAt: this.now(), device: there, sentAt: this.now(), pick: (meta['pick'] as AiPick) ?? { account: '', model: '' }, profileId: stringField(meta['profileId']), model: stringField(meta['model']) })
+          await link.send(there, 'push', id, { text: message })
+          await this.addActivity(id, stringField(meta['label']) || 'Helper', `Sent back: ${clip(message, 140)}`)
+          return `Helper #${id} is back on it. Its new result will arrive as a message.`
+        }
+      }
+      this.remote.delete(id)
+    }
+    const origin = this.originOf(meta)
     const label = stringField(meta['label']) || 'Helper'
     const chat = stringField(meta['chat']) || MAIN_CHAT
     // Back to work on the model it was started on, while that account is still there.
@@ -402,9 +507,11 @@ export class HelperManager implements HelperHost {
     const side = meta['side'] === true
     const desk = meta['desk'] === true ? { desk: true, tools: this.deskTools() } : {}
     const pushes = numberField(meta['pushes']) + 1
+    const here = link === null ? {} : { runOn: link.selfId() }
     if (brain.kind === 'plan') {
-      await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now() })
+      await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now(), ...here })
       this.runs.set(id, {
+        origin,
         chat,
         pick,
         side,
@@ -435,8 +542,10 @@ export class HelperManager implements HelperHost {
       summary: 'Back on it',
       pushes,
       startedAt: this.now(),
+      ...here,
     })
     this.runs.set(id, {
+      origin,
       chat,
       pick,
       side,
@@ -570,7 +679,12 @@ export class HelperManager implements HelperHost {
 
   async stop(id: string): Promise<boolean> {
     const run = this.runs.get(id)
-    if (run === undefined) return false
+    if (run === undefined) {
+      const elsewhere = await this.runningElsewhere(id)
+      if (elsewhere === '') return false
+      await this.link()?.send(elsewhere, 'stop', id)
+      return true
+    }
     const at = this.queue.indexOf(id)
     if (at >= 0) {
       this.queue.splice(at, 1)
@@ -591,6 +705,8 @@ export class HelperManager implements HelperHost {
 
   async stopAll(): Promise<number> {
     const ids = [...this.runs.keys()]
+    const away = [...this.remote.values()]
+    for (const run of away) await this.link()?.send(run.device, 'stop', run.id)
     this.queue.length = 0
     for (const id of ids) {
       const run = this.runs.get(id)
@@ -609,13 +725,13 @@ export class HelperManager implements HelperHost {
       }
     }
     if (ids.length > 0) this.emit({ type: 'chat_changed' })
-    return ids.length
+    return ids.length + away.length
   }
 
   live(): HelperLive[] {
     return [...this.runs.values()]
       .sort((a, b) => a.startedAt - b.startedAt)
-      .map((run) => ({
+      .map((run): HelperLive => ({
         id: run.id,
         label: run.label,
         brief: run.brief,
@@ -625,6 +741,18 @@ export class HelperManager implements HelperHost {
         ...(run.chat === MAIN_CHAT ? {} : { chat: run.chat }),
         ...(run.side === true ? { side: true } : {}),
       }))
+      .concat(
+        [...this.remote.values()].map((run): HelperLive => ({
+          id: run.id,
+          label: run.label,
+          brief: run.brief,
+          state: 'working',
+          startedAt: run.startedAt,
+          profile: run.profile,
+          ...(run.chat === MAIN_CHAT ? {} : { chat: run.chat }),
+          remote: true,
+        })),
+      )
   }
 
   /**
@@ -670,7 +798,7 @@ export class HelperManager implements HelperHost {
 
   async answer(itemId: string, answer: string): Promise<boolean> {
     const waiter = this.askWaiters.get(itemId)
-    if (waiter === undefined) return false
+    if (waiter === undefined) return this.answerElsewhere(itemId, 'answer', answer)
     const row = await this.store.get('chat_item', itemId)
     if (row === null) return false
     const meta = parseMeta(row.meta)
@@ -688,7 +816,7 @@ export class HelperManager implements HelperHost {
 
   async decide(itemId: string, decision: Decision): Promise<boolean> {
     const waiter = this.decisionWaiters.get(itemId)
-    if (waiter === undefined) return false
+    if (waiter === undefined) return this.answerElsewhere(itemId, 'decide', decision)
     const row = await this.store.get('chat_item', itemId)
     if (row === null) return false
     const meta = parseMeta(row.meta)
@@ -716,6 +844,19 @@ export class HelperManager implements HelperHost {
       // chat resumes from its turn lease, and ProjectAgentRows.restore follows it again and closes it when that chat
       // is done. Failing it here left the card dead while the project's own helpers carried on (22 Oct 2026).
       if (typeof meta['projectChat'] === 'string' && meta['projectChat'] !== '') continue
+      // Placed on another brain (s12): it works there, not here. Follow it until its result comes back.
+      const runOn = stringField(meta['runOn'])
+      if (runOn !== '' && this.offload !== null && !this.offload.isSelf(runOn)) {
+        if (this.offload.isSelf(stringField(meta['placedBy']))) {
+          this.remote.set(row.id, { id: row.id, label: stringField(meta['label']) || 'Helper', brief: row.text, chat: stringField(meta['chat']) || MAIN_CHAT, profile: stringField(meta['profile']), startedAt: numberField(meta['startedAt']) || row.createdAt, device: runOn, sentAt: this.now(), pick: (meta['pick'] as AiPick) ?? { account: '', model: '' }, profileId: stringField(meta['profileId']), model: stringField(meta['model']) })
+        }
+        continue
+      }
+      // Another brain holds its job lease and is running it (a helper of that brain, replicated here): not ours.
+      if (this.offload !== null) {
+        const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
+        if (lease !== null && lease.status === 'running' && lease.brainId !== '' && !this.offload.isSelf(lease.brainId)) continue
+      }
       await this.updateMeta(row.id, {
         state: 'failed',
         summary: 'Interrupted when the app closed.',
@@ -727,6 +868,7 @@ export class HelperManager implements HelperHost {
     this.runs.clear()
     this.queue.length = 0
     this.active.clear()
+    // Keep the helpers placed elsewhere that were just followed again.
     this.inbox.clear()
     this.batches.clear()
     this.batchOf.clear()
@@ -807,6 +949,21 @@ export class HelperManager implements HelperHost {
   }
 
   private async finish(run: HelperRun, state: HelperState, result: string): Promise<void> {
+    const link = this.link()
+    const away = link !== null && run.origin !== undefined && run.origin !== '' && !link.isSelf(run.origin) ? run.origin : ''
+    // Placed here by another brain, and this brain cannot run its AI (signed out, key refused) before it did
+    // anything: it goes back to the brain that placed it, which runs it itself (s12).
+    if (away !== '' && link !== null && state === 'failed' && CANNOT_RUN_HERE.test(result)) {
+      link.cannotRun?.(run.pick.account, result)
+      this.leases?.end(`job-${run.id}`, 'failed')
+      this.runs.delete(run.id)
+      this.active.delete(run.id)
+      this.inbox.delete(run.id)
+      await this.updateMeta(run.id, { summary: 'Waiting its turn', queued: true, runOn: run.origin })
+      await link.send(away, 'bounce', run.id, { text: clip(result, 300) })
+      this.pump()
+      return
+    }
     this.leases?.end(`job-${run.id}`, state === 'failed' ? 'failed' : 'done')
     this.runs.delete(run.id)
     this.active.delete(run.id)
@@ -830,43 +987,213 @@ export class HelperManager implements HelperHost {
     // A desk with nothing for the main agent says so; its result stays on its card.
     if (run.desk === true && state === 'done' && /^\s*QUIET\b/i.test(result)) return
 
+    // Run here for another brain: the result goes back to the brain that placed it, which hands it over (s12).
+    if (away !== '' && link !== null) {
+      await link.send(away, 'result', run.id, { text: state === 'stopped' ? '' : this.resultNote(run, state, result), info: JSON.stringify({ state }) })
+      return
+    }
+    await this.report(run.id, run.chat, run.side === true, state, result, () => this.resultNote(run, state, result))
+  }
+
+  /** What a finished helper leaves for the chat that started it: a new turn, a batch's share, or nothing (stopped). */
+  private async report(id: string, chat: string, side: boolean, state: HelperState, _result: string, noteOf: () => string): Promise<void> {
+
     // The user stopped it: there is nothing to report back.
     if (state === 'stopped') {
-      this.dropFromBatch(run.id)
+      this.dropFromBatch(id)
       return
     }
 
-    if (run.side === true) {
+    if (side) {
       try {
-        await this.alongsideDone(run.chat, run.id)
+        await this.alongsideDone(chat, id)
       } catch {
         // The summary block is already in the chat; the agent hearing about it is a nicety.
       }
       return
     }
 
-    const note = this.resultNote(run, state, result)
-    const batch = this.batchOf.get(run.id)
+    const note = noteOf()
+    const batch = this.batchOf.get(id)
     if (batch === undefined) {
-      await this.handOver(note, run.chat)
+      await this.handOver(note, chat)
       return
     }
 
-    this.batchOf.delete(run.id)
+    this.batchOf.delete(id)
     const group = this.batches.get(batch)
     if (group === undefined) {
-      await this.handOver(note, run.chat)
+      await this.handOver(note, chat)
       return
     }
-    group.results.set(run.id, note)
+    group.results.set(id, note)
     if ([...this.batchOf.values()].includes(batch)) return
 
     this.batches.delete(batch)
     const all = [...group.results.values()]
     await this.handOver(
       `[Helpers finished: all ${all.length} you started together are done. Give the user ONE packed answer.]\n\n${all.join('\n\n')}`,
-      run.chat,
+      chat,
     )
+  }
+
+  // ---- other brains (s12) --------------------------------------------------------------------------------------
+
+  /** One message from another brain about one helper. False: not ready yet (its rows have not arrived). */
+  async onRemote(msg: JobRow): Promise<boolean> {
+    const id = msg.helper
+    switch (msg.op) {
+      case 'start':
+        return this.adopt(id, msg.from)
+      case 'steer':
+        if (this.runs.has(id)) await this.steer(id, msg.text)
+        return true
+      case 'push': {
+        if (this.runs.has(id)) {
+          await this.steer(id, msg.text)
+          return true
+        }
+        const row = await this.store.get('chat_item', id)
+        if (row === null) return false
+        await this.push(id, msg.text)
+        return true
+      }
+      case 'stop':
+        await this.stop(id)
+        return true
+      case 'answer':
+        await this.answer(msg.item, msg.text)
+        return true
+      case 'decide':
+        await this.decide(msg.item, msg.text === 'approve' ? 'approve' : 'decline')
+        return true
+      case 'result': {
+        const placed = this.remote.get(id)
+        this.remote.delete(id)
+        const row = await this.store.get('chat_item', id)
+        const meta = row === null ? {} : parseMeta(row.meta)
+        let state: HelperState = 'done'
+        try {
+          const info = JSON.parse(msg.info) as { state?: unknown }
+          if (info.state === 'failed' || info.state === 'stopped' || info.state === 'done') state = info.state
+        } catch {
+          // A result without its state reads as done.
+        }
+        this.emit({ type: 'chat_changed' })
+        const chat = placed?.chat ?? (stringField(meta['chat']) || MAIN_CHAT)
+        await this.report(id, chat, meta['side'] === true, state, msg.text, () => msg.text || `[Helper #${id} finished]`)
+        return true
+      }
+      case 'bounce': {
+        // The brain it was sent to cannot run its AI: run it here.
+        this.remote.delete(id)
+        return this.adopt(id, '')
+      }
+      default:
+        return true
+    }
+  }
+
+  /** A helper another brain placed here (or one sent back from there): run it here. */
+  private async adopt(id: string, from: string): Promise<boolean> {
+    if (this.runs.has(id)) return true
+    const row = await this.store.get('chat_item', id)
+    if (row === null || row.kind !== 'helper') return false
+    const meta = parseMeta(row.meta)
+    if (meta['state'] !== 'working') return true
+    const chat = stringField(meta['chat']) || MAIN_CHAT
+    const stored = meta['pick']
+    const pick: AiPick =
+      typeof stored === 'object' && stored !== null && typeof (stored as AiPick).account === 'string'
+        ? { account: (stored as AiPick).account, model: typeof (stored as AiPick).model === 'string' ? (stored as AiPick).model : '' }
+        : await pickFor(this.brainDeps(), chat, 'helpers')
+    const brain = brainFor(this.brainDeps(), pick)
+    const link = this.link()
+    if (!isBrain(brain)) {
+      if (from !== '' && link !== null && !link.isSelf(from)) {
+        link.cannotRun?.(pick.account, brain.message)
+        await link.send(from, 'bounce', id, { text: brain.message })
+        return true
+      }
+      await this.updateMeta(id, { state: 'failed', summary: clip(brain.message, 160), result: brain.message, endedAt: this.now(), queued: false })
+      return true
+    }
+    await this.updateMeta(id, { runOn: link?.selfId() ?? '', queued: true, summary: 'Waiting its turn' })
+    this.runs.set(id, {
+      origin: from,
+      chat,
+      pick,
+      id,
+      label: stringField(meta['label']) || 'Helper',
+      profileId: this.profileIdFrom(meta),
+      brief: row.text,
+      model: brain.model,
+      pushes: numberField(meta['pushes']),
+      startedAt: this.now(),
+      controller: null,
+      initialHistory: null,
+    })
+    this.queue.push(id)
+    this.pump()
+    return true
+  }
+
+  /** The other brain a helper is working on now, or '' (here, finished, or no other brain). */
+  private async runningElsewhere(id: string): Promise<string> {
+    const link = this.link()
+    if (link === null) return ''
+    const placed = this.remote.get(id)
+    const holder = await link.leaseHolder(id)
+    if (holder.device !== '' && !link.isSelf(holder.device) && holder.running) return holder.device
+    if (placed !== undefined) return placed.device
+    return ''
+  }
+
+  /** A card a helper on another brain asked: the answer is kept on the card and sent to that brain. */
+  private async answerElsewhere(itemId: string, op: 'answer' | 'decide', value: string): Promise<boolean> {
+    const link = this.link()
+    if (link === null) return false
+    const row = await this.store.get('chat_item', itemId)
+    if (row === null) return false
+    const meta = parseMeta(row.meta)
+    const helper = stringField(meta['helper'])
+    if (helper === '') return false
+    const there = await this.runningElsewhere(helper)
+    if (there === '') return false
+    await this.store.upsert('chat_item', { id: row.id, kind: row.kind, text: row.text, meta: JSON.stringify({ ...meta, ...(op === 'answer' ? { answer: value } : { decision: value }) }) })
+    this.emit({ type: 'chat_changed' })
+    await link.send(there, op, helper, { item: itemId, text: value })
+    return true
+  }
+
+  /** Starts nobody took (the brain went away before its lease): run them here. Called every few seconds. */
+  async takeBack(after: number): Promise<number> {
+    const link = this.link()
+    if (link === null) return 0
+    let taken = 0
+    for (const run of [...this.remote.values()]) {
+      if (this.now() - run.sentAt < after) continue
+      const holder = await link.leaseHolder(run.id)
+      if (holder.device !== '') continue
+      if (link.up(run.device)) continue
+      this.remote.delete(run.id)
+      if (await this.adopt(run.id, '')) taken += 1
+    }
+    return taken
+  }
+
+  private async labelOf(id: string): Promise<string> {
+    const placed = this.remote.get(id)
+    if (placed !== undefined) return placed.label
+    const row = await this.store.get('chat_item', id)
+    return row === null ? 'Helper' : stringField(parseMeta(row.meta)['label']) || 'Helper'
+  }
+
+  /** The brain a helper's result goes back to: the one that placed it, when that is another brain. */
+  private originOf(meta: Record<string, unknown>): string {
+    const link = this.link()
+    const placedBy = stringField(meta['placedBy'])
+    return link === null || placedBy === '' || link.isSelf(placedBy) ? '' : placedBy
   }
 
   /** A delivery failing must not take the manager down with it. */
@@ -1219,6 +1546,15 @@ export class HelperManager implements HelperHost {
   }
 
   private async buildHelperPrompt(run: HelperRun): Promise<string> {
+    const base = await this.buildBasePrompt(run)
+    const link = this.link()
+    if (link === null || run.origin === undefined || run.origin === '' || link.isSelf(run.origin)) return base
+    const here = (await link.deviceName(link.selfId())) || 'this server'
+    const there = (await link.deviceName(run.origin)) || 'the computer the person uses'
+    return `${base}\n\nWHERE YOU RUN\nYou run on ${here}, another of the person's computers, so the one they use (${there}) keeps its resources. Files, folders and apps named in the brief are on ${there}: reach them with device_tool on "${there}" (files_list, files_read, file_send, shell_run). The browser here has none of the person's sign-ins: for a signed-in site use device_tool on "${there}" with its browser_* tools. Do not mention which computer you run on in your result.`
+  }
+
+  private async buildBasePrompt(run: HelperRun): Promise<string> {
     const [memories, goals, tasks, projects] = await Promise.all([
       this.store.list('memory'),
       this.store.list('goal'),

@@ -37,6 +37,9 @@ function delegateTool(host: HelperHost): Tool {
               profile: str(
                 "The user's profile this helper works in (e.g. Work). It can then only use that profile's connected accounts, learned apps and browser sign-ins. Leave it out for General: none of their accounts.",
               ),
+              device: str(
+                "Optional: where it runs. Leave it out (best): a linked server takes jobs that do not need this computer, so this computer keeps its resources; it looks the same here either way. 'here' keeps it on this computer (its files, its signed-in browser, its screen); or name a linked device.",
+              ),
             },
             required: ['label', 'brief'],
           },
@@ -135,7 +138,8 @@ export function parseTasks(value: unknown, profiles?: unknown): HelperTask[] {
     const label = text(row['label']).trim()
     const model = text(row['model']).trim()
     const profile = text(row['profile']).trim() || (byOrder[index] ?? '')
-    tasks.push({ label, brief, ...(model === '' ? {} : { model }), ...(profile === '' ? {} : { profile }) })
+    const device = text(row['device']).trim()
+    tasks.push({ label, brief, ...(model === '' ? {} : { model }), ...(profile === '' ? {} : { profile }), ...(device === '' ? {} : { device }) })
   }
   return tasks
 }

@@ -701,6 +701,7 @@ export const mockAgent: AgentApi = {
         device: [],
         device_command: [],
         turn_lease: [],
+        job: [],
         memory: [],
         goal: [],
         task: [],

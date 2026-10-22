@@ -170,6 +170,16 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     return out
   }
 
+  if (key === 'helpersRunOn') {
+    if (typeof value !== 'string') return INVALID
+    const clean = value.trim()
+    return clean === 'best' || clean === 'here' || /^[A-Za-z0-9_-]{1,64}$/.test(clean) ? clean : INVALID
+  }
+  if (key === 'devicesJobCap') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return INVALID
+    return Math.max(0, Math.min(16, Math.round(value)))
+  }
+
   const expected = DEFAULT_SETTINGS[key]
   if (typeof expected === 'boolean') return typeof value === 'boolean' ? value : INVALID
   if (typeof expected === 'string') {

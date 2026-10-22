@@ -54,6 +54,8 @@ export interface HelperView {
   activity: ChatItem[]
   /** The model it runs on, when it was picked from a list of helper models ('' otherwise). */
   model: string
+  /** The linked brain it runs on when that is not the one that started it (s12), '' when it runs where it started. */
+  where: string
 }
 
 export function helperState(value: string): HelperState {
@@ -87,6 +89,7 @@ export function helperView(item: ChatItem, items: ChatItem[]): HelperView {
     activity: helperActivities(items, helperIdOf(item)),
     // Shown only when it was chosen from a list (delegate writes modelName then); one model needs no label.
     model: metaText(meta, 'modelName') === '' ? '' : metaText(meta, 'model'),
+    where: metaText(meta, 'runOn') !== '' && metaText(meta, 'runOn') !== metaText(meta, 'placedBy') ? metaText(meta, 'runsOnName') : '',
   }
 }
 
