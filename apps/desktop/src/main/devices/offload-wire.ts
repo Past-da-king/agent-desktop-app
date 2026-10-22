@@ -69,12 +69,24 @@ export interface OffloadWire {
   stop(): void
 }
 
+/**
+ * Whether another brain counts as up for placing work: our replication link to it is good, OR it is connected to us
+ * now. A server that can only dial out (userspace VPN, loopback listener) never has a link from this side, yet it
+ * replicates the job rows through its own link to us, so it can take work.
+ */
+export function brainReachable(links: Array<{ peer: string; ok: boolean }>, isConnected: (id: string) => boolean, id: string): boolean {
+  return links.some((link) => link.peer === id && link.ok) || isConnected(id)
+}
+
 export function startOffload(deps: OffloadWireDeps): OffloadWire {
   const { store, helpers, settings } = deps
   const now = (): number => Date.now()
   const selfId = (): string => devicesState.sync?.selfId() ?? ''
   const isSelf = (id: string): boolean => id !== '' && (id === selfId() || ownBrainIds(store).includes(id))
-  const reachable = (id: string): boolean => devicesState.sync?.replicator.status().some((link) => link.peer === id && link.ok) ?? false
+  const reachable = (id: string): boolean => {
+    const sync = devicesState.sync
+    return sync !== null && brainReachable(sync.replicator.status(), (each) => sync.isConnected(each), id)
+  }
 
   const cannot = new Map<string, number>()
   try {
