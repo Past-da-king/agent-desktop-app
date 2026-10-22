@@ -1,6 +1,8 @@
-import type { ChatItem, HelperState } from '@agent/core'
+import { MAIN_CHAT, type ChatItem, type HelperState, type ProjectIcon, type ProjectRow } from '@agent/core'
 
+import { chatOf } from './chats'
 import { metaOf, metaText } from './meta'
+import { projectOfChat } from './projects'
 
 export interface HelperView {
   id: string
@@ -90,4 +92,86 @@ export function visibleHelpers(items: ChatItem[]): HelperView[] {
 /** Helpers still doing a job right now (a queued helper included). */
 export function workingHelpers(items: ChatItem[]): HelperView[] {
   return visibleHelpers(items).filter((helper) => helper.state === 'working')
+}
+
+/**
+ * Whose a helper is, for its picture and its "under which project" line. A project agent row (written by
+ * main/runtime/project-agents.ts, id `pa-<chat>`, in the MAIN chat) carries its project in `meta.project`; any other
+ * helper belongs to the project holding its chat. A hidden project, or a chat no project holds any more, shows a
+ * plain icon and no name.
+ */
+export type HelperOwner =
+  | { kind: 'main' }
+  | { kind: 'project'; id: string; name: string; icon: ProjectIcon }
+  | { kind: 'plain' }
+
+export interface HelperCard extends HelperView {
+  row: ChatItem
+  owner: HelperOwner
+  /** The one line under its name: the step it is on, else its status line. */
+  line: string
+  /** 1 for a helper drawn under its project agent's card. */
+  depth: 0 | 1
+  /** For a project agent row: the project chat it stands for ('' otherwise). */
+  projectChat: string
+}
+
+function projectMetaOf(meta: Record<string, unknown>): { id: string; name: string; icon: ProjectIcon } | null {
+  const value = meta['project']
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const p = value as Record<string, unknown>
+  const text = (key: string): string => (typeof p[key] === 'string' ? (p[key] as string) : '')
+  if (text('id') === '') return null
+  const image = text('image')
+  return {
+    id: text('id'),
+    name: text('name'),
+    icon: { glyph: text('glyph') || 'folder', color: (text('color') || 'iris') as ProjectIcon['color'], ...(image === '' ? {} : { image }) },
+  }
+}
+
+export function helperOwner(item: ChatItem, projects: ProjectRow[]): HelperOwner {
+  const fromMeta = projectMetaOf(metaOf(item))
+  const project = fromMeta !== null ? (projects.find((each) => each.id === fromMeta.id) ?? null) : projectOfChat(projects, chatOf(item))
+  if (project !== null) return project.hidden ? { kind: 'plain' } : { kind: 'project', id: project.id, name: project.name, icon: project.icon }
+  if (fromMeta !== null) return { kind: 'project', ...fromMeta }
+  return chatOf(item) === MAIN_CHAT ? { kind: 'main' } : { kind: 'plain' }
+}
+
+/** The one line a helper card shows: the step running now, else its newest step, else its status line. */
+export function helperLine(helper: HelperView): string {
+  const steps = helper.activity
+  const running = [...steps].reverse().find((step) => metaText(metaOf(step), 'status') === 'running')
+  const step = running ?? steps[steps.length - 1]
+  const text = step === undefined ? '' : metaText(metaOf(step), 'summary') || step.text
+  if (text.trim() !== '') return text
+  if (helper.summary.trim() !== '') return helper.summary
+  return helper.queued ? 'Waiting its turn' : 'Starting'
+}
+
+/**
+ * Every helper working right now, from any chat (the main thread, any project, hidden ones too), for the side panel.
+ * A project agent's card comes first and the helpers working in its project chat sit right under it; the rest are
+ * oldest first. Nothing is cut: the panel scrolls.
+ */
+export function helperCards(items: ChatItem[], projects: ProjectRow[]): HelperCard[] {
+  const working = items
+    .filter((item) => isHelper(item))
+    .map((item) => {
+      const view = helperView(item, items)
+      const projectChat = metaText(metaOf(item), 'projectChat')
+      return { ...view, row: item, owner: helperOwner(item, projects), line: helperLine(view), depth: 0 as 0 | 1, projectChat }
+    })
+    .filter((card) => card.state === 'working')
+    .sort((a, b) => Number(a.queued) - Number(b.queued) || a.startedAt - b.startedAt)
+  const heads = new Set(working.filter((card) => card.projectChat !== '').map((card) => card.projectChat))
+  const under = (card: HelperCard): string => (card.projectChat === '' && heads.has(chatOf(card.row)) ? chatOf(card.row) : '')
+  const out: HelperCard[] = []
+  for (const card of working) {
+    if (under(card) !== '') continue
+    out.push(card)
+    if (card.projectChat === '') continue
+    for (const child of working) if (under(child) === card.projectChat) out.push({ ...child, depth: 1 })
+  }
+  return out
 }

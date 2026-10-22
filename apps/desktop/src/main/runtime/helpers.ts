@@ -712,6 +712,10 @@ export class HelperManager implements HelperHost {
       if (row.kind !== 'helper') continue
       const meta = parseMeta(row.meta)
       if (meta['state'] !== 'working') continue
+      // A project agent's row (runtime/project-agents.ts, it carries projectChat) is not a helper run: its project
+      // chat resumes from its turn lease, and ProjectAgentRows.restore follows it again and closes it when that chat
+      // is done. Failing it here left the card dead while the project's own helpers carried on (22 Oct 2026).
+      if (typeof meta['projectChat'] === 'string' && meta['projectChat'] !== '') continue
       await this.updateMeta(row.id, {
         state: 'failed',
         summary: 'Interrupted when the app closed.',
