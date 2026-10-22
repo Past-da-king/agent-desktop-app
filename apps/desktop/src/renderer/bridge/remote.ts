@@ -476,6 +476,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       status: rpc('devices.status'),
       setEnabled: () => notHere('Changing devices'),
       setExtraUrls: () => notHere('Changing devices'),
+      setNetwork: () => notHere('Changing devices'),
       offer: () => notHere('Adding a device'),
       cancelOffer: async () => undefined,
       list: rpc('devices.list'),

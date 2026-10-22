@@ -16,13 +16,14 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import type { AiAccountDraft, DeviceRow, PairingOfferInfo, ProviderId } from '@agent/core'
+import type { AiAccountDraft, DeviceRow, DevicesStatus, PairingOfferInfo, ProviderId } from '@agent/core'
 
 import { AccountStore } from '../main/accounts'
 import { Secrets } from '../main/secrets'
 import { SettingsStore } from '../main/settings'
 import { FileKeyCipher } from './file-cipher'
 import { loadIdentity } from '../main/devices/identity'
+import { OverlayNet } from '../main/devices/net'
 import { DEVICES_CHANNELS } from '../shared/devices-channels'
 import { callControl, startControl, terminalQr } from './control'
 import { headlessFacts, startHeadlessDevices } from './devices'
@@ -45,6 +46,7 @@ const HELP = `agent-node: your agent as a service
   agent-node roles <id> brain,hands | move <id> up|down    who answers, in which order
   agent-node revoke <id>                                   take a device out
   agent-node config [--listen ADDR] [--port N] [--url U]   where it listens, and an address that reaches it
+  agent-node net none | tailscale | headscale URL < key    optional overlay network (auth key on stdin)
   agent-node account list | add claude | add codex          the AI it thinks with (a plan signed in on this machine)
   agent-node account add api --provider P < keyfile        ... or an API key, read from stdin
   agent-node ask "hello"                                   one turn, to check it answers (while stopped)
@@ -428,6 +430,33 @@ async function offer(args: Args): Promise<number> {
   return 0
 }
 
+/** The optional overlay network (protocol s10). The auth key comes in on stdin, never as an argument. */
+async function netCommand(args: Args): Promise<number> {
+  const dataDir = dataDirOf(args)
+  const mode = args.positional[0] ?? ''
+  if (mode !== 'none' && mode !== 'tailscale' && mode !== 'headscale') {
+    console.error('Which network? agent-node net none | tailscale | headscale https://your-headscale < keyfile')
+    return 1
+  }
+  const key = mode === 'none' ? '' : (await readStdin()).trim()
+  const input = { mode, controlUrl: mode === 'headscale' ? (args.positional[1] ?? '') : undefined, authKey: key === '' ? undefined : key }
+  if (runningPid(dataDir) !== null) {
+    const status = (await callControl(dataDir, DEVICES_CHANNELS.setNetwork, [input])) as DevicesStatus
+    const net = status.network
+    console.log(`network: ${net?.mode ?? mode}, ${net?.state ?? 'unknown'}${net !== undefined && net.error !== '' ? ` (${net.error})` : ''}`)
+    return 0
+  }
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+  const { secrets } = stores(dataDir)
+  new OverlayNet({ dir: join(dataDir, 'devices'), secrets, binary: () => null, nodeName: () => '', onChange: () => undefined }).save({
+    network: mode,
+    controlUrl: input.controlUrl,
+    authKey: input.authKey,
+  })
+  console.log(`network: ${mode} (takes effect on the next start)`)
+  return 0
+}
+
 async function deviceAction(args: Args, action: 'revoke' | 'roles' | 'move'): Promise<number> {
   const dataDir = dataDirOf(args)
   const id = args.positional[0] ?? ''
@@ -471,6 +500,8 @@ export async function run(argv: string[]): Promise<number> {
     case 'ask':
       checkNode()
       return ask(args)
+    case 'net':
+      return netCommand(args)
     case 'config': {
       const dataDir = dataDirOf(args)
       const config = readConfig(dataDir)

@@ -146,6 +146,12 @@ type node struct {
 
 func startNode(t *testing.T, controlURL, name string, extra ...string) *node {
 	t.Helper()
+	n, _ := startNodeWithStdin(t, controlURL, name, extra...)
+	return n
+}
+
+func startNodeWithStdin(t *testing.T, controlURL, name string, extra ...string) (*node, io.WriteCloser) {
+	t.Helper()
 	args := append([]string{
 		"--control-url", controlURL,
 		"--hostname", name,
@@ -159,6 +165,10 @@ func startNode(t *testing.T, controlURL, name string, extra ...string) *node {
 		cmd.Stderr = os.Stderr
 	}
 	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +200,7 @@ func startNode(t *testing.T, controlURL, name string, extra ...string) *node {
 			cmd.Process.Kill()
 		}
 	})
-	return n
+	return n, stdin
 }
 
 func (n *node) status() statusLine {
@@ -220,6 +230,48 @@ func waitFor(t *testing.T, what string, d time.Duration, f func() bool) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestStdinControl(t *testing.T) {
+	controlURL := startTestControl(t)
+	for _, how := range []string{"quit", "logout", "eof"} {
+		t.Run(how, func(t *testing.T) {
+			n, stdin := startNodeWithStdin(t, controlURL, "ctl-"+how, "--authkey-stdin", "--stdin-control")
+			io.WriteString(stdin, "\n") // empty key line: the test control server needs none
+			waitFor(t, "Running", 60*time.Second, func() bool { return n.status().State == "Running" })
+			if how == "eof" {
+				stdin.Close()
+			} else {
+				io.WriteString(stdin, how+"\n")
+			}
+			select {
+			case err := <-n.done:
+				if err != nil {
+					t.Fatalf("exit: %v", err)
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("did not exit")
+			}
+			if !n.hasLine("exit") {
+				t.Fatal("no exit line")
+			}
+		})
+	}
+}
+
+func startTestControl(t *testing.T) string {
+	t.Helper()
+	derpMap := integration.RunDERPAndSTUN(t, logger.Discard, "127.0.0.1")
+	control := &testcontrol.Server{
+		DERPMap:        derpMap,
+		DNSConfig:      &tailcfg.DNSConfig{Proxied: true},
+		MagicDNSDomain: "test-net.ts.net",
+		Logf:           logger.Discard,
+	}
+	control.HTTPTestServer = httptest.NewUnstartedServer(control)
+	control.HTTPTestServer.Start()
+	t.Cleanup(control.HTTPTestServer.Close)
+	return control.HTTPTestServer.URL
 }
 
 func TestTwoNodesForwardAndSocks(t *testing.T) {

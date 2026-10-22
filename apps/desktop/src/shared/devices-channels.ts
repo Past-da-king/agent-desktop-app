@@ -3,6 +3,7 @@ export const DEVICES_CHANNELS = {
   status: 'agent:devices.status',
   setEnabled: 'agent:devices.setEnabled',
   setExtraUrls: 'agent:devices.setExtraUrls',
+  setNetwork: 'agent:devices.setNetwork',
   offer: 'agent:devices.offer',
   cancelOffer: 'agent:devices.cancelOffer',
   list: 'agent:devices.list',

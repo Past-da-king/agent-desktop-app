@@ -14,6 +14,10 @@
 .dv .dv-up svg{transform:rotate(180deg)}
 .dv .dv-addresses{padding:12px 18px 10px;display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--outline-v);margin-top:6px}
 .dv .dv-address-form{display:flex;gap:8px;align-items:center}
+.dv .dv-net{padding:12px 18px 10px;display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--outline-v)}
+.dv .dv-net .seg{align-self:flex-start;max-width:100%}
+.dv .dv-net p{margin:0}
+.dv .dv-net-form{display:flex;flex-direction:column;gap:8px}
 .dv .dv-input{height:44px;padding:0 14px;font-size:14px;flex:1;min-width:0}
 .dv-urls{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .dv-urls li{display:flex;align-items:center;justify-content:space-between;gap:8px;font:500 13px/1.4 ui-monospace,'Cascadia Mono',Menlo,monospace;color:var(--on-sv);overflow-wrap:anywhere}

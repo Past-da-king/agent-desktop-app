@@ -15,6 +15,7 @@ import { Dialog } from '../ui/Dialog'
 import { Icon, type IconName } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
+import { NetworkRow } from './DevicesNetwork'
 
 const ROLE_LABEL: Record<DeviceRole, string> = { screen: 'Screen', brain: 'Answers', hands: 'Acts' }
 const ROLE_HINT: Record<DeviceRole, string> = {
@@ -472,6 +473,7 @@ export function DevicesSettings(): JSX.Element {
             </form>
           </div>
         ) : null}
+        {!readOnly && status !== null ? <NetworkRow status={status} onStatus={setStatus} /> : null}
       </div>
       {adding ? <AddDeviceDialog known={live.map((device) => device.id)} onClose={() => setAdding(false)} /> : null}
       {revoking !== null ? <RevokeDialog device={revoking} onClose={() => setRevoking(null)} /> : null}

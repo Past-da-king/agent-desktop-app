@@ -284,6 +284,7 @@ const api: AgentApi = {
     status: () => call<DevicesStatus>(DEVICES_CHANNELS.status),
     setEnabled: (on) => call<DevicesStatus>(DEVICES_CHANNELS.setEnabled, on),
     setExtraUrls: (urls) => call<DevicesStatus>(DEVICES_CHANNELS.setExtraUrls, urls),
+    setNetwork: (input) => call<DevicesStatus>(DEVICES_CHANNELS.setNetwork, input),
     offer: () => call<PairingOfferInfo>(DEVICES_CHANNELS.offer),
     cancelOffer: () => call<void>(DEVICES_CHANNELS.cancelOffer),
     list: () => call<DeviceRow[]>(DEVICES_CHANNELS.list),

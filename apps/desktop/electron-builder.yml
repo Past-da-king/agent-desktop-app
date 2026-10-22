@@ -25,6 +25,16 @@ files:
   - '!**/*.ts'
   - '!**/*.tsx'
 
+# The optional overlay-network helper (tools/agent-net, Go). tools/agent-net/build.sh lays the binaries out as
+# dist/electron/<os>-<arch>/; the app finds it at <resources>/agent-net/ (main/devices/net.ts findSidecar). When it
+# has not been built, electron-builder warns and leaves it out: the app works, Network = Tailscale/Headscale says so.
+extraResources:
+  - from: ../../tools/agent-net/dist/electron/${os}-${arch}
+    to: agent-net
+    filter:
+      - agent-net
+      - agent-net.exe
+
 npmRebuild: false
 buildDependenciesFromSource: false
 
