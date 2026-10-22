@@ -1,16 +1,18 @@
 import type { CSSProperties, ReactNode } from 'react'
 
-import { openCards } from '../lib/cards'
-import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { useRoute, useUi } from '../state/useUi'
+import { useWaiting } from '../state/useWaiting'
 import { Icon, type IconName } from '../ui/Icon'
 import { ChatPanel } from './Panel'
 import { Rail } from './Rail'
 
+/**
+ * How many cards wait on the person: the very list Needs you draws (state/useWaiting), so the rail's badge and
+ * "Waiting for you" can never count something Home and the side panel do not show (22 Oct 2026).
+ */
 export function useNeeds(): number {
-  const items = useEntity('chat_item')
-  return openCards(items).length
+  return useWaiting().length
 }
 
 const MOBILE: Array<{ page: 'home' | 'tasks' | 'memory' | 'routines' | 'connections'; icon: IconName; label: string }> = [
