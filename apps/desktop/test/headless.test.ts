@@ -15,9 +15,13 @@ import { Secrets } from '../src/main/secrets'
 import { SettingsStore } from '../src/main/settings'
 import { FileKeyCipher } from '../src/headless/file-cipher'
 import { parseArgs } from '../src/headless/main'
-import { ensureCert, readConfig } from '../src/headless/node-config'
-import { selfFacts, startNodeServer } from '../src/headless/node-server'
+import { derFromPem, fingerprintOf, makeSelfSignedCert } from '../src/main/devices/cert'
+import { loadIdentity } from '../src/main/devices/identity'
+import { SecretPassTable } from '../src/main/devices/passes'
+import { canRunTurns, headlessFacts, startHeadlessDevices } from '../src/headless/devices'
+import { readConfig } from '../src/headless/node-config'
 import { pair, parsePairLink, shortCodeTarget, PASS_SECRET } from '../src/headless/pair'
+import { connectRpc } from './devices-client'
 import { pinnedJson } from '../src/headless/pinned'
 import { startHeadlessRuntime, type HeadlessRuntime } from '../src/headless/runtime'
 
@@ -28,6 +32,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const temps: string[] = []
 const closers: Array<() => Promise<void> | void> = []
 let fake: FakeAi | null = null
+
+/** A throwaway node certificate and its fingerprint. */
+function cert(name: string): { cert: string; key: string; fp: string } {
+  const made = makeSelfSignedCert(name)
+  return { cert: made.certPem, key: made.keyPem, fp: fingerprintOf(derFromPem(made.certPem)) }
+}
 
 function temp(): string {
   const dir = mkdtempSync(join(tmpdir(), 'agent-node-test-'))
@@ -103,25 +113,66 @@ describe('headless runtime', () => {
   })
 })
 
-describe('headless node server', () => {
-  it('answers /v1/health over TLS pinned by fingerprint, and refuses a wrong pin before sending', async () => {
-    fake = await startFakeAi(() => ({ text: 'ok' }))
-    const dataDir = temp()
-    const runtime = await bootRuntime(dataDir)
-    const config = { ...readConfig(dataDir), port: 0 }
-    const cert = ensureCert(dataDir, config.name)
-    const node = await startNodeServer({ runtime, config, cert, version: '9.9.9' })
-    closers.push(() => node.close())
+describe('headless node as a Devices node (A\'s server)', () => {
+  it('pairs another headless node as a brain, and runs a chat turn for it over /v1/rpc', async () => {
+    fake = await startFakeAi(() => ({ text: 'Answered by the server.' }))
+    // Node one: the server that answers.
+    const serverDir = temp()
+    const server = await bootRuntime(serverDir)
+    let node = await startHeadlessDevices(server, { name: 'server-one', version: '9.9.9', listen: '127.0.0.1', port: 20000 + Math.floor(Math.random() * 30000) })
+    closers.push(() => node.stop())
+    let status = node.status()
+    for (let attempt = 0; !status.running && attempt < 4; attempt++) {
+      await node.stop()
+      node = await startHeadlessDevices(server, { name: 'server-one', version: '9.9.9', listen: '127.0.0.1', port: 20000 + Math.floor(Math.random() * 30000) })
+      status = node.status()
+    }
+    expect(status.running).toBe(true)
+    const base = `https://127.0.0.1:${status.port}`
+    await node.setExtraUrls([base])
 
-    const health = await pinnedJson(`https://127.0.0.1:${node.port}/v1/health`, { fp: cert.fp })
-    expect(health.status).toBe(200)
-    expect(health.json).toMatchObject({ id: config.id, version: '9.9.9', ready: true, busy: false, roles: ['brain', 'hands'] })
-    expect(health.fp).toBe(cert.fp)
-    const other = ensureCert(temp(), 'other')
-    await expect(pinnedJson(`https://127.0.0.1:${node.port}/v1/health`, { fp: other.fp })).rejects.toThrow(/different certificate/)
-    expect((await pinnedJson(`https://127.0.0.1:${node.port}/v1/devices`, { fp: cert.fp })).status).toBe(404)
+    const health = await pinnedJson(`${base}/v1/health`, { fp: status.fp })
+    expect(health.json).toMatchObject({ id: node.identity.nodeId, name: 'server-one', version: '9.9.9', ready: true, busy: false })
+    expect(canRunTurns(server)).toBe(true)
+    await expect(pinnedJson(`${base}/v1/health`, { fp: cert('other').fp })).rejects.toThrow(/different certificate/)
+
+    // Node two pairs with it from the QR text, as `agent-node pair` does.
+    const joinDir = temp()
+    const config = readConfig(joinDir)
+    const identity = loadIdentity(join(joinDir, 'devices'))
+    const settings = new SettingsStore(join(joinDir, 'settings.json'))
+    const secrets = new Secrets(join(joinDir, 'secrets'), new FileKeyCipher(join(joinDir, 'secrets.key')))
+    const offer = node.offer()
+    const outcome = await pair(parsePairLink(offer.uri), headlessFacts('server-two', '9.9.9', [], identity.fp), config, joinDir, { dataDir: joinDir, settings, secrets })
+    expect(outcome.meshId).toBe(node.identity.meshId)
+    expect(loadIdentity(join(joinDir, 'devices')).meshId).toBe(node.identity.meshId)
+    const pass = secrets.get(PASS_SECRET) ?? ''
+    expect(pass.length).toBeGreaterThan(20)
+    const row = await server.store.get('device', outcome.deviceId)
+    expect(row).toMatchObject({ name: 'server-two', kind: 'server', revoked: false })
+    expect(row?.roles).toEqual(expect.arrayContaining(['brain', 'hands']))
+
+    // The joined node drives the server's runtime over the wire: read settings, send a message, see the answer.
+    const client = await connectRpc(base, status.fp, pass, headlessFacts('server-two', '9.9.9', [], identity.fp))
+    closers.push(() => client.close())
+    const remoteSettings = (await client.call('settings.get')) as { model: string }
+    expect(remoteSettings.model).toBe('fake-model')
+    await client.call('chat.send', 'hello over the wire', [], '')
+    await waitUntil(async () => (await server.store.list('chat_item')).some((r) => r.kind === 'agent' && r.text === 'Answered by the server.'))
+    const items = await server.store.list('chat_item')
+    const asked = items.find((r) => r.kind === 'user' && r.text === 'hello over the wire')
+    expect(JSON.parse(asked?.meta ?? '{}').origin).toMatchObject({ deviceId: outcome.deviceId, kind: 'server' })
   })
 })
+
+async function waitUntil(check: () => Promise<boolean>, ms = 15_000): Promise<void> {
+  const end = Date.now() + ms
+  while (Date.now() < end) {
+    if (await check()) return
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error('timed out')
+}
 
 interface FakeNode {
   url: string
@@ -131,10 +182,10 @@ interface FakeNode {
 }
 
 async function fakePairingNode(): Promise<FakeNode> {
-  const cert = ensureCert(temp(), 'desk')
+  const desk = cert('desk')
   const seen: string[] = []
   const pass = 'p'.repeat(43)
-  const server = createServer({ cert: cert.cert, key: cert.key }, (req, res) => {
+  const server = createServer({ cert: desk.cert, key: desk.key }, (req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (c: Buffer) => chunks.push(c))
     req.on('end', () => {
@@ -162,7 +213,7 @@ async function fakePairingNode(): Promise<FakeNode> {
     server.close(() => resolve())
     server.closeAllConnections()
   }))
-  return { url: `https://127.0.0.1:${port}`, fp: cert.fp, seen, server }
+  return { url: `https://127.0.0.1:${port}`, fp: desk.fp, seen, server }
 }
 
 describe('headless pairing', () => {
@@ -173,14 +224,14 @@ describe('headless pairing', () => {
     const settings = new SettingsStore(join(dataDir, 'settings.json'))
     const secrets = new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key')))
     const link = `agent://pair?v=1&mesh=mesh_1&node=node_desk&name=Desk&u=${encodeURIComponent(desk.url)}&fp=${desk.fp}&c=ABCD-EFGH`
-    const facts = selfFacts(config, '9.9.9', [], '')
+    const facts = headlessFacts('server-two', '9.9.9', [], '')
 
     const outcome = await pair(parsePairLink(link), facts, config, dataDir, { dataDir, settings, secrets })
 
     expect(outcome).toMatchObject({ deviceId: 'dev_server', meshId: 'mesh_1', bundleError: '' })
     expect(secrets.get(PASS_SECRET)).toBe('p'.repeat(43))
     expect(secrets.get('apiKey-acc1')).toBe('sk-from-desk')
-    expect(JSON.parse(secrets.get('passHashes') ?? '{}')).toEqual({ dev_phone: 'ab'.repeat(32) })
+    expect(new SecretPassTable(secrets).all()).toEqual({ dev_phone: 'ab'.repeat(32) })
     expect(settings.get().agentName).toBe('Desk agent')
     expect(settings.get().accounts[0]).toMatchObject({ id: 'acc1', model: 'from-desk', hasKey: true })
     // A shortcut belongs to the device it was set on.
@@ -199,7 +250,7 @@ describe('headless pairing', () => {
     const config = readConfig(dataDir)
     const target = shortCodeTarget(desk.url, 'abcdefgh')
     expect(target.code).toBe('ABCD-EFGH')
-    const outcome = await pair(target, selfFacts(config, '9.9.9', [], ''), config, dataDir, {
+    const outcome = await pair(target, headlessFacts('server-two', '9.9.9', [], ''), config, dataDir, {
       dataDir,
       settings: new SettingsStore(join(dataDir, 'settings.json')),
       secrets: new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key'))),
@@ -211,10 +262,10 @@ describe('headless pairing', () => {
     const desk = await fakePairingNode()
     const dataDir = temp()
     const config = readConfig(dataDir)
-    const wrong = ensureCert(temp(), 'imposter').fp
+    const wrong = cert('imposter').fp
     const link = `agent://pair?v=1&u=${encodeURIComponent(desk.url)}&fp=${wrong}&c=ABCD-EFGH`
     await expect(
-      pair(parsePairLink(link), selfFacts(config, '9.9.9', [], ''), config, dataDir, {
+      pair(parsePairLink(link), headlessFacts('server-two', '9.9.9', [], ''), config, dataDir, {
         dataDir,
         settings: new SettingsStore(join(dataDir, 'settings.json')),
         secrets: new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key'))),
@@ -284,4 +335,40 @@ describe('headless CLI, end to end', () => {
     expect(asked.out).toContain('Hello from the server.')
     expect(fake.requests[0]?.headers['authorization']).toBe('Bearer sk-cli-test')
   }, 60_000)
+})
+
+describe('headless CLI pairing, end to end', () => {
+  it('offers from a running node, pairs a second node with the printed link, lists and revokes it', async () => {
+    const built = spawnSync(process.execPath, [join(root, 'scripts', 'build-headless.mjs'), '--bundle'], { cwd: root, encoding: 'utf8' })
+    expect(built.status, built.stderr).toBe(0)
+    const one = temp()
+    const two = temp()
+    const port = String(20000 + Math.floor(Math.random() * 30000))
+    expect((await cli(['config', '--port', port, '--url', `https://127.0.0.1:${port}`, '--data-dir', one])).code).toBe(0)
+    const started = await cli(['start', '--daemon', '--data-dir', one])
+    closers.push(async () => {
+      await cli(['stop', '--data-dir', one])
+    })
+    expect(started.code, started.err + started.out).toBe(0)
+
+    const offered = await cli(['offer', '--data-dir', one])
+    expect(offered.code, offered.err).toBe(0)
+    // The QR is drawn in half blocks, then the link and code.
+    expect(offered.out).toMatch(/[\u2580\u2584\u2588]{10}/)
+    const link = /Pairing link: (agent:\/\/pair\?\S+)/.exec(offered.out)?.[1] ?? ''
+    expect(link).toContain(`u=${encodeURIComponent(`https://127.0.0.1:${port}`)}`)
+
+    const paired = await cli(['pair', link, '--data-dir', two])
+    expect(paired.code, paired.err + paired.out).toBe(0)
+    expect(paired.out).toMatch(/Paired with https:\/\/127\.0\.0\.1/)
+
+    const listed = await cli(['devices', '--data-dir', one])
+    const joined = /^(dev_\S+)\s+\S+\s+server\/linux\s+brain\+hands/m.exec(listed.out.split('\n').slice(1).join('\n'))
+    expect(listed.out.split('\n').filter((l) => l.startsWith('dev_')).length).toBe(2)
+    const id = joined?.[1] ?? listed.out.split('\n').filter((l) => l.startsWith('dev_'))[1]?.split(' ')[0] ?? ''
+    expect((await cli(['revoke', id, '--data-dir', one])).code).toBe(0)
+    expect((await cli(['devices', '--data-dir', one])).out).toContain('revoked')
+    // Anyone without the folder's permissions cannot reach the control line.
+    expect(statSync(join(one, 'control.sock')).mode & 0o777).toBe(0o600)
+  }, 90_000)
 })

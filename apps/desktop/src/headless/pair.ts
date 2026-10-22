@@ -3,6 +3,9 @@
  * then take in the state bundle (s6). Every request is pinned to the certificate named in the link; with a short code
  * the certificate is trusted on first use and its fingerprint shown.
  */
+import { join } from 'node:path'
+
+import { joinMesh, loadIdentity } from '../main/devices/identity'
 import type { BrainRef, DeviceFacts } from '../main/devices/types'
 import type { Secrets } from '../main/secrets'
 import { applyBundle, type ApplyResult, type BundleTargets } from './bundle'
@@ -121,6 +124,9 @@ export async function pair(
     const next: NodeConfig = { ...config, meshId: answer.meshId, deviceId: answer.deviceId, brains }
     writeConfig(dataDir, next)
     Object.assign(config, next)
+    // This node now belongs to that mesh; it keeps its own id and certificate.
+    const devicesDir = join(dataDir, 'devices')
+    if (answer.meshId !== '') joinMesh(devicesDir, loadIdentity(devicesDir), answer.meshId)
 
     let bundle: ApplyResult | null = null
     let bundleError = ''

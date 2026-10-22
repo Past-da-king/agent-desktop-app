@@ -67,8 +67,30 @@ Branch `devices-headless` (off `devices`), worktree `~/agent-desktop-wt/devices-
   helpers.test.ts "runs two helpers at the same time" (teardown closes the store while a helper still writes its
   meta); not in this lane, seen on and off, left as is.
 
+## Integration with A (branch devices-headless-int, 22 Oct 03:00)
+- devices-headless + merge of devices-node (A, fb428a1), no conflicts. B NOT merged here: A and B conflict with each
+  other (two DeviceRow types, db.ts, runner.ts, ipc.ts, origin.ts...), which is the lead's merge.
+- The headless node runs A's `DevicesService` as kind 'server' (A's service got an optional `kind` /
+  `canOpenLinks` / `canReceiveFiles`, defaults unchanged). My basic server (node-server.ts) and the openssl cert are
+  gone; identity and cert are A's (`<data>/devices/identity.json`, `node-key.pem`, `node-cert.pem`). The runtime's
+  handlers are recorded in a HandlerRegistry, so A's /v1/rpc serves the headless runtime. Pairing joins the mesh
+  (joinMesh). Pass hashes go to A's SecretPassTable.
+- Local control socket `<data>/control.sock` (0600) for the CLI: `offer` (QR in half blocks + link + short code),
+  `devices`, `roles`, `move`, `revoke`; `config --url` adds an advertised address.
+- PROVEN: headless.test.ts 10 pass: a headless node pairs with another headless node through A's server and drives
+  a chat turn over /v1/rpc (origin recorded); the CLI e2e test (start daemon, offer, pair with the printed link,
+  devices, revoke). Mutation: without the handler registry the RPC test fails "not available on this device".
+  Full suite: 1153 passed (the only error is the known helpers.test.ts flake). `scripts/headless/qr-check.sh`
+  decodes the terminal QR with OpenCV: matches the link.
+- SERVER redeployed (5fb52e1): ready, crontab 44 lines. Cross-machine: a temp node in WSL paired with the server by
+  `agent-node pair --url https://<tailnet address>:7787 --code <code from 'agent-node offer' on the server>`; the
+  server listed it as brain+hands; then revoked it (row stays, revoked). Bundle answers 404 until B is merged.
+
 ## In flight / next
-- Relay through a linked device (scope item 6, part 2): needs A's /v1/rpc and device commands.
+- After the lead merges A+B: wire B (registerDevicesSync with the headless store/secrets/profiles/learned/passes,
+  TurnLeases, BundleKeeper; pair -> joinFrom), drop headless/bundle.ts stub, redeploy, prove bundle + replication
+  between the desktop and the server.
+- Relay through a linked device (scope item 6, part 2).
 
 ## Merge notes
 - Wire A's server into `headless/node-server.ts` `startNodeServer` (deps: runtime with `ipc` HandlerTable,

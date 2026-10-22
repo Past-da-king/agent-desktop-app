@@ -7,7 +7,6 @@ becomes one more brain your phone and computers can use.
 ## Needs
 
 - Linux, Node 22.13 or newer (it does not have to be the system Node: pass `--node`).
-- `openssl` (it makes its own certificate on first start).
 - For the Claude plan: Claude Code installed and signed in for this user (`claude` on the PATH or in
   `~/.local/bin`). For an API key account, nothing else.
 
@@ -53,11 +52,17 @@ with them. Restart it after pairing: `agent-node stop` (the keepalive starts it 
 | `agent-node config --listen ADDR --port N` | where it listens (next start) |
 
 Data: `~/.local/share/agent-node` (or `--data-dir` / `AGENT_DATA_DIR`). Logs: `logs/` in there. Keys are kept
-encrypted with a key file only your user can read.
+encrypted with a key file only your user can read. The node's identity and certificate are in `devices/` there.
+
+## Its own browser
+
+When the machine has a Chromium (Playwright's in `~/.cache/ms-playwright`, or `chromium` / `google-chrome` on the
+PATH, or `AGENT_CHROMIUM_PATH`), the agent browses with it, headless, in its own profile. It starts on first use and
+closes after ten quiet minutes.
 
 ## What it cannot do (yet)
 
-- No browser of its own: the browser tools say they are not available here.
+- Without a Chromium on the machine, the browser tools say they are not available here.
 - No screen: links and files the agent wants to show you go to the device you asked from once it is paired.
 
 ## Remove
