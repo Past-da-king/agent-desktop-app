@@ -63,6 +63,7 @@ import { describeRun, finishRun, runStarted } from './run-detail'
 import { viaLabel, type ChatVia } from '../tools/projects'
 import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
+import type { LeaseHook } from './turns'
 
 export interface SettingsView {
   get(): Settings
@@ -84,6 +85,16 @@ export const WAITING_FOR_USER = 'Waiting for you'
 
 /** Build the provider for the chosen settings, or null when nothing is set up yet. */
 export type ProviderFactory = (settings: Settings, apiKey: string) => LlmProvider | null
+
+/** Devices (docs/devices-protocol.md s8), each part optional: turn leases work with Devices off too. */
+export interface RunnerDevices {
+  /** Turn leases: crash resume and failover (runtime/turns.ts). */
+  leases?: LeaseHook
+  /** This node's own facts, stored as meta.origin on messages typed here. */
+  selfOrigin?: () => JsonObject | null
+  /** The prompt's one line about which device the newest message came from. */
+  originLine?: (chat: string) => Promise<string>
+}
 
 export interface RunnerDeps {
   store: DataStore
@@ -125,6 +136,7 @@ export interface RunnerDeps {
   classifier?: Classifier | null
   /** How long a joined message may wait to be read before it is started alongside instead. */
   joinPickupMs?: number
+  devices?: RunnerDevices
 }
 
 interface ActivityRow {
@@ -193,6 +205,9 @@ export class Runner {
   private readonly classifierOverride: Classifier | null | undefined
   private readonly joinPickupMs: number
   private readonly locks: BrainLocks | undefined
+  private readonly devices: RunnerDevices | undefined
+  /** The app is quitting: a turn cut off now keeps its lease running, so the next start resumes it. */
+  private disposing = false
 
   private readonly lines = new Map<string, ChatLine>()
   private routineRunning = false
@@ -230,6 +245,7 @@ export class Runner {
     this.classifierOverride = deps.classifier
     this.joinPickupMs = deps.joinPickupMs ?? JOIN_PICKUP_MS
     this.locks = deps.locks
+    this.devices = deps.devices
   }
 
   /** What runtime/brains.ts needs to say which AI a chat thinks with. */
@@ -283,13 +299,13 @@ export class Runner {
    * routed: about the same task, it joins the running work; different work, it runs alongside as its own run
    * and leaves a summary block. Either way the person's row says which.
    */
-  async send(text: string, attachments: Attachment[] = [], chat: string = MAIN_CHAT): Promise<void> {
+  async send(text: string, attachments: Attachment[] = [], chat: string = MAIN_CHAT, origin?: JsonObject): Promise<void> {
     const clean = text.trim()
     if (clean === '' && attachments.length === 0) return
     // The person handed these files over: the agent may open them without asking again.
     if (attachments.length > 0) this.allowFiles(attachments.map((attachment) => attachment.path))
     const prepared = await prepareMessage(clean, attachments)
-    const meta: JsonObject = { attachments: attachments as unknown as JsonObject[], ...chatTag(chat) }
+    const meta: JsonObject = { attachments: attachments as unknown as JsonObject[], ...chatTag(chat), ...this.originMeta(origin) }
     const line = this.line(chat)
 
     if (!line.running) {
@@ -625,6 +641,7 @@ export class Runner {
   }
 
   dispose(): void {
+    this.disposing = true
     for (const line of this.lines.values()) line.controller?.abort()
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
@@ -701,6 +718,7 @@ export class Runner {
     text: string,
     images: string[],
     user: { text: string; meta: string } | null,
+    leaseId?: string,
   ): Promise<void> {
     line.running = true
     // A message the person sent starts a fresh action budget. A helper's result does not.
@@ -713,11 +731,14 @@ export class Runner {
     this.emitFor(line.chat, { type: 'run_started' })
 
     let error: string | undefined
+    let lease: string | null = null
     try {
-      if (user !== null) await this.addUserItem(line.chat, user.text, user.meta)
+      const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
+      lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(leaseId === undefined ? {} : { id: leaseId }) }) ?? null
       const prompt = await this.withContextNotes(line, text)
       error = await this.drive(line, prompt, images, controller.signal)
     } finally {
+      if (lease !== null && !this.disposing) this.devices?.leases?.end(lease, error === undefined ? 'done' : 'failed')
       if (line.controller === controller) line.controller = null
       line.turn = null
       line.paused = false
@@ -733,6 +754,35 @@ export class Runner {
           null,
         )
       }
+    }
+  }
+
+  /** Run a chat again after it was cut off (runtime/turns.ts), under the lease it had. Never waits for the run. */
+  async resumeTurn(chat: string, leaseId: string, note: string): Promise<void> {
+    const line = this.line(chat)
+    if (line.running) {
+      line.steer.push({ text: note, images: [], at: this.now() })
+      this.emitFor(chat, { type: 'chat_changed' })
+      return
+    }
+    void this.begin(line, note, [], null, leaseId)
+  }
+
+  /** meta.origin for a message: the device it came from (the node server says), else this node itself. */
+  private originMeta(origin: JsonObject | undefined): JsonObject {
+    const value = origin ?? this.devices?.selfOrigin?.() ?? null
+    return value === null ? {} : { origin: value }
+  }
+
+  /** The prompt's line about where the newest message came from, when Devices is on. */
+  private async deviceLine(chat: string): Promise<{ deviceLine?: string }> {
+    const make = this.devices?.originLine
+    if (make === undefined) return {}
+    try {
+      const line = await make(chat)
+      return line === '' ? {} : { deviceLine: line }
+    } catch {
+      return {}
     }
   }
 
@@ -919,6 +969,7 @@ export class Runner {
       liveHelpers: this.helpers?.live() ?? [],
       ...this.profilePrompt(),
       ...(await this.projectPrompt(chat)),
+      ...(await this.deviceLine(chat)),
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
@@ -994,6 +1045,7 @@ export class Runner {
       liveHelpers: this.helpers?.live() ?? [],
       ...this.profilePrompt(),
       ...(role === 'main' ? await this.projectPrompt(chat) : {}),
+      ...(role === 'main' ? await this.deviceLine(chat) : {}),
       canDelegate: this.helpers !== undefined,
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
