@@ -204,7 +204,8 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       return { ...view, row: item, owner: helperOwner(item, projects), line, depth: 0, projectChat, steps: lines }
     })
     .filter(shown)
-    .sort((a, b) => Number(a.queued) - Number(b.queued) || a.startedAt - b.startedAt)
+    // Working cards first (queued after running), then the ones that just finished; oldest first within each.
+    .sort((a, b) => Number(a.state !== 'working') - Number(b.state !== 'working') || Number(a.queued) - Number(b.queued) || a.startedAt - b.startedAt)
   const heads = new Set(working.filter((card) => card.projectChat !== '').map((card) => card.projectChat))
   const under = (card: HelperCard): string => (card.projectChat === '' && heads.has(chatOfRow(card.row)) ? chatOfRow(card.row) : '')
   const out: HelperCard[] = []
