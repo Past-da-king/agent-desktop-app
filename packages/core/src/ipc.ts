@@ -441,6 +441,8 @@ export interface DevicesStatus {
   extraUrls: string[]
   /** This node's own device id. */
   nodeId: string
+  /** The device asking: this node in its own window, the paired device over the wire. */
+  viewer: string
   nodeName: string
   /** This node's certificate fingerprint, and the same as four words to compare by eye. */
   fp: string

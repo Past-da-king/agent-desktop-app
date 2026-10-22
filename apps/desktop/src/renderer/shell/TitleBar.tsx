@@ -28,8 +28,10 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
   const agentName = settings?.agentName.trim() || 'your agent'
   const dark = isDarkNow()
   const modKey = agent.platform === 'darwin' ? 'Cmd K' : 'Ctrl K'
-  const label = syncCopy(status.signedIn, status.syncing, status.error, status.lastSyncedAt)
-  const dotClass = !status.signedIn || status.error ? 'dot off' : status.syncing ? 'dot busy' : 'dot'
+  // On another device the window shows the computer it is linked to; that computer's sync is its own business.
+  const remote = agent.remote
+  const label = remote !== undefined ? `On ${remote.nodeName}` : syncCopy(status.signedIn, status.syncing, status.error, status.lastSyncedAt)
+  const dotClass = remote !== undefined ? 'dot' : !status.signedIn || status.error ? 'dot off' : status.syncing ? 'dot busy' : 'dot'
 
   const switchTheme = (): void => {
     void save({ theme: dark ? 'light' : 'dark' })

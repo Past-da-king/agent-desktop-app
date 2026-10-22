@@ -58,6 +58,7 @@ function status(): DevicesStatus {
     urls,
     extraUrls,
     nodeId: SELF,
+    viewer: SELF,
     nodeName: 'This computer',
     fp: 'preview',
     fpWords: 'Prev iewF inge rpri',

@@ -18,7 +18,7 @@ import { originFrom, setLocalOrigin } from './origin'
 import { formatShortCode, handlePair, pairUri, PairingOffers } from './pairing'
 import { SecretPassTable, type SecretsLike } from './passes'
 import { callAllowed } from './rpc'
-import type { HandlerRegistry } from './registry'
+import { wireOf, type HandlerRegistry } from './registry'
 import { DevicesServer, contentTypeFor } from './server'
 import type { BrainRef, DeviceFacts, DeviceRecord, DeviceRole, DevicesHost, RouteReply, RouteRequest } from './types'
 
@@ -71,9 +71,10 @@ function sortDevices(rows: DeviceRow[]): DeviceRow[] {
   return [...rows].sort((a, b) => brain(a) - brain(b) || a.priority - b.priority || a.pairedAt - b.pairedAt)
 }
 
-/** "Ab3d Ef9h Jk2m Np4q": the start of the fingerprint in groups, to compare by eye on both screens. */
+/** "3F2A 9C01 77DE 0B41": the start of the fingerprint as hex in groups, to compare by eye on both screens. */
 export function fingerprintWords(fp: string): string {
-  return (fp.slice(0, 16).match(/.{1,4}/g) ?? []).join(' ')
+  const hex = Buffer.from(fp, 'base64url').toString('hex').slice(0, 16).toUpperCase()
+  return (hex.match(/.{1,4}/g) ?? []).join(' ')
 }
 
 /** True when `child` is `parent` or inside it (both already real paths). */
@@ -105,6 +106,7 @@ export class DevicesService {
   private readonly dir: string
   private allowedCache = new Map<string, number>()
   private offStore: (() => void) | null = null
+  private ipv6 = true
 
   constructor(private readonly deps: DevicesServiceDeps) {
     this.now = deps.now ?? Date.now
@@ -171,21 +173,23 @@ export class DevicesService {
       canOpenLinks: true,
       canReceiveFiles: true,
       fingerprint: this.identity.fp,
-      urls: advertisedUrls(this.config.get()),
+      urls: this.urls(),
     }
   }
 
   // ---- Settings > Devices ----
 
-  status(): DevicesStatus {
+  /** `viewer`: the device asking (a wire caller), else this node. */
+  status(viewer: string = this.identity.nodeId): DevicesStatus {
     const config = this.config.get()
     return {
       enabled: config.enabled,
       running: this.server.running,
       port: this.server.running ? this.server.port() : config.port,
-      urls: advertisedUrls(config),
+      urls: this.urls(),
       extraUrls: config.extraUrls,
       nodeId: this.identity.nodeId,
+      viewer,
       nodeName: this.deps.nodeName(),
       fp: this.identity.fp,
       fpWords: fingerprintWords(this.identity.fp),
@@ -228,7 +232,7 @@ export class DevicesService {
 
   offer(): PairingOfferInfo {
     const offer = this.offers.create()
-    const urls = advertisedUrls(this.config.get())
+    const urls = this.urls()
     const uri = pairUri({
       meshId: this.identity.meshId,
       nodeId: this.identity.nodeId,
@@ -292,7 +296,7 @@ export class DevicesService {
       if (typeof raw !== 'string' || raw === '' || raw.length > 100) throw new Error('Invalid device id')
       return raw
     }
-    ipc.handle(DEVICES_CHANNELS.status, async () => this.status())
+    ipc.handle(DEVICES_CHANNELS.status, async (event) => this.status(wireOf(event)?.deviceId))
     ipc.handle(DEVICES_CHANNELS.setEnabled, async (_event, on) => this.setEnabled(on === true))
     ipc.handle(DEVICES_CHANNELS.setExtraUrls, async (_event, raw) =>
       this.setExtraUrls(Array.isArray(raw) ? raw.filter((u): u is string => typeof u === 'string').slice(0, 12) : []),
@@ -310,10 +314,29 @@ export class DevicesService {
 
   // ---- inside ----
 
+  /** What this node advertises right now (no IPv6 addresses when it could only listen on IPv4). */
+  private urls(): string[] {
+    return advertisedUrls(this.config.get(), undefined, this.ipv6)
+  }
+
   private async listen(): Promise<void> {
     const config = this.config.get()
     try {
-      await this.server.start(config.listen, config.port)
+      // "Every address" means IPv6 too: '::' takes both on a dual-stack system. Without IPv6, IPv4 only.
+      if (config.listen === '0.0.0.0') {
+        try {
+          await this.server.start('::', config.port)
+          this.ipv6 = true
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code
+          if (code !== 'EAFNOSUPPORT' && code !== 'EADDRNOTAVAIL' && code !== 'EINVAL') throw error
+          await this.server.start('0.0.0.0', config.port)
+          this.ipv6 = false
+        }
+      } else {
+        await this.server.start(config.listen, config.port)
+        this.ipv6 = config.listen.includes(':')
+      }
       this.error = ''
       this.deps.log?.('Devices server listening', { port: this.server.port() })
     } catch (error) {

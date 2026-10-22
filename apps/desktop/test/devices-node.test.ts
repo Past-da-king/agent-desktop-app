@@ -278,6 +278,14 @@ describe('the desktop node', () => {
     expect(windowEvents.length).toBeGreaterThan(0)
   })
 
+  it('listens on IPv4 and IPv6 when it listens everywhere', async () => {
+    const port = service.status().port
+    await service.configure({ listen: '0.0.0.0', port })
+    expect(service.status().running).toBe(true)
+    expect((await pinnedRequest(`https://127.0.0.1:${port}/v1/health`, fp)).status).toBe(200)
+    expect((await pinnedRequest(`https://[::1]:${port}/v1/health`, fp)).status).toBe(200)
+  })
+
   it('keeps the brain order and roles the person sets', async () => {
     const brain = await pair(['brain'])
     const self = service.identity.nodeId
