@@ -630,6 +630,15 @@ async function main() {
     const meta = metaOf(row)
     ev.push(`helper row ${row.id}: label "${meta.label ?? ''}", state ${meta.state ?? '?'}, summary "${String(meta.summary ?? '').slice(0, 60)}"`)
     ev.push(`project ${project.name} icon: ${project.icon?.image ? 'picture' : project.icon?.glyph ?? 'none'} ${project.icon?.color ?? ''}`)
+    const shown = meta.project ?? {}
+    ev.push(`row carries project: id ${shown.id === project.id ? 'matches' : 'MISSING'}, icon ${shown.glyph ?? '?'} ${shown.color ?? '?'}${shown.image ? ', picture' : ''}; in the main chat: ${meta.chat === undefined || meta.chat === '' || meta.chat === 'main' ? 'yes' : 'NO'}`)
+    const closed = await phone.waitFor(async () => {
+      const r = (await phone.rows('chat_item')).find((x) => x.id === row.id)
+      const m = metaOf(r ?? {})
+      return m.state === 'done' || m.state === 'failed' ? m : null
+    }, TIMEOUT_MS, 'the project agent row to close')
+    ev.push(`closed: state ${closed.state}, summary "${String(closed.summary ?? '').slice(0, 60)}"`)
+    if (shown.id !== project.id || !(meta.chat === undefined || meta.chat === '' || meta.chat === 'main') || closed.state !== 'done') return 'FAIL'
   })
 
   await check('d', 'an image from a local path on the brain loads through /v1/file', async (ev) => {
