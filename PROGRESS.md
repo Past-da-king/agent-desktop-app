@@ -80,6 +80,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 05:45 C merged A+B+design on devices-headless-int 92de9b1 (full suite 1242 pass): attach.ts wires B onto A service (desktop + headless), relay line, SOCKS for uplink/pinnedFetch, headless runs leases/device hub/workers. Fixed: joining node id, double pass, extraPeers, helpers flake. Two real headless processes pair + bundle + replicate. Missing B 66c2d1d and A c9d76c0: sent back to merge, then harness local + redeploy + cross-machine.
 
+- 06:00 LEAD merged into devices 9cc81a7: C 95e7872 + B 66c2d1d + A c9d76c0 + project agent rows in headless. Typecheck, lint ok; full suite 1245 pass (one flaky sync test once, green on rerun). Harness local (2 headless nodes + fake AI): a-f PASS, g crash resume FAIL (timeout) -> B fixing directly on devices. A building 0.2.42 installer + live desktop copy (C:	empgent-build-devices, C:	emp\devices-live).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
