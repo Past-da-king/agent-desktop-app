@@ -50,6 +50,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const cdp = await connect()
 await cdp.send('Page.enable')
 await cdp.send('Runtime.enable')
+// A window behind others gives no frames, and a screenshot would wait for ever.
+await cdp.send('Page.bringToFront')
 
 if (mode === 'settings') {
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false })
@@ -99,6 +101,18 @@ if (mode === 'settings') {
   await sleep(400)
   await cdp.shot(`live-after-revoke-${nth}`)
   console.log(JSON.stringify({ clicked, list: await cdp.evaluate(`document.querySelector('section.dv').innerText`) }))
+} else if (mode === 'section') {
+  // Settings > Devices as it is now, at desktop and phone width (no clicks).
+  for (const [width, height, mobile] of [[1280, 860, false], [390, 844, true]]) {
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile })
+    await cdp.evaluate(`location.hash = '#/settings'`)
+    await sleep(2500)
+    await cdp.evaluate(`document.querySelector('section.dv').scrollIntoView({ block: 'start' })`)
+    await sleep(600)
+    await cdp.shot(`${rest[0] ?? 'live-devices'}-${width}`)
+  }
+  console.log(await cdp.evaluate(`document.querySelector('section.dv')?.innerText`))
+  await cdp.send('Emulation.clearDeviceMetricsOverride')
 } else if (mode === 'shoot') {
   const [name, width, height, mobile, url] = rest
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: Number(width), height: Number(height), deviceScaleFactor: 1, mobile: mobile === 'mobile' })

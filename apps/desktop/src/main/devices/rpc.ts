@@ -79,7 +79,11 @@ export class RpcSession {
     if (typeof frame !== 'object' || frame === null) return
     const value = frame as Record<string, unknown>
     if (value['type'] === 'hello') {
-      const facts = cleanFacts(value['device'])
+      // s11: the catalogue rides in the hello, beside the facts (or inside them).
+      const device = value['device']
+      const withTools =
+        value['tools'] !== undefined && typeof device === 'object' && device !== null ? { ...(device as Record<string, unknown>), tools: value['tools'] } : device
+      const facts = cleanFacts(withTools)
       if (facts === null) {
         this.conn.close(4002, 'bad hello')
         return

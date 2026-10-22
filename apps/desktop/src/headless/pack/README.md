@@ -21,6 +21,9 @@ cd agent-node
 ~/agent-node/bin/agent-node status
 ```
 
+From a development machine with this repo, one command builds, copies, installs and starts it on a server:
+`bash scripts/headless/deploy.sh <ssh host> [--node /path/to/node] [--proxy socks5://host:port]`.
+
 It listens on `https://127.0.0.1:7787` by default. To reach it from your other devices, either put it behind a
 mesh VPN that forwards to loopback, or listen on all addresses (`--listen 0.0.0.0`) on a network you trust.
 

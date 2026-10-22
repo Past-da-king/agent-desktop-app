@@ -92,7 +92,8 @@ describe('Runner', () => {
     expect(rows.map((row) => row.kind)).toEqual(['user', 'agent'])
     expect(rows[1]?.text).toBe('Hi Sam')
     expect(await database.list('turn')).toHaveLength(2)
-    expect(events[0]).toEqual({ type: 'run_started' })
+    // The person's row is stored (and the lease with it) just before the run is announced.
+    expect(events.filter((e) => e.type !== 'chat_changed')[0]).toEqual({ type: 'run_started' })
     expect(events.at(-1)).toEqual({ type: 'run_finished' })
     expect(runner.state()).toEqual({ running: false, waiting: [] })
   })
