@@ -122,5 +122,22 @@ Branch `devices-headless` (off `devices`), worktree `~/agent-desktop-wt/devices-
   got its device row and its "CrossCheck" memory, 0 failed links.
 - Server: running 0.2.41 from this branch, ready, crontab 44 lines, proxy socks5://localhost:1055 set.
 
+## FINAL integration cc1d662 (22 Oct ~04:10), + deploy script
+- Re-merged A c9d76c0 and B 66c2d1d. Headless: B's ProjectAgentRows; A's DeviceToolHost lends browser, files,
+  shell_run, run_code (run_code joined group shell; on a server shell sharing is switched on at first start);
+  /usr/lib/chromium/chromium is a browser candidate (not present on this server: Playwright's Chromium is used).
+- Harness fixes: leases recovered after Devices attach (ownIds include the device id); runner stores the lease
+  before run_started; replicator re-reads peers on device change; first local change pushed at once.
+- PROVEN: full suite 1245 passed / exit 0; `bash scripts/devices-e2e-local.sh dist-headless/agent-node.mjs`:
+  a-g all PASS (f 3/3 alone); cross-machine (cross-replicate.sh) passes on 0.2.42.
+- Version 0.2.42 on devices-headless-int.
+- ONE-COMMAND deploy from WSL: `bash scripts/headless/deploy.sh <ssh host> [--node PATH] [--proxy socks5://...]
+  [--port N]` (build, copy, install, restart, status). On the server itself: `sh agent-node/install.sh` from the
+  tarball. Server now 0.2.42 via deploy.sh, ready, crontab 44 lines.
+
+## Not done
+- The raw TCP relay through a linked device (lead marked it LOWER priority; covered for now by web_fetch_via_device
+  and B's device tools, e.g. using the PC's or phone's browser).
+
 ## In flight / next
 - Lead: fast-forward `devices` to devices-headless-int; live test with the test desktop + server + phone.
