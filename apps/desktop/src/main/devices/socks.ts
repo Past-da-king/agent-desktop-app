@@ -3,7 +3,9 @@
  * the person's other devices that way, e.g. a server whose mesh VPN runs in userspace and offers a local SOCKS5
  * port. The TLS (and the certificate pin) still runs end to end on top: the proxy only sees encrypted bytes.
  */
+import { Agent } from 'node:https'
 import { connect, isIP, type Socket } from 'node:net'
+import { connect as tlsConnect, type ConnectionOptions } from 'node:tls'
 
 export interface SocksProxy {
   host: string
@@ -87,4 +89,37 @@ function expandIpv6(address: string): number[] {
   const b = tail === '' ? [] : tail.split(':')
   const middle = new Array<string>(8 - a.length - b.length).fill('0')
   return [...a, ...(address.includes('::') ? middle : []), ...b].map((part) => parseInt(part || '0', 16))
+}
+
+/** The proxy this app reaches other devices through, if any (`AGENT_NODE_PROXY`, or set by the headless node). */
+let current: SocksProxy | null = parseSocksProxy(process.env['AGENT_NODE_PROXY'])
+
+export function setDevicesProxy(next: SocksProxy | null): void {
+  current = next
+}
+
+export function devicesProxy(): SocksProxy | null {
+  return current
+}
+
+/**
+ * For https.request: an Agent that opens each connection through the proxy, or false for a direct connection (as
+ * before). TLS and the pin check still run on the socket the request gets, so 'secureConnect' fires as usual.
+ */
+export function proxyAgent(): Agent | false {
+  const proxy = current
+  if (proxy === null) return false
+  const agent = new Agent({ keepAlive: false })
+  ;(agent as unknown as { createConnection: unknown }).createConnection = (
+    options: ConnectionOptions & { host?: string; port?: number },
+    done: (error: Error | null, socket?: Socket) => void,
+  ): undefined => {
+    const host = (options.host ?? 'localhost').replace(/^\[|\]$/g, '')
+    socksConnect(proxy, host, Number(options.port ?? 443)).then(
+      (raw) => done(null, tlsConnect({ ...options, socket: raw })),
+      (error: Error) => done(error),
+    )
+    return undefined
+  }
+  return agent
 }

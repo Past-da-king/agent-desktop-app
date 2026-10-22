@@ -9,6 +9,8 @@ import { createHash, randomBytes } from 'node:crypto'
 import { request } from 'node:https'
 import type { TLSSocket } from 'node:tls'
 
+import { proxyAgent } from './socks'
+
 import { WsConnection } from './ws'
 import type { DeviceFacts, DeviceToolResult } from './types'
 
@@ -38,7 +40,8 @@ export interface UplinkDeps {
 export function connectPinned(url: string, fp: string, pass: string, timeoutMs = 8000): Promise<WsConnection> {
   return new Promise((resolve, reject) => {
     const req = request(`${url}/v1/rpc`, {
-      agent: false,
+      // Through the devices proxy when one is set (devices/socks.ts), else direct as before.
+      agent: proxyAgent(),
       rejectUnauthorized: false,
       timeout: timeoutMs,
       headers: {

@@ -21,6 +21,8 @@ import { ConnectedAppsFile, LearnedStore } from '../main/apps/store'
 import { FileBrainLocks } from '../main/brain-locks'
 import { Store } from '../main/db'
 import { HandlerRegistry, recordHandlers } from '../main/devices/registry'
+import { devicesState, type DevicesSyncDeps } from '../main/devices/sync'
+import { TurnLeases } from '../main/runtime/turns'
 import { registerIpc, type IpcMainLike } from '../main/ipc'
 import { Logger } from '../main/logger'
 import { ChatIndex } from '../main/memory/chat-index'
@@ -122,6 +124,12 @@ export interface HeadlessRuntime {
   memory: MemoryService
   apps: AppsService
   learned: LearnedStore
+  /** Turn leases: a turn or helper cut off by a crash or a restart resumes, and failover between brains. */
+  leases: TurnLeases
+  /** What devices/attach.ts needs from the runtime (shared tools, notes back to a chat, cards for other brains). */
+  devicesHooks: Pick<DevicesSyncDeps, 'leases' | 'localTools' | 'shareGroups' | 'preferred' | 'noteBack' | 'context'>
+  /** The per-account rules file, for the devices bundle. */
+  connectedApps: ConnectedAppsFile
   /** The node's own headless browser, or null when this machine has no Chromium. */
   browser: HeadlessBrowser | null
   /** The app contract by channel, for tests and local calls. */
@@ -134,6 +142,8 @@ export interface HeadlessRuntime {
   actions: DeviceActions
   /** True while any chat has a turn running. */
   busy(): boolean
+  /** Run this first when the runtime stops (the devices sync). */
+  onStop(fn: () => void | Promise<void>): void
   /** Stop timers, wait for running turns and helpers (up to `graceMs`), close the database. */
   stop(graceMs?: number): Promise<void>
 }
@@ -181,9 +191,10 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   logger.info('Starting headless node', { version: options.version, platform: process.platform })
 
   const learned = new LearnedStore(join(dir, 'learned-apps.json'))
+  const connectedApps = new ConnectedAppsFile(join(dir, 'connected-apps.json'))
   const apps = new AppsService({
     secrets,
-    file: new ConnectedAppsFile(join(dir, 'connected-apps.json')),
+    file: connectedApps,
     learned,
     profiles: new ProfileStore(join(dir, 'profiles.json')),
     openExternal: async (url) => {
@@ -230,13 +241,29 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   let memory: MemoryService | null = null
   const notify = (title: string, body: string): void => actions.notify(title, body)
 
+  const leases = new TurnLeases({
+    store,
+    selfId: () => devicesState.sync?.selfId() ?? store.deviceId,
+    ownIds: () => [store.deviceId],
+    resumeTurn: (chat, id, note) => runner?.resumeTurn(chat, id, note),
+    resumeJob: async (id, note) => {
+      await helpers.push(id, note)
+    },
+    lost: (lease) => {
+      if (lease.kind === 'job') void helpers.stop(lease.messageId)
+      else runner?.stop(lease.chatId)
+    },
+  })
+  const deviceHub = (): NonNullable<typeof devicesState.sync>['tools'] | null => devicesState.sync?.tools ?? null
+  const workerToolList = [...browserTools(buildWorkerToolset({ store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned })), ...nodeTools]
   const helpers = new HelperManager({
+    leases,
     store,
     cli: cliHost,
     settings,
     secrets,
     providerFactory: factory,
-    workerTools: [...browserTools(buildWorkerToolset({ store, settings, ...browserDep, agentName: () => settings.get().agentName, environment, apps, learned })), ...nodeTools],
+    workerTools: workerToolList,
     deliver: async (note, chat) => {
       if (runner !== null) await runner.deliver(note, chat)
     },
@@ -262,6 +289,15 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       apps,
       learned,
       searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
+      deviceHub,
+      devices: {
+        selfId: () => devicesState.sync?.selfId() ?? '',
+        commands: () => devicesState.sync?.commands ?? null,
+        // No screen here: a link the person should see goes to the device they asked from (device commands).
+        openLocal: (url) => {
+          void actions.openUrl(url)
+        },
+      },
       projects: {
         post: async (chat, text, via) => {
           if (runner !== null) await runner.receive(chat, text, via)
@@ -278,6 +314,11 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     ...nodeTools,
   ])
   const theRunner = new Runner({
+    devices: {
+      leases,
+      selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
+      originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
+    },
     store,
     settings,
     secrets,
@@ -313,6 +354,9 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   } catch {
     // Startup repair is best effort.
   }
+  // What a crash or a restart cut off runs again, once (runtime/turns.ts). With Devices on, the failover side is set
+  // by devices/attach.ts and the recovery waits for one replication pass first.
+  if (options.quiet !== true) void leases.recover().catch(() => 0)
 
   const chatIndex = new ChatIndex(join(dir, 'chat-search.db'))
   const upkeep = new UpkeepFile(join(dir, 'memory-upkeep.json'))
@@ -400,6 +444,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
 
   const busy = (): boolean => theRunner.state().running
   let stopped = false
+  const stopHooks: Array<() => void | Promise<void>> = []
 
   return {
     dataDir: dir,
@@ -416,14 +461,30 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     apps,
     learned,
     browser,
+    leases,
+    devicesHooks: {
+      leases,
+      localTools: () => workerToolList,
+      shareGroups: () => settings.get().devicesShareGroups,
+      preferred: () => settings.get().devicesPreferred,
+      noteBack: async (chat, text) => {
+        await theRunner.deliver(text, chat)
+      },
+      context: (chat, signal) => theRunner.deviceContext(chat, signal),
+    },
+    connectedApps,
     ipc,
     registry,
     ipcMain,
     actions,
     busy,
+    onStop: (fn) => {
+      stopHooks.push(fn)
+    },
     async stop(graceMs = 20_000): Promise<void> {
       if (stopped) return
       stopped = true
+      for (const fn of stopHooks.splice(0)) await Promise.resolve(fn()).catch(() => undefined)
       scheduler.stop()
       theMemory.stop()
       // Let a running turn finish; if it does not in time it is marked interrupted on the next start and resumed.
@@ -432,6 +493,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       while (working() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200))
       logger.info('Stopping headless node', { stillWorking: working() ? 1 : 0 })
       await browser?.close()
+      leases.stop()
       disposeIpc()
       disposeStore()
       theRunner.dispose()

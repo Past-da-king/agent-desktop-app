@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { DatabaseSync } from 'node:sqlite'
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { providerFor } from '@agent/core'
@@ -19,7 +21,7 @@ import { parseArgs } from '../src/headless/main'
 import { derFromPem, fingerprintOf, makeSelfSignedCert } from '../src/main/devices/cert'
 import { loadIdentity } from '../src/main/devices/identity'
 import { SecretPassTable } from '../src/main/devices/passes'
-import { canRunTurns, headlessFacts, startHeadlessDevices } from '../src/headless/devices'
+import { canRunTurns, headlessFacts, JOIN_CHANNEL, startHeadlessDevices } from '../src/headless/devices'
 import { readConfig } from '../src/headless/node-config'
 import { pair, parsePairLink, shortCodeTarget, PASS_SECRET } from '../src/headless/pair'
 import { connectRpc } from './devices-client'
@@ -143,10 +145,9 @@ describe('headless node as a Devices node (A\'s server)', () => {
     const joinDir = temp()
     const config = readConfig(joinDir)
     const identity = loadIdentity(join(joinDir, 'devices'))
-    const settings = new SettingsStore(join(joinDir, 'settings.json'))
     const secrets = new Secrets(join(joinDir, 'secrets'), new FileKeyCipher(join(joinDir, 'secrets.key')))
     const offer = node.offer()
-    const outcome = await pair(parsePairLink(offer.uri), headlessFacts('server-two', '9.9.9', [], identity.fp), config, joinDir, { dataDir: joinDir, settings, secrets })
+    const outcome = await pair(parsePairLink(offer.uri), headlessFacts('server-two', '9.9.9', [], identity.fp), config, joinDir, { dataDir: joinDir, secrets })
     expect(outcome.meshId).toBe(node.identity.meshId)
     expect(loadIdentity(join(joinDir, 'devices')).meshId).toBe(node.identity.meshId)
     const pass = secrets.get(PASS_SECRET) ?? ''
@@ -220,31 +221,23 @@ async function fakePairingNode(): Promise<FakeNode> {
 }
 
 describe('headless pairing', () => {
-  it('pairs from a pairing link, stores the pass, and takes in the bundle', async () => {
+  it('pairs from a pairing link, stores the pass, and records the brain to join', async () => {
     const desk = await fakePairingNode()
     const dataDir = temp()
     const config = readConfig(dataDir)
-    const settings = new SettingsStore(join(dataDir, 'settings.json'))
     const secrets = new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key')))
     const link = `agent://pair?v=1&mesh=mesh_1&node=node_desk&name=Desk&u=${encodeURIComponent(desk.url)}&fp=${desk.fp}&c=ABCD-EFGH`
     const facts = headlessFacts('server-two', '9.9.9', [], '')
 
-    const outcome = await pair(parsePairLink(link), facts, config, dataDir, { dataDir, settings, secrets })
+    const outcome = await pair(parsePairLink(link), facts, config, dataDir, { dataDir, secrets })
 
-    expect(outcome).toMatchObject({ deviceId: 'dev_server', meshId: 'mesh_1', bundleError: '' })
+    expect(outcome).toMatchObject({ deviceId: 'dev_server', meshId: 'mesh_1' })
     expect(secrets.get(PASS_SECRET)).toBe('p'.repeat(43))
-    expect(secrets.get('apiKey-acc1')).toBe('sk-from-desk')
-    expect(new SecretPassTable(secrets).all()).toEqual({ dev_phone: 'ab'.repeat(32) })
-    expect(settings.get().agentName).toBe('Desk agent')
-    expect(settings.get().accounts[0]).toMatchObject({ id: 'acc1', model: 'from-desk', hasKey: true })
-    // A shortcut belongs to the device it was set on.
-    expect(settings.get().quickAskHotkey).not.toBe('Ctrl+Space')
     const saved = readConfig(dataDir)
-    expect(saved).toMatchObject({ meshId: 'mesh_1', deviceId: 'dev_server' })
+    expect(saved).toMatchObject({ meshId: 'mesh_1', deviceId: 'dev_server', join: { url: desk.url, fp: desk.fp } })
     expect(saved.brains[0]).toMatchObject({ id: 'node_desk', fp: desk.fp })
-    // Neither the pass nor the key is written anywhere but the secrets store.
+    // The pass is written nowhere but the secrets store.
     expect(readFileSync(join(dataDir, 'node.json'), 'utf8')).not.toContain('ppppp')
-    expect(readFileSync(join(dataDir, 'settings.json'), 'utf8')).not.toContain('sk-from-desk')
   })
 
   it('pairs by address and short code, trusting the certificate on first use', async () => {
@@ -255,7 +248,6 @@ describe('headless pairing', () => {
     expect(target.code).toBe('ABCD-EFGH')
     const outcome = await pair(target, headlessFacts('server-two', '9.9.9', [], ''), config, dataDir, {
       dataDir,
-      settings: new SettingsStore(join(dataDir, 'settings.json')),
       secrets: new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key'))),
     })
     expect(outcome.fp).toBe(desk.fp)
@@ -270,7 +262,6 @@ describe('headless pairing', () => {
     await expect(
       pair(parsePairLink(link), headlessFacts('server-two', '9.9.9', [], ''), config, dataDir, {
         dataDir,
-        settings: new SettingsStore(join(dataDir, 'settings.json')),
         secrets: new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key'))),
       }),
     ).rejects.toThrow(/Could not reach/)
@@ -409,7 +400,6 @@ describe('relay: fetching through a paired computer', () => {
     const identity = loadIdentity(join(serverDir, 'devices'))
     await pair(parsePairLink(node.offer().uri), headlessFacts('the-server', '9.9.9', [], identity.fp), readConfig(serverDir), serverDir, {
       dataDir: serverDir,
-      settings: new SettingsStore(join(serverDir, 'settings.json')),
       secrets: new Secrets(join(serverDir, 'secrets'), new FileKeyCipher(join(serverDir, 'secrets.key'))),
     })
     const server = await bootRuntime(serverDir)
@@ -479,4 +469,58 @@ describe('reaching other nodes through a SOCKS5 proxy', () => {
     expect(parseSocksProxy('http://127.0.0.1:8080')).toBeNull()
     expect(parseSocksProxy('socks5://[::1]:1055')).toEqual({ host: '::1', port: 1055 })
   })
+})
+
+describe('two running headless nodes, joined (A server + B sync), as two processes', () => {
+  it('the second takes the first one\'s account and key, and the first one\'s memory replicates to it', async () => {
+    const built = spawnSync(process.execPath, [join(root, 'scripts', 'build-headless.mjs'), '--bundle'], { cwd: root, encoding: 'utf8' })
+    expect(built.status, built.stderr).toBe(0)
+    fake = await startFakeAi((_body, index) =>
+      index === 0 ? { toolCalls: [{ name: 'memory_save', input: { title: 'Lerato', body: 'Lives in Durban.', topics: 'family' } }] } : { text: 'Saved.' },
+    )
+    const port = (): string => String(20000 + Math.floor(Math.random() * 30000))
+    const one = temp()
+    const two = temp()
+    const onePort = port()
+    const twoPort = port()
+
+    // Node one: an API account (key on stdin) and one memory, then it runs.
+    expect((await cli(['account', 'add', 'api', '--provider', 'openai', '--base-url', fake.url, '--allow-http', '--model', 'fake-model', '--data-dir', one], 'sk-two-nodes')).code).toBe(0)
+    expect((await cli(['ask', 'Remember Lerato lives in Durban', '--data-dir', one])).code).toBe(0)
+    expect((await cli(['config', '--port', onePort, '--url', `https://127.0.0.1:${onePort}`, '--data-dir', one])).code).toBe(0)
+    expect((await cli(['start', '--daemon', '--data-dir', one])).code).toBe(0)
+    closers.push(async () => {
+      await cli(['stop', '--data-dir', one])
+    })
+
+    // Node two: a fresh install, running, with nothing set up.
+    expect((await cli(['config', '--port', twoPort, '--url', `https://127.0.0.1:${twoPort}`, '--data-dir', two])).code).toBe(0)
+    expect((await cli(['start', '--daemon', '--data-dir', two])).code).toBe(0)
+    closers.push(async () => {
+      await cli(['stop', '--data-dir', two])
+    })
+    expect((await cli(['status', '--data-dir', two])).out).toContain('no AI account yet')
+
+    // Pair two with one; it takes one's bundle at once.
+    const offered = await cli(['offer', '--no-qr', '--data-dir', one])
+    const link = /Pairing link: (agent:\/\/pair\?\S+)/.exec(offered.out)?.[1] ?? ''
+    const paired = await cli(['pair', link, '--data-dir', two])
+    expect(paired.code, paired.err + paired.out).toBe(0)
+    expect(paired.out).toContain('Took in your settings, accounts and keys')
+    expect((await cli(['status', '--data-dir', two])).out).toMatch(/state: running \(pid \d+\), ready/)
+
+    // Replication: node one's memory arrives in node two's database.
+    const memoryOnTwo = async (): Promise<boolean> => {
+      const db = new DatabaseSync(join(two, 'agent.db'), { readOnly: true })
+      try {
+        const rows = db.prepare("SELECT payload FROM rows WHERE entity = 'memory' AND deleted = 0").all() as Array<{ payload: string }>
+        return rows.some((row) => row.payload.includes('Lerato'))
+      } finally {
+        db.close()
+      }
+    }
+    await waitUntil(memoryOnTwo, 45_000)
+    const listed = await cli(['devices', '--data-dir', two])
+    expect(listed.out.split('\n').filter((l) => l.startsWith('dev_')).length).toBe(2)
+  }, 120_000)
 })

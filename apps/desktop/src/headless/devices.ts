@@ -6,7 +6,11 @@
 import { join } from 'node:path'
 
 import { platformOf } from '../main/devices/facts'
+import { attachDevicesSync } from '../main/devices/attach'
 import { registerRelay, rolesFromStore } from '../main/devices/relay'
+import { devicesState } from '../main/devices/sync'
+import { readConfig, writeConfig } from './node-config'
+import { PASS_SECRET } from './pair'
 import { DevicesService } from '../main/devices/service'
 import type { DeviceFacts } from '../main/devices/types'
 import type { HeadlessRuntime } from './runtime'
@@ -63,6 +67,34 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     canReceiveFiles: false,
   })
   service.registerIpc(runtime.ipcMain)
+  // Replication, the bundle, device commands, shared tools and turn failover (devices/attach.ts), as on the desktop.
+  const detach = attachDevicesSync(service, {
+    store: runtime.store,
+    bundle: {
+      settings: runtime.settings,
+      secrets: runtime.secrets,
+      profiles: runtime.apps.profiles,
+      learned: runtime.learned,
+      connected: runtime.connectedApps,
+      passes: service.passTable(),
+      projects: () => runtime.store.list('project'),
+    },
+    ...runtime.devicesHooks,
+    pairedPass: () => runtime.secrets.get(PASS_SECRET),
+    imageDir: join(runtime.dataDir, 'attachments', 'from-devices'),
+    log: (line) => runtime.logger.info(line),
+    // The brains this node paired with, until their device rows replicate here.
+    extraPeers: () => readConfig(runtime.dataDir).brains.map((brain) => ({ id: brain.id, name: brain.name, urls: brain.urls, fp: brain.fp })),
+  })
+  runtime.onStop(async () => {
+    detach()
+    await service.stop()
+  })
+  // `agent-node pair` while this node runs: take the brain's bundle (settings, accounts, keys) now.
+  runtime.ipcMain.handle(JOIN_CHANNEL, async (_event, url, fp) => {
+    if (typeof url !== 'string' || typeof fp !== 'string') throw new Error('Which node to join?')
+    return joinNow(runtime.dataDir, url, fp)
+  })
   // This node fetches pages for the person's other nodes too (relay.fetch).
   registerRelay(service.host(), {
     store: runtime.store,
@@ -77,5 +109,22 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
   if (options.extraUrls !== undefined && options.extraUrls.length > 0) await service.setExtraUrls(options.extraUrls)
   // A headless node exists to be reached: it always listens (on loopback unless told otherwise).
   await service.setEnabled(true)
+  // A pairing made while it was stopped: take that brain's bundle now.
+  const pending = readConfig(runtime.dataDir).join
+  if (pending !== null) await joinNow(runtime.dataDir, pending.url, pending.fp).catch(() => false)
   return service
+}
+
+/** The control channel `agent-node pair` uses to hand a fresh pairing to the running node. */
+export const JOIN_CHANNEL = 'agent:devices.join'
+
+async function joinNow(dataDir: string, url: string, fp: string): Promise<boolean> {
+  const sync = devicesState.sync
+  if (sync === null) return false
+  const ok = await sync.joinFrom(url, fp)
+  if (ok) {
+    const config = readConfig(dataDir)
+    if (config.join !== null) writeConfig(dataDir, { ...config, join: null })
+  }
+  return ok
 }
