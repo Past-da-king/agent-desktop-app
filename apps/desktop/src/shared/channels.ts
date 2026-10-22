@@ -76,6 +76,7 @@ export const CHANNELS = {
   helpers: {
     stop: 'agent:helpers.stop',
     stopAll: 'agent:helpers.stopAll',
+    cards: 'agent:helpers.cards',
   },
   apps: {
     status: 'agent:apps.status',
@@ -162,6 +163,7 @@ export const EVENTS = {
   apps: 'agent:evt:apps.changed',
   voiceCall: 'agent:evt:voice.call',
   profiles: 'agent:evt:profiles.changed',
+  helperCards: 'agent:evt:helpers.cards',
   dictationCommand: 'agent:evt:dictation.command',
   dictationView: 'agent:evt:dictation.view',
 } as const

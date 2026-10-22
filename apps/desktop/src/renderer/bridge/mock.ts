@@ -49,6 +49,7 @@ import { mockVoice } from '../voice/mock-voice'
 import { DEMO_CHATS } from './chats-demo'
 import { mockHotkeys } from './mock-hotkeys'
 import { readMode, seedFor, type DemoMode } from './seed'
+import { cardInfo, helperCards } from '../../shared/helper-cards'
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
 
@@ -1119,6 +1120,13 @@ export const mockAgent: AgentApi = {
         })
       }
       return working.length
+    },
+    async cards() {
+      const cards = helperCards(rows.chat_item, rows.project).map((card) => cardInfo(card))
+      return { seq: 1, at: Date.now(), cards }
+    },
+    onCards() {
+      return () => undefined
     },
   },
 

@@ -191,7 +191,7 @@ const METHODS: Record<string, string[]> = {
     'openInSystem',
     'attach',
   ],
-  helpers: ['stop', 'stopAll'],
+  helpers: ['stop', 'stopAll', 'cards'],
   apps: ['status', 'setKey', 'catalog', 'connect', 'disconnect', 'setRules', 'learned', 'removeLearned', 'setTrusted'],
   profiles: ['list', 'create', 'update', 'remove', 'setMember'],
   window: ['minimize', 'toggleMaximize', 'close', 'isMaximized'],

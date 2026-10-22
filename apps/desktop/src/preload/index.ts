@@ -42,7 +42,7 @@ import type {
   WorkerInfo,
   WorkerLogLine,
 } from '@agent/core'
-import type { DeviceRow, DevicesStatus, PairingOfferInfo } from '@agent/core'
+import type { DeviceRow, DevicesStatus, HelperCardsSnapshot, PairingOfferInfo } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
 import { CHANNELS, EVENTS } from '../shared/channels'
@@ -156,6 +156,8 @@ const api: AgentApi = {
   helpers: {
     stop: (id) => call<boolean>(CHANNELS.helpers.stop, id),
     stopAll: () => call<number>(CHANNELS.helpers.stopAll),
+    cards: () => call<HelperCardsSnapshot>(CHANNELS.helpers.cards),
+    onCards: (callback) => on<HelperCardsSnapshot>(EVENTS.helperCards, callback),
   },
 
   apps: {
