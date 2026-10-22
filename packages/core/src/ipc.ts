@@ -1193,6 +1193,34 @@ export interface DeviceCall {
   lines: Array<{ who: 'you' | 'agent'; text: string; at: number }>
 }
 
+/** Someone a call can talk to on this computer: the main agent, a project (with its chats) or a helper at work. */
+export interface CallTarget {
+  kind: 'main' | 'project' | 'helper'
+  id: string
+  name: string
+  /** A project's icon glyph ('' otherwise). */
+  glyph: string
+  running: boolean
+  /** What it is doing now (a helper that finished: what it did). */
+  doing: string
+  /** A project's chats, oldest first. */
+  chats: Array<{ id: string; title: string; running: boolean; doing: string }>
+}
+
+/** A call hands a message to one agent: `target` is 'main', or a project, chat or helper by id or name. */
+export interface CallHandoffInput {
+  target: string
+  message: string
+  /** Narrows the match when the voice knows what kind it is. */
+  kind?: 'main' | 'project' | 'helper' | ''
+  /** A project target: start a new chat there instead of using its latest. */
+  newChat?: boolean
+}
+
+export type CallHandoffResult =
+  | { ok: true; kind: 'main' | 'project' | 'chat' | 'helper'; id: string; name: string; chat: string; said: string; detail: string }
+  | { ok: false; error: string; ambiguous: Array<{ kind: string; id: string; name: string }> }
+
 export interface VoiceApi {
   /** Stores the Gemini key in the secrets module only. Pass '' to clear. */
   setKey(key: string): Promise<void>
@@ -1208,6 +1236,10 @@ export interface VoiceApi {
   liveToken(): Promise<LiveTokenResult>
   /** A paired device's call on this computer's agent: its transcript lands in this chat as a call row. */
   callSave(call: DeviceCall): Promise<{ itemId: string } | null>
+  /** For a paired device's call: who is here to talk to (the main agent, projects and their chats, helpers). */
+  callTargets(): Promise<CallTarget[]>
+  /** For a paired device's call: hand a message to the main agent, a project (chat) or a helper, by forgiving name. */
+  callHandoff(input: CallHandoffInput): Promise<CallHandoffResult>
   callStart(): Promise<{ ok: boolean; message: string }>
   /** One chunk of 16 kHz mono PCM16 from the microphone. Fire and forget. */
   callAudio(pcm: Uint8Array): void

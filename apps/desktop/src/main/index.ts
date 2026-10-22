@@ -62,6 +62,7 @@ import { createTray, type TrayHandle } from './tray'
 import { startUpdates } from './updates'
 import { EVENTS } from '../shared/channels'
 import { registerVoiceIpc } from './voice/ipc'
+import { HelperFeed } from './devices/helper-feed'
 import { ChatIndex } from './memory/chat-index'
 import { EMPTY_VOCABULARY, dictationWordsFromProjects, vocabularyFrom } from './memory/vocabulary'
 import { registerMemoryHistoryIpc } from './memory/history-ipc'
@@ -1071,7 +1072,19 @@ async function startServices(win: BrowserWindow): Promise<void> {
     environment: () => environment.current(),
     notesDir: join(app.getPath('userData'), 'voice-notes'),
   })
-  registerVoiceIpc(voice, ipcMain)
+  // A linked phone's call hands its work to the main agent, a project chat or a helper here (main/voice/handoff.ts).
+  const callStore = store
+  const callRunner = runner
+  const callHelpers = helpers
+  const callFeed = new HelperFeed({ store: callStore, emit: () => undefined })
+  registerVoiceIpc(voice, ipcMain, {
+    store: callStore,
+    send: (text, chat, origin) => callRunner.send(text, [], chat, origin as never),
+    steer: (id, message) => callHelpers.steer(id, message),
+    cards: () => callFeed.snapshot(),
+    state: (chat) => callRunner.state(chat),
+    agentName: () => settings.get().agentName,
+  })
 
   // Dictation anywhere: the pill window holds the microphone, the words are typed into the app in front.
   const voiceService = voice
