@@ -7,7 +7,7 @@
 import { request } from 'node:http'
 import { connect, type TLSSocket } from 'node:tls'
 
-import { fingerprintOf } from './node-config'
+import { fingerprintOf } from '../main/devices/cert'
 
 export interface PinnedReply {
   status: number

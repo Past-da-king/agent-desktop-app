@@ -11,6 +11,7 @@ import { join } from 'node:path'
 
 import type { Settings } from '@agent/core'
 
+import { SecretPassTable } from '../main/devices/passes'
 import type { Secrets } from '../main/secrets'
 import type { SettingsStore } from '../main/settings'
 
@@ -62,7 +63,7 @@ export async function applyBundle(targets: BundleTargets, bundle: unknown): Prom
     for (const [name, value] of Object.entries(secrets)) {
       if (name === 'passHashes' && isObject(value)) {
         const table = Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-        targets.secrets.set('passHashes', JSON.stringify(table))
+        new SecretPassTable(targets.secrets).replaceAll(table)
         result.passHashes = Object.keys(table).length
       } else if (typeof value === 'string' && SECRET_NAME.test(name)) {
         targets.secrets.set(name as Parameters<Secrets['set']>[0], value)
