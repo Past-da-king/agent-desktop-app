@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { LiveTranscriber, joinSegment, languageHint, setupMessage } from '../src/main/dictation/transcriber'
+import { LiveTranscriber, cleanVocabulary, joinSegment, languageHint, replayRecording, setupMessage } from '../src/main/dictation/transcriber'
 import type { SocketLike } from '../src/main/voice/live'
 import { startFakeLive, type FakeLive } from './fake-live'
 
@@ -36,6 +36,16 @@ describe('the live transcription setup', () => {
       },
     })
     expect(setupMessage({ model: 'models/x' })).toMatchObject({ setup: { model: 'models/x', inputAudioTranscription: { languageCodes: [] } } })
+  })
+
+  it('sends the names to listen for as custom vocabulary, distinct and at most 100', () => {
+    expect(setupMessage({ model: 'm', languageCodes: [], vocabulary: ['Initech', ' Northwind ', 'initech', 'x'] })).toMatchObject({
+      setup: { inputAudioTranscription: { customVocabulary: ['Initech', 'Northwind'] } },
+    })
+    const many = Array.from({ length: 150 }, (_, index) => `Name ${index}`)
+    expect(cleanVocabulary(many)).toHaveLength(100)
+    expect(cleanVocabulary(many)[0]).toBe('Name 0')
+    expect(JSON.stringify(setupMessage({ model: 'm', vocabulary: [] }))).not.toContain('customVocabulary')
   })
 
   it('joins settled stretches of speech with one space', () => {
@@ -149,5 +159,49 @@ describe('LiveTranscriber over a real socket', () => {
 
   it('says it could not reach Gemini when nothing is listening', async () => {
     await expect(transcriber('ws://127.0.0.1:1/ws').start()).rejects.toThrow('Could not reach Gemini. Check the connection.')
+  })
+
+  it('replays a kept recording and waits past a quiet spell for the settled words', async () => {
+    live = await startFakeLive((connection, message) => {
+      if ('setup' in message) {
+        connection.send({ setupComplete: {} })
+        return
+      }
+      const input = message['realtimeInput'] as Record<string, unknown> | undefined
+      // The final words come well after the stream ends, longer than the usual quiet that settles a live session.
+      if (input?.['audioStreamEnd'] === true) setTimeout(() => connection.send({ serverContent: { inputTranscription: { text: 'Call Initech.' } } }), 1200)
+    })
+    const text = await replayRecording({
+      url: live.url,
+      key: 'test-key',
+      model: 'gemini-3.5-transcribe-live',
+      socket: nodeSocket,
+      vocabulary: ['Initech'],
+      pcm: Buffer.alloc(3200 * 5, 1),
+      signal: new AbortController().signal,
+    })
+    expect(text).toBe('Call Initech.')
+    const received = live.connections[0]?.received ?? []
+    expect(received[0]).toMatchObject({ setup: { inputAudioTranscription: { customVocabulary: ['Initech'] } } })
+    expect(received.filter((message) => (message['realtimeInput'] as Record<string, unknown> | undefined)?.['audio'] !== undefined)).toHaveLength(5)
+  })
+
+  it('a replay stops when it is cancelled', async () => {
+    live = await startFakeLive((connection, message) => {
+      if ('setup' in message) connection.send({ setupComplete: {} })
+    })
+    const abort = new AbortController()
+    const replay = replayRecording({
+      url: live.url,
+      key: 'test-key',
+      model: 'm',
+      socket: nodeSocket,
+      pcm: Buffer.alloc(3200 * 40, 1),
+      signal: abort.signal,
+    })
+    setTimeout(() => abort.abort(), 150)
+    const started = Date.now()
+    await expect(replay).rejects.toThrow()
+    expect(Date.now() - started).toBeLessThan(1000)
   })
 })

@@ -445,6 +445,13 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       ready: async () => undefined,
       onCommand: noop,
       onView: noop,
+      // The message box records here and transcribes in one call (DictateButton's own path).
+      toggle: async () => {
+        throw new Error('Dictation into this window only works on the computer itself.')
+      },
+      cancel: async () => undefined,
+      retry: async () => undefined,
+      onDraft: noop,
     },
 
     memory: {

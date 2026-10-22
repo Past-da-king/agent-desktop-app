@@ -115,6 +115,27 @@
 .dictate-x,.dictate-done{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:inherit;background:transparent;transition:background .2s var(--effects)}
 .dictate-x:hover{background:color-mix(in srgb,var(--on-pc) 12%,transparent)}
 .dictate-done{background:var(--primary);color:var(--on-primary)}
+.dictate.working{padding:0 4px 0 14px;gap:8px}
+.dictate-spin{flex:none;width:18px;height:18px;border-radius:50%;border:3px solid color-mix(in srgb,var(--on-pc) 30%,transparent);border-top-color:var(--on-pc);animation:dict-spin .8s linear infinite}
+@keyframes dict-spin{to{transform:rotate(360deg)}}
+.dictate-time{font:600 13px/1 var(--font);font-variant-numeric:tabular-nums;min-width:26px}
+.dictate-retry{height:36px;padding:0 14px;border-radius:999px;background:var(--primary);color:var(--on-primary);font:600 13px/1 var(--font)}
+.dictate-bars.live i{animation:dict-live 1s ease-in-out infinite}
+.dictate-bars.live i:nth-child(2){animation-delay:.15s}
+.dictate-bars.live i:nth-child(3){animation-delay:.3s}
+.dictate-bars.live i:nth-child(4){animation-delay:.45s}
+@keyframes dict-live{0%,100%{height:6px}50%{height:20px}}
+.dictation-draft{display:flex;align-items:flex-start;gap:10px;margin:0 6px 8px;padding:10px 14px;border-radius:16px;background:var(--s-high);color:var(--on-bg);font-size:15px;line-height:1.45;animation:dict-in .25s var(--spatial) both}
+.dictation-draft.is-error{background:var(--ec);color:var(--on-ec)}
+.dd-dot{flex:none;width:10px;height:10px;margin-top:6px;border-radius:50%;background:var(--err);animation:orb-wait 1.2s ease-in-out infinite}
+.dd-spin{flex:none;width:16px;height:16px;margin-top:3px;border-radius:50%;border:3px solid color-mix(in srgb,var(--primary) 30%,transparent);border-top-color:var(--primary);animation:dict-spin .8s linear infinite}
+.dd-words,.dd-message{flex:1;min-width:0;overflow-wrap:anywhere}
+.dd-guess{color:var(--on-sv);opacity:.75}
+.dd-hint{color:var(--on-sv)}
+.dd-time{flex:none;font:600 13px/22px var(--font);font-variant-numeric:tabular-nums;color:var(--on-sv)}
+.dd-time.working{color:var(--primary)}
+.dd-btn{flex:none;height:30px;padding:0 12px;border-radius:999px;background:transparent;color:inherit;font:600 13px/1 var(--font);border:1px solid color-mix(in srgb,currentColor 30%,transparent)}
+.dd-btn.primary{background:var(--primary);color:var(--on-primary);border-color:transparent}
 .dictate-mic.working{animation:orb-wait 1.2s ease-in-out infinite;opacity:1}
 
 /* ---------- settings ---------- */
@@ -153,7 +174,7 @@
 }
 
 @media (prefers-reduced-motion:reduce){
-  .call-sheet,.cap,.call-visuals .vcard,.dictate,.call-row-b{animation:none}
+  .call-sheet,.cap,.call-visuals .vcard,.dictate,.call-row-b,.dictation-draft,.dd-dot,.dictate-bars.live i{animation:none}
   .orb-blob,.orb.is-connecting .orb-core,.dictate-mic.working{animation:none}
 }
 .call-sheet:focus{outline:none}

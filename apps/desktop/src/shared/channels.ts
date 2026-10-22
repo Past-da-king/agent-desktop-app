@@ -143,6 +143,9 @@ export const CHANNELS = {
     micState: 'agent:dictation.micState',
     stop: 'agent:dictation.stop',
     ready: 'agent:dictation.ready',
+    toggle: 'agent:dictation.toggle',
+    cancel: 'agent:dictation.cancel',
+    retry: 'agent:dictation.retry',
   },
   app: {
     info: 'agent:app.info',
@@ -168,4 +171,5 @@ export const EVENTS = {
   helperCards: 'agent:evt:helpers.cards',
   dictationCommand: 'agent:evt:dictation.command',
   dictationView: 'agent:evt:dictation.view',
+  dictationDraft: 'agent:evt:dictation.draft',
 } as const

@@ -748,6 +748,12 @@ export interface DictationView {
   message: string
   /** The shortcut that switches to clean-up while listening, as the person presses it ("Alt+C"), or ''. */
   switchKeys: string
+  /** When this phase began (ms since the epoch, this computer's clock), for the seconds counter. */
+  since?: number
+  /** The most this phase may take before it gives up with an error, in ms (finishing only). */
+  limitMs?: number
+  /** The recording was kept: clicking the pill, or Retry in the message box, transcribes it again. */
+  canRetry?: boolean
 }
 
 /** What the main process asks of the pill window's microphone. */
@@ -1424,6 +1430,17 @@ export interface AgentApi {
     ready(): Promise<void>
     onCommand(cb: (command: DictationCommand) => void): Unsubscribe
     onView(cb: (view: DictationView) => void): Unsubscribe
+    /**
+     * The message box's microphone: start a dictation into this window, or stop the one that is running. The
+     * words show in the box while they are said and are typed at its cursor at the end.
+     */
+    toggle(mode: 'plain' | 'clean'): Promise<void>
+    /** Esc: stop listening or stop waiting for the words, and type nothing. */
+    cancel(): Promise<void>
+    /** Transcribe the kept recording of a dictation that failed or was cancelled, again. */
+    retry(): Promise<void>
+    /** The dictation going into this window: its words while they are said, its counter, its errors. */
+    onDraft(cb: (view: DictationView) => void): Unsubscribe
   }
   /** New Chat filing, past chats and the memory import. */
   memory: MemoryApi

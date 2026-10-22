@@ -23,7 +23,7 @@ import { HANDOFF_CLOSED } from './tools/browser'
 
 import type { AppPlatform } from '@agent/core'
 
-import { EARLIER_CHATS_PROJECT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
@@ -63,7 +63,7 @@ import { startUpdates } from './updates'
 import { EVENTS } from '../shared/channels'
 import { registerVoiceIpc } from './voice/ipc'
 import { ChatIndex } from './memory/chat-index'
-import { EMPTY_VOCABULARY, vocabularyFrom } from './memory/vocabulary'
+import { EMPTY_VOCABULARY, dictationWordsFromProjects, vocabularyFrom } from './memory/vocabulary'
 import { registerMemoryHistoryIpc } from './memory/history-ipc'
 import { registerMemoryIpc } from './memory/ipc'
 import { MemoryTidy, TidyFile } from './memory/tidy'
@@ -1083,6 +1083,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     locale: app.getLocale(),
     log: (message, fields) => logger.info(message, fields),
     vocabulary: async () => (store === null ? EMPTY_VOCABULARY : vocabularyFrom(await store.list('memory'))),
+    extraWords: async () => {
+      const own = [settings.get().userName, settings.get().agentName].filter((name) => name.trim() !== '' && name !== DEFAULT_SETTINGS.agentName)
+      if (store === null) return own
+      return [...own, ...dictationWordsFromProjects(await store.list('project')).slice(0, 30)]
+    },
   })
   registerDictationIpc(
     {
@@ -1092,6 +1097,13 @@ async function startServices(win: BrowserWindow): Promise<void> {
       micState: (session, ok, message) => dictation?.controller.micState(session, ok, message),
       stop: () => dictation?.controller.stop(),
       pillReady: () => dictation?.pill.rendererReady(),
+      toggle: (sender, mode) => {
+        if (dictation === null) return
+        if (sender !== null && typeof sender === 'object' && 'id' in sender) dictation.toggleFrom(sender as Electron.WebContents, mode)
+        else dictation.controller.toggle(mode)
+      },
+      cancel: () => dictation?.controller.cancel(),
+      retry: () => void dictation?.controller.retry(),
     },
     ipcMain,
   )

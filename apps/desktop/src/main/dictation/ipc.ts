@@ -17,6 +17,10 @@ export interface DictationIpcDeps {
   micState: (session: number, ok: boolean, message: string) => void
   stop: () => void
   pillReady: () => void
+  /** The message box's microphone in the window `sender` belongs to. */
+  toggle: (sender: unknown, mode: 'plain' | 'clean') => void
+  cancel: () => void
+  retry: () => void
 }
 
 export function registerDictationIpc(deps: DictationIpcDeps, ipcMain: IpcMainLike & Partial<IpcMainOnLike>): void {
@@ -33,6 +37,15 @@ export function registerDictationIpc(deps: DictationIpcDeps, ipcMain: IpcMainLik
   })
   ipcMain.handle(CHANNELS.dictation.ready, async () => {
     deps.pillReady()
+  })
+  ipcMain.handle(CHANNELS.dictation.toggle, async (event, mode) => {
+    deps.toggle((event as { sender?: unknown } | null)?.sender ?? null, mode === 'clean' ? 'clean' : 'plain')
+  })
+  ipcMain.handle(CHANNELS.dictation.cancel, async () => {
+    deps.cancel()
+  })
+  ipcMain.handle(CHANNELS.dictation.retry, async () => {
+    deps.retry()
   })
 
   // Audio chunks are fire and forget (ipcRenderer.send), about ten a second.

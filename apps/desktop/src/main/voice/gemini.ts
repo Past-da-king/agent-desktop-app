@@ -52,12 +52,14 @@ export function explain(error: unknown): string {
     if (error.status === 401 || error.status === 403) return 'That Gemini key was not accepted.'
     if (error.status === 429) return 'Gemini says this key is out of quota for now. Try again later.'
     if (error.status === 0) return 'Could not reach Gemini. Check the connection.'
+    if (error.status === -1) return error.message === 'cancelled' ? 'Cancelled.' : 'Gemini took too long to answer.'
+    if (error.status === 503) return 'Gemini is busy right now. Try again in a moment.'
     return `Gemini could not do that (${error.status}).`
   }
   return 'Could not reach Gemini. Check the connection.'
 }
 
-async function post(deps: GeminiDeps, model: string, body: unknown): Promise<Record<string, unknown>> {
+async function post(deps: GeminiDeps, model: string, body: unknown, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const key = deps.key()
   if (key === null || key.trim() === '') throw new GeminiError(401, 'No key')
   const fetcher = deps.fetchImpl ?? fetch
@@ -67,11 +69,18 @@ async function post(deps: GeminiDeps, model: string, body: unknown): Promise<Rec
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': key.trim() },
       body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
     })
-  } catch {
-    throw new GeminiError(0, 'unreachable')
+  } catch (error) {
+    if (signal?.aborted === true) throw new GeminiError(-1, signal.reason instanceof Error && signal.reason.name === 'TimeoutError' ? 'timeout' : 'cancelled')
+    throw new GeminiError(0, error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'unreachable')
   }
-  const text = await response.text()
+  let text: string
+  try {
+    text = await response.text()
+  } catch {
+    throw new GeminiError(signal?.aborted === true ? -1 : 0, 'unreachable')
+  }
   if (!response.ok) throw new GeminiError(response.status, errorMessage(text))
   try {
     return JSON.parse(text) as Record<string, unknown>
@@ -310,26 +319,44 @@ export function wavOf(pcm: Buffer, rate = OUTPUT_RATE): Buffer {
   return Buffer.concat([header, pcm])
 }
 
-/** Dictation: the whole recording in one call, transcribed word for word. */
-export async function transcribe(deps: GeminiDeps, pcm: Buffer, choice: ModelChoice): Promise<string> {
+/**
+ * Dictation: the whole recording in one call, transcribed word for word. `names` are the people, companies and
+ * projects the speaker talks about, so they come back spelled right. `signal` bounds it: a call that never
+ * answers must never leave a dictation waiting.
+ */
+export async function transcribe(
+  deps: GeminiDeps,
+  pcm: Buffer,
+  choice: ModelChoice,
+  options: { names?: string[]; signal?: AbortSignal } = {},
+): Promise<string> {
   const wav = wavFromPcm(pcm, INPUT_RATE)
-  return firstThatAnswers(preferring(choice.transcribe, TRANSCRIBE_MODELS), async (model) => {
-    const body = await post(deps, model, {
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text:
-                'Transcribe this voice note exactly as spoken, in the language spoken. Add normal punctuation. ' +
-                'Reply with the transcript only. If nobody speaks, reply with nothing.',
-            },
-            { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } },
-          ],
-        },
-      ],
-      generationConfig: { temperature: 0 },
-    })
+  const names = (options.names ?? []).filter((name) => name.trim() !== '').slice(0, 100)
+  const hint = names.length === 0 ? '' : ` Names the speaker may say, spelled as they should be written: ${names.join(', ')}.`
+  // A busy model (503) or one out of quota (429) hands over to the next one, like a missing one (404).
+  return eachModel(preferring(choice.transcribe, TRANSCRIBE_MODELS), [404, 429, 503], async (model) => {
+    const body = await post(
+      deps,
+      model,
+      {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text:
+                  'Transcribe this voice note exactly as spoken, in the language spoken. Add normal punctuation. ' +
+                  'Reply with the transcript only. If nobody speaks, reply with nothing.' +
+                  hint,
+              },
+              { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } },
+            ],
+          },
+        ],
+        generationConfig: { temperature: 0 },
+      },
+      options.signal,
+    )
     return textOf(body)
   })
 }

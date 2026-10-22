@@ -1,18 +1,22 @@
 /**
  * Dictation anywhere: the shortcut starts listening, the words appear in a small pill near the bottom of the
- * screen, and when it stops they are typed where the cursor is, in whatever app is in front.
+ * screen (and in the app's own message box when that is where they go), and when it stops they are typed where
+ * the cursor is, in whatever app is in front.
  *
  *   Dictation shortcut (Alt+Space)          idle: start. Listening: stop and type. Finishing: type now, do not wait.
  *   Clean-up shortcut (Ctrl+Alt+C)          idle: start in clean-up mode. Listening plainly: switch to clean-up.
  *                                           Listening in clean-up: stop and type.
  *   Clean-up switch (Alt+C, held only while listening; the dictation shortcut's modifiers with C)
  *                                           turns clean-up on or off for this dictation.
- *   Esc (held only while listening)         cancel: nothing is typed.
+ *   Esc (held while listening or finishing) cancel: nothing is typed. While finishing the recording is kept.
  *   Quiet for a while                       stops by itself, as if the shortcut was pressed.
+ *
+ * Finishing never waits for ever: it has a hard limit that grows with the recording, the pill counts the seconds,
+ * and when the words cannot be had (an error, the limit, Esc) the recording is kept so Retry can send it again.
  *
  * The microphone lives in the pill's window (it never takes focus, so the app in front keeps the keyboard);
  * this class only sees its audio. Words stream from Google's live transcription model; every chunk is also kept,
- * so a live session that cannot start or drops falls back to one transcription of the whole recording.
+ * so a live session that cannot start or drops falls back to the whole recording.
  * Everything with side effects is injected, so tests run the whole flow with fakes and fake timers.
  */
 import type { DictationCommand, DictationPhase, DictationView } from '@agent/core'
@@ -37,11 +41,16 @@ export interface PillLike {
   command(command: DictationCommand): void
 }
 
+export type BatchResult = { ok: true; text: string } | { ok: false; error: string }
+
 export interface DictationDeps {
   hasKey: () => boolean
   transcriber: (handlers: { onUpdate: (text: string, interim: string) => void; onDrop: (reason: string) => void }) => TranscriberLike
-  /** The whole recording in one call: the fallback when the live session is not there. */
-  batch: (pcm: Buffer) => Promise<{ ok: true; text: string } | { ok: false; error: string }>
+  /**
+   * The whole recording at once: the fallback when the live session is not there, and Retry. It must give up
+   * when `signal` aborts; the controller aborts it at the finishing limit or on Esc.
+   */
+  batch: (pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void) => Promise<BatchResult>
   cleanUp: (text: string) => Promise<string>
   /** Puts names memory knows were mis-heard right (memory/vocabulary.ts), on every dictation. */
   fixNames?: (text: string) => Promise<string>
@@ -61,6 +70,10 @@ export interface DictationDeps {
   nothingMs?: number
   maxMs?: number
   finalWaitMs?: number
+  /** The microphone must report in this long after the start, or the dictation ends with an error. */
+  micStartMs?: number
+  /** The most finishing may take for a recording of `bytes`, from the stop to the words typed. */
+  finishLimitMs?: (bytes: number) => number
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** Called as a dictation starts, before anything else moves (the app notes where the cursor is). */
   began?: () => void
@@ -70,6 +83,14 @@ type State = 'idle' | 'starting' | 'listening' | 'finishing' | 'cleaning' | 'typ
 
 const LOUD = 0.02 // RMS of 16-bit samples, 0..1; quiet rooms through noise suppression sit well under it
 const MAX_RECORDING_BYTES = 16_000 * 2 * 60 * 10
+const BYTES_PER_SECOND = 16_000 * 2
+/** How long a failed dictation's error, with its Retry, stays up. The recording is kept until the next one. */
+const RETRY_SHOW_MS = 20_000
+
+/** The default finishing limit: 30 s, plus one for every two said, at most 100 s. */
+export function defaultFinishLimitMs(bytes: number): number {
+  return Math.min(100_000, Math.round(30_000 + (bytes / BYTES_PER_SECOND) * 500))
+}
 
 interface Session {
   id: number
@@ -82,11 +103,35 @@ interface Session {
   text: string
   interim: string
   startedAt: number
+  phaseSince: number
+  limitMs: number
   lastActivity: number
   heard: boolean
+  /** Speech-loud audio was recorded (whatever the live model made of it). */
+  loud: boolean
   releases: Array<() => void>
+  escape: (() => void) | null
+  abort: AbortController | null
   timer: ReturnType<typeof setInterval> | null
 }
+
+interface Kept {
+  chunks: Buffer[]
+  bytes: number
+  clean: boolean
+}
+
+/** The recording a retried dictation reads from: no live session behind it. */
+const NO_LIVE: TranscriberLike = {
+  start: () => Promise.reject(new Error('No live session.')),
+  audio: () => undefined,
+  finish: () => Promise.reject(new Error('No live session.')),
+  flush: () => undefined,
+  close: () => undefined,
+  text: () => '',
+}
+
+const ABORTED = Symbol('aborted')
 
 export class DictationController {
   private readonly deps: DictationDeps
@@ -95,6 +140,8 @@ export class DictationController {
   private session: Session | null = null
   private sequence = 0
   private hideTimer: ReturnType<typeof setTimeout> | null = null
+  private kept: Kept | null = null
+  private dismissRelease: (() => void) | null = null
   private lastView: DictationView = { phase: 'hidden', clean: false, text: '', interim: '', message: '', switchKeys: '' }
 
   constructor(deps: DictationDeps) {
@@ -104,6 +151,11 @@ export class DictationController {
 
   get phase(): State {
     return this.state
+  }
+
+  /** True while a failed or cancelled dictation's recording is kept for Retry. */
+  get canRetry(): boolean {
+    return this.kept !== null && this.state === 'idle'
   }
 
   /** The view the pill should show now (for a pill window that just loaded). */
@@ -152,19 +204,77 @@ export class DictationController {
     this.show('listening')
   }
 
-  /** Esc while listening: stop and type nothing. */
+  /**
+   * Esc. Listening: stop and type nothing. Finishing or cleaning up: stop waiting, type nothing, keep the
+   * recording for Retry. Idle with an error up: put it away.
+   */
   cancel(): void {
     const session = this.session
-    if (session === null || (this.state !== 'starting' && this.state !== 'listening')) return
-    this.log('Dictation cancelled')
-    this.end(session)
-    this.deps.pill.hide()
-    this.lastView = { ...this.lastView, phase: 'hidden' }
+    if (session !== null && (this.state === 'starting' || this.state === 'listening')) {
+      this.log('Dictation cancelled')
+      this.end(session)
+      this.deps.pill.hide()
+      this.view({ ...this.lastView, phase: 'hidden', canRetry: false })
+      return
+    }
+    if (session !== null && (this.state === 'finishing' || this.state === 'cleaning')) {
+      this.log('Dictation cancelled while finishing', { ms: this.now() - session.phaseSince })
+      this.keep(session)
+      session.abort?.abort(new Error('Cancelled.'))
+      session.transcriber.close()
+      this.finishSession(session)
+      this.flash('notice', 'Cancelled. Nothing was typed.', RETRY_SHOW_MS, true)
+      return
+    }
+    if (this.state === 'idle' && this.lastView.phase !== 'hidden') this.dismiss()
   }
 
-  /** The pill was clicked. */
+  /** The pill was clicked: stop listening, or retry a dictation that failed. */
   stop(): void {
     if (this.state === 'starting' || this.state === 'listening') void this.finish()
+    else if (this.canRetry) void this.retry()
+  }
+
+  /** Transcribe the kept recording again, and type it where the first try would have. */
+  async retry(): Promise<void> {
+    const kept = this.kept
+    if (kept === null || this.state !== 'idle') return
+    if (!this.deps.hasKey()) {
+      this.flash('notice', 'Add a Gemini key in Settings, Voice, to dictate.', 5000)
+      return
+    }
+    this.clearHide()
+    this.releaseDismiss()
+    this.kept = null
+    this.sequence += 1
+    const now = this.now()
+    const session: Session = {
+      id: this.sequence,
+      clean: kept.clean,
+      transcriber: NO_LIVE,
+      live: false,
+      liveFailed: true,
+      chunks: kept.chunks,
+      bytes: kept.bytes,
+      text: '',
+      interim: '',
+      startedAt: now,
+      phaseSince: now,
+      limitMs: 0,
+      lastActivity: now,
+      heard: true,
+      loud: true,
+      releases: [],
+      escape: null,
+      abort: null,
+      timer: null,
+    }
+    this.session = session
+    this.state = 'finishing'
+    this.log('Dictation retried', { bytes: kept.bytes })
+    session.escape = this.deps.hold('Escape', () => this.cancel())
+    this.deps.pill.show()
+    await this.complete(session)
   }
 
   /** The pill's microphone started, or could not. */
@@ -180,6 +290,7 @@ export class DictationController {
     if (this.state === 'starting') {
       this.state = 'listening'
       session.lastActivity = this.now()
+      session.phaseSince = this.now()
       this.show('listening')
     }
   }
@@ -193,6 +304,7 @@ export class DictationController {
     session.bytes += pcm.length
     if (!session.liveFailed) session.transcriber.audio(pcm)
     if (loudness(pcm) > LOUD) {
+      session.loud = true
       session.heard = true
       session.lastActivity = this.now()
     }
@@ -200,21 +312,25 @@ export class DictationController {
 
   dispose(): void {
     const session = this.session
-    if (session !== null) this.end(session)
-    if (this.hideTimer !== null) clearTimeout(this.hideTimer)
+    if (session !== null) {
+      session.abort?.abort(new Error('Closing.'))
+      this.end(session)
+    }
+    this.clearHide()
+    this.releaseDismiss()
   }
 
   // ---- the flow --------------------------------------------------------------------------------
 
   private start(mode: DictationMode): void {
-    if (this.hideTimer !== null) {
-      clearTimeout(this.hideTimer)
-      this.hideTimer = null
-    }
+    this.clearHide()
+    this.releaseDismiss()
     if (!this.deps.hasKey()) {
       this.flash('notice', 'Add a Gemini key in Settings, Voice, to dictate.', 5000)
       return
     }
+    // A new dictation replaces whatever an earlier one kept for Retry.
+    this.kept = null
     this.deps.began?.()
     this.sequence += 1
     const id = this.sequence
@@ -233,8 +349,10 @@ export class DictationController {
         if (current === null || current.id !== id) return
         this.log('Dictation live session dropped', { reason })
         current.liveFailed = true
+        if (this.state === 'listening' || this.state === 'starting') this.show(this.state)
       },
     })
+    const now = this.now()
     const session: Session = {
       id,
       clean: mode === 'clean',
@@ -245,10 +363,15 @@ export class DictationController {
       bytes: 0,
       text: '',
       interim: '',
-      startedAt: this.now(),
-      lastActivity: this.now(),
+      startedAt: now,
+      phaseSince: now,
+      limitMs: 0,
+      lastActivity: now,
       heard: false,
+      loud: false,
       releases: [],
+      escape: null,
+      abort: null,
       timer: null,
     }
     this.session = session
@@ -276,15 +399,23 @@ export class DictationController {
       const release = this.deps.hold(keys.cleanSwitch, () => this.switchClean())
       if (release !== null) session.releases.push(release)
     }
-    const escape = this.deps.hold('Escape', () => this.cancel())
-    if (escape !== null) session.releases.push(escape)
+    session.escape = this.deps.hold('Escape', () => this.cancel())
 
     session.timer = setInterval(() => this.tick(session), 250)
   }
 
   private tick(session: Session): void {
-    if (this.session !== session || this.state !== 'listening') return
+    if (this.session !== session) return
     const now = this.now()
+    if (this.state === 'starting') {
+      if (now - session.startedAt > (this.deps.micStartMs ?? 10_000)) {
+        this.log('Dictation microphone never started')
+        this.end(session)
+        this.flash('error', 'The microphone did not start. Try again.', 5000)
+      }
+      return
+    }
+    if (this.state !== 'listening') return
     const quiet = now - session.lastActivity
     if (now - session.startedAt > (this.deps.maxMs ?? 9.5 * 60_000)) {
       void this.finish()
@@ -301,16 +432,45 @@ export class DictationController {
     if (session === null || (this.state !== 'starting' && this.state !== 'listening')) return
     this.state = 'finishing'
     this.stopListening(session)
+    await this.complete(session)
+  }
+
+  /**
+   * From the stop to the words typed, under one hard limit. Whatever happens it ends: typed, nothing heard, or an
+   * error with the recording kept for Retry.
+   */
+  private async complete(session: Session): Promise<void> {
+    const limit = (this.deps.finishLimitMs ?? defaultFinishLimitMs)(session.bytes)
+    const abort = new AbortController()
+    session.abort = abort
+    session.phaseSince = this.now()
+    session.limitMs = limit
     this.show('finishing')
+    const timer = setTimeout(() => abort.abort(new Error('timeout')), limit)
+    try {
+      await this.produce(session, abort.signal)
+    } finally {
+      clearTimeout(timer)
+    }
+    // Every way through `produce` ends the session; one still open means the limit came first (or something
+    // gave up without saying why). Either way it ends here, with the recording kept: never a wait that never ends.
+    if (this.session === session) {
+      this.log('Dictation took too long', { ms: this.now() - session.phaseSince, bytes: session.bytes, aborted: abort.signal.aborted })
+      this.fail(session, abort.signal.aborted ? `The words did not come back within ${Math.round(limit / 1000)} seconds.` : 'Could not transcribe that.')
+    }
+  }
+
+  private async produce(session: Session, signal: AbortSignal): Promise<void> {
+    const bounded = <T>(work: Promise<T>): Promise<T | typeof ABORTED> => race(work, signal)
 
     let text = ''
     let problem = ''
     if (session.live && !session.liveFailed) {
-      try {
-        text = await session.transcriber.finish(this.deps.finalWaitMs ?? 2500)
-      } catch {
-        session.liveFailed = true
-      }
+      const live = await bounded(session.transcriber.finish(this.deps.finalWaitMs ?? 2500).catch(() => null))
+      if (live === ABORTED || this.session !== session) return
+      // A live session that heard nothing while the recording is plainly speech has failed quietly.
+      if (live === null || (live.trim() === '' && session.loud)) session.liveFailed = true
+      else text = live
     } else {
       // Never connected (or still connecting): the recording itself is the transcript's source.
       session.liveFailed = true
@@ -318,27 +478,39 @@ export class DictationController {
     }
     if (session.liveFailed && session.bytes > 0) {
       const heardLive = session.transcriber.text()
-      const whole = await this.deps.batch(Buffer.concat(session.chunks))
+      const onUpdate = (said: string, guess: string): void => {
+        if (this.session !== session || this.state !== 'finishing') return
+        session.text = said
+        session.interim = guess
+        this.show('finishing')
+      }
+      const whole = await bounded(
+        this.deps.batch(Buffer.concat(session.chunks), signal, onUpdate).catch((error: unknown): BatchResult => ({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Could not transcribe that.',
+        })),
+      )
+      if (whole === ABORTED || this.session !== session) return
       if (whole.ok) text = whole.text
       else if (heardLive.trim() !== '') text = heardLive
       else problem = whole.error
     }
-    if (this.session !== session) return
     text = text.trim()
 
     if (text === '') {
-      this.finishSession(session)
-      this.flash(problem === '' ? 'notice' : 'error', problem === '' ? 'Nothing was heard. Try again a little closer to the microphone.' : `${problem} Nothing was typed.`, problem === '' ? 3000 : 5000)
+      if (problem !== '') {
+        this.fail(session, problem)
+        return
+      }
+      this.end(session)
+      this.flash('notice', 'Nothing was heard. Try again a little closer to the microphone.', 3000)
       return
     }
 
     if (this.deps.fixNames !== undefined) {
-      try {
-        text = (await this.deps.fixNames(text)).trim() || text
-      } catch {
-        // Names stay as heard; the words are still typed.
-      }
-      if (this.session !== session) return
+      const fixed = await bounded(this.deps.fixNames(text).catch(() => text))
+      if (fixed === ABORTED || this.session !== session) return
+      text = fixed.trim() || text
     }
 
     let note = ''
@@ -347,27 +519,50 @@ export class DictationController {
       session.text = text
       session.interim = ''
       this.show('cleaning')
-      try {
-        text = (await this.deps.cleanUp(text)).trim() || text
-      } catch {
-        note = 'Could not clean up, so it was typed as said.'
-      }
+      const cleaned = await bounded(this.deps.cleanUp(text).catch(() => null))
+      if (cleaned === ABORTED || this.session !== session) return
+      if (cleaned === null) note = 'Could not clean up, so it was typed as said.'
+      else text = cleaned.trim() || text
     }
 
     this.state = 'typing'
+    // Typing is not cancelled half way; Esc after this point is too late.
     let outcome: TypeOutcome | 'inserted' = 'copied'
     try {
       outcome = await this.deps.type(text)
     } catch {
       outcome = 'copied'
     }
-    this.log('Dictation typed', { outcome, characters: text.length, clean: session.clean })
-    this.finishSession(session)
+    if (this.session !== session) return
+    this.log('Dictation typed', { outcome, characters: text.length, clean: session.clean, ms: this.now() - session.phaseSince })
+    this.end(session)
     if (outcome === 'copied') {
       this.flash('notice', `Copied. Press ${this.pasteKeys()} to paste it.`, 5000)
     } else {
       this.flash('done', note === '' ? (session.clean ? 'Cleaned up and typed' : 'Typed') : note, note === '' ? 1200 : 3500)
     }
+  }
+
+  /** The words could not be had: keep the recording, say why, offer Retry. */
+  private fail(session: Session, problem: string): void {
+    this.log('Dictation failed, recording kept', { bytes: session.bytes })
+    this.keep(session)
+    session.abort?.abort(new Error('failed'))
+    this.end(session)
+    const reason = problem.trim().replace(/\s*Nothing was typed\.?$/, '')
+    this.flash('error', `${reason}${/[.!?]$/.test(reason) ? '' : '.'} Nothing was typed.`, RETRY_SHOW_MS, true)
+  }
+
+  private keep(session: Session): void {
+    if (session.bytes === 0) return
+    this.kept = { chunks: session.chunks, bytes: session.bytes, clean: session.clean }
+  }
+
+  private dismiss(): void {
+    this.clearHide()
+    this.releaseDismiss()
+    this.view({ ...this.lastView, phase: 'hidden', canRetry: false })
+    this.deps.pill.hide()
   }
 
   private pasteKeys(): string {
@@ -389,6 +584,8 @@ export class DictationController {
   }
 
   private finishSession(session: Session): void {
+    session.escape?.()
+    session.escape = null
     if (this.session === session) this.session = null
     this.state = 'idle'
   }
@@ -404,6 +601,8 @@ export class DictationController {
       const stop = keys.dictate === '' ? 'Click to stop' : `${this.deps.format(keys.dictate)} to stop`
       switchKeys = keys.cleanSwitch === null || keys.cleanSwitch === '' ? '' : this.deps.format(keys.cleanSwitch)
       message = session?.liveFailed === true ? `${stop}. Words show when you stop.` : stop
+    } else if (phase === 'finishing' || phase === 'cleaning') {
+      message = 'Esc to cancel'
     }
     this.view({
       phase,
@@ -412,19 +611,35 @@ export class DictationController {
       interim: session?.interim ?? '',
       message,
       switchKeys,
+      ...(session === null ? {} : { since: session.phaseSince }),
+      ...(session !== null && (phase === 'finishing' || phase === 'cleaning') ? { limitMs: session.limitMs } : {}),
     })
   }
 
-  private flash(phase: 'done' | 'notice' | 'error', message: string, ms: number): void {
-    this.view({ phase, clean: false, text: '', interim: '', message, switchKeys: '' })
+  private flash(phase: 'done' | 'notice' | 'error', message: string, ms: number, retry = false): void {
+    const canRetry = retry && this.kept !== null
+    this.view({ phase, clean: false, text: '', interim: '', message, switchKeys: '', ...(canRetry ? { canRetry: true } : {}) })
     this.deps.pill.show()
-    if (this.hideTimer !== null) clearTimeout(this.hideTimer)
+    this.clearHide()
+    this.releaseDismiss()
+    if (canRetry) this.dismissRelease = this.deps.hold('Escape', () => this.cancel())
     this.hideTimer = setTimeout(() => {
       this.hideTimer = null
       if (this.state !== 'idle') return
-      this.lastView = { ...this.lastView, phase: 'hidden' }
+      this.releaseDismiss()
+      this.view({ ...this.lastView, phase: 'hidden', canRetry: false })
       this.deps.pill.hide()
     }, ms)
+  }
+
+  private clearHide(): void {
+    if (this.hideTimer !== null) clearTimeout(this.hideTimer)
+    this.hideTimer = null
+  }
+
+  private releaseDismiss(): void {
+    this.dismissRelease?.()
+    this.dismissRelease = null
   }
 
   private view(view: DictationView): void {
@@ -435,6 +650,25 @@ export class DictationController {
   private log(message: string, fields?: Record<string, string | number | boolean>): void {
     this.deps.log?.(message, fields)
   }
+}
+
+/** The work, or ABORTED as soon as `signal` aborts, whichever is first. The work is left to end on its own. */
+function race<T>(work: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTED> {
+  if (signal.aborted) return Promise.resolve(ABORTED)
+  return new Promise((resolve) => {
+    const onAbort = (): void => resolve(ABORTED)
+    signal.addEventListener('abort', onAbort, { once: true })
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      () => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(ABORTED)
+      },
+    )
+  })
 }
 
 /** RMS of 16-bit little-endian samples, 0 to 1. */

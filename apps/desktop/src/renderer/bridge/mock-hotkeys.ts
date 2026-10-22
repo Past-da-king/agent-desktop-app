@@ -79,6 +79,18 @@ export function mockHotkeys(settings: () => Settings): Pick<AgentApi, 'hotkeys' 
       onCommand(): Unsubscribe {
         return () => undefined
       },
+      async toggle() {
+        throw new Error('The preview has no dictation anywhere.')
+      },
+      async cancel() {
+        return undefined
+      },
+      async retry() {
+        return undefined
+      },
+      onDraft(): Unsubscribe {
+        return () => undefined
+      },
       onView(callback): Unsubscribe {
         const view = pill === null ? undefined : PILLS[pill]
         const timer = view === undefined ? null : setTimeout(() => callback(view), 50)
