@@ -72,6 +72,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 04:50 A DONE devices-node 374139b: serves its own tools (browser, notify, ask/approval in its main chat, files, file_send/receive, shell off), device.result to onDeviceResult, links OUT to a higher brain with its own pass; firewall check + one-UAC "Allow connections" (not triggered); Devices off = nothing changes (tested); Settings > Devices trimmed. Full suite 1153. Two test Block rules "Electron" for C:\temp\devices-node-run\electron\electron.exe need elevation to delete (left). Asked A to confirm D's node-side list.
 
+- 05:00 A FINAL devices-node c9d76c0: phone frames pinned by test/devices-phone.test.ts (bare/lowercase code, hello tools, allowlist, events). Full suite 1154.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
