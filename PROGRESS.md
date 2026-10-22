@@ -68,6 +68,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 04:25 D DONE: C:\Users\past9\Downloads\agent\Agent-0.14.0.apk (versionCode 90, same key). Server ~/phone-aos/app-remote feature/remote 218e1ed (base 0.13.0 3811400). Native screens mirror the brain (linked.db over /v1/rpc), QR (zxing)/link/short code, pinned TLS, failover strip, device commands, 22 lent tools. RemoteLinkTest 22/22, full 538/540 (2 old OpenUi failures). Proven on redroid against a fake node (18 shots ~/phone-aos/proof-0140/). NOT proven vs real node or real camera. Node-side needs sent to A (dashless code, hello tools top level, allowlist incl. device.ack/result, event names); main-chat project helper row with icon sent to B. TODO lead: check APK size (thin, must be ~30-60 MB).
 
+- 04:35 C relay DONE devices-headless-int 32dc26e: RPC relay.fetch (web_fetch with its checks, brain/hands only), headless tool web_fetch_via_device, live: server agent fetched via a WSL node. FINDING: server tailscaled is userspace, so outbound to tailnet peers only via its local SOCKS5; added main/devices/socks.ts + `agent-node config --proxy`. Server redeployed 5588626. C told (again) to do the A+B(+design) merge itself, with socks for pinned-fetch/probes and the desktop registerRelay line.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
