@@ -65,6 +65,8 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     kind: 'server',
     canOpenLinks: false,
     canReceiveFiles: false,
+    // The brains it paired with sign in before their rows replicate here (their first push brings them).
+    knownPeer: (id) => (readConfig(runtime.dataDir).brains.some((brain) => brain.id === id) ? ['brain', 'hands'] : null),
   })
   service.registerIpc(runtime.ipcMain)
   // Replication, the bundle, device commands, shared tools and turn failover (devices/attach.ts), as on the desktop.
