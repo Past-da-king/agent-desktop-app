@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
+import { createServer as createHttpServer } from 'node:http'
 import { createServer, type Server } from 'node:https'
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -371,4 +372,59 @@ describe('headless CLI pairing, end to end', () => {
     // Anyone without the folder's permissions cannot reach the control line.
     expect(statSync(join(one, 'control.sock')).mode & 0o777).toBe(0o600)
   }, 90_000)
+})
+
+describe('relay: fetching through a paired computer', () => {
+  it('a paired node fetches a page through the other node; a screen may not', async () => {
+    // A page only "the computer" fetches for the server (loopback is allowed for the test only).
+    const page = createHttpServer((_req, res) => {
+      res.setHeader('content-type', 'text/html')
+      res.end('<html><body><h1>Only from home</h1><p>secret-relay-text</p></body></html>')
+    })
+    await new Promise<void>((resolve) => page.listen(0, '127.0.0.1', () => resolve()))
+    closers.push(() => new Promise<void>((resolve) => page.close(() => resolve())))
+    const pageAddress = page.address()
+    const pageUrl = `http://127.0.0.1:${typeof pageAddress === 'object' && pageAddress !== null ? pageAddress.port : 0}/`
+
+    fake = await startFakeAi((body, index) =>
+      JSON.stringify(body).includes('Fetched through') || index > 3
+        ? { text: 'Got it through the computer.' }
+        : { toolCalls: [{ name: 'web_fetch_via_device', input: { url: pageUrl } }] },
+    )
+    const computer = await bootRuntime(temp())
+    let node = await startHeadlessDevices(computer, { name: 'home-computer', version: '9.9.9', listen: '127.0.0.1', port: 20000 + Math.floor(Math.random() * 30000), relayLoopback: true })
+    for (let attempt = 0; !node.status().running && attempt < 4; attempt++) {
+      await node.stop()
+      node = await startHeadlessDevices(computer, { name: 'home-computer', version: '9.9.9', listen: '127.0.0.1', port: 20000 + Math.floor(Math.random() * 30000), relayLoopback: true })
+    }
+    closers.push(() => node.stop())
+    const status = node.status()
+    const base = `https://127.0.0.1:${status.port}`
+    await node.setExtraUrls([base])
+
+    // The server pairs with the computer, then its agent fetches through it.
+    const serverDir = temp()
+    const identity = loadIdentity(join(serverDir, 'devices'))
+    await pair(parsePairLink(node.offer().uri), headlessFacts('the-server', '9.9.9', [], identity.fp), readConfig(serverDir), serverDir, {
+      dataDir: serverDir,
+      settings: new SettingsStore(join(serverDir, 'settings.json')),
+      secrets: new Secrets(join(serverDir, 'secrets'), new FileKeyCipher(join(serverDir, 'secrets.key'))),
+    })
+    const server = await bootRuntime(serverDir)
+    await server.runner.send('Read that page from home')
+    const toolResult = fake.requests.map((r) => JSON.stringify(r.body)).find((b) => b.includes('Fetched through')) ?? ''
+    expect(toolResult).toContain('Fetched through home-computer')
+    expect(toolResult).toContain('secret-relay-text')
+    expect((await server.store.list('chat_item')).some((r) => r.kind === 'agent' && r.text === 'Got it through the computer.')).toBe(true)
+
+    // A phone paired as a screen cannot use the computer's connection.
+    const phone = await pinnedJson(`${base}/v1/pair`, {
+      fp: status.fp,
+      body: { code: node.offer().shortCode, device: headlessFacts('a-phone', '1.0', [], ''), wantRoles: ['screen'] },
+    })
+    const phonePass = (phone.json as { pass: string }).pass
+    const client = await connectRpc(base, status.fp, phonePass, { ...headlessFacts('a-phone', '1.0', [], ''), kind: 'phone', platform: 'android' })
+    closers.push(() => client.close())
+    await expect(client.call('relay.fetch', { url: pageUrl })).rejects.toThrow(/Only your own computers/)
+  }, 60_000)
 })
