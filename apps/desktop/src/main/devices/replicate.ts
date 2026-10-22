@@ -62,6 +62,8 @@ export function registerSyncRoutes(host: DevicesHost, store: ReplicaStore, bundl
       const since = whole(req.query.get('since') ?? req.query.get('cursor'))
       const wait = Math.min(MAX_WAIT_SECONDS, whole(req.query.get('wait')))
       const result = await pullFrom(store, since, wait, caller, req.signal)
+      // The caller went away (or the node is stopping): nothing to answer, and the database may be closing.
+      if (req.signal.aborted) return { status: 499, json: {} }
       return {
         status: 200,
         json: { changes: result.changes.map(changeToJson), cursor: result.cursor, bundle: bundleVersion() },

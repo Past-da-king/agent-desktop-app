@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto'
 import type { DeviceRow, TurnLeaseRow } from '@agent/core'
 
 import type { DataStore } from './data'
+import { chatTag } from './chat-lines'
 
 export const HEARTBEAT_MS = 10_000
 export const STALE_MS = 45_000
@@ -43,8 +44,8 @@ export interface TurnLeasesDeps {
   resumeTurn: (chat: string, leaseId: string, note: string) => Promise<void> | void
   /** Send a helper back to work with a note. */
   resumeJob: (helperId: string, note: string) => Promise<void> | void
-  /** A visible note in a chat. */
-  notice: (chat: string, text: string) => Promise<void> | void
+  /** A visible note in a chat. Default: a notice row in that chat. */
+  notice?: (chat: string, text: string) => Promise<void> | void
   /** Is that brain up? Injectable for tests; the node passes a pinned /v1/health probe. */
   health?: (brain: DeviceRow) => Promise<{ up: boolean; ready: boolean }>
   /** The brains ranked best first (device rows with role brain, not revoked, by priority). */
@@ -58,6 +59,12 @@ export interface TurnLeasesDeps {
   maxAttempts?: number
 }
 
+export interface Failover {
+  health: NonNullable<TurnLeasesDeps['health']>
+  brains: NonNullable<TurnLeasesDeps['brains']>
+  ready?: TurnLeasesDeps['ready']
+}
+
 export class TurnLeases implements LeaseHook {
   private readonly beats = new Map<string, ReturnType<typeof setInterval>>()
   /** Lease ids being resumed: their begin keeps the bumped attempt instead of starting at 1. */
@@ -66,8 +73,31 @@ export class TurnLeases implements LeaseHook {
   private watcher: ReturnType<typeof setInterval> | null = null
   private readonly now: () => number
 
+  private failover: Failover | null
+  private readyGate: (() => Promise<void>) | undefined
+
   constructor(private readonly deps: TurnLeasesDeps) {
     this.now = deps.now ?? Date.now
+    this.failover = deps.health !== undefined && deps.brains !== undefined ? { health: deps.health, brains: deps.brains } : null
+    this.readyGate = deps.ready
+  }
+
+  /** Devices switched on: probe other brains, rank them, and wait for the first replication before recovering. */
+  setFailover(failover: Failover | null): void {
+    this.failover = failover
+    if (failover?.ready !== undefined) this.readyGate = failover.ready
+  }
+
+  private isOwn(brainId: string): boolean {
+    return brainId === this.deps.selfId() || (this.deps.ownIds?.() ?? []).includes(brainId)
+  }
+
+  private async notice(chat: string, text: string): Promise<void> {
+    if (this.deps.notice !== undefined) {
+      await this.deps.notice(chat, text)
+      return
+    }
+    await this.deps.store.upsert('chat_item', { kind: 'notice', text, meta: JSON.stringify(chatTag(chat)) })
   }
 
   begin(info: { kind: 'turn' | 'job'; chatId: string; messageId: string; prompt: string; id?: string }): string {
@@ -91,7 +121,7 @@ export class TurnLeases implements LeaseHook {
       this.write(async () => {
         const row = await this.deps.store.get('turn_lease', id)
         // Taken over by another brain (we were thought dead): stop claiming it.
-        if (row === null || row.status !== 'running' || row.brainId !== this.deps.selfId()) {
+        if (row === null || row.status !== 'running' || !this.isOwn(row.brainId)) {
           this.stopBeat(id)
           return
         }
@@ -107,7 +137,7 @@ export class TurnLeases implements LeaseHook {
     this.stopBeat(id)
     this.write(async () => {
       const row = await this.deps.store.get('turn_lease', id)
-      if (row === null || row.brainId !== this.deps.selfId()) return
+      if (row === null || !this.isOwn(row.brainId)) return
       await this.deps.store.upsert('turn_lease', { id, status, heartbeatAt: this.now() })
     })
   }
@@ -119,10 +149,9 @@ export class TurnLeases implements LeaseHook {
 
   /** On start: this brain's leases left running by a crash are resumed, each once. Returns how many. */
   async recover(): Promise<number> {
-    await this.deps.ready?.()
+    await this.readyGate?.()
     await this.settled()
-    const own = new Set([this.deps.selfId(), ...(this.deps.ownIds?.() ?? [])].filter((id) => id !== ''))
-    const leases = (await this.deps.store.list('turn_lease')).filter((row) => row.status === 'running' && own.has(row.brainId))
+    const leases = (await this.deps.store.list('turn_lease')).filter((row) => row.status === 'running' && this.isOwn(row.brainId))
     // Mark them all first: a second recover (or a crash during resume) never resumes the same run twice.
     const go: TurnLeaseRow[] = []
     for (const lease of leases) {
@@ -149,13 +178,14 @@ export class TurnLeases implements LeaseHook {
 
   /** Take over running leases whose brain is gone, when this brain is the best healthy one left. Returns how many. */
   async claimStale(): Promise<number> {
-    const health = this.deps.health
-    const brainsOf = this.deps.brains
-    if (health === undefined || brainsOf === undefined) return 0
+    const failover = this.failover
+    if (failover === null) return 0
+    const health = failover.health
+    const brainsOf = failover.brains
     const self = this.deps.selfId()
     const now = this.now()
     const stale = (await this.deps.store.list('turn_lease')).filter(
-      (row) => row.status === 'running' && row.brainId !== self && now - row.heartbeatAt > (this.deps.staleMs ?? STALE_MS),
+      (row) => row.status === 'running' && !this.isOwn(row.brainId) && now - row.heartbeatAt > (this.deps.staleMs ?? STALE_MS),
     )
     if (stale.length === 0) return 0
     const brains = await brainsOf()
@@ -199,7 +229,7 @@ export class TurnLeases implements LeaseHook {
   private async giveUpIfSpent(lease: TurnLeaseRow): Promise<boolean> {
     if (lease.attempt < (this.deps.maxAttempts ?? MAX_ATTEMPTS)) return false
     await this.deps.store.upsert('turn_lease', { id: lease.id, status: 'failed', brainId: this.deps.selfId(), heartbeatAt: this.now() })
-    await this.deps.notice(lease.chatId, GAVE_UP_NOTE)
+    await this.notice(lease.chatId, GAVE_UP_NOTE)
     return true
   }
 

@@ -4,6 +4,7 @@
  * is all the replication, bundle and command modules need from it.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
 
 import type { DeviceFacts, DevicesHost, DevicesRoute, RpcMethod } from '../src/main/devices/types'
 
@@ -37,11 +38,12 @@ export function facts(name: string, patch: Partial<DeviceFacts> = {}): DeviceFac
   }
 }
 
-export async function startTestHost(selfId: string, selfFacts: DeviceFacts = facts(selfId)): Promise<TestHost> {
+export async function startTestHost(selfId: string, selfFacts: DeviceFacts = facts(selfId), tls?: { key: string; cert: string }): Promise<TestHost> {
   const routes: DevicesRoute[] = []
-  const server: Server = createServer((req, res) => {
+  const onRequest = (req: IncomingMessage, res: ServerResponse): void => {
     void handle(req, res)
-  })
+  }
+  const server: Server = tls === undefined ? createServer(onRequest) : createHttpsServer({ key: tls.key, cert: tls.cert }, onRequest)
 
   const host: TestHost = {
     url: '',
@@ -132,7 +134,7 @@ export async function startTestHost(selfId: string, selfFacts: DeviceFacts = fac
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
   const address = server.address()
   if (address === null || typeof address === 'string') throw new Error('no port')
-  host.url = `http://127.0.0.1:${address.port}`
+  host.url = `${tls === undefined ? 'http' : 'https'}://127.0.0.1:${address.port}`
   return host
 }
 

@@ -44,6 +44,8 @@ import { HelperManager } from './runtime/helpers'
 import { clipboardAttachments } from './clipboard-files'
 import { savePastedFile } from './pasted'
 import { Runner } from './runtime/runner'
+import { TurnLeases } from './runtime/turns'
+import { devicesState } from './devices/sync'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
@@ -132,6 +134,8 @@ let store: Store | null = null
 let settingsStore: SettingsStore | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+/** Turn leases: a turn or helper cut off by a crash resumes on the next start (runtime/turns.ts). */
+let leases: TurnLeases | null = null
 let memory: MemoryService | null = null
 let chatIndex: ChatIndex | null = null
 let voice: VoiceService | null = null
@@ -638,7 +642,18 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const budget = new StepBudget()
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
   cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
+  const leaseStore = store
+  leases = new TurnLeases({
+    store: leaseStore,
+    selfId: () => devicesState.sync?.selfId() ?? leaseStore.deviceId,
+    ownIds: () => [leaseStore.deviceId],
+    resumeTurn: (chat, id, note) => runner?.resumeTurn(chat, id, note),
+    resumeJob: async (id, note) => {
+      await helpers.push(id, note)
+    },
+  })
   const helpers = new HelperManager({
+    leases,
     store,
     cli: cliHost,
     settings,
@@ -679,6 +694,13 @@ async function startServices(win: BrowserWindow): Promise<void> {
     learned,
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
+    devices: {
+      selfId: () => devicesState.sync?.selfId() ?? '',
+      commands: () => devicesState.sync?.commands ?? null,
+      openLocal: (url) => {
+        if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+      },
+    },
     projects: {
       post: async (chat, text, via) => {
         if (runner !== null) await runner.receive(chat, text, via)
@@ -701,6 +723,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
   })
   runner = new Runner({
+    devices: {
+      leases,
+      selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
+      originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
+    },
     store,
     settings,
     secrets,
@@ -741,6 +768,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     } catch {
       // Startup repair is best effort: the app must still open if a row cannot be rewritten.
     }
+    // After the repairs: what a crash cut off runs again, once (runtime/turns.ts).
+    void leases?.recover().catch(() => 0)
   }
   if (isSmoke) await repairs()
   else win.webContents.once('did-finish-load', () => setTimeout(() => void repairs(), 250))
@@ -997,6 +1026,8 @@ if (!app.requestSingleInstanceLock()) {
     void voice?.callEnd()
     voice = null
     runner?.dispose()
+    leases?.stop()
+    devicesState.sync?.stop()
     runner = null
     agentBrowser?.destroy()
     agentBrowser = null

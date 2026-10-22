@@ -91,7 +91,7 @@ export interface RunnerDevices {
   /** Turn leases: crash resume and failover (runtime/turns.ts). */
   leases?: LeaseHook
   /** This node's own facts, stored as meta.origin on messages typed here. */
-  selfOrigin?: () => JsonObject | null
+  selfOrigin?: () => object | null
   /** The prompt's one line about which device the newest message came from. */
   originLine?: (chat: string) => Promise<string>
 }
@@ -770,7 +770,7 @@ export class Runner {
 
   /** meta.origin for a message: the device it came from (the node server says), else this node itself. */
   private originMeta(origin: JsonObject | undefined): JsonObject {
-    const value = origin ?? this.devices?.selfOrigin?.() ?? null
+    const value = origin ?? (this.devices?.selfOrigin?.() as JsonObject | null | undefined) ?? null
     return value === null ? {} : { origin: value }
   }
 
