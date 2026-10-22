@@ -20,6 +20,8 @@ const ALLOWED: ReadonlySet<string> = new Set([
   DEVICES_CHANNELS.move,
   DEVICES_CHANNELS.revoke,
   DEVICES_CHANNELS.setExtraUrls,
+  // The overlay network (agent-node net); the key arrives over this owner-only local socket, never argv.
+  DEVICES_CHANNELS.setNetwork,
 ])
 
 export function controlPath(dataDir: string): string {
