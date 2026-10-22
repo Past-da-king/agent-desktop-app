@@ -41,7 +41,10 @@ names or keys in source or defaults.
   connections" when the check (`netsh advfirewall firewall show rule name=all dir=in verbose`, no elevation) finds
   a Block rule for the app or no Allow rule for the app or the port. It runs ONE elevated PowerShell (one UAC
   prompt) that removes the app's inbound rules and adds "Agent devices" (program) and "Agent devices (port N)"
-  (TCP), profiles private and domain (`main/devices/firewall.ts`).
+  (TCP) for Private and Domain from any address, plus "Agent devices (VPN)" and "Agent devices (port N, VPN)" for
+  Public limited to `remoteip=LocalSubnet,100.64.0.0/10,fd7a:115c:a1e0::/48` (a VPN adapter is often classed Public;
+  the app is never opened to the whole internet). "Allowed" means every profile is covered, so an older
+  Private-only rule brings the step back (`main/devices/firewall.ts`).
 
 ## 3. Pairing (QR + short code)
 
