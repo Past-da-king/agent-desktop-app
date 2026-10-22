@@ -336,6 +336,11 @@ export class HelperManager implements HelperHost {
     this.offload = link
   }
 
+  /** This brain placed that helper on another brain, and it still works there. */
+  isPlacedElsewhere(id: string): boolean {
+    return this.remote.has(id)
+  }
+
   /** Helpers running on this brain now (the node row's `active`). */
   activeCount(): number {
     return this.runs.size

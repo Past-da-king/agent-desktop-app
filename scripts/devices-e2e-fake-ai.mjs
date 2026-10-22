@@ -11,6 +11,11 @@
  *  - "start a chat in the "<project>" project ..."      -> calls project_chat_start, then "started"
  *  - "... end with this code on its own line: <code>"  -> waits 20 s (a turn long enough to kill), then answers
  *  - a resume note ("was interrupted")                  -> answers the code of the interrupted request once
+ *  - "hand this to a helper on device "<name>": <brief>" -> calls delegate with that device, then "started"
+ *  - "steer helper <id> with: <note>"                   -> calls helper_steer, then "steered"
+ *  - a helper's "Offload job <code>"                     -> waits 12 s, one memory_search step, then
+ *                                                          "Offload result <code>" plus the steered word if one came
+ *  - a helper's result ("[Helper #...")                  -> "relayed: " and the result
  *  - anything else                                       -> "ok"
  */
 import { createServer } from 'node:http'
@@ -55,6 +60,28 @@ createServer((req, res) => {
     const toolsUsed = after.filter((m) => m.role === 'assistant' && Array.isArray(m.tool_calls)).flatMap((m) => m.tool_calls.map((t) => t.function?.name))
     const all = messages.map(textOf).join('\n')
 
+    const steer = /steer helper (\S+) with: (.+)/.exec(user)
+    if (steer) {
+      if (!toolsUsed.includes('helper_steer')) return reply(res, call('helper_steer', { id: steer[1], message: steer[2] }))
+      return reply(res, say('steered'))
+    }
+    const handOut = /hand this to a helper on device "([^"]+)": (.+)/.exec(user)
+    if (handOut) {
+      if (!toolsUsed.includes('delegate')) return reply(res, call('delegate', { tasks: [{ label: 'Offload check', brief: handOut[2], device: handOut[1] }] }))
+      return reply(res, say('started'))
+    }
+    if (/^\[Helper #/.test(user)) return reply(res, say(`relayed: ${user.replace(/\s+/g, ' ').slice(0, 300)}`))
+    const job = /Offload job (e2e-\S+)/.exec(all)
+    if (job && !/hand this to a helper/.test(all)) {
+      const allUsed = messages.filter((m) => m.role === 'assistant' && Array.isArray(m.tool_calls)).flatMap((m) => m.tool_calls.map((t) => t.function?.name))
+      if (!allUsed.includes('memory_search')) {
+        await new Promise((resolve) => setTimeout(resolve, 12_000))
+        if (res.destroyed) return
+        return reply(res, call('memory_search', { query: 'offload check' }))
+      }
+      const word = /Use the word (\w+)/.exec(all)?.[1]
+      return reply(res, say(`Offload result ${job[1]}${word ? ` ${word}` : ''}`))
+    }
     if (/was interrupted/.test(user)) {
       const code = [...all.matchAll(/end with this code on its own line: (e2e-[a-z]-[0-9a-f]+)/g)].at(-1)?.[1]
       return reply(res, say(code ? `Picked up after the interruption.\n${code}` : 'Carried on.'))

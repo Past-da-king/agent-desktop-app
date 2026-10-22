@@ -13,7 +13,7 @@
  *        [--brain https://<second brain>:7787 ...]                 ranked, best first
  *        [--stop-cmd '<shell command that stops brain 1>' ...]     one per --brain, same order ('' to skip)
  *        [--start-cmd '<shell command that starts brain 1>' ...]   one per --brain, same order
- *        [--image /abs/path/on/the/brain.png] [--project <name> | --make-project] [--timeout 240] [--only a,c,f]
+ *        [--image /abs/path/on/the/brain.png] [--project <name> | --make-project] [--timeout 240] [--only a,c,f] (o: offload)
  *        [--state file] [--name 'E2E test phone'] [--quiet]
  *
  * --code takes the short code (the first connection is then trusted and its fingerprint printed) or the whole
@@ -682,6 +682,45 @@ async function main() {
     }, TIMEOUT_MS, 'the project agent row to close')
     ev.push(`closed: state ${closed.state}, summary "${String(closed.summary ?? '').slice(0, 60)}"`)
     if (shown.id !== project.id || !(meta.chat === undefined || meta.chat === '' || meta.chat === 'main') || closed.state !== 'done') return 'FAIL'
+  })
+
+  await check('o', 'offload: a helper delegated on the first brain runs on the second; its card, steer and result work on the first', async (ev) => {
+    const devices = await phone.rows('device')
+    const brainRows = devices.filter((d) => !d.revoked && (d.roles ?? []).includes('brain')).sort((x, y) => x.priority - y.priority)
+    const here = brainRows[0]
+    const there = brainRows.find((d) => d.id !== here?.id)
+    if (!here || !there) {
+      ev.push('needs two brains')
+      return 'SKIP'
+    }
+    // The first brain places work only on a brain whose capacity (its node row) it has heard recently.
+    await phone.waitFor(async () => (await phone.rows('job')).find((j) => j.kind === 'node' && j.device === there.id && Date.now() - j.at < 60_000), TIMEOUT_MS, `${there.name}'s capacity on ${here.name}`)
+    const marker = `e2e-o-${nonce()}`
+    const word = `w${nonce()}`
+    const before = new Set((await phone.rows('chat_item')).filter((r) => r.kind === 'helper').map((r) => r.id))
+    phone.call('chat.send', `Automated link test: hand this to a helper on device "${there.name}": Offload job ${marker}`).catch(() => undefined)
+    const row = await phone.waitFor(async () => (await phone.rows('chat_item')).find((r) => r.kind === 'helper' && !before.has(r.id) && r.text.includes(marker)), TIMEOUT_MS, 'the helper row')
+    const meta = metaOf(row)
+    ev.push(`helper ${row.id}: placed by ${meta.placedBy === here.id ? here.name : meta.placedBy}, runs on ${meta.runOn === there.id ? there.name : meta.runOn}`)
+    const lease = await phone.waitFor(async () => (await phone.rows('turn_lease')).find((l) => l.id === `job-${row.id}` && l.status === 'running'), TIMEOUT_MS, 'its job lease')
+    ev.push(`job lease held by ${lease.brainId === there.id ? there.name : lease.brainId}`)
+    // Steer while its first step is still thinking: it reads the note before its next step.
+    phone.call('chat.send', `Automated link test: steer helper ${row.id} with: Use the word ${word}`).catch(() => undefined)
+    const step = await phone.waitFor(async () => (await phone.rows('chat_item')).find((r) => r.kind === 'activity' && metaOf(r).helper === row.id && metaOf(r).tool === 'memory_search'), TIMEOUT_MS, 'a step on its card')
+    ev.push(`step seen on ${here.name}: "${String(step.text).slice(0, 50)}"`)
+    const relayed = await replyContaining(phone, `Offload result ${marker}`, TIMEOUT_MS)
+    ev.push(`result in the chat on ${here.name}: "${relayed.text.slice(0, 120)}"`)
+    const doneMeta = await phone.waitFor(async () => {
+      const m = metaOf((await phone.rows('chat_item')).find((r) => r.id === row.id) ?? {})
+      return m.state === 'working' ? null : m
+    }, 10_000, 'the card to close').catch(() => ({ state: 'working' }))
+    ev.push(`card: ${doneMeta.state}, "${String(doneMeta.summary ?? '').slice(0, 60)}"`)
+    if (meta.runOn !== there.id || meta.placedBy !== here.id || lease.brainId !== there.id) return 'FAIL'
+    if (!relayed.text.includes(word)) {
+      ev.push('the steer did not reach the helper')
+      return 'FAIL'
+    }
+    if (doneMeta.state !== 'done') return 'FAIL'
   })
 
   await check('d', 'an image from a local path on the brain loads through /v1/file', async (ev) => {

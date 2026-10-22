@@ -916,6 +916,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     name: () => settings.get().deviceName,
     browser: () => true,
     emitChat: (event) => broadcast(EVENTS.chat, event),
+    needsYou: (itemId, title, body) => notifier.needsYou(itemId, title, body),
     log: (message, detail) => logger.info(message, detail),
   })
   const placedWire = offloadWire

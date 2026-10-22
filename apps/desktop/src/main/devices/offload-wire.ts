@@ -6,7 +6,7 @@
  *
  * Off (no effect at all) while Devices is off, and while no other brain beats a node row.
  */
-import { MAIN_CHAT, accountsOf, resolvePick, type AiAccount, type ChatRunInfo, type DataChange, type JobRow, type ProjectRow, type RunState, type Settings, type TriggerRow, type TurnLeaseRow } from '@agent/core'
+import { MAIN_CHAT, accountsOf, resolvePick, type AiAccount, type ChatEvent, type ChatItem, type ChatRunInfo, type DataChange, type JobRow, type ProjectRow, type RunState, type Settings, type TriggerRow, type TurnLeaseRow } from '@agent/core'
 
 import { brainFor, isBrain, type ProviderFactory } from '../runtime/brains'
 import type { HelperManager, OffloadLink } from '../runtime/helpers'
@@ -45,7 +45,9 @@ export interface OffloadWireDeps {
   name: () => string
   browser: () => boolean
   /** A chat event for the window (a placed project chat started or finished elsewhere). */
-  emitChat?: (event: { type: 'run_started' | 'run_finished' | 'chat_changed'; chat?: string }) => void
+  emitChat?: (event: ChatEvent) => void
+  /** A question or approval from a helper running on another brain for this one: tell the person here. */
+  needsYou?: (itemId: string, title: string, body: string) => void
   log?: (line: string, detail?: Record<string, unknown>) => void
 }
 
@@ -164,6 +166,27 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
       deps.emitChat?.({ type: 'run_finished', chat: lease.chatId })
     }
   })
+  // A card asked by a helper this brain placed elsewhere arrives by replication: the person hears it here.
+  const told = new Set<string>()
+  const offCards = store.onChange((change: DataChange) => {
+    if (change.entity !== 'chat_item' || change.row === undefined) return
+    const row = change.row as ChatItem
+    if ((row.kind !== 'question' && row.kind !== 'approval') || told.has(row.id)) return
+    let meta: Record<string, unknown> = {}
+    try {
+      meta = JSON.parse(row.meta) as Record<string, unknown>
+    } catch {
+      return
+    }
+    const helper = typeof meta['helper'] === 'string' ? meta['helper'] : ''
+    const open = row.kind === 'question' ? (meta['answer'] ?? '') === '' : (meta['decision'] ?? '') === ''
+    if (helper === '' || !open || !helpers.isPlacedElsewhere(helper)) return
+    told.add(row.id)
+    const chat = typeof meta['chat'] === 'string' && meta['chat'] !== '' ? meta['chat'] : undefined
+    deps.emitChat?.({ type: 'needs_you', itemId: row.id, ...(chat === undefined ? {} : { chat }) })
+    const by = typeof meta['by'] === 'string' && meta['by'] !== '' ? meta['by'] : 'A helper'
+    deps.needsYou?.(row.id, row.kind === 'question' ? `${by} has a question` : `${by} needs your OK`, row.text.slice(0, 200))
+  })
   offload.start()
 
   const forward = async (chat: string, text: string, via: ChatVia | null): Promise<boolean> => {
@@ -232,6 +255,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     stop: () => {
       clearInterval(takeBack)
       offLeases()
+      offCards()
       offload.stop()
       helpers.setOffload(null)
     },
