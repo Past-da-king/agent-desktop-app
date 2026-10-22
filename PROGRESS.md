@@ -53,6 +53,9 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 02:22 WSL restarted on its own (Wsl/Service/0x8007274c), likely Windows memory pressure (~1.6 GB free). Server node unaffected (it runs on the server). A on track: devices-node fb428a1, live proof copy C:\temp\devices-node-run (own userData, port 7797). WSL networking is mirrored (127.0.0.1 shared with Windows).
 
+- 03:00 C: server has its own browser (CDP on the server's Chromium, devices-headless 88ee83e), real turn on the server opened a page and answered. Full suite 1123 pass. A core done (devices-node fb428a1: server, pairing, rpc, Settings > Devices; finishing live proof + s11). B core done (devices-sync 1b4c93d: change log + replication, pinned fetch, bundle, origin line, device commands, open_url/send_file, turn leases wired in index.ts; finishing s11 brain side).
+- 03:05 C made INTEGRATOR: branch devices-int (worktree ~/agent-desktop-wt/devices-int) merging node+sync+headless, wiring seams, two-node + scripted phone test; then relay. Lead merges devices-int into devices, then design.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
