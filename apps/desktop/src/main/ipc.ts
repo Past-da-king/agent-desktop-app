@@ -47,6 +47,7 @@ import { picksFrom } from './settings'
 import type { AccountStore } from './accounts'
 import { listPeople, type PeopleSource } from './browser/people'
 import { isRule } from './apps/store'
+import { HelperFeed } from './devices/helper-feed'
 import type { Store } from './db'
 import { guardRoutineWrite } from './memory/routine'
 import { listModels } from './models'
@@ -452,6 +453,10 @@ export function registerIpc(deps: IpcDeps): () => void {
     return deps.helpers.stop(id)
   })
 
+  // The helper cards a linked device shows: the same model as the side panel, built here and sent on each change.
+  const helperFeed = new HelperFeed({ store, emit: (snapshot) => send(EVENTS.helperCards, snapshot) })
+  handle(CHANNELS.helpers.cards, async () => helperFeed.snapshot())
+
   handle(CHANNELS.helpers.stopAll, async () => {
     if (deps.helpers === undefined) return 0
     return deps.helpers.stopAll()
@@ -782,6 +787,7 @@ export function registerIpc(deps: IpcDeps): () => void {
   const offProfiles = deps.apps?.profiles.onChange(() => send(EVENTS.profiles, null)) ?? (() => undefined)
 
   return () => {
+    helperFeed.dispose()
     offSettings()
     offStatus()
     offProgress()

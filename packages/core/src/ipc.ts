@@ -887,12 +887,63 @@ export interface BrowserViewInfo {
 
 export type HelperState = 'working' | 'done' | 'failed' | 'stopped'
 
+/** Whose a helper card is: the main agent's own, a project's (its name and icon), or a plain helper. */
+export type HelperCardOwner =
+  | { kind: 'main' }
+  | { kind: 'project'; id: string; name: string; icon: ProjectIcon }
+  | { kind: 'plain' }
+
+/**
+ * One helper or project agent card as a linked device gets it (shared/helper-cards.ts builds it, the same model as the
+ * window's side panel). Plain data: the device renders it and keeps nothing else.
+ */
+export interface HelperCardInfo {
+  /** The helper id (helpers.stop takes it); a project agent's card has its row id `pa-<chat>`. */
+  id: string
+  /** Its chat_item row id. */
+  row: string
+  /** The chat its row is in ("main" for the main thread and every project agent card). */
+  chat: string
+  label: string
+  state: HelperState
+  queued: boolean
+  /** What it is doing right now: the step it is on, else its status line. */
+  line: string
+  /** Once it has finished: one line saying what it did ('' while it works). */
+  done: string
+  /** 1 for a helper drawn under its project agent's card. */
+  depth: 0 | 1
+  /** For a project agent's card: the project chat it stands for ('' otherwise). */
+  projectChat: string
+  owner: HelperCardOwner
+  model: string
+  startedAt: number
+  endedAt: number | null
+  /** What it was asked to do (clipped). */
+  brief: string
+  /** What it brought back, once finished (clipped). */
+  result: string
+  /** Its newest steps, oldest first (a project agent's card: the newest lines of its project chat). */
+  steps: Array<{ text: string; status: string; at: number }>
+}
+
+/** Every card right now. `seq` grows with each new list, so a device can drop one that arrives late. */
+export interface HelperCardsSnapshot {
+  seq: number
+  at: number
+  cards: HelperCardInfo[]
+}
+
 /** The helper controls the chat and Home need. A helper's live details ride on its `chat_item` row. */
 export interface HelpersApi {
   /** Stops one working helper. False when it was not running. */
   stop(id: string): Promise<boolean>
   /** Stops every working helper and returns how many were asked to stop. */
   stopAll(): Promise<number>
+  /** Every working helper and project agent card (and ones that just finished), for a linked device. */
+  cards(): Promise<HelperCardsSnapshot>
+  /** The cards changed: the whole new list. */
+  onCards(cb: (snapshot: HelperCardsSnapshot) => void): Unsubscribe
 }
 
 // ---------------------------------------------------------------------------------------------------------------
