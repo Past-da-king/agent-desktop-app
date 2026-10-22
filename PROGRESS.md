@@ -58,6 +58,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 03:20 B core DONE devices-sync 9f797ac (31 devices tests, full suite 1141 pass): replication 3 nodes with relay + conflict + no echo + TLS pin, bundle (secrets brain only), origin line, open_url/send_file device commands, turn leases with crash resume exactly once + failover claim, works with Devices off. Merge notes in PROGRESS-B.md, forwarded to C. B now on s11 device tools brain side (was missed).
 
+- 03:35 A core DONE devices-node a3c06e9 (30 devices tests, full suite 1141 pass, no new deps: own DER/cert, RFC 6455, QR). Live on Windows test copy C:\temp\devices-node-run (AGENT_USER_DATA, port 7797): QR decoded and paired the scripted client from WSL, RPC/event/upload/file, revoke 4003 then 401, pass survives restart. LIMIT: Windows Firewall prompted and auto-added Block rules for the test exe; LAN/VPN inbound needs Allow. WSL can only reach Windows on 127.0.0.1. A now on: s11 serving its tools + outbound client link, and an "Allow connections" UAC step for the firewall rule.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
