@@ -101,6 +101,9 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
   // Project chats that run on another brain for this one, and whether a turn runs there now (their turn leases).
   const runningThere = new Set<string>()
   const placedChats = new Set<string>()
+  /** Placed chats whose first turn has not shown its lease here yet, and since when (they count as running). */
+  const starting = new Map<string, number>()
+  const START_GRACE_MS = 60_000
 
   const handle = async (msg: JobRow): Promise<boolean> => {
     if (msg.op === 'post') {
@@ -159,6 +162,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     const lease = change.row as TurnLeaseRow
     if (lease.kind !== 'turn' || lease.chatId === MAIN_CHAT || isSelf(lease.brainId) || !placedChats.has(lease.chatId)) return
     const running = lease.status === 'running'
+    starting.delete(lease.chatId)
     if (running && !runningThere.has(lease.chatId)) {
       runningThere.add(lease.chatId)
       deps.emitChat?.({ type: 'run_started', chat: lease.chatId })
@@ -192,12 +196,22 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
   const forward = async (chat: string, text: string, via: ChatVia | null): Promise<boolean> => {
     const to = await offload.routeChat(chat, via?.from === 'project' ? via.chat : undefined)
     if (to === null) return false
-    if (chat !== MAIN_CHAT) placedChats.add(chat)
+    if (chat !== MAIN_CHAT) {
+      placedChats.add(chat)
+      starting.set(chat, now())
+    }
     await offload.send(to, 'post', chat, { text, info: via === null ? '' : JSON.stringify(via) })
     return true
   }
 
-  const state = (local: RunState, chat: string): RunState => (runningThere.has(chat) && !local.running ? { ...local, running: true } : local)
+  const startingNow = (chat: string): boolean => {
+    const since = starting.get(chat)
+    if (since === undefined) return false
+    if (now() - since < START_GRACE_MS) return true
+    starting.delete(chat)
+    return false
+  }
+  const state = (local: RunState, chat: string): RunState => ((runningThere.has(chat) || startingNow(chat)) && !local.running ? { ...local, running: true } : local)
 
   return {
     offload,

@@ -362,6 +362,31 @@ describe('helpers on another brain', () => {
   })
 })
 
+describe('restarts and project chats', () => {
+  it('a restart does not fail a helper another brain is running', async () => {
+    const mesh: Mesh = { down: new Set(), up: () => true }
+    const node = await makeNode('dev_srv', 'server', mesh, { script: () => ({ text: '' }) })
+    const theirs = await node.db.upsert('chat_item', { kind: 'helper', text: 'Their job', meta: JSON.stringify({ label: 'Theirs', state: 'working' }) })
+    await node.db.upsert('turn_lease', { id: `job-${theirs.id}`, kind: 'job', chatId: 'main', messageId: theirs.id, brainId: 'dev_pc', status: 'running', attempt: 1, heartbeatAt: Date.now(), startedAt: Date.now(), prompt: '' })
+    const ours = await node.db.upsert('chat_item', { kind: 'helper', text: 'Our job', meta: JSON.stringify({ label: 'Ours', state: 'working' }) })
+    await node.helpers.restore()
+    expect(JSON.parse((await node.db.get('chat_item', theirs.id))?.meta ?? '{}').state).toBe('working')
+    expect(JSON.parse((await node.db.get('chat_item', ours.id))?.meta ?? '{}').state).toBe('failed')
+  })
+
+  it('a placed project chat gets its messages on the brain running it; its message_main comes back', async () => {
+    const { pc, srv } = await twoNodes({ pc: { script: () => ({ text: '' }) }, server: { script: () => ({ text: '' }) } })
+    await pc.offload.placeChat('chat-x', 'dev_srv')
+    expect(await pc.offload.routeChat('chat-x')).toBe('dev_srv')
+    expect(await pc.offload.routeChat('main')).toBeNull()
+    await waitFor(async () => (await srv.db.get('job', 'chat-chat-x')) !== null, 3000)
+    // On the server it runs here; what it writes to the main chat goes back to the PC.
+    expect(await srv.offload.routeChat('chat-x')).toBeNull()
+    expect(await srv.offload.routeChat('main', 'chat-x')).toBe('dev_pc')
+    expect(await srv.offload.routeChat('main', 'chat-other')).toBeNull()
+  })
+})
+
 describe('routines on one brain only', () => {
   it('the preferred brain claims a due slot; another waits, and claims it only when nobody did', async () => {
     const { pc, srv } = await twoNodes({ pc: { script: () => ({ text: '' }) }, server: { script: () => ({ text: '' }) } })
