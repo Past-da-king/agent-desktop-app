@@ -103,17 +103,24 @@ Branch `devices-headless` (off `devices`), worktree `~/agent-desktop-wt/devices-
   the proxy, and the server's agent (ChatGPT plan) answered with example.com's first sentence "Fetched through"
   the WSL node; the WSL node logged `Relay fetch {host: example.com}`.
 
+## INTEGRATION A + B + design (C as integrator), 22 Oct 03:15, branch devices-headless-int 691ed06
+- Merged A (374139b), B (502ab1d), design (307888a, 0.2.41). Conflicts: core ipc.ts (A typed DeviceRow/DevicesApi +
+  B DeviceCommandRow/TurnLeaseRow + entities), origin.ts (union; originFromFacts = originFrom), A's device-tools.ts
+  renamed devices/device-tool-host.ts (B keeps device-tools.ts), preload/css/index (devices + workers;
+  index's helper toolset is `helperToolset`), remote bridge workers section.
+- `devices/attach.ts` attachDevicesSync(service, deps): B's registerDevicesSync on A's DevicesService while Devices
+  is on. Called in index.ts and in the headless node. A's service: isEnabled(), ownPass(), onSwitch().
+  index.ts also: registerRelay; connected-apps file named for the bundle.
+- SOCKS5 (`socks.ts` proxyAgent) used by A's uplink and B's pinnedFetch.
+- Fixes found by real runs: joining node keeps its id (`nodeId` in POST /v1/pair, protocol s3); one pass per joined
+  node (paired pass = devicesSelfPass); extraPeers (the paired brain) until its row arrives; person-added addresses
+  advertised first; headless listens once; helpers' late write after store close no longer rejects.
+- Headless node also runs workers + event router (design).
+- PROVEN: full suite 1242 passed / 0 failed (twice). headless.test.ts 14 incl. two real processes: join at once
+  (bundle: account + key), ready, memory replicates. LIVE cross-machine (`scripts/headless/cross-replicate.sh <ssh
+  host> socks5://localhost:1055`): temp node on the server paired with a WSL node through SOCKS5, took its account,
+  got its device row and its "CrossCheck" memory, 0 failed links.
+- Server: running 0.2.41 from this branch, ready, crontab 44 lines, proxy socks5://localhost:1055 set.
+
 ## In flight / next
-- After the lead merges A+B: wire B (registerDevicesSync with the headless store/secrets/profiles/learned/passes,
-  TurnLeases, BundleKeeper; pair -> joinFrom), drop headless/bundle.ts stub, redeploy, prove bundle + replication
-  between the desktop and the server.
-- Relay through a linked device (scope item 6, part 2).
-
-## Merge notes
-- Wire A's server into `headless/node-server.ts` `startNodeServer` (deps: runtime with `ipc` HandlerTable,
-  config, cert, version). Its pass-table should read `secrets.get('passHashes')` (JSON) on the headless node.
-- Wire B's `applyBundle` into `headless/bundle.ts`; secret names `devicePass` and `passHashes` need adding to
-  `SecretName` if B types them.
-
-## Last commit
-(see git log)
+- Lead: fast-forward `devices` to devices-headless-int; live test with the test desktop + server + phone.
