@@ -9,6 +9,7 @@ import { HelperManager } from '../src/main/runtime/helpers'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset, buildWorkerToolset } from '../src/main/runtime/toolset'
 import { GAVE_UP_NOTE, RESUME_NOTE, TurnLeases, rankedBrains, type LeaseHook } from '../src/main/runtime/turns'
+import { SELF_ID_KEY, ownBrainIds } from '../src/main/devices/sync'
 import { secretsView, settingsView } from './support'
 
 const READY: Partial<Settings> = { hasKey: true, mode: 'api_key', provider: 'openai', model: 'fake-model', allowHttp: true, notifications: false }
@@ -106,7 +107,8 @@ describe('crash resume', () => {
 
     await waitFor(async () => (await store.list('chat_item')).some((row) => row.kind === 'agent' && row.text === 'Picked it up and finished.'), 5000)
     await waitFor(async () => (await store.get('turn_lease', lease?.id ?? ''))?.status === 'done', 5000)
-    expect(await store.get('turn_lease', lease?.id ?? '')).toMatchObject({ status: 'done', attempt: 2, brainId: 'brain-1' })
+    expect(await store.get('turn_lease', lease?.id ?? '')).toMatchObject({ status: 'done', attempt: 2, brainId: 'brain-1', messageId: lease?.messageId })
+    expect(lease?.messageId).not.toBe('')
     expect(fake.requests).toHaveLength(2)
     // The resumed request carries the whole saved transcript plus the note, and names the task.
     const resumed = messagesText(fake.requests[1]?.body ?? {})
@@ -119,6 +121,23 @@ describe('crash resume', () => {
     expect(await third.recover()).toBe(0)
     expect(fake.requests).toHaveLength(2)
     expect(RESUME_NOTE).toContain('interrupted')
+  })
+
+  it('a lease written with Devices on is still ours on a restart, before Devices is attached again', async () => {
+    const store = new Store(':memory:')
+    cleanups.push(() => store.close())
+    // With Devices on, the lease carried the node's device id, and the node remembered it.
+    store.setLocalValue(SELF_ID_KEY, 'dev_node')
+    const before = new TurnLeases({ store, selfId: () => 'dev_node', resumeTurn: () => undefined, resumeJob: () => undefined })
+    const id = before.begin({ kind: 'turn', chatId: 'main', messageId: 'm1', prompt: 'x' })
+    before.stop()
+    await before.settled()
+    // Restart: recovery runs first, when only the install id is known as selfId.
+    const resumed: string[] = []
+    const after = new TurnLeases({ store, selfId: () => store.deviceId, ownIds: () => ownBrainIds(store), resumeTurn: (_c, lease) => { resumed.push(lease) }, resumeJob: () => undefined })
+    expect(await after.recover()).toBe(1)
+    expect(resumed).toEqual([id])
+    expect(ownBrainIds({ deviceId: 'x', localValue: () => null })).toEqual(['x'])
   })
 
   it('a finished turn leaves a done lease and nothing to resume', async () => {

@@ -21,7 +21,7 @@ import { ConnectedAppsFile, LearnedStore } from '../main/apps/store'
 import { FileBrainLocks } from '../main/brain-locks'
 import { Store } from '../main/db'
 import { HandlerRegistry, recordHandlers } from '../main/devices/registry'
-import { devicesState, type DevicesSyncDeps } from '../main/devices/sync'
+import { devicesState, ownBrainIds, type DevicesSyncDeps } from '../main/devices/sync'
 import { TurnLeases } from '../main/runtime/turns'
 import { registerWorkersIpc } from '../main/workers/ipc'
 import { EventRouter } from '../main/workers/router'
@@ -290,7 +290,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const leases = new TurnLeases({
     store,
     selfId: () => devicesState.sync?.selfId() ?? store.deviceId,
-    ownIds: () => [store.deviceId],
+    ownIds: () => ownBrainIds(store),
     resumeTurn: (chat, id, note) => runner?.resumeTurn(chat, id, note),
     resumeJob: async (id, note) => {
       await helpers.push(id, note)

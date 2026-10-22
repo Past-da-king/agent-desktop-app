@@ -84,6 +84,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 06:15 A: live desktop copy running at C:/temp/devices-live (win-unpacked trial build, AGENT_USER_DATA, port 7787, DevTools 9351, fake AI in WSL 127.0.0.1:18080, seeded memory/task/routine/project+image). Firewall shows blocked (needs Allow). D 880116f: project agent row with icon on the phone, images via /v1/file, lent approvals as notification + card, cold-start freeze fixed; RemoteLinkTest 25/25, full 541/543 (2 old). APK 85.8 MB is thin but unshrunk dex: D doing real-node redroid proof then R8 -> 0.14.1.
 
+- 06:25 A: build copy C:/temp/agent-build-devices synced to devices 78ebb6c, dry-run installer OK (322.7 MB). Live copy on 78ebb6c, stop.ps1/start.ps1 hooks for the harness. A now runs the live cross-machine test (desktop copy + temp server node port 7788 + harness phone). Final 0.2.42 build waits for B g fix. Server service stays clean for Ayanda: he pairs it to his real PC after installing 0.2.42 (START-HERE step).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
