@@ -66,6 +66,13 @@ export interface DevicesServiceDeps {
   kind?: DeviceKind
   canOpenLinks?: boolean
   canReceiveFiles?: boolean
+  /**
+   * Roles of a device this node trusts before its row has arrived: the brain it paired with. A joining node that
+   * cannot open connections out (a firewall, a userspace VPN) only ever hears from that brain, and the brain's first
+   * replication push brings the rows; without this its pass is refused for want of the row it carries. A row, once
+   * here, always wins (revoked stays revoked).
+   */
+  knownPeer?: (deviceId: string) => DeviceRole[] | null
   /** This node's own tools for other devices (protocol s11). Without it the node offers none. */
   deviceTools?: DeviceToolHost
   /** Windows Firewall check and the one-prompt "Allow connections" (Windows only). */
@@ -162,7 +169,8 @@ export class DevicesService {
         deviceForPass: (pass) => this.passes.deviceFor(pass),
         rolesOf: (id) => {
           const row = this.rows.get(id)
-          return row === undefined || row.revoked ? null : row.roles
+          if (row === undefined) return this.deps.knownPeer?.(id) ?? null
+          return row.revoked ? null : row.roles
         },
         self: () => ({ id: this.identity.nodeId, facts: this.selfFacts() }),
         callRpc: (session, method, args) => callAllowed(this.deps.registry, this.server.added(), session, method, args),
