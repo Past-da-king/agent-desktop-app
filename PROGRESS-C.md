@@ -34,9 +34,27 @@ Branch `devices-headless` (off `devices`), worktree `~/agent-desktop-wt/devices-
   by short code (TOFU), wrong cert sends nothing; arg/link parsing; bundle builds and `status` exits 0 under plain
   Node from a dir with no node_modules.
 
+- CLI also has `account list|add claude|add codex|add api --provider P < keyfile|remove` (keys only on stdin) and
+  `ask "text"` (one turn in-process, refuses while the service runs on the same data dir).
+- `scripts/headless/install-test.sh <tgz>`: sandboxed install test (temp HOME, fake crontab, no systemd): install,
+  keepalive restarts after kill -9, reinstall over a running copy, uninstall; existing crontab lines kept.
+
+## Proven (22 Oct, 02:10)
+- `npx vitest run apps/desktop/test/headless.test.ts`: 9 passed. Full suite under flock: 1120 passed, 9 skipped.
+- `npm run typecheck`, `node scripts/lint-checks.mjs`: clean.
+- Server (user home only, no sudo): `install.sh --node ~/node-v24.15.0-linux-x64/bin/node`; crontab 42 -> 44 lines
+  (two `# agent-node keepalive` lines; backup in ~/agent-node/backups). Linger is off, so crontab keepalive.
+  `curl -sk https://127.0.0.1:7787/v1/health` on the server and from WSL over the tailnet address: ready true.
+  RSS idle 71 MB; server free -m: about 8 GB available.
+- Real turn on the server: `agent-node account add codex` + `agent-node ask` answered "headless node ok" in 6 s
+  through the server's ChatGPT plan. The Claude engine runs too, but the server's own Claude login has expired
+  (`claude auth status`: loggedIn false), so Claude-plan turns there need someone to run `claude` and sign in.
+- The service on the server runs with a ChatGPT plan account (so it is ready before pairing); pairing replaces
+  accounts with the desktop's.
+
 ## In flight / next
-- Full vitest under flock, then tarball, then server deploy (step 5) and memory check (step 6).
-- Lead's scope correction item 6 (server: own headless browser, relay through a linked device) comes after deploy.
+- Scope correction item 6: the server's own headless browser (CDP driver over the Playwright Chromium already in
+  ~/.cache/ms-playwright), then relay through a linked device (needs A's RPC).
 
 ## Merge notes
 - Wire A's server into `headless/node-server.ts` `startNodeServer` (deps: runtime with `ipc` HandlerTable,
