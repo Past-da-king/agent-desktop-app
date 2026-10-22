@@ -54,6 +54,21 @@ let rows: DeviceRow[] = [
     lastSeen: Date.now() - 120000,
     revoked: false,
   },
+  {
+    id: 'dev_preview_server',
+    createdAt: Date.now() - 7200000,
+    name: 'Home server',
+    kind: 'server',
+    platform: 'linux',
+    roles: ['brain', 'hands'],
+    priority: 1,
+    urls: [],
+    fp: 'preview-server',
+    facts: facts('Home server', 'server', 'linux', 0),
+    pairedAt: Date.now() - 7200000,
+    lastSeen: Date.now() - 30000,
+    revoked: false,
+  },
 ]
 
 function changed(): void {

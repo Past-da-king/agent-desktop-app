@@ -113,6 +113,17 @@ if (mode === 'mock') {
     await section.scrollIntoViewIfNeeded()
     await check(page, `devices-mock@${tag}`)
     await section.screenshot({ path: path.join(outDir, `mock-devices-${tag}.png`) })
+    // Where helpers run (s12): shown with two brains; picking the server sticks.
+    const place = page.locator('.dv-place')
+    await place.scrollIntoViewIfNeeded()
+    await place.getByRole('tab', { name: 'Home server' }).click()
+    await page.waitForTimeout(200)
+    if ((await place.getByRole('tab', { name: 'Home server' }).getAttribute('aria-selected')) !== 'true') failures.push(`${tag} Run helpers on did not keep Home server`)
+    await place.getByRole('tab', { name: '2' }).click()
+    await page.waitForTimeout(200)
+    await check(page, `devices-mock-place@${tag}`)
+    await place.screenshot({ path: path.join(outDir, `mock-place-${tag}.png`) })
+    await place.getByRole('tab', { name: 'Best' }).click()
     // Join with a link: a bad link says so, a good one joins (mock).
     const join = page.locator('.dv-join')
     await join.scrollIntoViewIfNeeded()

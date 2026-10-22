@@ -353,10 +353,10 @@ function HelperPlacement({ brains, selfId }: { brains: DeviceRow[]; selfId: stri
       </div>
       <div className="dv-place-row">
         <span>
-          Helpers this computer runs for your other devices
-          <small>At the same time.</small>
+          Run for your other devices
+          <small>How many of their helpers this computer runs at once.</small>
         </span>
-        <Segmented ariaLabel="Helpers this computer runs for your other devices" options={CAP_OPTIONS} value={capValue} onChange={(next) => change({ devicesJobCap: Number(next) })} />
+        <Segmented ariaLabel="Run for your other devices" options={CAP_OPTIONS} value={capValue} onChange={(next) => change({ devicesJobCap: Number(next) })} />
       </div>
     </div>
   )
