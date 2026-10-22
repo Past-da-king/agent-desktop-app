@@ -28,6 +28,7 @@ const ENTITY_NAMES: readonly EntityName[] = [
   'device',
   'device_command',
   'turn_lease',
+  'job',
 ]
 
 export function isEntityName(value: unknown): value is EntityName {

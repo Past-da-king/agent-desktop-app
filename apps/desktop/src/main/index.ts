@@ -50,6 +50,7 @@ import { devicesState, ownBrainIds, type DevicesSyncDeps } from './devices/sync'
 import { attachDevicesSync } from './devices/attach'
 import { registerRelay, rolesFromStore } from './devices/relay'
 import { Scheduler } from './runtime/scheduler'
+import { startOffload, type OffloadWire } from './devices/offload-wire'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
 import { MINE_PARTITION, ProfileStore } from './apps/profiles'
@@ -733,9 +734,14 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
   })
   // A project agent the main agent hands work to shows as a helper row in the main chat, with the project's icon.
+  // Devices (s12): helpers, project chats and routines placed on another brain (devices/offload-wire.ts).
+  let offloadWire: OffloadWire | null = null
   const projectAgents = new ProjectAgentRows({
     store,
-    state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
+    state: (chat) => {
+      const local = runner?.state(chat) ?? { running: false, waiting: [] }
+      return offloadWire?.state(local, chat) ?? local
+    },
     changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
   })
   // The app's own controls as tools (tools/app-control.ts): what Settings does by clicking, the agent can do too.
@@ -828,8 +834,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
     projects: {
       agents: projectAgents,
       post: async (chat, text, via) => {
+        if ((await offloadWire?.forward(chat, text, via)) === true) return
         if (runner !== null) await runner.receive(chat, text, via)
       },
+      place: async (chat, project, brief, device) => offloadWire?.placeChat(chat, project, brief, device),
       state: (chat) => runner?.state(chat) ?? { running: false, waiting: [] },
       agentName: () => settings.get().agentName,
       profiles: () => apps.profiles.all(),
@@ -896,6 +904,21 @@ async function startServices(win: BrowserWindow): Promise<void> {
       for (const path of paths) filePicks.add(path)
     },
   })
+  offloadWire = startOffload({
+    store,
+    helpers,
+    settings,
+    secrets,
+    providerFactory: factory,
+    cli: cliHost,
+    runner: () => runner,
+    kind: 'desktop',
+    name: () => settings.get().deviceName,
+    browser: () => true,
+    emitChat: (event) => broadcast(EVENTS.chat, event),
+    log: (message, detail) => logger.info(message, detail),
+  })
+  const placedWire = offloadWire
   // The start-up repairs each read the whole chat; they run once the window has painted, not before it.
   const repairs = async (): Promise<void> => {
     if (store === null || runner === null) return
@@ -996,6 +1019,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       if (eventRouter === null) throw new Error('Event routines are not ready yet.')
       return eventRouter.runNow(trigger)
     },
+    claim: (trigger) => placedWire.claimRoutine(trigger),
   })
   scheduler.start()
   // Workers come back on every start; each one catches up from its cursor on what it missed while closed.
@@ -1045,7 +1069,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     secrets,
     accounts,
     account,
-    chat: runner,
+    chat: placedWire.wrapRunner(runner),
     routines: scheduler,
     helpers,
     ipcMain,
