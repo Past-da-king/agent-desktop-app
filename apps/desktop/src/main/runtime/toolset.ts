@@ -39,6 +39,7 @@ import type { HelperHost } from './helpers'
 import type { SettingsView } from './runner'
 import { deviceTools, type DeviceToolDeps } from '../tools/devices'
 import { deviceAgentTools, withDeviceArg, type DeviceToolHub } from '../devices/device-tools'
+import { appControlTools, appUpdateTools, type AppControlDeps } from '../tools/app-control'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -72,6 +73,11 @@ export interface ToolsetDeps extends CoreToolDeps {
   deviceHub?: () => DeviceToolHub | null
   /** Background workers (workers/). Without them there are no worker_* tools. */
   workers?: WorkerToolDeps
+  /**
+   * The app's own controls (tools/app-control.ts): Devices and Settings for every agent, installing an update for
+   * the main agent only. Without it there are none.
+   */
+  appControl?: AppControlDeps
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -185,7 +191,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
     // The developer tools replace the learned apps' in-page network watcher: every tab records from the start.
     ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
-
+    ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
   ]
 }
 
@@ -200,6 +206,8 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
     const own = deviceTools({ store: deps.store, ...deps.devices })
     tools.push(...asOwner(deps.deviceHub === undefined ? own : withDeviceArg(own, deps.deviceHub))) // open_url, send_file
   }
+  // Installing an update ends the app, so only the main agent may (helpers resume after the restart).
+  if (deps.appControl !== undefined) tools.push(...asOwner(appUpdateTools(deps.appControl))) // app_update
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
   // No step counter any more (21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.

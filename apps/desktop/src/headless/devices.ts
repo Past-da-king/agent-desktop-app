@@ -15,7 +15,7 @@ import { PASS_SECRET } from './pair'
 import { existsSync, readFileSync } from 'node:fs'
 
 import { DeviceToolHost } from '../main/devices/device-tool-host'
-import { DevicesService } from '../main/devices/service'
+import { DevicesService, setDevicesService } from '../main/devices/service'
 import type { DeviceFacts } from '../main/devices/types'
 import type { HeadlessRuntime } from './runtime'
 
@@ -97,6 +97,8 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
   })
   const node = service
   node.registerIpc(runtime.ipcMain)
+  // The agent's Devices tools (tools/app-control.ts) find the node here, as on the desktop.
+  setDevicesService(node)
   // Replication, the bundle, device commands, shared tools and turn failover (devices/attach.ts), as on the desktop.
   const detach = attachDevicesSync(node, {
     store: runtime.store,
@@ -118,6 +120,7 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
   })
   runtime.onStop(async () => {
     detach()
+    setDevicesService(null)
     await node.stop()
   })
   // `agent-node pair` while this node runs: take the brain's bundle (settings, accounts, keys) now.

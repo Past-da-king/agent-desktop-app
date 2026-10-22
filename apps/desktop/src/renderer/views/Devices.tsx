@@ -15,6 +15,7 @@ import { Dialog } from '../ui/Dialog'
 import { Icon, type IconName } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
+import { JoinRow } from './DevicesJoin'
 import { NetworkRow } from './DevicesNetwork'
 
 const ROLE_LABEL: Record<DeviceRole, string> = { screen: 'Screen', brain: 'Answers', hands: 'Acts' }
@@ -457,6 +458,7 @@ export function DevicesSettings(): JSX.Element {
             ))}
           </div>
         ) : null}
+        {!readOnly && status !== null ? <JoinRow /> : null}
         {!readOnly && status !== null ? <NetworkRow status={status} onStatus={setStatus} /> : null}
       </div>
       {adding ? <AddDeviceDialog known={live.map((device) => device.id)} onClose={() => setAdding(false)} /> : null}

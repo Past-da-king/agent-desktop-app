@@ -16,9 +16,21 @@ export interface DevicesConfig {
   extraUrls: string[]
   /** Protocol s11: which groups of this node's tools other devices may use. Missing groups take their default. */
   shareGroups: Partial<Record<'browser' | 'files' | 'notifications' | 'approval' | 'shell', boolean>>
+  /**
+   * Brains this computer joined from a pairing link they made (service.join): trusted and replicated with before
+   * their device rows arrive here. A row, once here, always wins (revoked stays revoked).
+   */
+  peers: JoinedPeer[]
 }
 
-export const DEFAULT_DEVICES_CONFIG: DevicesConfig = { enabled: false, port: 7787, listen: '0.0.0.0', extraUrls: [], shareGroups: {} }
+export interface JoinedPeer {
+  id: string
+  name: string
+  urls: string[]
+  fp: string
+}
+
+export const DEFAULT_DEVICES_CONFIG: DevicesConfig = { enabled: false, port: 7787, listen: '0.0.0.0', extraUrls: [], shareGroups: {}, peers: [] }
 
 const MAX_EXTRA = 12
 
@@ -56,7 +68,18 @@ export function cleanConfig(raw: unknown): DevicesConfig {
   for (const key of ['browser', 'files', 'notifications', 'approval', 'shell'] as const) {
     if (typeof groups[key] === 'boolean') shareGroups[key] = groups[key]
   }
-  return { enabled: value['enabled'] === true, port, listen, extraUrls, shareGroups }
+  const peers: JoinedPeer[] = []
+  for (const item of Array.isArray(value['peers']) ? value['peers'] : []) {
+    if (typeof item !== 'object' || item === null) continue
+    const o = item as Record<string, unknown>
+    const id = typeof o['id'] === 'string' ? o['id'] : ''
+    const fp = typeof o['fp'] === 'string' ? o['fp'] : ''
+    const urls = Array.isArray(o['urls']) ? o['urls'].filter((u): u is string => typeof u === 'string' && /^https:\/\//i.test(u)).slice(0, 12) : []
+    if (!/^dev_[A-Za-z0-9_-]{4,64}$/.test(id) || fp === '' || peers.some((p) => p.id === id)) continue
+    peers.push({ id, name: typeof o['name'] === 'string' ? o['name'].slice(0, 80) : '', urls, fp })
+    if (peers.length >= 12) break
+  }
+  return { enabled: value['enabled'] === true, port, listen, extraUrls, shareGroups, peers }
 }
 
 export class DevicesConfigFile {
@@ -73,7 +96,7 @@ export class DevicesConfigFile {
   }
 
   get(): DevicesConfig {
-    return { ...this.state, extraUrls: [...this.state.extraUrls], shareGroups: { ...this.state.shareGroups } }
+    return { ...this.state, extraUrls: [...this.state.extraUrls], shareGroups: { ...this.state.shareGroups }, peers: this.state.peers.map((p) => ({ ...p, urls: [...p.urls] })) }
   }
 
   save(patch: Partial<DevicesConfig>): DevicesConfig {

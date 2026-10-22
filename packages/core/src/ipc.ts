@@ -538,6 +538,21 @@ export interface DevicesNetworkInput {
   authKey?: string | null
 }
 
+/** What joining another node's devices from its pairing link did. */
+export interface DeviceJoinResult {
+  /** The node that made the link. */
+  node: { id: string; name: string }
+  /** The address that answered. */
+  url: string
+  /** This computer's id there (a node keeps the id it has). */
+  deviceId: string
+  meshId: string
+  /** The brains this computer now replicates with. */
+  brains: Array<{ id: string; name: string }>
+  /** The other node's settings, accounts and keys were taken now. */
+  tookBundle: boolean
+}
+
 /** "Add a device": what the QR code and the short code carry, valid until `expiresAt` (ms). */
 export interface PairingOfferInfo {
   uri: string
@@ -566,6 +581,10 @@ export interface DevicesApi {
   move(id: string, direction: 'up' | 'down'): Promise<void>
   /** Takes the device out: its pass stops working at once and its connections close. */
   revoke(id: string): Promise<void>
+  /** Deletes a device's row for good (a taken-out device leaves a revoked row behind); takes it out first. */
+  forget(id: string): Promise<void>
+  /** Joins the person's devices from a pairing link another node made (its Add a device, or `agent-node offer`). */
+  join(link: string, takeBundle?: boolean): Promise<DeviceJoinResult>
   /** Lets other devices use one group of this computer's tools, or not. */
   setShareGroup(group: DeviceShareGroup, on: boolean): Promise<DevicesStatus>
   /** Windows: the one prompt that lets other devices through the firewall. */
