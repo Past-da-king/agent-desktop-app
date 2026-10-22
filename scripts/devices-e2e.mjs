@@ -61,6 +61,9 @@ function parseArgs(argv) {
   return out
 }
 
+// The name this scripted phone lends its notification tool under. The agent always asks for 'notify'; the real app
+// lends 'notify_user' (E2E_PHONE_NOTIFY=notify_user), and the brain must match either spelling.
+const PHONE_NOTIFY = process.env.E2E_PHONE_NOTIFY || 'notify'
 const args = parseArgs(process.argv.slice(2))
 const TIMEOUT_MS = Math.max(30, args.timeout) * 1000
 const log = (...parts) => {
@@ -284,7 +287,7 @@ class Ws {
 // ---- the phone ------------------------------------------------------------------------------------------------------
 
 const PHONE_TOOLS = [
-  { name: 'notify', description: 'Show a notification on this phone', params: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } } }, group: 'notifications', readOnly: false },
+  { name: PHONE_NOTIFY, description: 'Show a notification on this phone', params: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } } }, group: 'notifications', readOnly: false },
   { name: 'ask_user', description: 'Ask the person on this phone, with buttons', params: { type: 'object', properties: { question: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } } }, group: 'approval', readOnly: false },
   { name: 'browser_open', description: 'Open a page in this phone browser (test stub)', params: { type: 'object', properties: { url: { type: 'string' } } }, group: 'browser', readOnly: false },
 ]
@@ -406,7 +409,7 @@ class Phone {
     this.commands.push(command)
     try {
       if (command.kind === 'tool') {
-        const value = command.tool === 'notify' ? 'Shown' : command.tool === 'ask_user' ? (command.args?.options?.[0] ?? 'Yes') : command.tool === 'browser_open' ? `Opened ${command.args?.url ?? ''} (test stub)` : null
+        const value = command.tool === PHONE_NOTIFY ? 'Shown' : command.tool === 'ask_user' ? (command.args?.options?.[0] ?? 'Yes') : command.tool === 'browser_open' ? `Opened ${command.args?.url ?? ''} (test stub)` : null
         if (value === null) await this.call('device.result', command.id, false, `no tool ${command.tool}`)
         else await this.call('device.result', command.id, true, value)
       } else await this.call('device.ack', command.id, true, '')
@@ -662,11 +665,11 @@ async function main() {
     phone.call('chat.send', `Automated link test: use the open_url tool to open ${url} on my device, then use device_tool with device "best" and tool "notify" (title "${marker}", body "test"), then reply done.`).catch(() => undefined)
     const opened = await phone.waitFor(() => phone.commands.slice(before).find((c) => c.kind === 'open_url' && String(c.url ?? '').includes(marker)), TIMEOUT_MS, 'a device.command open_url')
     ev.push(`device.command ${opened.id}: open_url ${opened.url} (acked)`)
-    const notify = await phone.waitFor(() => phone.commands.slice(before).find((c) => c.kind === 'tool' && c.tool === 'notify'), TIMEOUT_MS, 'a device.command tool notify').catch((error) => {
+    const notify = await phone.waitFor(() => phone.commands.slice(before).find((c) => c.kind === 'tool' && c.tool === PHONE_NOTIFY), TIMEOUT_MS, `a device.command tool ${PHONE_NOTIFY}`).catch((error) => {
       ev.push(`no tool command: ${error.message}`)
       return null
     })
-    if (notify) ev.push(`device.command ${notify.id}: tool notify, args ${JSON.stringify(notify.args)}, deadline ${notify.deadlineMs} ms (answered with device.result)`)
+    if (notify) ev.push(`device.command ${notify.id}: tool ${notify.tool}, args ${JSON.stringify(notify.args)}, deadline ${notify.deadlineMs} ms (answered with device.result)`)
     const devices = await phone.rows('device')
     const me = devices.find((d) => d.id === state.deviceId)
     ev.push(`this phone's tools on its device row: ${(me?.tools ?? []).map((t) => t.name).join(', ') || 'none'}`)
