@@ -112,6 +112,7 @@ function real(path: string): string | null {
 export class DevicesService {
   private ident: NodeIdentity | null = null
   private srv: DevicesServer | null = null
+  private readonly switchListeners = new Set<(on: boolean) => void>()
   private readonly config: DevicesConfigFile
   private readonly passes: SecretPassTable
   private readonly offers: PairingOffers
@@ -198,13 +199,32 @@ export class DevicesService {
     return this.passes
   }
 
+  /** Whether Devices is switched on (the headless node always is). */
+  isEnabled(): boolean {
+    return this.enabled
+  }
+
+  /** This node's own pass (its hash is in the mesh's pass table), for its links to other nodes. */
+  ownPass(): string {
+    return this.selfPass()
+  }
+
+  /** Hears Devices being switched on or off (devices/attach.ts starts and stops replication with it). */
+  onSwitch(listener: (on: boolean) => void): () => void {
+    this.switchListeners.add(listener)
+    return () => this.switchListeners.delete(listener)
+  }
+
   /** Reads the device rows, writes this node's own, and listens when Devices is on. */
   async start(): Promise<void> {
     await this.reloadRows()
     this.offStore = this.deps.store.onChange((change) => {
       if (change.entity === 'device') void this.reloadRows().then(() => this.uplink.tick())
     })
-    if (this.enabled) await this.switchOn()
+    if (this.enabled) {
+      await this.switchOn()
+      for (const listener of this.switchListeners) listener(true)
+    }
   }
 
   async stop(): Promise<void> {
@@ -370,6 +390,7 @@ export class DevicesService {
       this.error = ''
       setLocalOrigin(null)
     }
+    for (const listener of this.switchListeners) listener(on)
     this.changed()
     return this.status()
   }

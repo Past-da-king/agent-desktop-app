@@ -57,7 +57,8 @@ agent://pair?v=1&mesh=<meshId>&node=<nodeId>&name=<url-encoded node name>&u=<url
   plus any node address works the same as the QR; with the short code the client accepts the certificate on first
   use and shows its fingerprint words.
 
-`POST /v1/pair` (no auth) body:
+`POST /v1/pair` (no auth) body (a node joining another node also sends `"nodeId": "<its own dev_ id>"`, and the
+pairing node registers it under that id, so every node knows it by one id; a screen gets a new id):
 
 ```json
 { "code": "<c or short code>", "device": DeviceFacts, "wantRoles": ["screen"] }

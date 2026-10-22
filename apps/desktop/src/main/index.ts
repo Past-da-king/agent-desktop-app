@@ -46,6 +46,8 @@ import { savePastedFile } from './pasted'
 import { Runner } from './runtime/runner'
 import { TurnLeases } from './runtime/turns'
 import { devicesState, type DevicesSyncDeps } from './devices/sync'
+import { attachDevicesSync } from './devices/attach'
+import { registerRelay, rolesFromStore } from './devices/relay'
 import { Scheduler } from './runtime/scheduler'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
@@ -148,6 +150,7 @@ let runner: Runner | null = null
 /** Turn leases: a turn or helper cut off by a crash resumes on the next start (runtime/turns.ts). */
 let leases: TurnLeases | null = null
 /** The app's side of registerDevicesSync (set once the runtime is built). */
+let disposeDevicesSync: (() => void) | null = null
 let devicesAppHooks: Pick<DevicesSyncDeps, 'leases' | 'localTools' | 'shareGroups' | 'preferred' | 'noteBack' | 'context'> | null = null
 let memory: MemoryService | null = null
 let chatIndex: ChatIndex | null = null
@@ -639,9 +642,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
   }
 
   const learned = new LearnedStore(join(dir, 'learned-apps.json'))
+  // Named, so the devices bundle can carry the per-account rules too (devices/bundle.ts).
+  const connectedApps = new ConnectedAppsFile(join(dir, 'connected-apps.json'))
   const apps = new AppsService({
     secrets,
-    file: new ConnectedAppsFile(join(dir, 'connected-apps.json')),
+    file: connectedApps,
     learned,
     // Profiles stay on this computer (not a synced entity yet).
     profiles: new ProfileStore(join(dir, 'profiles.json')),
@@ -1040,6 +1045,28 @@ async function startServices(win: BrowserWindow): Promise<void> {
     })
     devices.registerIpc(ipcMain)
     setDevicesService(devices)
+    // While Devices is on: replication, the bundle, device commands, shared tools, turn failover (devices/attach.ts).
+    if (devicesAppHooks !== null) {
+      const hooks = devicesAppHooks
+      const ready = devices
+      disposeDevicesSync = attachDevicesSync(ready, {
+        store,
+        bundle: {
+          settings,
+          secrets,
+          profiles: apps.profiles,
+          learned,
+          connected: connectedApps,
+          passes: ready.passTable(),
+          projects: () => store === null ? Promise.resolve([]) : store.list('project'),
+        },
+        ...hooks,
+        imageDir: join(dir, 'attachments', 'from-devices'),
+        log: (line) => logger.info(line),
+      })
+    }
+    // A page this computer fetches for the person's other nodes (a server a site blocks): relay.fetch.
+    registerRelay(devices.host(), { store, rolesOf: rolesFromStore(store) })
     await devices.start()
   } catch (error) {
     logger.error('Devices could not start', { message: error instanceof Error ? error.message : String(error) })
@@ -1104,6 +1131,8 @@ if (!app.requestSingleInstanceLock()) {
     setDevicesService(null)
     runner?.dispose()
     leases?.stop()
+    disposeDevicesSync?.()
+    disposeDevicesSync = null
     devicesState.sync?.stop()
     runner = null
     agentBrowser?.destroy()

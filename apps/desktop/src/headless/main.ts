@@ -25,7 +25,7 @@ import { FileKeyCipher } from './file-cipher'
 import { loadIdentity } from '../main/devices/identity'
 import { DEVICES_CHANNELS } from '../shared/devices-channels'
 import { callControl, startControl, terminalQr } from './control'
-import { headlessFacts, startHeadlessDevices } from './devices'
+import { headlessFacts, JOIN_CHANNEL, startHeadlessDevices } from './devices'
 import { readConfig, writeConfig, type NodeConfig } from './node-config'
 import { pair, parsePairLink, shortCodeTarget } from './pair'
 import { parseSocksProxy } from '../main/devices/socks'
@@ -297,13 +297,16 @@ async function pairCommand(args: Args): Promise<number> {
   const settings = new SettingsStore(join(dataDir, 'settings.json'))
   const secrets = new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key')))
   const facts = headlessFacts(config.name, version(), config.publicUrls, identity.fp)
-  const outcome = await pair(target, facts, config, dataDir, { dataDir, settings, secrets })
+  const outcome = await pair(target, facts, config, dataDir, { dataDir, secrets })
   console.log(`Paired with ${outcome.url} as ${outcome.deviceId} (mesh ${outcome.meshId}).`)
   if (target.fp === '') console.log(`Its certificate fingerprint is ${outcome.fp}. Check it matches the one on that device.`)
-  if (outcome.bundle !== null) {
-    console.log(`Took in ${outcome.bundle.settings} settings and ${outcome.bundle.secrets} keys.`)
-  } else console.log(`Paired, but the settings and keys did not come over yet: ${outcome.bundleError}`)
-  if (runningPid(dataDir) !== null) console.log('Restart it to use them: agent-node stop && agent-node start --daemon')
+  if (runningPid(dataDir) === null) {
+    console.log('Your settings, accounts and keys come over when it starts: agent-node start --daemon')
+    return 0
+  }
+  const joined = await callControl(dataDir, JOIN_CHANNEL, [outcome.url, outcome.fp]).catch((error: unknown) => error)
+  if (joined === true) console.log('Took in your settings, accounts and keys from it.')
+  else console.log(`Paired, but the settings and keys did not come over yet (${joined instanceof Error ? joined.message : 'no answer'}). They come over on the next start.`)
   return 0
 }
 

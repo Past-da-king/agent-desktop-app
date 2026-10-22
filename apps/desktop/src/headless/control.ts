@@ -20,6 +20,8 @@ const ALLOWED: ReadonlySet<string> = new Set([
   DEVICES_CHANNELS.move,
   DEVICES_CHANNELS.revoke,
   DEVICES_CHANNELS.setExtraUrls,
+  // headless/devices.ts JOIN_CHANNEL: take a freshly paired brain's bundle.
+  'agent:devices.join',
 ])
 
 export function controlPath(dataDir: string): string {

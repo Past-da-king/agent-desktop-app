@@ -9,6 +9,8 @@ import { createHash } from 'node:crypto'
 import { request as httpsRequest } from 'node:https'
 import type { TLSSocket } from 'node:tls'
 
+import { proxyAgent } from './socks'
+
 export function fingerprintOf(der: Buffer): string {
   return createHash('sha256').update(der).digest('base64url')
 }
@@ -58,7 +60,8 @@ export function pinnedFetch(fp: string, timeoutMs = 70_000): typeof fetch {
           headers,
           // The chain is not checked (self-signed by design); the pin below is.
           rejectUnauthorized: false,
-          agent: false,
+          // Through the devices proxy when one is set (devices/socks.ts), else direct as before.
+          agent: proxyAgent(),
           timeout: timeoutMs,
         },
         (res) => {
