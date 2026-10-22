@@ -310,6 +310,55 @@ As built (apps/desktop/src/main/devices/device-tools.ts, brain side):
 - The runner on a node runs tools with no person to answer unless the app wires `context` (ask_user /
   request_approval on a NODE then answer "nobody could answer"); phones answer them natively.
 
+## 12. Offload: work placed on another brain (added 22 Oct 2026)
+
+A brain can hand its helpers, project chats and routine runs to another brain (typically a linked server), so the
+computer the person uses keeps its resources. Everything still shows there as if it ran there: the helper's card,
+steps, Now line and result replicate like any row. Off with Devices off, and while no other brain beats a node row,
+so both apps keep working alone.
+
+**Rows** (entity `job`, synced, `runtime/offload.ts`):
+- `node-<deviceId>` (`kind: node`): written only by that brain every 20 s. `info` = `{ name, kind, accounts, cap,
+  active, browser }`: the AI account ids it can run now (a key it holds, or a plan whose login file exists and has
+  not failed here in the last 6 h), how many helpers it runs for other devices at once (`devicesJobCap`, 0 = none),
+  how many run now, and whether it has a browser. Older than 75 s = gone.
+- `kind: msg`: one message to one brain (`device`) from another (`from`) about one helper (`helper`), `op` one of
+  `start`, `steer`, `push`, `stop`, `answer`, `decide` (to the brain running it), `result`, `bounce` (back to the
+  brain that placed it), `post`, `chatstop` (a project chat). `status` sent, then done by the receiver. Handled
+  messages are removed after a day.
+- `kind: claim`: `chat-<chatId>` = which brain runs a project chat (`device`) and who placed it (`from`);
+  `routine-<triggerId>@<lastRunAt>` = which brain runs that slot of a routine.
+
+**Helpers.** `delegate` (task field `device`: best, here, or a brain by name) asks `place()`. Placed elsewhere, the
+helper row is written here with `placedBy`, `runOn`, `runsOnName`, and a `start` goes to that brain. That brain adopts
+the row and runs it under its own job lease (`job-<id>`, s8), so exactly one brain runs it; it writes the card, steps
+and transcript, and on finishing sends `result` (the same note a local helper hands the main agent) to `placedBy`,
+which delivers it into the chat that delegated, batches and all. Steer, stop and card answers on the placing brain go
+as messages to the lease holder; push goes to the brain that ran it while it is up (its session is there), else runs
+here. A runner that cannot run the AI (signed out, key refused) before doing anything sends `bounce` and stops
+offering that account; the placing brain then runs it itself. A start with no lease after 45 s, whose brain is
+unreachable, is run here. A runner that dies mid-job is taken over by the existing lease failover (s8) and finished by
+the taker, which delivers straight away when it placed the job. Desks (event routines) and separate runs (alongside)
+always run where they start.
+
+**Policy for best** (`choosePlacement`): never a brain that is offline, full, takes no work, or cannot run the job's
+AI account. A job that needs this computer (local paths, its screen, its signed-in browser, its apps, a project with a
+folder) stays. Anything else goes to the least busy linked server; none free, it stays. A server keeps its own work
+and hands a computer only a job that needs one. Setting `helpersRunOn` (this computer only, Settings > Devices >
+Where helpers run): best, here, or one brain's id. The helper on another brain is told in its prompt where it runs,
+that files and apps named in the brief are on the placing computer (reach them with `device_tool` there), and that its
+browser has none of the person's sign-ins (use the placing computer's `browser_*` through `device_tool`). Nothing in
+the chat says where it ran; the helper's details show "Runs on <name>".
+
+**Project chats.** `project_chat_start` (field `device`) places the chat with the same policy (a project with a folder
+stays). Messages into a placed chat (`project_chat_send`, the person typing in it here) go there as `post`; its
+`message_main` comes back to the placing brain as `post` into the main chat; Stop sends `chatstop`. The chat shows as
+running here while its turn lease runs there.
+
+**Routines.** Every brain holds the same routines, so a due slot runs on exactly one: the brain the routine's prompt
+would be placed on (field `device` on the routine, else best) claims it at once; any other brain waits 90 s and
+claims it only if nobody did; the newest claim wins after a 2.5 s settle. Run now runs where it was pressed.
+
 ## 10. Overlay network (optional, pluggable)
 
 A sidecar (`agent-net`, Go, tsnet) can join a Tailscale-compatible control server (Tailscale or the user's own
