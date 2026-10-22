@@ -131,6 +131,11 @@ export interface ReplicatorDeps {
   peers?: () => Promise<PeerTarget[]>
   /** A peer's bundle version changed (or it was seen for the first time): read its bundle. */
   onBundleVersion?: (peer: PeerTarget, version: string, url: string) => void
+  /**
+   * After every good pull, with the peer's bundle version (may be ''). Lets this node push its own bundle to a peer
+   * that cannot reach it to read it (a joining node behind a userspace VPN or a firewall that only hears from us).
+   */
+  afterPull?: (peer: PeerTarget, version: string, url: string) => void
   /** Long-poll window, seconds. */
   waitSeconds?: number
   /** How often the peer list is read again. */
@@ -340,6 +345,7 @@ class PeerLink {
           this.bundleSeen = version
           this.deps.onBundleVersion?.(this.peer, version, url)
         }
+        this.deps.afterPull?.(this.peer, version, url)
         this.goodUrl = index
         this.lastError = null
         this.lastOkAt = Date.now()
