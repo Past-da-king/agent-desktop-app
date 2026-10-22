@@ -39,11 +39,13 @@ import type {
   Unsubscribe,
   VoiceResult,
 } from '@agent/core'
+import type { DeviceRow, DevicesStatus, PairingOfferInfo } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
 import { CHANNELS, EVENTS } from '../shared/channels'
 import { MEMORY_CHANNELS, MEMORY_EVENTS } from '../shared/memory-channels'
 import { MEMORY_HISTORY_CHANNELS } from '../shared/memory-history-channels'
+import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../shared/devices-channels'
 
 const platform: AgentApi['platform'] =
   process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
@@ -276,6 +278,19 @@ const api: AgentApi = {
     tidyState: () => call<MemoryTidyProgress | null>(MEMORY_CHANNELS.tidyState),
     undoTidy: () => call<{ removed: number; restored: number }>(MEMORY_CHANNELS.undoTidy),
     onTidy: (callback) => on<MemoryTidyProgress>(MEMORY_EVENTS.tidy, callback),
+  },
+
+  devices: {
+    status: () => call<DevicesStatus>(DEVICES_CHANNELS.status),
+    setEnabled: (on) => call<DevicesStatus>(DEVICES_CHANNELS.setEnabled, on),
+    setExtraUrls: (urls) => call<DevicesStatus>(DEVICES_CHANNELS.setExtraUrls, urls),
+    offer: () => call<PairingOfferInfo>(DEVICES_CHANNELS.offer),
+    cancelOffer: () => call<void>(DEVICES_CHANNELS.cancelOffer),
+    list: () => call<DeviceRow[]>(DEVICES_CHANNELS.list),
+    setRoles: (id, roles) => call<void>(DEVICES_CHANNELS.setRoles, id, roles),
+    move: (id, direction) => call<void>(DEVICES_CHANNELS.move, id, direction),
+    revoke: (id) => call<void>(DEVICES_CHANNELS.revoke, id),
+    onChanged: (callback) => on<null>(DEVICES_EVENTS.changed, () => callback()),
   },
 }
 

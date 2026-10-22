@@ -54,6 +54,8 @@ import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
 import type { SettingsStore } from './settings'
 import { CHANNELS, EVENTS } from '../shared/channels'
+import { messageOrigin } from './devices/origin'
+import type { MessageOrigin } from './devices/types'
 
 export interface IpcMainLike {
   handle(
@@ -84,7 +86,8 @@ export type Broadcast = (channel: string, payload?: unknown) => void
 
 /** The chat side the renderer can reach. Runner implements this; tests can pass a small fake. */
 export interface ChatRunner {
-  send(text: string, attachments?: Attachment[], chat?: string): Promise<void>
+  /** `origin`: the device the message came from (devices/origin.ts), kept on the user row as meta.origin. */
+  send(text: string, attachments?: Attachment[], chat?: string, origin?: MessageOrigin): Promise<void>
   stop(chat?: string): void
   state(chat?: string): RunState
   /** Several chats at once: every chat with something going on. */
@@ -383,11 +386,13 @@ export function registerIpc(deps: IpcDeps): () => void {
 
   // ---- chat ----
 
-  handle(CHANNELS.chat.send, async (_event, rawText, rawAttachments, rawChat) => {
+  handle(CHANNELS.chat.send, async (event, rawText, rawAttachments, rawChat) => {
     const text = requireString(rawText, 'message', MAX_MESSAGE)
     const attachments = requireAttachments(rawAttachments)
     const target = optionalChat(rawChat)
-    if (target === undefined) await chat.send(text, attachments)
+    const origin = messageOrigin(event)
+    if (origin !== undefined) await chat.send(text, attachments, target, origin)
+    else if (target === undefined) await chat.send(text, attachments)
     else await chat.send(text, attachments, target)
   })
 
