@@ -64,6 +64,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 - Note: the server node listens on 127.0.0.1; its reachable url is added at runtime with `agent-node config --url` (not in source).
 - 04:00 design moved to 307888a (workers, 0.2.39 to 0.2.41). C merges design into devices-headless-int after A+B. Devices release version will be 0.2.42.
 
+- 04:10 B s11 brain side DONE devices-sync 645ec03 (11 device-tools tests, full suite 1152): device_tool/devices_list, router (origin first, preferred, priority, phones last), ask_user/request_approval/notify on another device, offline queue, blocked-browser hint, node-to-node tools over replicated device_command rows, shell off by default. Bundle projects include icons; helper status lines are replicated chat_item rows. B next: ask_user on another node (context), then scripts/devices-e2e.mjs live harness (phone protocol client, checks a-g, stop/start hooks).
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
