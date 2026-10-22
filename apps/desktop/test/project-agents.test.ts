@@ -110,4 +110,33 @@ describe('project agents in the main chat', () => {
     expect(await status()).toMatchObject({ state: 'working', lastBrief: 'Now the cart page' })
     expect((await store.list('chat_item')).filter((row) => row.id === 'pa-pc1')).toHaveLength(1)
   })
+
+  it('after a restart the row is followed again: it stays open while its chat resumes, then closes when the chat is done', async () => {
+    const store = new Store(':memory:')
+    cleanups.push(() => store.close())
+    const project = await store.upsert('project', { name: 'Shop Site', description: '', icon: { glyph: 'globe', color: 'iris' }, path: '', profile: '', hidden: false, chats: ['pc2'] })
+    const before = new ProjectAgentRows({ store, state: () => ({ running: true, waiting: [] }), checkMs: 50 })
+    await before.delegated('pc2', project, 'Fix the helper cards')
+    before.dispose()
+    const status = async (): Promise<Record<string, unknown>> => meta(await store.get('chat_item', 'pa-pc2'))
+
+    // The app starts again: nothing runs yet (the lease has not resumed the chat), so the row waits out the grace.
+    let running = false
+    const after = new ProjectAgentRows({ store, state: () => ({ running, waiting: [] }), checkMs: 50, resumeGraceMs: 400 })
+    cleanups.push(() => after.dispose())
+    await after.restore()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect((await status())['state']).toBe('working')
+
+    // The chat resumes and works: its steps reach the row again.
+    running = true
+    await store.upsert('chat_item', { kind: 'activity', text: 'Read the panel', meta: JSON.stringify({ chat: 'pc2', status: 'running' }) })
+    await waitFor(async () => (await status())['summary'] === 'Read the panel', 2000)
+
+    // It finishes: the row closes as done.
+    await store.upsert('chat_item', { kind: 'agent', text: 'Cards are back.', meta: JSON.stringify({ chat: 'pc2' }) })
+    running = false
+    await waitFor(async () => (await status())['state'] === 'done', 2000)
+    expect((await status())['summary']).toBe('Cards are back.')
+  })
 })
