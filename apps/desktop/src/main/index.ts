@@ -83,6 +83,7 @@ import { recordHandlers, handlerRegistry } from './devices/registry'
 import { DevicesService, setDevicesService } from './devices/service'
 import { SelfUpdater, resumeNote } from './self-update'
 import type { AppControlDeps } from './tools/app-control'
+import { registryInvoker } from './tools/app-actions'
 import { findSidecar } from './devices/net'
 import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tool-host'
 import { WindowsFirewall } from './devices/firewall'
@@ -752,6 +753,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     devices: () => devices,
     links: () => devicesState.sync?.replicator.status() ?? [],
     settings,
+    invoker: () => registryInvoker(handlerRegistry),
   }
   const helperToolset = buildWorkerToolset({
     appControl,
