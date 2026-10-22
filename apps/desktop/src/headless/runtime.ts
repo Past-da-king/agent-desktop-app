@@ -41,6 +41,7 @@ import { buildToolset, buildWorkerToolset } from '../main/runtime/toolset'
 import { Secrets } from '../main/secrets'
 import { SettingsStore } from '../main/settings'
 import { EVENTS } from '../shared/channels'
+import { findChromium, HeadlessBrowser } from './browser'
 import { FileKeyCipher } from './file-cipher'
 
 /** What a headless node can do on its own device. Device commands (protocol s5.2) plug in through these. */
@@ -62,6 +63,8 @@ export interface HeadlessOptions {
   extraTools?: Tool[]
   /** Skip the background memory and routine timers (tests that only run one turn). */
   quiet?: boolean
+  /** Use this Chromium for the browser tools; null for none. Default: whatever findChromium() finds. */
+  chromium?: string | null
   /** Overrides how providers are made (tests point it at a local fake). */
   providerFactory?: ConstructorParameters<typeof Runner>[0]['providerFactory']
 }
@@ -114,6 +117,8 @@ export interface HeadlessRuntime {
   memory: MemoryService
   apps: AppsService
   learned: LearnedStore
+  /** The node's own headless browser, or null when this machine has no Chromium. */
+  browser: HeadlessBrowser | null
   /** The app contract, for the node server's /v1/rpc. */
   ipc: HandlerTable
   /** Replaced by the node server once it runs (device commands to the origin device). */
@@ -175,6 +180,14 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     },
   })
   const learnedNames = (): Record<string, string> => Object.fromEntries(learned.apps().map((a) => [a.id, a.name]))
+  const chromium = options.chromium === undefined ? findChromium() : options.chromium
+  const browser = chromium === null
+    ? null
+    : new HeadlessBrowser({ dir: join(dir, 'browser'), executable: chromium, log: (message, detail) => logger.info(message, detail) })
+  logger.info('Browser', { available: browser === null ? 0 : 1 })
+  // With a browser the tools are the desktop's own; without one they stay listed and say so.
+  const browserTools = (tools: Tool[]): Tool[] => (browser === null ? markNoBrowser(tools) : tools)
+  const browserDep = browser === null ? {} : { browser }
 
   const factory =
     options.providerFactory ??
@@ -193,7 +206,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     settings,
     secrets,
     providerFactory: factory,
-    workerTools: markNoBrowser(buildWorkerToolset({ store, settings, agentName: () => settings.get().agentName, environment, apps, learned })),
+    workerTools: browserTools(buildWorkerToolset({ store, settings, ...browserDep, agentName: () => settings.get().agentName, environment, apps, learned })),
     deliver: async (note, chat) => {
       if (runner !== null) await runner.deliver(note, chat)
     },
@@ -206,10 +219,11 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     profiles: apps.profiles,
     learnedNames,
   })
-  const tools = markNoBrowser([
+  const tools = browserTools([
     ...buildToolset({
       store,
       settings,
+      ...browserDep,
       filePicks,
       agentName: () => settings.get().agentName,
       helpers,
@@ -371,6 +385,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     memory: theMemory,
     apps,
     learned,
+    browser,
     ipc,
     actions,
     busy,
@@ -384,6 +399,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       const working = (): boolean => busy() || helpers.live().length > 0
       while (working() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200))
       logger.info('Stopping headless node', { stillWorking: working() ? 1 : 0 })
+      await browser?.close()
       disposeIpc()
       disposeStore()
       theRunner.dispose()
