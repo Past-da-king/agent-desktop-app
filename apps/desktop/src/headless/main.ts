@@ -247,15 +247,33 @@ async function stopCommand(args: Args): Promise<number> {
     return 0
   }
   process.kill(pid, 'SIGTERM')
-  for (let i = 0; i < 120; i++) {
-    await new Promise((r) => setTimeout(r, 250))
-    if (runningPid(dataDir) === null) {
-      console.log('Stopped.')
-      return 0
+  // Wait for the process itself to be gone (not just its pid file), so a start right after this works. A running
+  // turn gets up to 20 s to finish (it resumes on the next start if it does not); after 30 s it is killed.
+  const alive = (): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
     }
   }
-  console.error(`Still stopping (pid ${pid}); a turn may be finishing.`)
-  return 1
+  for (let i = 0; i < 120 && alive(); i++) await new Promise((r) => setTimeout(r, 250))
+  if (alive()) {
+    console.error(`It did not stop in 30 s (pid ${pid}); killing it. Its turn resumes on the next start.`)
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Gone in the meantime.
+    }
+    for (let i = 0; i < 40 && alive(); i++) await new Promise((r) => setTimeout(r, 250))
+  }
+  if (alive()) {
+    console.error(`Could not stop pid ${pid}.`)
+    return 1
+  }
+  rmSync(pidFile(dataDir), { force: true })
+  console.log('Stopped.')
+  return 0
 }
 
 async function status(args: Args): Promise<number> {

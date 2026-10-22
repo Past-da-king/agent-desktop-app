@@ -141,6 +141,8 @@ export interface HeadlessRuntime {
   connectedApps: ConnectedAppsFile
   /** Background workers (agent-written scripts kept running) and the router that hands their events to routines. */
   supervisor: Supervisor
+  /** The main agent's toolset: what this node lends to the agents on other devices (shared device tools, s11). */
+  mainTools: Tool[]
   /** The node's own headless browser, or null when this machine has no Chromium. */
   browser: HeadlessBrowser | null
   /** The app contract by channel, for tests and local calls. */
@@ -422,10 +424,9 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   }
   // What a crash or a restart cut off runs again, once (runtime/turns.ts). With Devices on, the failover side is set
   // by devices/attach.ts and the recovery waits for one replication pass first.
-  if (options.quiet !== true) {
-    void projectAgents.restore().catch(() => undefined)
-    void leases.recover().catch(() => 0)
-  }
+  // Leases are recovered once the node's Devices side is up (headless/devices.ts), so the turns it ran under its
+  // device id are found as its own and a peer's takeover is seen first.
+  void projectAgents.restore().catch(() => undefined)
   // Events that arrived while the node was down (or were cut short) go to their routines now.
   if (options.quiet !== true) await router.start().catch((error: unknown) => logger.warn('Event router did not start', { message: error instanceof Error ? error.message : String(error) }))
 
@@ -538,6 +539,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     apps,
     learned,
     browser,
+    mainTools: tools,
     supervisor,
     leases,
     devicesHooks: {

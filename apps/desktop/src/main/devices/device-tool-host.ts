@@ -34,6 +34,7 @@ const FIXED_GROUPS: Record<string, ShareGroup> = {
   file_send: 'files',
   file_receive: 'files',
   shell_run: 'shell',
+  run_code: 'shell',
 }
 
 const READ_ONLY = new Set(['browser_look', 'browser_read', 'browser_wait_for', 'files_list', 'files_read', 'files_find', 'file_send'])

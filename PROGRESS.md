@@ -94,6 +94,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 07:20 C kept working on devices-headless-int: cc1d662 (0.2.42 bump, own g/f fixes, headless DeviceToolHost, harness 7/7). Lines diverged; C told to merge cc1d662 INTO devices (canonical), dedupe fixes, then work only on devices and redeploy the clean server. A holds final build until that merge.
 
+- 07:40 LIVE 7/7 PASS (A, harness-3.log): Windows desktop copy (brain 1) + temp server node 7790 (brain 2) + harness phone: a-g incl. failover and crash resume (kill mid-turn, restart, exactly one reply). Pair POST via a temporary tunnel only (firewall). A now: firewall rule scope, then final build after C merges into devices. C deployed 0.2.42 from devices-headless-int via one-command deploy.sh; told to merge into devices and redeploy.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).

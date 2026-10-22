@@ -730,13 +730,15 @@ export class Runner {
     }
     const controller = new AbortController()
     line.controller = controller
-    this.emitFor(line.chat, { type: 'run_started' })
 
     let error: string | undefined
     let lease: string | null = null
     try {
       const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
       lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(leaseId === undefined ? {} : { id: leaseId }) }) ?? null
+      // The lease is stored before anyone hears the turn started, so a brain that dies right after can be taken over.
+      await this.devices?.leases?.settled?.()
+      this.emitFor(line.chat, { type: 'run_started' })
       const prompt = await this.withContextNotes(line, text)
       error = await this.drive(line, prompt, images, controller.signal)
     } finally {

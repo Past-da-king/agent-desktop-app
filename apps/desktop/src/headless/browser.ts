@@ -58,6 +58,9 @@ export function findChromium(env: NodeJS.ProcessEnv = process.env, home = homedi
   } catch {
     // No Playwright cache here.
   }
+  // A system Chromium (Debian and Ubuntu keep the real binary here). Always started with our own profile folder and
+  // its own debugging port, never attached to a browser something else already runs.
+  candidates.push('/usr/lib/chromium/chromium', '/usr/lib/chromium-browser/chromium-browser')
   for (const dir of (env['PATH'] ?? '').split(':')) {
     for (const name of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable']) candidates.push(join(dir, name))
   }

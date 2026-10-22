@@ -441,7 +441,8 @@ describe('reaching other nodes through a SOCKS5 proxy', () => {
           const at = atyp === 0x01 ? 8 : 5 + (req[4] ?? 0)
           const port = req.readUInt16BE(at)
           seen.push(`${host}:${port}`)
-          const upstream = tcpConnect({ host, port }, () => {
+          // Every address is this test's node on loopback (the documentation address stands for a remote one).
+          const upstream = tcpConnect({ host: '127.0.0.1', port }, () => {
             client.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]))
             client.pipe(upstream)
             upstream.pipe(client)
@@ -462,14 +463,18 @@ describe('reaching other nodes through a SOCKS5 proxy', () => {
     })
 
     setNodeProxy(parseSocksProxy(`socks5://127.0.0.1:${proxyPort}`))
-    const reply = await pinnedJson(`${desk.url}/v1/bundle`, { fp: desk.fp, pass: 'x' })
+    const remote = `https://192.0.2.10:${new URL(desk.url).port}`
+    const reply = await pinnedJson(`${remote}/v1/bundle`, { fp: desk.fp, pass: 'x' })
     expect(reply.status).toBe(401)
-    expect(seen).toEqual([new URL(desk.url).host])
-    await expect(pinnedJson(`${desk.url}/v1/bundle`, { fp: cert('imposter').fp })).rejects.toThrow(/different certificate/)
+    expect(seen).toEqual([`192.0.2.10:${new URL(desk.url).port}`])
+    await expect(pinnedJson(`${remote}/v1/bundle`, { fp: cert('imposter').fp })).rejects.toThrow(/different certificate/)
+    // This machine itself is never reached through the proxy.
+    expect((await pinnedJson(`${desk.url}/v1/bundle`, { fp: desk.fp, pass: 'x' })).status).toBe(401)
+    expect(seen).toHaveLength(2)
 
     setNodeProxy(parseSocksProxy('socks5://127.0.0.1:1'))
     // Refused or silent, depending on the network: either way a plain answer, not a hang.
-    await expect(pinnedJson(`${desk.url}/v1/bundle`, { fp: desk.fp, timeoutMs: 3000 })).rejects.toThrow(/proxy (could not be reached|did not connect)/)
+    await expect(pinnedJson(`${remote}/v1/bundle`, { fp: desk.fp, timeoutMs: 3000 })).rejects.toThrow(/proxy (could not be reached|did not connect)/)
     expect(parseSocksProxy('http://127.0.0.1:8080')).toBeNull()
     expect(parseSocksProxy('socks5://[::1]:1055')).toEqual({ host: '::1', port: 1055 })
   })
@@ -527,4 +532,29 @@ describe('two running headless nodes, joined (A server + B sync), as two process
     const listed = await cli(['devices', '--data-dir', two])
     expect(listed.out.split('\n').filter((l) => l.startsWith('dev_')).length).toBe(2)
   }, 120_000)
+})
+
+describe('headless CLI: stop and status', () => {
+  it('stop waits for the process to exit so start works at once, and status never sends loopback through the proxy', async () => {
+    const built = spawnSync(process.execPath, [join(root, 'scripts', 'build-headless.mjs'), '--bundle'], { cwd: root, encoding: 'utf8' })
+    expect(built.status, built.stderr).toBe(0)
+    fake = await startFakeAi(() => ({ text: 'ok' }))
+    const dir = temp()
+    const port = String(20000 + Math.floor(Math.random() * 30000))
+    expect((await cli(['account', 'add', 'api', '--provider', 'openai', '--base-url', fake.url, '--allow-http', '--data-dir', dir], 'sk-x')).code).toBe(0)
+    // A proxy that is not there: other devices would go through it, this machine itself never does.
+    expect((await cli(['config', '--port', port, '--proxy', 'socks5://127.0.0.1:1', '--data-dir', dir])).code).toBe(0)
+    expect((await cli(['start', '--daemon', '--data-dir', dir])).code).toBe(0)
+    closers.push(async () => {
+      await cli(['stop', '--data-dir', dir])
+    })
+    expect((await cli(['status', '--data-dir', dir])).out).toMatch(/state: running \(pid \d+\), ready/)
+
+    const stopped = await cli(['stop', '--data-dir', dir])
+    expect(stopped.out).toContain('Stopped.')
+    const again = await cli(['start', '--daemon', '--data-dir', dir])
+    expect(again.code, again.out + again.err).toBe(0)
+    expect(again.out).toMatch(/^Started/)
+    expect((await cli(['status', '--data-dir', dir])).out).toMatch(/state: running \(pid \d+\), ready/)
+  }, 90_000)
 })
