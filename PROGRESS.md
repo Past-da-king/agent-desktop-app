@@ -106,6 +106,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 09:00 C: server already on bc3b0bd (current head), clean, unpaired. E had finished at 03:05 (devices-net 9c767eb: agent-net tsnet sidecar, Headscale live e2e, Settings Network row, headless net command) but its report never arrived. E now merging devices, wiring peer dialling, 0.2.43; then A rebuilds installer as 0.2.43, C redeploys.
 
+- 09:30 E merged into devices 5c7ca3a (0.2.43): overlay urls first, proxyFor (proxy setting, else overlay SOCKS for overlay hosts, loopback never), overlay never writes rows with Devices off. Full suite 1270, harness 7/7. design fast-forwarded to 5c7ca3a. A rebuilding installer 0.2.43 with agent-net.exe; C redeploying server.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
