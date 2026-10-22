@@ -23,6 +23,11 @@ import { Store } from '../main/db'
 import { HandlerRegistry, recordHandlers } from '../main/devices/registry'
 import { devicesState, type DevicesSyncDeps } from '../main/devices/sync'
 import { TurnLeases } from '../main/runtime/turns'
+import { registerWorkersIpc } from '../main/workers/ipc'
+import { EventRouter } from '../main/workers/router'
+import { killLeftover, killTree, spawnWorker } from '../main/workers/spawn'
+import { WorkerStore } from '../main/workers/store'
+import { Supervisor } from '../main/workers/supervisor'
 import { registerIpc, type IpcMainLike } from '../main/ipc'
 import { Logger } from '../main/logger'
 import { ChatIndex } from '../main/memory/chat-index'
@@ -44,6 +49,9 @@ import { buildToolset, buildWorkerToolset } from '../main/runtime/toolset'
 import { Secrets } from '../main/secrets'
 import { SettingsStore } from '../main/settings'
 import { EVENTS } from '../shared/channels'
+import { WORKER_EVENTS } from '../shared/workers-channels'
+
+const WORKERS_CHANGED = WORKER_EVENTS.changed
 import { loadIdentity } from '../main/devices/identity'
 import { findChromium, HeadlessBrowser } from './browser'
 import { headlessFacts } from './devices'
@@ -130,6 +138,8 @@ export interface HeadlessRuntime {
   devicesHooks: Pick<DevicesSyncDeps, 'leases' | 'localTools' | 'shareGroups' | 'preferred' | 'noteBack' | 'context'>
   /** The per-account rules file, for the devices bundle. */
   connectedApps: ConnectedAppsFile
+  /** Background workers (agent-written scripts kept running) and the router that hands their events to routines. */
+  supervisor: Supervisor
   /** The node's own headless browser, or null when this machine has no Chromium. */
   browser: HeadlessBrowser | null
   /** The app contract by channel, for tests and local calls. */
@@ -241,6 +251,35 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   let memory: MemoryService | null = null
   const notify = (title: string, body: string): void => actions.notify(title, body)
 
+  // Background workers (docs/workers-and-triggers.md): a server is a good home for them. Their events go to the
+  // router, which hands them to each event routine's desk.
+  const workers = new WorkerStore(join(dir, 'workers'))
+  let eventRouter: EventRouter | null = null
+  const workerNotice = async (text: string): Promise<void> => {
+    try {
+      await store.upsert('chat_item', { kind: 'notice', text, meta: JSON.stringify({ workers: true }) })
+      broadcast(EVENTS.chat, { type: 'chat_changed' })
+    } catch {
+      // The log and the notification still have it.
+    }
+  }
+  const supervisor = new Supervisor({
+    store: workers,
+    spawn: spawnWorker,
+    secrets,
+    killTree,
+    killLeftover,
+    onEvent: (event) => {
+      void eventRouter?.offer(event)
+    },
+    onFailing: (worker) => {
+      logger.warn('Worker failing', { id: worker.id })
+      notify(`${worker.name} keeps failing`, worker.lastError || 'It stopped too often.')
+      void workerNotice(`Worker "${worker.name}" keeps failing and was stopped: ${worker.lastError || 'it exited too often'}. Restart it on the Routines page, Workers.`)
+    },
+    onChange: () => broadcast(WORKERS_CHANGED, null),
+  })
+  const workerDeps = { store: workers, supervisor }
   const leases = new TurnLeases({
     store,
     selfId: () => devicesState.sync?.selfId() ?? store.deviceId,
@@ -255,7 +294,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     },
   })
   const deviceHub = (): NonNullable<typeof devicesState.sync>['tools'] | null => devicesState.sync?.tools ?? null
-  const workerToolList = [...browserTools(buildWorkerToolset({ store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned })), ...nodeTools]
+  const workerToolList = [...browserTools(buildWorkerToolset({ store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps })), ...nodeTools]
   const helpers = new HelperManager({
     leases,
     store,
@@ -290,6 +329,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       learned,
       searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
       deviceHub,
+      workers: workerDeps,
       devices: {
         selfId: () => devicesState.sync?.selfId() ?? '',
         commands: () => devicesState.sync?.commands ?? null,
@@ -313,6 +353,24 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     }),
     ...nodeTools,
   ])
+  eventRouter = new EventRouter({
+    store,
+    workers,
+    desk: helpers,
+    onChange: () => broadcast(WORKERS_CHANGED, null),
+    workerName: (id) => {
+      try {
+        return workers.manifest(id)?.name ?? id
+      } catch {
+        return id
+      }
+    },
+    onFailed: (trigger, why) => {
+      notify(`Routine could not run: ${trigger.name}`, why.slice(0, 200))
+      void workerNotice(`Routine "${trigger.name}" could not hand its events to its desk: ${why.slice(0, 300)}. Its events are kept as failed; Run now on the Routines page tries them again.`)
+    },
+  })
+  const router = eventRouter
   const theRunner = new Runner({
     devices: {
       leases,
@@ -357,6 +415,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   // What a crash or a restart cut off runs again, once (runtime/turns.ts). With Devices on, the failover side is set
   // by devices/attach.ts and the recovery waits for one replication pass first.
   if (options.quiet !== true) void leases.recover().catch(() => 0)
+  // Events that arrived while the node was down (or were cut short) go to their routines now.
+  if (options.quiet !== true) await router.start().catch((error: unknown) => logger.warn('Event router did not start', { message: error instanceof Error ? error.message : String(error) }))
 
   const chatIndex = new ChatIndex(join(dir, 'chat-search.db'))
   const upkeep = new UpkeepFile(join(dir, 'memory-upkeep.json'))
@@ -408,8 +468,14 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       if (trigger.builtin !== MEMORY_DAILY_ROUTINE) throw new Error('That routine cannot run here.')
       return { text: resultLine(await theMemory.runNow()), waiting: false }
     },
+    runEvent: async (trigger) => router.runNow(trigger),
   })
-  if (options.quiet !== true) scheduler.start()
+  if (options.quiet !== true) {
+    scheduler.start()
+    // Workers come back on every start; each catches up from its cursor on what it missed.
+    supervisor.start()
+  }
+  registerWorkersIpc(ipcMain, { store: workers, supervisor, openPath: async () => '' })
 
   const disposeIpc = registerIpc({
     store,
@@ -461,6 +527,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     apps,
     learned,
     browser,
+    supervisor,
     leases,
     devicesHooks: {
       leases,
@@ -487,6 +554,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       for (const fn of stopHooks.splice(0)) await Promise.resolve(fn()).catch(() => undefined)
       scheduler.stop()
       theMemory.stop()
+      router.stop()
+      supervisor.stopAll()
       // Let a running turn finish; if it does not in time it is marked interrupted on the next start and resumed.
       const deadline = Date.now() + graceMs
       const working = (): boolean => busy() || helpers.live().length > 0

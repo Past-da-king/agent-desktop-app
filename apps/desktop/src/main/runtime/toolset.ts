@@ -24,6 +24,7 @@ import { chatTools } from '../tools/chats'
 import { routineTools } from '../tools/routines'
 import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
+import { workerTools as backgroundWorkerTools, type WorkerToolDeps } from '../tools/workers'
 import { browserRunner, webAppTools } from '../tools/webapps'
 import type { StepBudget } from './budget'
 import { browserOwner } from '../browser/owner'
@@ -69,6 +70,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   devices?: Omit<DeviceToolDeps, 'store'>
   /** Shared device tools (s11): devices_list, device_tool, and a `device` argument on the browser and asking tools. */
   deviceHub?: () => DeviceToolHub | null
+  /** Background workers (workers/). Without them there are no worker_* tools. */
+  workers?: WorkerToolDeps
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -156,6 +159,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...(deps.searchChats === undefined ? [] : chatTools({ store: deps.store, search: deps.searchChats })), // chats_search, chat_read
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
     ...routineTools(deps.store, deps.now), // routine_create, routine_list, routine_update, routine_delete
+    ...backgroundWorkerTools(deps.workers), // worker_guide, worker_create, worker_update, worker_test, worker_list, worker_logs, worker_events, worker_control, worker_delete, worker_secret_set
     ...fileTools({
       settings,
       ...(deps.filePicks === undefined ? {} : { picks: deps.filePicks }),

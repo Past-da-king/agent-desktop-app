@@ -3,6 +3,7 @@
  * a browser bundle must never see those. The renderer only needs the contract and the provider list.
  */
 export * from './ipc'
+export * from './workers'
 export * from './attachments'
 export * from './providers/catalog'
 export * from './accounts'

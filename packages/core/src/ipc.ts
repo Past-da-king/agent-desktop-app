@@ -9,6 +9,8 @@
  * Extending it: a milestone that adds a feature may ADD members here (never rename or remove one), and must update
  * the mock bridge and the preload in the same commit.
  */
+// Type-only: erased at build time, so this file still imports nothing at run time.
+import type { WorkersApi } from './workers'
 
 // ---------------------------------------------------------------------------------------------------------------
 // Settings
@@ -342,11 +344,20 @@ export interface TaskRow extends RowBase {
   updatedAt: number
 }
 
-/** A routine. kind: at (spec = ISO time) | daily (spec = "HH:mm") | interval (spec = minutes). */
+/**
+ * A routine. kind: at (spec = ISO time) | daily (spec = "HH:mm") | interval (spec = minutes) | event (spec = JSON
+ * EventFilter, workers.ts: it runs when a worker emits a matching event, in its own standing helper, the desk).
+ */
 export interface TriggerRow extends RowBase {
   name: string
-  kind: 'at' | 'daily' | 'interval'
+  kind: 'at' | 'daily' | 'interval' | 'event'
   spec: string
+  /** event only: matching events are gathered for this many seconds into one run (default 20). */
+  gatherSeconds?: number
+  /** event only: the profile its desk works in ('' = General). */
+  profile?: string
+  /** event only: the helper id of its desk, the one standing helper every run of this routine continues. */
+  deskId?: string
   prompt: string
   enabled: boolean
   lastRunAt: number | null
@@ -1118,6 +1129,9 @@ export interface AppInfo {
 export interface AgentApi {
   platform: AppPlatform
   version: string
+
+  /** Background workers and the events they emit (workers.ts). */
+  workers: WorkersApi
 
   settings: {
     get(): Promise<Settings>
