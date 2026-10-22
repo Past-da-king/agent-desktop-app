@@ -92,6 +92,8 @@ Branch `devices` off `design` 4d5bcff, worktree `~/agent-desktop-wt/devices`. Co
 
 - 07:10 LIVE CROSS-MACHINE (A): desktop copy (Windows, brain 1) + temp server node (brain 2) + harness phone from WSL: a-f PASS (log C:/temp/devices-live/harness-2.log). Fixed 9a54047 knownPeer (joiner accepts its brain before the row arrives) and df9288c bundle push (POST /v1/bundle to peers that cannot reach back). Caveat: the pairing POST itself needs inbound to the desktop (Allow connections); test used a temporary ssh tunnel for that one call. Next: A reruns g live on port 7790, widens firewall rule for VPN adapters on Public, then final 0.2.42 build. C: CLI stop/status fixes + redeploy clean server service.
 
+- 07:20 C kept working on devices-headless-int: cc1d662 (0.2.42 bump, own g/f fixes, headless DeviceToolHost, harness 7/7). Lines diverged; C told to merge cc1d662 INTO devices (canonical), dedupe fixes, then work only on devices and redeploy the clean server. A holds final build until that merge.
+
 ## Next for the lead
 1. Watch RAM (Windows and WSL), answer helpers.
 2. Merge A, B, C into `devices`; wire the seams (registerDevicesSync, headless startDevices).
