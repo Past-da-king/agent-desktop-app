@@ -16,6 +16,9 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import type { AiAccountDraft, ProviderId } from '@agent/core'
+
+import { AccountStore } from '../main/accounts'
 import { Secrets } from '../main/secrets'
 import { SettingsStore } from '../main/settings'
 import { FileKeyCipher } from './file-cipher'
@@ -36,6 +39,9 @@ const HELP = `agent-node: your agent as a service
   agent-node pair --url https://host:7787 --code ABCD-EFGH join with an address and short code
   agent-node devices                                       the brains this node is paired with
   agent-node config [--listen ADDR] [--port N]             change where it listens (next start)
+  agent-node account list | add claude | add codex          the AI it thinks with (a plan signed in on this machine)
+  agent-node account add api --provider P < keyfile        ... or an API key, read from stdin
+  agent-node ask "hello"                                   one turn, to check it answers (while stopped)
 
   --data-dir DIR   where it keeps its data (or AGENT_DATA_DIR; default ~/.local/share/agent-node)
 `
@@ -45,6 +51,9 @@ interface Args {
   positional: string[]
   flags: Map<string, string | true>
 }
+
+/** Flags that never take a value. */
+const BARE_FLAGS = new Set(['--daemon', '--foreground', '--allow-http'])
 
 export function parseArgs(argv: string[]): Args {
   const flags = new Map<string, string | true>()
@@ -56,7 +65,7 @@ export function parseArgs(argv: string[]): Args {
       if (eq > 0) flags.set(arg.slice(2, eq), arg.slice(eq + 1))
       else {
         const next = argv[i + 1]
-        if (next !== undefined && !next.startsWith('--') && arg !== '--daemon' && arg !== '--foreground') {
+        if (next !== undefined && !next.startsWith('--') && !BARE_FLAGS.has(arg)) {
           flags.set(arg.slice(2), next)
           i++
         } else flags.set(arg.slice(2), true)
@@ -147,6 +156,8 @@ async function start(args: Args): Promise<number> {
     const out = openSync(join(dataDir, 'logs', 'node.out'), 'a')
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start', '--data-dir', dataDir], {
       detached: true,
+      // A service never keeps the folder it was started from (it may be a temp folder that goes away).
+      cwd: homedir(),
       stdio: ['ignore', out, out],
       env: process.env,
     })
@@ -266,6 +277,97 @@ async function pairCommand(args: Args): Promise<number> {
   return 0
 }
 
+function stores(dataDir: string): { settings: SettingsStore; secrets: Secrets; accounts: AccountStore } {
+  const settings = new SettingsStore(join(dataDir, 'settings.json'))
+  const secrets = new Secrets(join(dataDir, 'secrets'), new FileKeyCipher(join(dataDir, 'secrets.key')))
+  return { settings, secrets, accounts: new AccountStore(settings, secrets) }
+}
+
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return ''
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
+  return Buffer.concat(chunks).toString('utf8').trim()
+}
+
+/** AI accounts on a node set up by hand (a server that is not paired). Keys come on stdin, never on the command line. */
+async function accountCommand(args: Args): Promise<number> {
+  const dataDir = dataDirOf(args)
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+  const { settings, accounts } = stores(dataDir)
+  const action = args.positional[0] ?? 'list'
+  if (action === 'list') {
+    const main = settings.get().ai.main.account
+    for (const a of accounts.all()) {
+      console.log(`${a.id}  ${a.label}  ${a.kind}${a.provider === undefined ? '' : `/${a.provider}`}  ${a.kind === 'api' ? (a.hasKey ? 'key saved' : 'no key') : 'plan'}${a.id === main ? '  (main)' : ''}`)
+    }
+    return 0
+  }
+  if (action === 'remove') {
+    accounts.remove(args.positional[1] ?? '')
+    console.log('Removed.')
+    return 0
+  }
+  if (action !== 'add') {
+    console.error('Use: agent-node account list | add claude | add codex | add api --provider P [--base-url U] [--model M] < keyfile | remove ID')
+    return 1
+  }
+  const kind = args.positional[1] ?? ''
+  if (kind !== 'claude' && kind !== 'codex' && kind !== 'api') {
+    console.error('Add which? claude, codex or api.')
+    return 1
+  }
+  const draft: AiAccountDraft = { kind }
+  if (flag(args, 'label') !== '') draft.label = flag(args, 'label')
+  if (flag(args, 'model') !== '') draft.model = flag(args, 'model')
+  let key = ''
+  if (kind === 'api') {
+    draft.provider = (flag(args, 'provider') || 'anthropic') as ProviderId
+    if (flag(args, 'base-url') !== '') draft.baseUrl = flag(args, 'base-url')
+    // Plain http only when asked for (a model server on this machine or a private network).
+    if (args.flags.has('allow-http')) draft.allowHttp = true
+    key = await readStdin()
+    if (key === '') {
+      console.error('Pipe the API key in on stdin, e.g. agent-node account add api --provider openai < key.txt')
+      return 1
+    }
+  }
+  const account = accounts.add(draft)
+  if (key !== '') accounts.setKey(account.id, key)
+  // The new account answers unless the person already chose one that can.
+  const main = settings.get().ai.main.account
+  const current = accounts.all().find((a) => a.id === main)
+  if (current === undefined || (current.kind === 'api' && !current.hasKey)) {
+    settings.save({ ai: { ...settings.get().ai, main: { account: account.id, model: '' } } })
+  }
+  console.log(`Added ${account.label} (${account.id}).${runningPid(dataDir) === null ? '' : ' Restart the node to use it.'}`)
+  return 0
+}
+
+/** One turn in this process, printed as plain text. For checking a node by hand; refuses while the service runs. */
+async function ask(args: Args): Promise<number> {
+  const dataDir = dataDirOf(args)
+  const text = args.positional.join(' ').trim()
+  if (text === '') {
+    console.error('Say what to ask: agent-node ask "hello"')
+    return 1
+  }
+  if (runningPid(dataDir) !== null) {
+    console.error('The node is running on this data folder; ask from a paired device, or stop it first.')
+    return 1
+  }
+  const runtime = await startHeadlessRuntime({ dataDir, appDir: appDir(), version: version(), quiet: true })
+  try {
+    const before = new Set((await runtime.store.list('chat_item')).map((row) => row.id))
+    await runtime.runner.send(text)
+    const rows = (await runtime.store.list('chat_item')).filter((row) => !before.has(row.id) && row.kind !== 'user')
+    for (const row of rows) if (row.text.trim() !== '') console.log(row.kind === 'agent' ? row.text : `[${row.kind}] ${row.text}`)
+    return rows.some((row) => row.kind === 'agent' && row.text.trim() !== '') ? 0 : 1
+  } finally {
+    await runtime.stop(0)
+  }
+}
+
 function devices(args: Args): number {
   const config = readConfig(dataDirOf(args))
   if (config.brains.length === 0) {
@@ -293,6 +395,12 @@ export async function run(argv: string[]): Promise<number> {
       return pairCommand(args)
     case 'devices':
       return devices(args)
+    case 'account':
+      checkNode()
+      return accountCommand(args)
+    case 'ask':
+      checkNode()
+      return ask(args)
     case 'config': {
       const dataDir = dataDirOf(args)
       const config = readConfig(dataDir)
