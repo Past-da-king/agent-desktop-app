@@ -86,6 +86,23 @@ Branch `devices-headless` (off `devices`), worktree `~/agent-desktop-wt/devices-
   `agent-node pair --url https://<tailnet address>:7787 --code <code from 'agent-node offer' on the server>`; the
   server listed it as brain+hands; then revoked it (row stays, revoked). Bundle answers 404 until B is merged.
 
+## Relay + SOCKS5 (22 Oct 02:50 UTC+2 ~ 03:50)
+- `main/devices/relay.ts`: `relay.fetch` RPC on every node = the app's own web_fetch (no private nets, no loopback,
+  text only, capped), only for paired brain/hands devices (screens refused). Registered by the headless node;
+  the DESKTOP needs one line where index.ts starts DevicesService:
+  `registerRelay(devices.host(), { store, rolesOf: rolesFromStore(store) })`.
+- `headless/rpc-client.ts` (pinned WS RPC client) and tool `web_fetch_via_device` (main + helpers on headless).
+- `main/devices/socks.ts` + `headless/pinned.ts`: node-to-node connections through SOCKS5 when set
+  (`agent-node config --proxy socks5://host:port`, or AGENT_NODE_PROXY). FINDING: the server's tailscaled runs in
+  userspace mode, so the server reaches other tailnet devices ONLY through its local SOCKS5 port (direct = no route,
+  via socks5 = 200). The server node is configured with its local proxy. B's replication from the server
+  (devices/pinned-fetch.ts) needs the same proxy, or the desktop must be the side that connects.
+- PROVEN: headless.test.ts 12 pass (relay through a paired node in an agent turn; a screen is refused; SOCKS5
+  pin end to end + proxy down answers plainly). LIVE across machines (`scripts/headless/relay-live.sh <ssh host>
+  socks5://localhost:1055`): a temp node in WSL as "home computer", a temp dir on the server paired to it through
+  the proxy, and the server's agent (ChatGPT plan) answered with example.com's first sentence "Fetched through"
+  the WSL node; the WSL node logged `Relay fetch {host: example.com}`.
+
 ## In flight / next
 - After the lead merges A+B: wire B (registerDevicesSync with the headless store/secrets/profiles/learned/passes,
   TurnLeases, BundleKeeper; pair -> joinFrom), drop headless/bundle.ts stub, redeploy, prove bundle + replication
