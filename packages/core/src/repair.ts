@@ -77,8 +77,11 @@ export function flatten(msgs: Msg[]): Msg[] {
   }
   const before: Msg[] = []
   for (const m of msgs.slice(0, lastUser)) {
-    const keep = m.blocks.filter((b) => b.t === 'text' || b.t === 'image')
-    if (keep.length > 0) before.push({ role: m.role, blocks: keep })
+    // Reasoning stays with the words it explains: thinking models (DeepSeek) refuse a history
+    // whose earlier assistant turns lost it.
+    const keep = m.blocks.filter((b) => b.t === 'text' || b.t === 'image' || b.t === 'reasoning')
+    if (!keep.some((b) => b.t !== 'reasoning')) continue
+    before.push({ role: m.role, blocks: keep })
   }
   return [...before, ...msgs.slice(lastUser)]
 }

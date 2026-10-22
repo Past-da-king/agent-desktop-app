@@ -63,7 +63,8 @@ export class OpenAiCompatProvider implements LlmProvider {
     maxTokens = 4096,
   ): Promise<Completion> {
     const wire: JsonObject[] = [{ role: 'system', content: system }]
-    for (const m of messages) wire.push(...toWire(m, this.name))
+    const echoReasoning = wantsReasoningBack(this.name, messages)
+    for (const m of messages) wire.push(...toWire(m, this.name, echoReasoning))
     const body: JsonObject = { model, messages: wire, max_tokens: maxTokens }
     if (this.extra) {
       for (const [key, value] of Object.entries(this.extra)) body[key] = value
@@ -92,7 +93,8 @@ export class OpenAiCompatProvider implements LlmProvider {
     if (Object.keys(choice).length === 0) throw new ProviderException('No choices in response')
     const msg = asObject(choice.message)
     const blocks: Block[] = []
-    const reasoning = asString(msg.reasoning_content)
+    // DeepSeek and OpenCode say reasoning_content; OpenRouter and some gateways say reasoning.
+    const reasoning = asString(msg.reasoning_content) || asString(msg.reasoning)
     if (reasoning && reasoning !== 'null') blocks.push({ t: 'reasoning', text: reasoning })
     const content = asString(msg.content)
     if (content && content !== 'null') blocks.push({ t: 'text', text: content })
@@ -123,18 +125,39 @@ export class OpenAiCompatProvider implements LlmProvider {
   }
 }
 
-function toWire(m: Msg, providerName: string): JsonObject[] {
+/**
+ * Providers that can serve a thinking model behind the OpenAI shape. DeepSeek's thinking mode
+ * (also what OpenCode Go/Zen proxy to) answers 400 "The reasoning_content in the thinking mode must
+ * be passed back to the API" when ANY earlier assistant message in a request with tools lacks it:
+ * turns where the model thought nothing, turns with no tool call, and turns written by another
+ * model before a switch or fallback.
+ */
+const THINKING_PROVIDERS = new Set(['deepseek', 'opencode_go', 'opencode_zen'])
+
+/** Stand-in for a turn with no reasoning of its own. An empty string reads as missing upstream. */
+export const REASONING_PLACEHOLDER = ' '
+
+/** Whether every assistant turn should carry reasoning_content on the wire. */
+export function wantsReasoningBack(providerName: string, messages: Msg[]): boolean {
+  if (THINKING_PROVIDERS.has(providerName)) return true
+  // Any other server that handed us reasoning (custom, OpenRouter...) is serving a thinking model too.
+  return messages.some((m) => m.role === 'ASSISTANT' && m.blocks.some((b) => b.t === 'reasoning'))
+}
+
+function toWire(m: Msg, providerName: string, echoReasoning = false): JsonObject[] {
   if (m.role === 'ASSISTANT') {
     const out: JsonObject = {
       role: 'assistant',
       content: msgText(m) || null,
     }
-    // Reasoning models behind OpenAI-style APIs (DeepSeek, OpenCode) want their reasoning back on tool turns.
+    // Reasoning models behind OpenAI-style APIs (DeepSeek, OpenCode) want their reasoning back on
+    // every assistant turn, not only the ones that thought out loud.
     const reasoning = m.blocks
       .filter((b): b is Extract<Block, { t: 'reasoning' }> => b.t === 'reasoning')
       .map((b) => b.text)
       .join('\n')
-    if (reasoning) out.reasoning_content = reasoning
+    if (reasoning.trim()) out.reasoning_content = reasoning
+    else if (echoReasoning) out.reasoning_content = REASONING_PLACEHOLDER
     const calls = msgToolCalls(m)
     if (calls.length > 0) {
       out.tool_calls = calls.map((call) => {

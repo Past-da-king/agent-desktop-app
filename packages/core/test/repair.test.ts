@@ -104,4 +104,39 @@ describe('repair', () => {
 
     expect(flatten(msgs)).toEqual(msgs)
   })
+
+  it('keeps reasoning with the words it explains, and drops a turn that was only thinking', () => {
+    const msgs: Msg[] = [
+      userText('first'),
+      {
+        role: 'ASSISTANT',
+        blocks: [
+          { t: 'reasoning', text: 'plan' },
+          { t: 'text', text: 'looking' },
+          { t: 'call', id: 'a', name: 'now', input: {} },
+        ],
+      },
+      { role: 'USER', blocks: [{ t: 'result', id: 'a', content: 'noon', err: false }] },
+      {
+        role: 'ASSISTANT',
+        blocks: [
+          { t: 'reasoning', text: 'only thoughts' },
+          { t: 'call', id: 'b', name: 'now', input: {} },
+        ],
+      },
+      { role: 'USER', blocks: [{ t: 'result', id: 'b', content: 'one', err: false }] },
+      userText('second'),
+    ]
+    expect(flatten(msgs)).toEqual([
+      userText('first'),
+      {
+        role: 'ASSISTANT',
+        blocks: [
+          { t: 'reasoning', text: 'plan' },
+          { t: 'text', text: 'looking' },
+        ],
+      },
+      userText('second'),
+    ])
+  })
 })
