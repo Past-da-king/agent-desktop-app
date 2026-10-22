@@ -7,6 +7,8 @@ const listeners = new Set<() => void>()
 const SELF = 'dev_preview_self'
 let enabled = false
 let extraUrls: string[] = []
+let shareGroups = { browser: true, files: true, notifications: true, approval: true, shell: false }
+let firewall: DevicesStatus['firewall'] = 'blocked'
 
 function facts(name: string, kind: DeviceRow['kind'], platform: DeviceRow['platform'], width: number): DeviceRow['facts'] {
   return { name, kind, platform, appVersion: '0.0.0', screen: { width, height: 0 }, canOpenLinks: true, canReceiveFiles: true, fingerprint: '', urls: [] }
@@ -64,6 +66,9 @@ function status(): DevicesStatus {
     fpWords: 'Prev iewF inge rpri',
     connected: enabled ? ['dev_preview_phone'] : [],
     error: '',
+    shareGroups: { ...shareGroups },
+    firewall: enabled ? firewall : 'not-needed',
+    servingTo: '',
   }
 }
 
@@ -109,6 +114,16 @@ export const mockDevices: DevicesApi = {
   async revoke(id) {
     rows = rows.map((row) => (row.id === id ? { ...row, revoked: true } : row))
     changed()
+  },
+  async setShareGroup(group, on) {
+    shareGroups = { ...shareGroups, [group]: on }
+    changed()
+    return status()
+  },
+  async allowFirewall() {
+    firewall = 'allowed'
+    changed()
+    return status()
   },
   onChanged(callback) {
     listeners.add(callback)

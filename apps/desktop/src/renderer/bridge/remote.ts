@@ -482,6 +482,8 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       setRoles: () => notHere('Changing devices'),
       move: () => notHere('Changing devices'),
       revoke: () => notHere('Taking out a device'),
+      setShareGroup: () => notHere('Changing devices'),
+      allowFirewall: () => notHere('Changing devices'),
       onChanged: (callback) => wire.on(DEVICES_EVENTS.changed, () => callback()),
     },
   }
