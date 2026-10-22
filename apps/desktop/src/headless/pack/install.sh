@@ -97,6 +97,8 @@ chmod 700 "$DATA_DIR"
 if [ "$SRC_DIR" != "$HOME_DIR" ]; then
   rm -rf "$HOME_DIR/node_modules"
   cp -R "$SRC_DIR/agent-node.mjs" "$SRC_DIR/package.json" "$SRC_DIR/README.md" "$SRC_DIR/install.sh" "$SRC_DIR/node_modules" "$HOME_DIR/"
+  # The optional overlay helper (agent-net), when this build packs one for this machine.
+  if [ -f "$SRC_DIR/agent-net" ]; then cp "$SRC_DIR/agent-net" "$HOME_DIR/agent-net"; chmod 755 "$HOME_DIR/agent-net"; fi
 fi
 
 cat > "$HOME_DIR/bin/agent-node" <<EOF
