@@ -15,6 +15,8 @@ import type {
   CallSummary,
   CallVisual,
   ChatItem,
+  DeviceCall,
+  LiveTokenResult,
   EnvironmentReport,
   RunState,
   Settings,
@@ -27,7 +29,9 @@ import type { DataStore } from '../runtime/data'
 import { visualMarkdown, voiceTools } from '../tools/voice'
 import {
   DEFAULT_CHOICE,
+  LIVE_TOKEN_URL,
   LIVE_URL,
+  mintLiveToken,
   checkKey,
   explain,
   speak as speakText,
@@ -166,6 +170,43 @@ export class VoiceService {
     } catch (error) {
       return { ok: false, error: explain(error) }
     }
+  }
+
+  /**
+   * A paired device with no Google key asks for a call: a one-use Live token from this computer's key, locked to
+   * the Live model this key can reach. The key itself never leaves; the token cannot start a second call.
+   */
+  async liveToken(): Promise<LiveTokenResult> {
+    if (this.key() === null) {
+      return { ok: false, needsKey: true, error: 'Calls use the Google (Gemini) key on your computer. Add one there in Settings, Voice.' }
+    }
+    try {
+      if (!this.checked) await this.check()
+      const { token, expiresAt } = await mintLiveToken(this.gemini(), this.choice.live, this.now())
+      return { ok: true, token, url: LIVE_TOKEN_URL, model: this.choice.live, voice: this.deps.settings.get().voiceName || 'Kore', expiresAt }
+    } catch (error) {
+      return { ok: false, needsKey: false, error: explain(error) }
+    }
+  }
+
+  /** A call a paired device held with this agent: one compact call row in this chat, like a call held here. */
+  async callSave(call: DeviceCall): Promise<{ itemId: string } | null> {
+    if (call.lines.length === 0) return null
+    const lines = call.lines.map((line, index) => ({ id: `d${index}`, who: line.who, text: line.text, at: line.at }))
+    const row = await this.deps.store.upsert('chat_item', {
+      kind: 'call',
+      text: callText(lines.length, call.durationMs),
+      createdAt: call.startedAt,
+      meta: JSON.stringify({
+        durationMs: call.durationMs,
+        endedAt: call.startedAt + call.durationMs,
+        lines: lines.map((line) => ({ who: line.who, text: line.text, at: line.at })),
+        visuals: 0,
+        handoffs: 0,
+        device: true,
+      }),
+    })
+    return { itemId: row.id }
   }
 
   // ---- the live call ---------------------------------------------------------------------

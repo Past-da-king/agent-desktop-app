@@ -1175,6 +1175,18 @@ export interface CallSummary {
   lines: number
 }
 
+/** A one-use Gemini Live token from a computer's key, for a paired device that has none (never the key itself). */
+export type LiveTokenResult =
+  | { ok: true; token: string; url: string; model: string; voice: string; expiresAt: number }
+  | { ok: false; needsKey: boolean; error: string }
+
+/** A call a paired device held: what was said, in order. */
+export interface DeviceCall {
+  startedAt: number
+  durationMs: number
+  lines: Array<{ who: 'you' | 'agent'; text: string; at: number }>
+}
+
 export interface VoiceApi {
   /** Stores the Gemini key in the secrets module only. Pass '' to clear. */
   setKey(key: string): Promise<void>
@@ -1186,6 +1198,10 @@ export interface VoiceApi {
   speak(text: string): Promise<VoiceResult<{ data: string }>>
   /** A voice note's audio (a WAV), by the file name in its chat row. Null when it is not on this computer. */
   noteAudio(file: string): Promise<Uint8Array | null>
+  /** For a paired device with no Google key of its own: a short-lived, one-use Live token minted here. */
+  liveToken(): Promise<LiveTokenResult>
+  /** A paired device's call on this computer's agent: its transcript lands in this chat as a call row. */
+  callSave(call: DeviceCall): Promise<{ itemId: string } | null>
   callStart(): Promise<{ ok: boolean; message: string }>
   /** One chunk of 16 kHz mono PCM16 from the microphone. Fire and forget. */
   callAudio(pcm: Uint8Array): void

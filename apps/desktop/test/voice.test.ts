@@ -15,10 +15,12 @@ import { DEFAULT_SETTINGS, type CallEvent, type Settings } from '@agent/core'
 
 import { Store } from '../src/main/db'
 import { visualFrom, visualMarkdown, voiceTools } from '../src/main/tools/voice'
-import { DEFAULT_CHOICE, checkKey, plainForSpeech, speak, stripWav, transcribe, wavFromPcm } from '../src/main/voice/gemini'
+import { DEFAULT_CHOICE, LIVE_TOKEN_START_MS, LIVE_TOKEN_TTL_MS, LIVE_TOKEN_URL, checkKey, mintLiveToken, plainForSpeech, speak, stripWav, transcribe, wavFromPcm } from '../src/main/voice/gemini'
 import { LiveSession, geminiSchema, joinChunk, type SocketLike } from '../src/main/voice/live'
 import { mediaAllowed } from '../src/main/voice/permissions'
+import { deviceCall } from '../src/main/voice/ipc'
 import { VoiceService } from '../src/main/voice/service'
+import { RPC_ALLOWED } from '../src/shared/rpc-methods'
 import { SettingsStore } from '../src/main/settings'
 import { downsample, floatToPcm16, level, pcm16ToFloat, springStep } from '../src/renderer/voice/pcm'
 
@@ -439,6 +441,126 @@ describe('VoiceService', () => {
     const shown = rows.find((row) => row.kind === 'agent' && row.text.includes('The plan'))
     expect(shown?.text).toContain('- Book the flight')
     expect(await voice.callEnd()).toBeNull()
+  })
+})
+
+// ---- keyless calls from a paired device ---------------------------------------------------------
+
+describe('Live tokens for a paired device with no key', () => {
+  let dir = ''
+  let store: Store
+  let settings: SettingsStore
+  let secrets: Map<string, string>
+
+  const models = { models: [{ name: 'models/gemini-3.1-flash-live-preview' }] }
+
+  function service(fetchImpl: typeof fetch): VoiceService {
+    return new VoiceService({
+      secrets: {
+        get: (name) => secrets.get(name) ?? null,
+        set: (name, value) => void secrets.set(name, value),
+        delete: (name) => void secrets.delete(name),
+      },
+      settings,
+      store,
+      runner: { send: async () => undefined, state: () => ({ running: false, waiting: [] }) },
+      emit: () => undefined,
+      fetchImpl,
+      now: () => 1_700_000_000_000,
+      platform: 'linux',
+      timeZone: 'UTC',
+    })
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'agent-livetoken-'))
+    store = new Store(join(dir, 'agent.db'))
+    settings = new SettingsStore(join(dir, 'settings.json'), { hostname: () => 'test' })
+    secrets = new Map()
+  })
+
+  afterEach(() => {
+    store.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('mints a one-use token locked to the Live model, key in a header only', async () => {
+    const fetch = fakeFetch(() => ({ status: 200, body: { name: 'auth_tokens/abc123' } }))
+    const minted = await mintLiveToken({ key: () => 'secret-key', fetchImpl: fetch.impl }, 'gemini-3.8-live', 1_000_000)
+    expect(minted).toEqual({ token: 'auth_tokens/abc123', expiresAt: 1_000_000 + LIVE_TOKEN_TTL_MS })
+    const call = fetch.calls[0]!
+    expect(call.url).toBe('https://generativelanguage.googleapis.com/v1beta/auth_tokens')
+    expect(call.url).not.toContain('secret-key')
+    expect((call.init.headers as Record<string, string>)['x-goog-api-key']).toBe('secret-key')
+    const body = JSON.parse(String(call.init.body)) as Record<string, any>
+    expect(body['uses']).toBe(1)
+    expect(body['bidiGenerateContentSetup']).toEqual({ model: 'models/gemini-3.8-live' })
+    expect(Date.parse(body['expireTime'])).toBe(1_000_000 + LIVE_TOKEN_TTL_MS)
+    expect(Date.parse(body['newSessionExpireTime'])).toBe(1_000_000 + LIVE_TOKEN_START_MS)
+    expect(LIVE_TOKEN_URL).toMatch(/BidiGenerateContentConstrained$/)
+  })
+
+  it('tells the device to add the key on the computer when there is none, and never returns the key', async () => {
+    const fetch = fakeFetch((url) => (url.includes('/models') ? { status: 200, body: models } : { status: 200, body: { name: 'auth_tokens/t1' } }))
+    const voice = service(fetch.impl)
+    const none = await voice.liveToken()
+    expect(none).toMatchObject({ ok: false, needsKey: true })
+    expect(fetch.calls).toHaveLength(0)
+
+    voice.setKey('gem-key')
+    settings.save({ voiceName: 'Puck' })
+    const result = await voice.liveToken()
+    expect(result).toEqual({
+      ok: true,
+      token: 'auth_tokens/t1',
+      url: LIVE_TOKEN_URL,
+      model: 'gemini-3.1-flash-live-preview',
+      voice: 'Puck',
+      expiresAt: 1_700_000_000_000 + LIVE_TOKEN_TTL_MS,
+    })
+    expect(JSON.stringify(result)).not.toContain('gem-key')
+  })
+
+  it('says plainly when Google refuses the token', async () => {
+    const fetch = fakeFetch((url) => (url.includes('/models') ? { status: 200, body: models } : { status: 429, body: { error: { message: 'quota' } } }))
+    const voice = service(fetch.impl)
+    voice.setKey('gem-key')
+    expect(await voice.liveToken()).toEqual({ ok: false, needsKey: false, error: 'Gemini says this key is out of quota for now. Try again later.' })
+  })
+
+  it("saves a device's call in this chat as one call row, dropping malformed lines", async () => {
+    const voice = service(fakeFetch(() => ({ status: 200, body: {} })).impl)
+    const record = deviceCall({
+      startedAt: 1_700_000_000_000,
+      durationMs: 125_000,
+      lines: [
+        { who: 'you', text: 'Book the dentist', at: 1_700_000_001_000 },
+        { who: 'agent', text: 'On it.', at: 1_700_000_002_000 },
+        { who: 'system', text: 'nope', at: 1 },
+        { who: 'you', text: '   ', at: 1 },
+        'junk',
+      ],
+    })
+    expect(record.lines).toHaveLength(2)
+    const saved = await voice.callSave(record)
+    const row = (await store.list('chat_item')).find((item) => item.kind === 'call')
+    expect(saved?.itemId).toBe(row?.id)
+    expect(row?.text).toBe('Call, 2 min')
+    expect(row?.createdAt).toBe(1_700_000_000_000)
+    const meta = JSON.parse(row?.meta ?? '{}') as { lines: Array<{ who: string; text: string }>; device: boolean }
+    expect(meta.lines).toEqual([
+      { who: 'you', text: 'Book the dentist', at: 1_700_000_001_000 },
+      { who: 'agent', text: 'On it.', at: 1_700_000_002_000 },
+    ])
+    expect(meta.device).toBe(true)
+    expect(await voice.callSave({ startedAt: 1, durationMs: 0, lines: [] })).toBeNull()
+    expect(() => deviceCall({ startedAt: 'x', durationMs: 1, lines: [] })).toThrow()
+  })
+
+  it('lets a paired device ask for a token and save a call, but never set the key', () => {
+    expect(RPC_ALLOWED.has('voice.liveToken')).toBe(true)
+    expect(RPC_ALLOWED.has('voice.callSave')).toBe(true)
+    expect(RPC_ALLOWED.has('voice.setKey')).toBe(false)
   })
 })
 

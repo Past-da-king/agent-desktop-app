@@ -115,6 +115,12 @@ export function mockVoice(deps: MockVoiceDeps): VoiceApi {
       // Half a second of silence: the preview has nothing to say out loud, but the flow is real.
       return { ok: true, data: silence(0.5) }
     },
+    async liveToken() {
+      return { ok: false as const, needsKey: false, error: 'Calls from another device need a computer.' }
+    },
+    async callSave() {
+      return null
+    },
     async callStart() {
       if (!deps.settings().hasVoiceKey) return { ok: false, message: 'Add a Gemini key in Settings to talk.' }
       clear()
