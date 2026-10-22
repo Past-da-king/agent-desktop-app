@@ -30,6 +30,11 @@ export interface MemoryServiceDeps {
   dailyAt?: () => string | Promise<string>
   /** Called after every daily pass, whatever started it, so the End of day routine shows its last run. */
   onDaily?: (report: UpkeepReport) => void | Promise<void>
+  /**
+   * Devices (s12): every brain holds the same memory, so a day's pass runs on one of them. False: another brain
+   * does this day. Absent: this brain does every day (alone). Run now always runs here.
+   */
+  claimDaily?: (day: string) => Promise<boolean>
   now?: () => number
   log?: (message: string, detail?: Record<string, string | number>) => void
 }
@@ -293,6 +298,7 @@ export class MemoryService {
     const lastChatAt = newest?.createdAt ?? 0
     const due = dueDay(this.now(), slot, state.lastDay, lastChatAt)
     if (due === null) return null
+    if (this.deps.claimDaily !== undefined && !(await this.deps.claimDaily(due.day).catch(() => true))) return null
     return this.daily(due.catchUp ? 'catch-up' : 'schedule', due)
   }
 
