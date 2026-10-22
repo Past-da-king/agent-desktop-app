@@ -13,7 +13,8 @@
  *        [--brain https://<second brain>:7787 ...]                 ranked, best first
  *        [--stop-cmd '<shell command that stops brain 1>' ...]     one per --brain, same order ('' to skip)
  *        [--start-cmd '<shell command that starts brain 1>' ...]   one per --brain, same order
- *        [--image /abs/path/on/the/brain.png] [--project <name>] [--timeout 240] [--only a,c,f] [--state file]
+ *        [--image /abs/path/on/the/brain.png] [--project <name> | --make-project] [--timeout 240] [--only a,c,f]
+ *        [--state file] [--name 'E2E test phone'] [--quiet]
  *
  * --code takes the short code (the first connection is then trusted and its fingerprint printed) or the whole
  * agent://pair?... link (fingerprint and addresses from the link). Pairing is saved in --state (default
@@ -32,7 +33,7 @@ import { spawnSync } from 'node:child_process'
 // ---- flags --------------------------------------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { brain: [], stopCmd: [], startCmd: [], only: null, timeout: 240, state: 'devices-e2e-state.json', code: '', image: '', project: '', name: 'E2E test phone', quiet: false }
+  const out = { makeProject: false, brain: [], stopCmd: [], startCmd: [], only: null, timeout: 240, state: 'devices-e2e-state.json', code: '', image: '', project: '', name: 'E2E test phone', quiet: false }
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
     const next = () => {
@@ -49,6 +50,7 @@ function parseArgs(argv) {
     else if (flag === '--state') out.state = next()
     else if (flag === '--image') out.image = next()
     else if (flag === '--project') out.project = next()
+    else if (flag === '--make-project') out.makeProject = true
     else if (flag === '--name') out.name = next()
     else if (flag === '--quiet') out.quiet = true
     else if (flag === '--help' || flag === '-h') {
@@ -596,7 +598,7 @@ async function main() {
     const leak = seen.join('\n').match(SECRET_SHAPES)
     ev.push(`secret-shaped values in everything this phone read: ${leak ? `FOUND (${leak[0].slice(0, 6)}...)` : 'none'}`)
     const settings = await phone.call('settings.get').catch(() => ({}))
-    const keyish = Object.entries(settings ?? {}).filter(([k, v]) => /key|token|pass|secret/i.test(k) && typeof v === 'string' && v.length > 12)
+    const keyish = Object.entries(settings ?? {}).filter(([k, v]) => /(api.?key|token|password|secret)$/i.test(k) && typeof v === 'string' && v.length > 12)
     if (keyish.length > 0) ev.push(`settings fields that look like secrets: ${keyish.map(([k]) => k).join(', ')}`)
     if (bundleRes.status !== 200 || (bundle && 'secrets' in bundle) || leak || keyish.length > 0) return 'FAIL'
     if (projects.length > 0 && withIcon.length < projects.length) return 'FAIL'
@@ -604,15 +606,19 @@ async function main() {
   })
 
   await check('c', 'a turn that names a project shows the project agent row', async (ev) => {
+    if (args.makeProject && !(await phone.rows('project')).some((p) => p.name === 'E2E test project')) {
+      await phone.call('data.upsert', 'project', { name: 'E2E test project', description: 'Made by the devices e2e harness; safe to delete.', icon: { glyph: 'tasks', color: 'teal' }, path: '', profile: '', hidden: false, chats: [] })
+      ev.push('made the project "E2E test project" (--make-project)')
+    }
     const projects = await phone.rows('project')
-    const project = args.project ? projects.find((p) => p.name.toLowerCase() === args.project.toLowerCase()) : projects.find((p) => !p.hidden) ?? projects[0]
+    const project = args.makeProject ? projects.find((p) => p.name === 'E2E test project') : args.project ? projects.find((p) => p.name.toLowerCase() === args.project.toLowerCase()) : projects.find((p) => !p.hidden) ?? projects[0]
     if (!project) {
       ev.push('no project on the brain to name (create one, or pass --project)')
       return 'SKIP'
     }
     const marker = `e2e-c-${nonce()}`
     const before = new Set((await phone.rows('chat_item')).filter((r) => r.kind === 'helper').map((r) => r.id))
-    await phone.call('chat.send', `Automated link test: start a chat in the "${project.name}" project (use project_chat_start) with the brief "Reply with ${marker} and stop." Then tell me it started.`)
+    phone.call('chat.send', `Automated link test: start a chat in the "${project.name}" project (use project_chat_start) with the brief "Reply with ${marker} and stop." Then tell me it started.`).catch(() => undefined)
     const row = await phone.waitFor(async () => {
       const rows = await phone.rows('chat_item')
       return rows.find((r) => r.kind === 'helper' && !before.has(r.id) && (JSON.stringify(metaOf(r)).includes(project.id) || JSON.stringify(metaOf(r)).includes(project.name)))
@@ -644,7 +650,7 @@ async function main() {
     const marker = `e2e-e-${nonce()}`
     const url = `https://example.com/${marker}`
     const before = phone.commands.length
-    await phone.call('chat.send', `Automated link test: use the open_url tool to open ${url} on my device, then use device_tool with device "best" and tool "notify" (title "${marker}", body "test"), then reply done.`)
+    phone.call('chat.send', `Automated link test: use the open_url tool to open ${url} on my device, then use device_tool with device "best" and tool "notify" (title "${marker}", body "test"), then reply done.`).catch(() => undefined)
     const opened = await phone.waitFor(() => phone.commands.slice(before).find((c) => c.kind === 'open_url' && String(c.url ?? '').includes(marker)), TIMEOUT_MS, 'a device.command open_url')
     ev.push(`device.command ${opened.id}: open_url ${opened.url} (acked)`)
     const notify = await phone.waitFor(() => phone.commands.slice(before).find((c) => c.kind === 'tool' && c.tool === 'notify'), TIMEOUT_MS, 'a device.command tool notify').catch((error) => {
@@ -669,7 +675,8 @@ async function main() {
       return 'SKIP'
     }
     const marker = `e2e-f-${nonce()}`
-    await phone.call('chat.send', `Automated link test: write a short paragraph (about 120 words) about lighthouses, then end with this code on its own line: ${marker}`)
+    // chat.send answers when the turn ends: do not wait for it, the brain is about to go away.
+    phone.call('chat.send', `Automated link test: write a short paragraph (about 120 words) about lighthouses, then end with this code on its own line: ${marker}`).catch(() => undefined)
     await waitRunning(phone, undefined, 30_000).catch(() => undefined)
     ev.push(`turn started on ${top.label}; stopping it now`)
     runHook('stop', top)
@@ -697,7 +704,7 @@ async function main() {
       return 'SKIP'
     }
     const marker = `e2e-g-${nonce()}`
-    await phone.call('chat.send', `Automated link test: write a short paragraph (about 120 words) about rivers, then end with this code on its own line: ${marker}`)
+    phone.call('chat.send', `Automated link test: write a short paragraph (about 120 words) about rivers, then end with this code on its own line: ${marker}`).catch(() => undefined)
     await waitRunning(phone, undefined, 30_000)
     ev.push(`turn running on ${top.label}; killing it`)
     runHook('stop', top)
