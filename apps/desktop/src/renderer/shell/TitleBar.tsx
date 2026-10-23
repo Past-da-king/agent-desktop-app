@@ -7,6 +7,7 @@ import { usePanel } from '../state/usePanel'
 import { timeAgo } from '../lib/format'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
+import { BackButton, WorkButton } from './WorkMenu'
 
 function syncCopy(signedIn: boolean, syncing: boolean, error: string | null, lastSyncedAt: number | null): string {
   if (!signedIn) return 'This computer only'
@@ -44,6 +45,8 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
         <span>Agent</span>
       </div>
 
+      {onboarding ? null : <BackButton />}
+
       {onboarding ? (
         <div style={{ flex: 1 }} />
       ) : (
@@ -57,6 +60,7 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
       <div className="tb-right">
         {onboarding ? null : (
           <>
+            <WorkButton />
             <div className="syncpill" title="Sync status">
               <i className={dotClass} />
               {label}

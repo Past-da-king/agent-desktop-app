@@ -21,6 +21,9 @@ import { DEVICES_EVENTS } from '../../shared/devices-channels'
 import { MEMORY_EVENTS } from '../../shared/memory-channels'
 import { VAULT_EVENTS } from '../../shared/vault-channels'
 import { decodeWire, encodeWire } from '../../shared/rpc-methods'
+import { localRoutes } from '../../shared/route-target'
+
+const routes = localRoutes()
 
 const CALL_TIMEOUT_MS = 60_000
 const ENTITIES: EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device']
@@ -396,9 +399,11 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       toggleMaximize: () => undefined,
       close: () => undefined,
       isMaximized: async () => false,
+      // A view is put on this device's own screen: the computer's window is the computer's.
+      show: routes.show,
       onMaximizeChange: noop,
       onQuickAsk: noop,
-      onRoute: noop,
+      onRoute: routes.onRoute,
       onHotkeyStatus: noop,
     },
 

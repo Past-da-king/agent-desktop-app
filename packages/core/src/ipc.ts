@@ -797,10 +797,17 @@ export type Decision = 'approve' | 'decline'
 
 /** Where a notification click, or the agent's project_open, should take the person. */
 export interface RouteTarget {
-  view: 'home' | 'chat' | 'tasks' | 'memory' | 'routines' | 'project'
+  /**
+   * The page, or `chat` (id: the chat, '' for the main chat) opened in full at its newest message, `helper` (id: the
+   * helper) opened in its own view, `back` to where the person was before the last move.
+   */
+  view: 'home' | 'chat' | 'tasks' | 'memory' | 'routines' | 'connections' | 'settings' | 'project' | 'helper' | 'back'
   /** The row to show, when there is one. */
   id: string
 }
+
+/** The views window.show (and app_action window.show) can put on screen. */
+export const ROUTE_VIEWS: readonly RouteTarget['view'][] = ['home', 'chat', 'tasks', 'memory', 'routines', 'connections', 'settings', 'project', 'helper', 'back']
 
 /** Whether the Quick Ask shortcut is live. A failure is explained in Settings. */
 export interface HotkeyStatus {
@@ -986,6 +993,13 @@ export type HelperCardOwner =
 export interface HelperCardInfo {
   /** The helper id (helpers.stop takes it); a project agent's card has its row id `pa-<chat>`. */
   id: string
+  /**
+   * What it stands for: a project chat (a tap opens that chat in full) or a helper (a tap opens its own view). Absent
+   * from older computers: read `projectChat` then.
+   */
+  kind?: 'project-chat' | 'helper'
+  /** For a helper working inside a project chat: that chat, which its view links to ('' otherwise). */
+  parentChat?: string
   /** Its chat_item row id. */
   row: string
   /** The chat its row is in ("main" for the main thread and every project agent card). */
@@ -1477,6 +1491,11 @@ export interface AgentApi {
     toggleMaximize(): void
     close(): void
     isMaximized(): Promise<boolean>
+    /**
+     * Put a view on screen in this window, the way a tap does: a chat in full at its newest message, a helper's view,
+     * a page, or Back. False when the target is not one the window knows.
+     */
+    show(target: RouteTarget): Promise<boolean>
     onMaximizeChange(cb: (maximized: boolean) => void): Unsubscribe
     /** Quick Ask overlay: the main process shows/hides it; the renderer listens. */
     onQuickAsk(cb: () => void): Unsubscribe

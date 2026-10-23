@@ -102,6 +102,7 @@ export const CHANNELS = {
     toggleMaximize: 'agent:window.toggleMaximize',
     close: 'agent:window.close',
     isMaximized: 'agent:window.isMaximized',
+    show: 'agent:window.show',
   },
   files: {
     pick: 'agent:files.pick',

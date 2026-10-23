@@ -2,6 +2,7 @@ import { MAIN_CHAT, type ChatItem, type ProjectRow } from '@agent/core'
 
 import { agent } from '../bridge'
 import { useChats } from '../state/useChats'
+import { usePanel } from '../state/usePanel'
 import { useUi } from '../state/useUi'
 import { chatOf } from './chats'
 import { newProjectChatId, projectOfChat } from './projects'
@@ -78,11 +79,28 @@ export async function startProjectChat(project: ProjectRow): Promise<void> {
   ui.focusComposer()
 }
 
-/** Open a chat from the rail. */
+/**
+ * Open a chat in full, the one way every place does it (the rail, a project's chat list, a side panel card, Needs
+ * you, the title bar's card list, the agent's window.show): the chat page with that chat, at its newest message, the
+ * cursor in the message box. A project chat opens under its project's header, exactly as from the project's page.
+ * Where the person was is kept, so Back returns there. It does not matter which device runs the chat: its rows are
+ * here, and a message typed here goes to wherever it runs.
+ */
 export function openChat(chat: string): void {
-  useChats.getState().openChat(chat)
-  useUi.getState().navigate({ page: 'chat' })
-  useUi.getState().scrollChat()
+  const panel = usePanel.getState()
+  // A helper or report open in the side panel gives way to the chat.
+  if (panel.helper !== null) panel.closeHelper()
+  if (panel.report !== null) panel.closeReport()
+  const ui = useUi.getState()
+  ui.navigate({ page: 'chat', chat })
+  ui.scrollChat()
+  ui.focusComposer()
+}
+
+/** Open a helper's own view (brief, steps, result): in the side panel where it shows, else over the window. */
+export function openHelper(id: string): void {
+  useUi.getState().closeOverlay()
+  usePanel.getState().openHelper(id)
 }
 
 /** A new chat with the history up to this message; the old chat stays as it was. Opens the new one. */
