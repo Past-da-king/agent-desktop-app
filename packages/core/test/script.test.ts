@@ -98,7 +98,7 @@ describe('run_script', () => {
     // One tool step, and what the model read back is the summary only.
     const results = history.flatMap((m) => m.blocks.filter((b): b is ToolResultBlock => b.t === 'result'))
     expect(results).toHaveLength(1)
-    expect(results[0]?.content).toContain('Result: "set 20"')
+    expect(results[0]?.content).toContain('Result: set 20')
     const sent = JSON.stringify(fake.requests[1]?.body ?? {})
     expect(sent).toContain('set 20')
     expect(sent).not.toContain('SECRET')
@@ -186,10 +186,15 @@ describe('run_script', () => {
     expect(formatOutcome(waiting)).toContain('"partialLog": "waiting"')
   })
 
+  it('gives a returned string back as its own lines, and anything else as JSON', async () => {
+    expect(formatOutcome(await run(`return ['one', 'two', 'three'].join(String.fromCharCode(10))`, []))).toMatch(/^Result: one\ntwo\nthree\n/)
+    expect(formatOutcome(await run(`return { a: 1 }`, []))).toMatch(/^Result: \{"a":1\}\n/)
+  })
+
   it('caps the return value and the log', async () => {
     const outcome = await run(`for (let i = 0; i < 2000; i++) log('line ' + i + ' ' + 'y'.repeat(50)); return 'x'.repeat(50000)`, [])
     const text = formatOutcome(outcome)
-    expect(text).toContain('[truncated: the result was 50002 chars')
+    expect(text).toContain('[truncated: the result was 50000 chars')
     expect(text).toContain('[log truncated')
     expect(text.length).toBeLessThan(SCRIPT_RESULT_CAP + 4_000 + 1_000)
   })
@@ -223,7 +228,7 @@ describe('run_script', () => {
     const id = /scr_[a-z0-9]+/.exec(started)?.[0] ?? ''
     expect(id).not.toBe('')
     expect(await resultTool!.run({ id }, ctx())).toContain('still running')
-    expect(await resultTool!.run({ id, wait_seconds: 5 }, ctx())).toContain('Result: "noon"')
+    expect(await resultTool!.run({ id, wait_seconds: 5 }, ctx())).toContain('Result: noon')
     // Another agent cannot read it.
     expect(await resultTool!.run({ id }, ctx({ agentLabel: 'helper', owner: 'helper:9' }))).toContain('No background script')
   })
