@@ -6,7 +6,10 @@ export const VAULT_CHANNELS = {
   reveal: 'agent:vault.reveal',
   copy: 'agent:vault.copy',
   audit: 'agent:vault.audit',
-  importAos: 'agent:vault.importAos',
+  importText: 'agent:vault.importText',
+  importFile: 'agent:vault.importFile',
+  prefs: 'agent:vault.prefs',
+  setPrefs: 'agent:vault.setPrefs',
 } as const
 
 export const VAULT_EVENTS = {

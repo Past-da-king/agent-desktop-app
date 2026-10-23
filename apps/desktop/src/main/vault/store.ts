@@ -8,16 +8,21 @@
 import { randomBytes } from 'node:crypto'
 
 import {
+  DEFAULT_VAULT_PREFS,
   VAULT_DEFAULT_FIELD,
   VAULT_FIELD_NAME,
   VAULT_KINDS,
   VAULT_REF,
   parseVaultRef,
+  hostMatches,
+  registrableDomain,
   vaultRefOf,
   type VaultAuditEntry,
   type VaultItemInput,
   type VaultItemMeta,
   type VaultKind,
+  type VaultPasskey,
+  type VaultPrefs,
 } from '@agent/core'
 
 export const VAULT_SECRET = 'vault'
@@ -44,6 +49,7 @@ interface VaultFile {
   audit: VaultAuditEntry[]
   /** When the vault last changed, for the bundle (newest wins). */
   changedAt: number
+  prefs: VaultPrefs
 }
 
 /** A placeholder resolved: the item, the field and the value. */
@@ -123,6 +129,7 @@ export class VaultStore {
       values,
       revealable: input.revealable ?? existing?.revealable ?? false,
       source: clean(input.source ?? existing?.source ?? '', 100),
+      ...(input.passkey !== undefined ? { passkey: passkeyOf(input.passkey) ?? undefined } : existing?.passkey !== undefined ? { passkey: existing.passkey } : {}),
       createdAt: existing?.createdAt ?? ts,
       updatedAt: ts,
       lastUsedAt: existing?.lastUsedAt ?? 0,
@@ -232,6 +239,67 @@ export class VaultStore {
     return result
   }
 
+  // ---- prefs, sites and passkeys ----
+
+  prefs(): VaultPrefs {
+    const p = this.file().prefs
+    return { ...p, never: [...p.never] }
+  }
+
+  setPrefs(patch: Partial<VaultPrefs>, who = 'person'): VaultPrefs {
+    const file = this.file()
+    const next = prefsOf({ ...file.prefs, ...patch })
+    this.write({ ...file, prefs: next }, { at: this.now(), itemId: '', name: 'Vault settings', action: 'save', who })
+    return this.prefs()
+  }
+
+  /** Whether to ask before an agent sees a value, or before a passkey is used. */
+  asks(what: 'reveal' | 'passkey'): boolean {
+    const p = this.file().prefs
+    if (p.dontAsk) return false
+    return what === 'reveal' ? p.askReveal : p.askPasskey
+  }
+
+  /** Logins for a page host (same site), newest first. */
+  loginsFor(host: string, profile?: string): VaultRecord[] {
+    return this.visible(profile)
+      .filter((item) => item.kind === 'login' && hostMatches(item.hosts, host))
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt || b.updatedAt - a.updatedAt)
+  }
+
+  record(id: string): VaultRecord | null {
+    return this.file().items.find((item) => item.id === id) ?? null
+  }
+
+  /** Passkeys for a relying party id. */
+  passkeysFor(rpId: string): VaultRecord[] {
+    const rp = rpId.toLowerCase()
+    return this.file().items.filter((item) => item.kind === 'passkey' && item.passkey !== undefined && item.passkey.rpId.toLowerCase() === rp && item.values['privateKey'] !== undefined)
+  }
+
+  /** A passkey the browser just made, or a newer sign count for one we have. */
+  savePasskey(input: { rpId: string; rpName?: string; userName?: string; credentialId: string; userHandle: string; signCount: number; privateKey: string }, who: string): VaultItemMeta {
+    const existing = this.file().items.find((item) => item.kind === 'passkey' && item.passkey?.credentialId === input.credentialId)
+    const passkey: VaultPasskey = { rpId: input.rpId, credentialId: input.credentialId, userHandle: input.userHandle, signCount: input.signCount }
+    if (existing !== undefined) {
+      // A sign-in: only the sign count moves. Logged as a use, and still a change, so the other brains get it.
+      const file = this.file()
+      const items = file.items.map((item) => (item.id === existing.id ? { ...item, passkey, lastUsedAt: this.now(), useCount: item.useCount + 1 } : item))
+      this.write({ ...file, items }, { at: this.now(), itemId: existing.id, name: existing.name, action: 'use', who })
+      return toMeta(items.find((item) => item.id === existing.id)!)
+    }
+    const site = input.rpName !== undefined && input.rpName.trim() !== '' ? input.rpName.trim() : input.rpId
+    return this.save({ name: `${site} passkey`, kind: 'passkey', username: input.userName ?? '', url: `https://${input.rpId}`, hosts: [input.rpId], passkey, source: 'browser', fields: { privateKey: input.privateKey } }, who)
+  }
+
+  /** Never offer to save passwords on this site again. */
+  never(host: string): void {
+    const site = registrableDomain(host)
+    const p = this.prefs()
+    if (site === '' || p.never.includes(site)) return
+    this.setPrefs({ never: [...p.never, site] })
+  }
+
   // ---- the bundle (devices) ----
 
   changedAt(): number {
@@ -239,14 +307,14 @@ export class VaultStore {
   }
 
   /** The whole vault for another brain (values included: only ever sent to a brain, over the device link). */
-  exportAll(): { changedAt: number; items: VaultRecord[] } {
+  exportAll(): { changedAt: number; items: VaultRecord[]; prefs: VaultPrefs } {
     const file = this.file()
     // Use counters are this device's own: left out, so using a key is not a change to send to every brain.
-    return { changedAt: file.changedAt, items: file.items.map((item) => ({ ...item, values: { ...item.values }, lastUsedAt: 0, useCount: 0, revealCount: 0 })) }
+    return { changedAt: file.changedAt, items: file.items.map((item) => ({ ...item, values: { ...item.values }, lastUsedAt: 0, useCount: 0, revealCount: 0 })), prefs: { ...file.prefs, never: [...file.prefs.never] } }
   }
 
   /** Take another brain's vault when it is newer. True when it was taken. */
-  replaceAll(incoming: { changedAt: number; items: unknown[] }, force = false): boolean {
+  replaceAll(incoming: { changedAt: number; items: unknown[]; prefs?: unknown }, force = false): boolean {
     const file = this.file()
     if (!force && !(incoming.changedAt > file.changedAt)) return false
     const mine = new Map(file.items.map((item) => [item.id, item]))
@@ -257,7 +325,7 @@ export class VaultStore {
         const own = mine.get(item.id)
         return own === undefined ? item : { ...item, lastUsedAt: own.lastUsedAt, useCount: own.useCount, revealCount: own.revealCount }
       })
-    this.cache = { v: 1, items, audit: file.audit, changedAt: incoming.changedAt }
+    this.cache = { v: 1, items, audit: file.audit, changedAt: incoming.changedAt, prefs: incoming.prefs === undefined ? file.prefs : prefsOf(incoming.prefs) }
     this.persist(this.cache)
     this.changed()
     return true
@@ -289,7 +357,7 @@ export class VaultStore {
   private file(): VaultFile {
     if (this.cache !== null) return this.cache
     const raw = this.secrets.get(VAULT_SECRET)
-    let parsed: VaultFile = { v: 1, items: [], audit: [], changedAt: 0 }
+    let parsed: VaultFile = { v: 1, items: [], audit: [], changedAt: 0, prefs: { ...DEFAULT_VAULT_PREFS } }
     if (raw !== null && raw.trim() !== '') {
       const data = JSON.parse(raw) as Partial<VaultFile>
       parsed = {
@@ -297,6 +365,7 @@ export class VaultStore {
         items: Array.isArray(data.items) ? data.items.map(recordOf).filter((item): item is VaultRecord => item !== null) : [],
         audit: Array.isArray(data.audit) ? data.audit.slice(-MAX_AUDIT) : [],
         changedAt: typeof data.changedAt === 'number' ? data.changedAt : 0,
+        prefs: prefsOf(data.prefs),
       }
     }
     this.cache = parsed
@@ -385,11 +454,36 @@ function recordOf(raw: unknown): VaultRecord | null {
     profile: str('profile'),
     values,
     revealable: r['revealable'] === true,
+    ...(passkeyOf(r['passkey']) === null ? {} : { passkey: passkeyOf(r['passkey'])! }),
     source: str('source'),
     createdAt: num('createdAt'),
     updatedAt: num('updatedAt'),
     lastUsedAt: num('lastUsedAt'),
     useCount: num('useCount'),
     revealCount: num('revealCount'),
+  }
+}
+
+function passkeyOf(raw: unknown): VaultPasskey | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const r = raw as Record<string, unknown>
+  if (typeof r['rpId'] !== 'string' || typeof r['credentialId'] !== 'string') return null
+  return {
+    rpId: r['rpId'],
+    credentialId: r['credentialId'],
+    userHandle: typeof r['userHandle'] === 'string' ? r['userHandle'] : '',
+    signCount: typeof r['signCount'] === 'number' ? r['signCount'] : 0,
+  }
+}
+
+function prefsOf(raw: unknown): VaultPrefs {
+  const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  const flag = (key: keyof VaultPrefs): boolean => (typeof r[key] === 'boolean' ? (r[key] as boolean) : (DEFAULT_VAULT_PREFS[key] as boolean))
+  return {
+    askReveal: flag('askReveal'),
+    askPasskey: flag('askPasskey'),
+    offerSave: flag('offerSave'),
+    dontAsk: flag('dontAsk'),
+    never: Array.isArray(r['never']) ? [...new Set((r['never'] as unknown[]).filter((x): x is string => typeof x === 'string').map((x) => x.toLowerCase()))].slice(0, 500) : [],
   }
 }

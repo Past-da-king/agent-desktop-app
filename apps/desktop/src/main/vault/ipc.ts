@@ -1,12 +1,13 @@
 /**
- * The window's view of the Vault: list (no values), add and edit, delete, and the person's own show and copy.
+ * The window's view of the Vault: list (no values), add and edit, delete, import a password export, and the person's
+ * own show and copy.
  * Show and copy are the person's clicks in this window: a paired device may only list (shared/rpc-methods.ts).
  */
-import type { VaultItemInput } from '@agent/core'
+import type { VaultItemInput, VaultPrefs } from '@agent/core'
 
 import { VAULT_CHANNELS } from '../../shared/vault-channels'
 import type { IpcMainLike } from '../ipc'
-import { importAos } from './aos-import'
+import { importFile, importText } from './import'
 import type { VaultStore } from './store'
 
 export interface VaultIpcDeps {
@@ -53,7 +54,13 @@ export function registerVaultIpc(ipcMain: IpcMainLike, deps: VaultIpcDeps): void
       timer.unref?.()
     },
     [VAULT_CHANNELS.audit]: (limit) => vault.audit(typeof limit === 'number' ? limit : 100),
-    [VAULT_CHANNELS.importAos]: (folder) => importAos(vault, typeof folder === 'string' ? folder : undefined, 'person'),
+    [VAULT_CHANNELS.prefs]: () => vault.prefs(),
+    [VAULT_CHANNELS.setPrefs]: (patch) => {
+      if (typeof patch !== 'object' || patch === null) throw new Error('That is not a Vault setting.')
+      return vault.setPrefs(patch as Partial<VaultPrefs>, 'person')
+    },
+    [VAULT_CHANNELS.importText]: (text, fileName) => importText(vault, typeof text === 'string' ? text : '', typeof fileName === 'string' ? fileName : '', 'person'),
+    [VAULT_CHANNELS.importFile]: (path) => importFile(vault, typeof path === 'string' ? path : '', 'person'),
   }
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, async (_event, ...args) => handler(...args))

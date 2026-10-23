@@ -78,6 +78,7 @@ import { VoiceService } from './voice/service'
 import { EventRouter } from './workers/router'
 import { registerWorkersIpc } from './workers/ipc'
 import { VaultStore } from './vault/store'
+import { BrowserVault } from './vault/browser-vault'
 import { setVaultRedactor } from './vault/redact'
 import { registerVaultIpc } from './vault/ipc'
 import { VAULT_EVENTS } from '../shared/vault-channels'
@@ -585,6 +586,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   vaultStore = vault
   setVaultRedactor((text) => vault.redact(text))
   vault.onChange(() => broadcast(VAULT_EVENTS.changed, null))
+  const browserVault = new BrowserVault(vault, (message, detail) => logger.info(message, detail))
   // The old single AI choice becomes the first account, once; after that the accounts list is the truth.
   migrateLegacyAccount(settings, secrets)
   const accounts = new AccountStore(settings, secrets)
@@ -646,6 +648,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     // The person's own tabs keep their own sign-ins, apart from every agent's (apps/profiles.ts MINE_PARTITION).
     personPartition: MINE_PARTITION,
   })
+  agentBrowser.setVault(browserVault)
   // The real-Electron browser proof opens a local test page here; never set in normal use.
   const probeUrl = process.env['AGENT_BROWSER_PROBE_URL']?.trim() ?? ''
   if (probeUrl !== '') {
@@ -784,6 +787,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     learned,
     workers: workerTools,
     vault,
+    browserVault,
   })
   // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
   // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
@@ -834,6 +838,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
     workers: workerTools,
     vault,
+    browserVault,
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
     deviceHub: () => devicesState.sync?.tools ?? null,
     devices: {

@@ -36,14 +36,14 @@ export function syntaxError(body: string): string {
 
 /**
  * Records the page's fetch / XMLHttpRequest calls (method, url, status, a slice of the request and
- * the reply) and WebSocket opens into window.__aosNet, newest last, at most 300, while
- * sessionStorage.__aosNet is "1".
+ * the reply) and WebSocket opens into window.__agentNet, newest last, at most 300, while
+ * sessionStorage.__agentNet is "1".
  */
 export const NET_SHIM = `
 (function(){
-  if (window.__aosNetHooked) return; window.__aosNetHooked = true;
-  var log = window.__aosNet = [];
-  function on(){ try { return sessionStorage.getItem('__aosNet') === '1'; } catch(e){ return false; } }
+  if (window.__agentNetHooked) return; window.__agentNetHooked = true;
+  var log = window.__agentNet = [];
+  function on(){ try { return sessionStorage.getItem('__agentNet') === '1'; } catch(e){ return false; } }
   function add(e){ e.t = Date.now(); log.push(e); if (log.length > 300) log.shift(); }
   function slice(x, n){ try { if (x == null) return ''; if (typeof x !== 'string') x = (x instanceof FormData ? '[form data]' : (x instanceof Blob || x instanceof ArrayBuffer ? '[binary]' : String(x))); return x.slice(0, n); } catch(e){ return ''; } }
   var of = window.fetch;
@@ -57,8 +57,8 @@ export const NET_SHIM = `
   };
   var X = window.XMLHttpRequest;
   if (X) { var oo = X.prototype.open, os = X.prototype.send;
-    X.prototype.open = function(m, u){ this.__aos = { k: 'xhr', m: String(m).toUpperCase(), u: String(u).slice(0, 400) }; return oo.apply(this, arguments); };
-    X.prototype.send = function(b){ var r = this.__aos; if (r && on()) { r.rq = slice(b, 500); var x = this;
+    X.prototype.open = function(m, u){ this.__agent = { k: 'xhr', m: String(m).toUpperCase(), u: String(u).slice(0, 400) }; return oo.apply(this, arguments); };
+    X.prototype.send = function(b){ var r = this.__agent; if (r && on()) { r.rq = slice(b, 500); var x = this;
       x.addEventListener('loadend', function(){ r.s = x.status; try { var ct = x.getResponseHeader('content-type') || ''; r.rs = /json|text|xml|javascript/.test(ct) && (x.responseType === '' || x.responseType === 'text') ? slice(x.responseText, 700) : '[' + ct + ']'; } catch(e){} add(r); }); }
       return os.apply(this, arguments); }; }
   var W = window.WebSocket;
@@ -67,19 +67,19 @@ export const NET_SHIM = `
 `
 
 export function netStart(): string {
-  return `${NET_SHIM};(function(){try{sessionStorage.setItem('__aosNet','1')}catch(e){}return 1})()`
+  return `${NET_SHIM};(function(){try{sessionStorage.setItem('__agentNet','1')}catch(e){}return 1})()`
 }
 
 export function netStop(): string {
-  return "(function(){try{sessionStorage.removeItem('__aosNet')}catch(e){}return 1})()"
+  return "(function(){try{sessionStorage.removeItem('__agentNet')}catch(e){}return 1})()"
 }
 
 export function netClear(): string {
-  return '(function(){if(window.__aosNet)window.__aosNet.length=0;return 1})()'
+  return '(function(){if(window.__agentNet)window.__agentNet.length=0;return 1})()'
 }
 
 /** The recorded calls whose method and url contain `filter`, newest last. */
 export function netLog(filter: string, limit: number): string {
   const n = Math.max(1, Math.min(100, Math.floor(limit)))
-  return `(function(){var f=${JSON.stringify(filter.toLowerCase())};var hooked=!!window.__aosNetHooked;var l=(window.__aosNet||[]).filter(function(e){return !f||((e.m+' '+e.u).toLowerCase().indexOf(f)>=0)});return {hooked:hooked,calls:l.slice(-${n})}})()`
+  return `(function(){var f=${JSON.stringify(filter.toLowerCase())};var hooked=!!window.__agentNetHooked;var l=(window.__agentNet||[]).filter(function(e){return !f||((e.m+' '+e.u).toLowerCase().indexOf(f)>=0)});return {hooked:hooked,calls:l.slice(-${n})}})()`
 }

@@ -21,6 +21,30 @@ SRC_DIRS.forEach((d) => walk(path.join(root, d)))
 const problems = []
 const rel = (p) => path.relative(root, p)
 const FORBIDDEN_INFRA = /guavas|past9|ap@|impetix|kronas|100\.86\.|ssh pc2|phoneaos\.past9|\.vercel\.app|ayanda/i
+// Product rule (23 Oct 2026): the product never knows one person's earlier tools. No feature, string, test or channel
+// may name a private predecessor app (its name, its folder, its globals); imports go through generic formats.
+const FORBIDDEN_PREDECESSOR = /A\.O\.S|\baos\b|\.aos\b|__aos|importAos|aos[-_]import|AOS_HOME/i
+{
+  const extra = []
+  const walkAll = (d) => {
+    if (!fs.existsSync(d)) return
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (SKIP.has(e.name)) continue
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) walkAll(p)
+      else if (/\.(ts|tsx|mjs|js|css|html|json)$/.test(e.name)) extra.push(p)
+    }
+  }
+  ;['packages/core/src', 'packages/core/test', 'apps/desktop/src', 'apps/desktop/test', 'scripts'].forEach((d) => walkAll(path.join(root, d)))
+  for (const f of extra) {
+    if (f === fileURLToPath(import.meta.url)) continue
+    fs.readFileSync(f, 'utf8')
+      .split('\n')
+      .forEach((line, i) => {
+        if (FORBIDDEN_PREDECESSOR.test(line)) problems.push(`${rel(f)}:${i + 1} names a private predecessor app: ${line.trim().slice(0, 80)}`)
+      })
+  }
+}
 // Mock seed data may name the demo persona; real infra names are never allowed anywhere.
 for (const f of files) {
   const text = fs.readFileSync(f, 'utf8')

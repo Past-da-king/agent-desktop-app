@@ -3,7 +3,7 @@
  * the page's isolated world (the same world as ./outline.ts, so the numbered registry is shared and
  * browser_click(index) keeps working on the new numbers).
  *
- * Modelled on the A.O.S browser engine: numbered elements with role, name and state; open shadow roots
+ * A page outline agents can act on: numbered elements with role, name and state; open shadow roots
  * and same-origin frames are walked; a cross-origin frame is reported with its rectangle so the agent
  * can act on it by coordinates. Acting resolves the target LIVE by name at act time (numbers go stale
  * the moment a page re-renders), waits for it to be visible, enabled and still, scrolls it into view,

@@ -8,9 +8,9 @@
  * What the window and every agent see is VaultItemMeta: names, kinds, hosts, which secret fields exist. Never values.
  */
 
-export type VaultKind = 'login' | 'api_key' | 'token' | 'note'
+export type VaultKind = 'login' | 'api_key' | 'token' | 'note' | 'passkey'
 
-export const VAULT_KINDS: readonly VaultKind[] = ['login', 'api_key', 'token', 'note']
+export const VAULT_KINDS: readonly VaultKind[] = ['login', 'api_key', 'token', 'note', 'passkey']
 
 /** The secret field a bare `{{vault:ref}}` means, per kind. */
 export const VAULT_DEFAULT_FIELD: Readonly<Record<VaultKind, string>> = {
@@ -18,6 +18,7 @@ export const VAULT_DEFAULT_FIELD: Readonly<Record<VaultKind, string>> = {
   api_key: 'key',
   token: 'token',
   note: 'text',
+  passkey: 'privateKey',
 }
 
 /** A field name: letters, digits, underscore and dash. */
@@ -50,7 +51,9 @@ export interface VaultItemMeta {
   fields: string[]
   /** An agent may see the value with vault_reveal without asking. Default false. */
   revealable: boolean
-  /** Where it came from, e.g. "A.O.S" for an imported item. */
+  /** A passkey: who it is for and which credential. None of this is secret; the private key is a field. */
+  passkey?: VaultPasskey
+  /** Where it came from, e.g. "Bitwarden" for an imported item, "browser" for one saved while signing in. */
   source: string
   createdAt: number
   updatedAt: number
@@ -58,6 +61,31 @@ export interface VaultItemMeta {
   useCount: number
   revealCount: number
 }
+
+export interface VaultPasskey {
+  rpId: string
+  /** base64 */
+  credentialId: string
+  /** base64 */
+  userHandle: string
+  signCount: number
+}
+
+/**
+ * When the Vault asks the person. Asking is the default; each can be switched off, and dontAsk switches all asking
+ * off at once (agents use the vault freely, typed passwords are saved without a prompt). Using a value without
+ * showing it (placeholders, fill, sign in) never asks.
+ */
+export interface VaultPrefs {
+  askReveal: boolean
+  askPasskey: boolean
+  offerSave: boolean
+  dontAsk: boolean
+  /** Sites (registrable domains) the person said never to offer saving for. */
+  never: string[]
+}
+
+export const DEFAULT_VAULT_PREFS: VaultPrefs = { askReveal: true, askPasskey: true, offerSave: true, dontAsk: false, never: [] }
 
 export interface VaultItemInput {
   id?: string
@@ -74,6 +102,7 @@ export interface VaultItemInput {
   fields?: Record<string, string>
   revealable?: boolean
   source?: string
+  passkey?: VaultPasskey
 }
 
 export interface VaultAuditEntry {
@@ -90,7 +119,9 @@ export interface VaultImportResult {
   updated: number
   skipped: number
   names: string[]
-  /** Plain words when it could not read the folder. */
+  /** The format it was read as: "Chrome or Edge", "Bitwarden", "1Password", "a JSON file". */
+  format?: string
+  /** Plain words when it could not read the file. */
   error?: string
 }
 
@@ -103,8 +134,15 @@ export interface VaultApi {
   /** Copies one field to the clipboard in the main process (cleared again after 30 s). Logged. */
   copy(id: string, field?: string): Promise<void>
   audit(limit?: number): Promise<VaultAuditEntry[]>
-  /** Import an A.O.S credential vault: the folder holding its credentials.db and credentials.key. */
-  importAos(folder?: string): Promise<VaultImportResult>
+  /**
+   * Import a password export: Chrome or Edge CSV, Bitwarden CSV or JSON (unencrypted), 1Password CSV, or a JSON file
+   * of names and values. Same site and username updates the item already there. Only counts and names come back.
+   */
+  importText(text: string, fileName?: string): Promise<VaultImportResult>
+  /** The same, from a file on this computer. */
+  importFile(path: string): Promise<VaultImportResult>
+  prefs(): Promise<VaultPrefs>
+  setPrefs(patch: Partial<VaultPrefs>): Promise<VaultPrefs>
   onChange(cb: () => void): () => void
 }
 
@@ -130,4 +168,23 @@ export function vaultRefOf(name: string): string {
     .slice(0, 48)
     .replace(/-+$/g, '')
   return slug === '' ? 'item' : slug
+}
+
+/** Multi-part public suffixes common enough to matter (no full list: a near miss only widens a match to a sibling). */
+const TWO_PART_SUFFIX = /^(?:co|com|net|org|gov|ac|edu|ltd|plc|nhs|me|mil|nom|or|ne|go|sch|info|biz|web)\.[a-z]{2}$/
+
+/** The site a host belongs to, for matching logins: login.example.co.uk -> example.co.uk. */
+export function registrableDomain(host: string): string {
+  const h = host.trim().toLowerCase().replace(/^\.+|\.+$/g, '')
+  if (h === '' || /^[0-9.]+$/.test(h) || h.includes(':')) return h
+  const parts = h.split('.')
+  if (parts.length <= 2) return h
+  const lastTwo = parts.slice(-2).join('.')
+  return TWO_PART_SUFFIX.test(lastTwo) ? parts.slice(-3).join('.') : lastTwo
+}
+
+/** True when an item saved for these hosts belongs on this page host. */
+export function hostMatches(itemHosts: readonly string[], pageHost: string): boolean {
+  const site = registrableDomain(pageHost)
+  return site !== '' && itemHosts.some((h) => registrableDomain(h) === site)
 }

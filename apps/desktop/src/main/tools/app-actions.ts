@@ -241,7 +241,10 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'vault.reveal': tool('See a vault value (Settings > Vault > Show)', 'vault_reveal'),
   'vault.copy': no('Copy a vault value (Settings > Vault > Copy)', "it puts a secret on the person's clipboard; use a placeholder or vault_fill"),
   'vault.audit': free('Who showed or copied what (Settings > Vault > History)', 'limit?'),
-  'vault.importAos': free('Import the A.O.S credential vault (Settings > Vault > Import from A.O.S)', 'folder?'),
+  'vault.prefs': free('When the Vault asks (Settings > Vault)'),
+  'vault.setPrefs': ask('Change when the Vault asks (Settings > Vault switches)', 'patch'),
+  'vault.importText': ask('Import passwords from the text of an export (Settings > Vault > Import)', 'text, fileName?', [0]),
+  'vault.importFile': free('Import a password export on this computer: Chrome or Edge CSV, Bitwarden CSV or JSON, 1Password CSV, or JSON of names and values (Settings > Vault > Import)', 'path'),
 }
 
 /** Calls the app's own IPC handlers (main/devices/registry.ts keeps them all). */

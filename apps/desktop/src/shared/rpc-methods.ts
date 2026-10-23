@@ -85,6 +85,7 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'devices.list',
   // The Vault: names only. Values never go to another device (show and copy are this window's own clicks).
   'vault.list',
+  'vault.prefs',
 ])
 
 /** Main-process events a paired device hears (the rest are about this computer's own window and hardware). */

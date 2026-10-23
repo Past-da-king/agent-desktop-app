@@ -217,7 +217,7 @@ describe('the record on the activity row', () => {
 
     const search = { t: 'call' as const, id: '5', name: 'memory_search', input: { query: 'VAT number', limit: 5 } }
     expect(runStarted(search)?.input).toBe('query: VAT number\nlimit: 5')
-    expect(runStarted({ t: 'call', id: '6', name: 'mcp__aos__os_status', input: {} })).toMatchObject({ label: 'os status', input: '' })
+    expect(runStarted({ t: 'call', id: '6', name: 'mcp__other__os_status', input: {} })).toMatchObject({ label: 'os status', input: '' })
 
     const fill = { t: 'call' as const, id: '7', name: 'browser_fill', input: { selector: 'input[type=password]', value: 'hunter2hunter2' } }
     expect(runStarted(fill)?.input).toBe('selector: input[type=password]\nvalue: [hidden]')

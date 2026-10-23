@@ -25,6 +25,7 @@ import { devicesState, ownBrainIds, type DevicesSyncDeps } from '../main/devices
 import { TurnLeases } from '../main/runtime/turns'
 import { registerWorkersIpc } from '../main/workers/ipc'
 import { VaultStore } from '../main/vault/store'
+import { BrowserVault } from '../main/vault/browser-vault'
 import { setVaultRedactor } from '../main/vault/redact'
 import { registerVaultIpc } from '../main/vault/ipc'
 import { guardTools } from '../main/vault/guard'
@@ -238,6 +239,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     ? null
     : new HeadlessBrowser({ dir: join(dir, 'browser'), executable: chromium, log: (message, detail) => logger.info(message, detail) })
   logger.info('Browser', { available: browser === null ? 0 : 1 })
+  const browserVault = new BrowserVault(vault, (message, detail) => logger.info(message, detail))
+  browser?.setVault(browserVault)
   // With a browser the tools are the desktop's own; without one they stay listed and say so.
   const browserTools = (tools: Tool[]): Tool[] => (browser === null ? markNoBrowser(tools) : tools)
   const browserDep = browser === null ? {} : { browser }
@@ -328,7 +331,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const deviceHub = (): NonNullable<typeof devicesState.sync>['tools'] | null => devicesState.sync?.tools ?? null
   // The node's own controls as tools (tools/app-control.ts): Devices (once started) and Settings. No self update here.
   const appControl: AppControlDeps = { devices: () => getDevicesService(), links: () => devicesState.sync?.replicator.status() ?? [], settings, invoker: () => registryInvoker(registry) }
-  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault })), ...nodeTools], vault)
+  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault })), ...nodeTools], vault)
   const helpers = new HelperManager({
     leases,
     store,
@@ -366,6 +369,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       deviceHub,
       workers: workerDeps,
       vault,
+      browserVault,
       devices: {
         selfId: () => devicesState.sync?.selfId() ?? '',
         commands: () => devicesState.sync?.commands ?? null,

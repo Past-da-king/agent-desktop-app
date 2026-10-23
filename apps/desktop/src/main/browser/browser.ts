@@ -68,6 +68,7 @@ import {
 } from './snapshot'
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, ViewRequest } from './types'
 import { planWindowOpen, popupSize } from './popup'
+import type { BrowserVault, VaultLink } from '../vault/browser-vault'
 import { pickTab } from './tab-pick'
 import { checkBrowserUrl } from './url-policy'
 import { EMBED_WAIT_MS, guardWebview, isEmbeddedGuest } from './embed'
@@ -138,6 +139,24 @@ export interface AgentBrowserOptions {
 }
 
 export class AgentBrowser implements BrowserDriver, BrowserProDriver {
+  /** The Vault serves every page from now on: tabs already open get it at once. */
+  setVault(vault: BrowserVault): void {
+    this.vault = vault
+    for (const tab of this.tabs) if (tab.ready) void this.attachVault(tab.wc, () => this.personTab === tab.id)
+  }
+
+  private async attachVault(wc: WebContents, person: () => boolean): Promise<void> {
+    const vault = this.vault
+    if (vault === null || wc.isDestroyed() || this.vaultAttached.has(wc)) return
+    this.vaultAttached.add(wc)
+    try {
+      const stop = await vault.attach(debuggerLink(wc), { person, frames: true })
+      wc.once('destroyed', stop)
+    } catch {
+      this.vaultAttached.delete(wc)
+    }
+  }
+
   private window: BrowserWindow | null
   private readonly partition: string
   /**
@@ -164,6 +183,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private guardSeq = 0
   /** Windows a page opened with window.open (a sign-in popup), kept alive while their flow runs. */
   private readonly popups = new Set<BrowserWindow>()
+  /** The Vault in the page: autofill, offers to save, passkeys (vault/browser-vault.ts). Set once the vault exists. */
+  private vault: BrowserVault | null = null
+  private readonly vaultAttached = new WeakSet<WebContents>()
   /** When each tab last had a real click, tap or key, so a window.open with no click behind it stays refused. */
   private readonly lastGesture = new Map<string, number>()
   private readonly downloads: string[] = []
@@ -1243,6 +1265,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (tab.ready) {
       await tab.cdp.send('Page.enable').catch(() => undefined)
       await tab.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PRESENCE_SCRIPT }).catch(() => undefined)
+      await this.attachVault(wc, () => this.personTab === tab.id)
     }
     await this.applyEmulation(tab)
   }
@@ -1827,6 +1850,15 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       if (/^https?:\/\//i.test(url)) void this.createTab(url, opener.partition)
       return { action: 'deny' }
     })
+    // A sign-in window gets the Vault too, as whoever uses the tab that opened it.
+    wc.once('dom-ready', () => {
+      try {
+        if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
+        void this.attachVault(wc, () => this.personTab === opener.id)
+      } catch {
+        // Another tool holds its debugger: no autofill in this window.
+      }
+    })
     child.once('ready-to-show', () => {
       if (child.isDestroyed()) return
       child.show()
@@ -2117,4 +2149,17 @@ export function addressOf(raw: string): string | null {
   if (/^https?:\/\//i.test(text)) return text
   if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(text) || /^localhost(:\d+)?(\/\S*)?$/i.test(text)) return `https://${text}`
   return `https://www.google.com/search?q=${encodeURIComponent(text)}`
+}
+
+/** The line from the Vault into a page: its own debugger, frames included (sessionId). */
+function debuggerLink(wc: WebContents): VaultLink {
+  return {
+    // Electron names the page's own session '' in its events, and a command sent to session '' goes nowhere.
+    send: (method, params = {}, sessionId) => (sessionId ? wc.debugger.sendCommand(method, params, sessionId) : wc.debugger.sendCommand(method, params)),
+    onEvent: (listener) => {
+      const handler = (_event: Electron.Event, method: string, params: Record<string, unknown>, sessionId?: string): void => listener(method, params, sessionId || undefined)
+      wc.debugger.on('message', handler)
+      return () => wc.debugger.removeListener('message', handler)
+    },
+  }
 }

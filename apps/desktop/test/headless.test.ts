@@ -30,6 +30,7 @@ import { pinnedJson, setNodeProxy } from '../src/headless/pinned'
 import { parseSocksProxy } from '../src/main/devices/socks'
 import { createServer as createTcpServer, connect as tcpConnect } from 'node:net'
 import { startHeadlessRuntime, type HeadlessRuntime } from '../src/headless/runtime'
+import { testContext } from './support'
 
 // Each test boots a whole runtime (two SQLite files, the tool registry); on a busy machine that takes seconds.
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
@@ -560,4 +561,27 @@ describe('headless CLI: stop and status', () => {
     expect(again.out).toMatch(/^Started/)
     expect((await cli(['status', '--data-dir', dir])).out).toMatch(/state: running \(pid \d+\), ready/)
   }, 90_000)
+})
+
+describe('the Vault on a headless node', () => {
+  it('serves vault tools to its agents and to other devices, asks by default, and not with "Don\'t ask me"', async () => {
+    const runtime = await bootRuntime(temp())
+    const secret = 'node-secret-' + Math.random().toString(16).slice(2, 12)
+    runtime.vault.save({ name: 'Server key', ref: 'server-key', kind: 'api_key', fields: { key: secret } })
+    const lent = runtime.devicesHooks.localTools()
+    for (const tools of [runtime.mainTools, lent]) {
+      const names = tools.map((tool) => tool.spec.name)
+      expect(names).toEqual(expect.arrayContaining(['vault_list', 'vault_reveal', 'vault_fill', 'vault_login', 'vault_save']))
+    }
+    const reveal = lent.find((tool) => tool.spec.name === 'vault_reveal')!
+    const asked: string[] = []
+    const ctx = testContext({ approve: async (summary) => (asked.push(summary), false) })
+    expect(await reveal.run({ item: 'server-key', why: 'test' }, ctx)).not.toContain(secret)
+    expect(asked).toHaveLength(1)
+    runtime.vault.setPrefs({ dontAsk: true })
+    expect(await reveal.run({ item: 'server-key', why: 'test' }, ctx)).toContain(secret)
+    expect(asked).toHaveLength(1)
+    const list = lent.find((tool) => tool.spec.name === 'vault_list')!
+    expect(await list.run({}, ctx)).not.toContain(secret)
+  }, 60_000)
 })
