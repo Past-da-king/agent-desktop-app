@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { BrowserWindow, nativeTheme, screen } from 'electron'
 
 import { EVENTS } from '../shared/channels'
+import { safeSend, whileAlive } from './alive'
 
 export const QUICK_ASK_WIDTH = 640
 export const QUICK_ASK_HEIGHT = 180
@@ -138,7 +139,7 @@ export class QuickAskWindow {
       existing.show()
       existing.setAlwaysOnTop(true, 'floating')
       existing.focus()
-      existing.webContents.send(EVENTS.quickAsk)
+      safeSend(existing, EVENTS.quickAsk)
       return
     }
 
@@ -168,17 +169,23 @@ export class QuickAskWindow {
     window.setAlwaysOnTop(true, 'floating')
     this.place(window)
 
-    window.once('ready-to-show', () => {
-      window.show()
-      window.setAlwaysOnTop(true, 'floating')
-      window.focus()
-      window.webContents.send(EVENTS.quickAsk)
-    })
-    window.on('blur', () => {
-      // Some window managers move focus for a moment when the dictation pill appears; the box stays for that.
-      if (this.options.keepOpen?.() === true) return
-      this.hide()
-    })
+    window.once(
+      'ready-to-show',
+      whileAlive(window, 'quick ask show', () => {
+        window.show()
+        window.setAlwaysOnTop(true, 'floating')
+        window.focus()
+        safeSend(window, EVENTS.quickAsk)
+      }),
+    )
+    window.on(
+      'blur',
+      whileAlive(window, 'quick ask blur', () => {
+        // Some window managers move focus for a moment when the dictation pill appears; the box stays for that.
+        if (this.options.keepOpen?.() === true) return
+        this.hide()
+      }),
+    )
     window.on('closed', () => {
       if (this.window === window) this.window = null
     })

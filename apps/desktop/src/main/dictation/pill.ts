@@ -10,6 +10,7 @@ import type { DictationCommand, DictationView } from '@agent/core'
 
 import { EVENTS } from '../../shared/channels'
 import type { PillLike } from './controller'
+import { safeSend } from '../alive'
 
 export const PILL_WIDTH = 520
 export const PILL_HEIGHT = 84
@@ -97,8 +98,8 @@ export class PillWindow implements PillLike {
 
   private send(channel: string, payload: unknown): void {
     const window = this.window
-    if (window === null || window.isDestroyed() || !this.loaded) return
-    window.webContents.send(channel, payload)
+    if (!this.loaded) return
+    safeSend(window, channel, payload)
   }
 
   private ensure(): BrowserWindow {
