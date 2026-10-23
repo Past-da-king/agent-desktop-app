@@ -15,6 +15,7 @@ import type { ProgramRef } from '../runtime/environment'
 import { spawnResolved } from '../runtime/spawn'
 import { killProcessTree, sanitiseEnv } from './shell'
 import { recordRun, StreamCapture } from './run-capture'
+import { codeText, currentVaultRun, hasPlaceholder } from '../vault/placeholders'
 
 export const CODE_TIMEOUT_MS = 30_000
 export const MAX_CODE_OUTPUT_CHARS = 20_000
@@ -123,7 +124,16 @@ function runCodeTool(deps: CodeToolDeps): Tool {
         return 'The user did not approve running that code, so I did not run it.'
       }
 
-      return execute({ language, code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input })
+      // {{vault:ref}}: the value goes into the scratch file only (removed when the run ends); the card and the row keep the placeholder.
+      let runnable = code
+      if (hasPlaceholder(code)) {
+        const vault = currentVaultRun()
+        if (vault === undefined) return 'There is no vault here, so {{vault:...}} cannot be used.'
+        const filled = codeText(code, vault)
+        if ('error' in filled) return filled.error
+        runnable = filled.code
+      }
+      return execute({ language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input })
     },
   }
 }
@@ -170,6 +180,8 @@ function pythonProgram(deps: CodeToolDeps): ProgramRef | null {
 interface ExecuteRequest {
   language: CodeLanguage
   code: string
+  /** The code as the agent wrote it (placeholders, not values): what the chat row keeps. */
+  shown?: string
   program: ProgramRef
   /** True when JavaScript fell back to the runtime inside the app. */
   appRuntime: boolean
@@ -205,7 +217,7 @@ async function execute(request: ExecuteRequest): Promise<string> {
     if (request.input === undefined) return
     recordRun(request.input, {
       kind: 'code',
-      input: request.code,
+      input: request.shown ?? request.code,
       label: request.language,
       cwd: folder,
       stdout: out.text(),
@@ -265,6 +277,8 @@ async function execute(request: ExecuteRequest): Promise<string> {
     child.once('close', finish)
   })
 
+  // A program that held a vault value does not stay on disk.
+  if (request.shown !== undefined && request.shown !== request.code) await fs.rm(script, { force: true }).catch(() => undefined)
   const written = await listFiles(folder, scriptName)
   const output = sink.text().trimEnd()
   const tail = sink.truncated() ? `\n...(cut, ${sink.total} characters in all)` : ''

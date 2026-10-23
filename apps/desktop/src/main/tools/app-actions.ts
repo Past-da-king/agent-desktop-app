@@ -230,6 +230,14 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'workers.remove': ask('Delete a worker', 'workerId'),
   'workers.setSecret': ask("Set a worker's key (Workers > worker > keys)", 'workerId, name, value', [2]),
   'workers.openFolder': free("Open a worker's folder", 'workerId'),
+  // The Vault (Settings > Vault): names only; values go in through vault_save and out only through vault_reveal.
+  'vault.list': free('What is in the Vault, without values (Settings > Vault)'),
+  'vault.save': tool('Add or change a vault item (Settings > Vault)', 'vault_save'),
+  'vault.remove': ask('Delete a vault item (Settings > Vault > Delete)', 'itemId'),
+  'vault.reveal': tool('See a vault value (Settings > Vault > Show)', 'vault_reveal'),
+  'vault.copy': no('Copy a vault value (Settings > Vault > Copy)', "it puts a secret on the person's clipboard; use a placeholder or vault_fill"),
+  'vault.audit': free('Who showed or copied what (Settings > Vault > History)', 'limit?'),
+  'vault.importAos': free('Import the A.O.S credential vault (Settings > Vault > Import from A.O.S)', 'folder?'),
 }
 
 /** Calls the app's own IPC handlers (main/devices/registry.ts keeps them all). */

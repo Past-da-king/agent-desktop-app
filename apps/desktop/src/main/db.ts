@@ -29,6 +29,7 @@ import {
 } from '@agent/core'
 
 import { changedFields, currentWriter, versionFields, type MemoryWriter } from './memory/history'
+import { redactDeep } from './vault/redact'
 
 interface StoredRow {
   cid: string
@@ -195,7 +196,8 @@ export class Store implements SyncStore {
     if (existing !== null) Object.assign(payload, existing.payload)
     for (const [key, value] of Object.entries(raw)) {
       if (key === 'id' || value === undefined) continue
-      payload[key] = value
+      // No vault value is ever written into a synced row (vault/redact.ts): chat items, turns, memory, tasks.
+      payload[key] = redactDeep(value)
     }
     if (existing === null && typeof payload.createdAt !== 'number') payload.createdAt = timestamp
     if (UPDATED_AT_ENTITIES.has(entity)) payload.updatedAt = timestamp

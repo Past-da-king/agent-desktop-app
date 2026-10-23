@@ -108,6 +108,7 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
       profiles: runtime.apps.profiles,
       learned: runtime.learned,
       connected: runtime.connectedApps,
+      vault: runtime.vault,
       passes: node.passTable(),
       projects: () => runtime.store.list('project'),
     },

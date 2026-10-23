@@ -60,6 +60,8 @@ export interface BundleSecrets {
   geminiKey?: string
   /** deviceId -> sha256(pass) hex. */
   passes: Record<string, string>
+  /** The Vault, values and all (vault/store.ts). Only ever sent to a brain, like the keys above. */
+  vault?: { changedAt: number; items: unknown[] }
 }
 
 export interface StateBundle {
@@ -84,6 +86,8 @@ export interface BundleSources {
   connected?: { allRules(): Record<string, AccountRules>; replaceRules(rules: Record<string, AccountRules>): void; userId(): string; setUserId(id: string): void }
   passes?: PassTable
   projects?: () => Promise<ProjectRow[]>
+  /** The Vault: the whole of it travels to another brain, newest wins. */
+  vault?: { exportAll(): { changedAt: number; items: unknown[] }; replaceAll(incoming: { changedAt: number; items: unknown[] }, force?: boolean): boolean; onChange?(listener: () => void): () => void }
   /** Kept on this device only: the bundle's hash and changedAt. */
   local: { localValue(key: string): string | null; setLocalValue(key: string, value: string): void }
   now?: () => number
@@ -96,13 +100,14 @@ export class BundleKeeper {
   private readonly listeners = new Set<(version: string) => void>()
   private readonly offs: Array<() => void> = []
   private applying = false
+  private forcing = false
 
   constructor(private readonly sources: BundleSources) {}
 
   /** Watch the parts that can say when they change; secrets cannot, so call check() after a key is saved too. */
   watch(): void {
     const check = (): void => void this.check()
-    for (const part of [this.sources.settings, this.sources.profiles, this.sources.learned]) {
+    for (const part of [this.sources.settings, this.sources.profiles, this.sources.learned, this.sources.vault]) {
       const off = part?.onChange?.(check)
       if (off !== undefined) this.offs.push(off)
     }
@@ -178,10 +183,12 @@ export class BundleKeeper {
     this.check()
     if (!force && !(bundle.changedAt > this.changedAt())) return false
     this.applying = true
+    this.forcing = force
     try {
       this.write(bundle)
     } finally {
       this.applying = false
+      this.forcing = false
     }
     // What we now hold is the sender's bundle as of its changedAt: not a local change to send back.
     this.sources.local.setLocalValue('bundle_hash', this.hashOf(this.content()))
@@ -202,6 +209,7 @@ export class BundleKeeper {
       if (typeof s.geminiKey === 'string' && s.geminiKey !== '') secrets.set(GEMINI, s.geminiKey)
       if (typeof s.composioUserId === 'string' && s.composioUserId !== '') connected?.setUserId(s.composioUserId)
       passes?.replaceAll({ ...s.passes })
+      if (s.vault !== undefined) this.sources.vault?.replaceAll(s.vault, this.forcing)
       // An account removed on the other brain takes its key with it.
       for (const account of settings.get().accounts) if (!incomingIds.has(account.id)) secrets.delete(keyNameFor(account.id))
     }
@@ -232,6 +240,8 @@ export class BundleKeeper {
     if (hasValue(gemini)) secrets.geminiKey = gemini
     const connected = this.sources.connected
     if (connected !== undefined) secrets.composioUserId = connected.userId()
+    const vault = this.sources.vault?.exportAll()
+    if (vault !== undefined && (vault.items.length > 0 || vault.changedAt > 0)) secrets.vault = vault
     return {
       settings: pickShared(current),
       profiles: this.sources.profiles?.all() ?? [],
@@ -362,6 +372,8 @@ export function parseBundle(value: unknown): StateBundle | null {
     if (typeof s['composioKey'] === 'string') bundle.secrets.composioKey = s['composioKey']
     if (typeof s['composioUserId'] === 'string') bundle.secrets.composioUserId = s['composioUserId']
     if (typeof s['geminiKey'] === 'string') bundle.secrets.geminiKey = s['geminiKey']
+    const v = s['vault']
+    if (isRecord(v) && typeof v['changedAt'] === 'number' && Array.isArray(v['items'])) bundle.secrets.vault = { changedAt: v['changedAt'], items: v['items'] as unknown[] }
   }
   return bundle
 }

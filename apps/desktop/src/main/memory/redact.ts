@@ -3,6 +3,7 @@
  * read back into every prompt, so a key, password or token must never land there. People's names, emails and
  * phone numbers are kept on purpose: they are what the person wants the agent to remember.
  */
+import { redactVault } from '../vault/redact'
 
 export const REDACTED = '[REDACTED]'
 
@@ -48,7 +49,7 @@ export interface Redaction {
 
 /** Takes every secret out of a piece of text. */
 export function redactSecrets(input: string): Redaction {
-  let text = input
+  let text = redactVault(input)
   const hits: Record<string, number> = {}
   let total = 0
   for (const rule of RULES) {
