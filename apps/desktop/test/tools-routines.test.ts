@@ -22,7 +22,7 @@ function tools() {
 }
 
 describe('routine tools', () => {
-  it('asks approval before creating a routine and saves it when approved', async () => {
+  it('creates a routine with no approval card and says when it runs', async () => {
     const approvals: string[] = []
     const create = toolNamed(tools(), 'routine_create')
 
@@ -41,9 +41,9 @@ describe('routine tools', () => {
       }),
     )
 
-    expect(approvals[0]).toContain('Create a routine: Morning brief')
-    expect(approvals[0]).toContain('every day at 07:30')
+    expect(approvals).toEqual([])
     expect(result).toContain('created')
+    expect(result).toContain('every day at 07:30')
 
     const rows = await store.list('trigger')
     expect(rows).toHaveLength(1)
@@ -58,7 +58,7 @@ describe('routine tools', () => {
     })
   })
 
-  it('creates nothing when the person declines', async () => {
+  it('creates it even where nobody could approve (a routine run in the background)', async () => {
     const create = toolNamed(tools(), 'routine_create')
 
     const result = await create.run(
@@ -66,8 +66,8 @@ describe('routine tools', () => {
       testContext({ approve: async () => false }),
     )
 
-    expect(result).toBe('The user declined.')
-    expect(await store.list('trigger')).toEqual([])
+    expect(result).toContain('created: runs every 120 minutes')
+    expect(await store.list('trigger')).toHaveLength(1)
   })
 
   it('refuses a spec that does not fit its kind', async () => {

@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { accessSync, constants, existsSync, promises as fs, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 
-import { int, schema, str, type Tool } from '@agent/core'
+import { int, resultLimitOf, schema, str, type Tool } from '@agent/core'
 
 import type { JsonObject, ToolContext } from '@agent/core'
 import type { RunState } from '../../shared/run-record'
@@ -345,7 +345,8 @@ async function runCommand(request: RunRequest): Promise<string> {
 
   // No folder named means the person's home folder, as the tool tells the model, never the app's install folder.
   const cwd = request.cwd ?? (request.deps.home ?? homedir)()
-  const sink = new OutputSink(MAX_OUTPUT_CHARS)
+  // A script reads all the output (ToolContext.resultLimit); a model reads the first MAX_OUTPUT_CHARS.
+  const sink = new OutputSink(resultLimitOf(request.ctx, MAX_OUTPUT_CHARS))
   // The person's copy: stdout and stderr apart, longer than the model's, start and end kept.
   const out = new StreamCapture()
   const err = new StreamCapture()

@@ -15,7 +15,7 @@ import {
 } from '@agent/core'
 
 import { appName, POPULAR_APPS } from './catalog'
-import { backendFor, keyKind, logoFor, type AppAccount, type ComposioBackend } from './composio'
+import { backendFor, connectedAppsIn, keyKind, logoFor, type AppAccount, type ComposioBackend } from './composio'
 import { AppGuard } from './guard'
 import { ProfileStore } from './profiles'
 import { hostOf, type ConnectedAppsFile, type LearnedStore } from './store'
@@ -117,10 +117,31 @@ export class AppsService {
     return { ok: true, message: 'Composio key saved. You can connect apps now.' }
   }
 
+  /**
+   * The person's accounts: of these apps, or of every app. A REST key lists every account in the project; a Composio
+   * Connect key only answers for the apps it is asked about, so "every app" there means the popular ones, every app
+   * an account was ever found in here, and every app a profile holds an account of. Whatever is found is remembered,
+   * so an app that worked once (through apps_run, apps_find_tools or Connections) is listed from then on.
+   */
   async accounts(apps?: string[]): Promise<AppAccount[]> {
     const backend = this.backend()
     if (backend === null) return []
-    return backend.accounts(apps)
+    const asked = apps === undefined && backend.listsEveryApp !== true ? this.appsToAsk() : apps
+    const found = await backend.accounts(asked)
+    this.deps.file.rememberApps(found.map((account) => account.app))
+    return found
+  }
+
+  /** Every app a Connect key is asked about when the whole list is wanted. */
+  appsToAsk(): string[] {
+    const fromProfiles = this.profiles.all().flatMap((profile) => profile.accounts.map((account) => account.app))
+    return [...new Set([...POPULAR_APPS.map((app) => app.slug), ...this.deps.file.seenApps(), ...fromProfiles].map((app) => app.toLowerCase()))]
+  }
+
+  /** Apps Composio said the person has a working account in, from any reply that says so (a tool search). */
+  noteConnectedApps(text: string): void {
+    const apps = connectedAppsIn(text)
+    if (apps.length > 0) this.deps.file.rememberApps(apps)
   }
 
   async activeAccounts(apps: string[]): Promise<AppAccount[]> {
@@ -174,7 +195,11 @@ export class AppsService {
           } catch {
             continue
           }
-          if (now.some((a) => a.status === 'ACTIVE' && !before.has(a.id))) return 'connected'
+          if (now.some((a) => a.status === 'ACTIVE' && !before.has(a.id))) {
+            // Listed from now on, whatever kind of key lists it.
+            this.deps.file.rememberApps([app])
+            return 'connected'
+          }
         }
         return 'timeout'
       } finally {
@@ -201,7 +226,7 @@ export class AppsService {
   async disconnect(accountId: string): Promise<void> {
     const backend = this.backend()
     if (backend === null) return
-    const account = (await backend.accounts()).find((a) => a.id === accountId)
+    const account = (await this.accounts()).find((a) => a.id === accountId)
     if (account === undefined) return
     await backend.disconnect(account)
     this.deps.file.forget(accountId)

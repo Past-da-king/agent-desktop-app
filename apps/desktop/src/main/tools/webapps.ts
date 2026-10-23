@@ -9,7 +9,7 @@
  * Read-only by default: a tool marked read_only=false asks the person each time (ctx.approve), unless
  * they trust that app in Connections.
  */
-import { enumOf, int, schema, str, type JsonObject, type JsonValue, type Tool, type ToolContext } from '@agent/core'
+import { clipResult, enumOf, int, resultLimitOf, schema, str, type JsonObject, type JsonValue, type Tool, type ToolContext } from '@agent/core'
 
 import { netClear, netLog, netStart, netStop, runScript, syntaxError } from '../apps/page-js'
 import { MAX_APPS, MAX_JS, MAX_TOOLS, hostOf, slugOf, type LearnedApp, type LearnedStore, type LearnedTool } from '../apps/store'
@@ -82,11 +82,11 @@ function asObject(value: unknown): JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : {}
 }
 
-/** Result text for the model: the value as JSON, trimmed; or the error. */
+/** Result text for the model: the value as JSON, trimmed (as a valid object, never cut JSON); or the error. */
 export function resultText(res: { ok: boolean; v?: unknown; e?: string }, max = 20_000): string {
   if (!res.ok) return `Error: ${res.e !== undefined && res.e !== '' ? res.e : 'failed'}`
   const v = res.v === undefined || res.v === null ? 'null' : typeof res.v === 'string' ? res.v : JSON.stringify(res.v)
-  return v.length > max ? `${v.slice(0, max)}\n[cut: ${v.length - max} more characters. Make the tool return less.]` : v
+  return clipResult(v, max)
 }
 
 /** Why a tool definition cannot be saved, or null. */
@@ -140,7 +140,7 @@ export async function callLearned(app: LearnedApp, tool: LearnedTool, input: Jso
   let out: string
   try {
     await runner.ensure(app)
-    out = resultText(await runner.run(tool.js, input))
+    out = resultText(await runner.run(tool.js, input), resultLimitOf(ctx, 20_000))
   } catch (cause) {
     out = `Error: could not run ${tool.name} (${cause instanceof Error ? cause.message : String(cause)}).`
   }

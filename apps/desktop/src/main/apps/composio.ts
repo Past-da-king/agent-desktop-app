@@ -51,6 +51,11 @@ export function toolkitChoice(raw: unknown): AppChoice | null {
 
 export interface ComposioBackend {
   readonly kind: ComposioKeyKind
+  /**
+   * True when accounts() with no apps lists every account the person has (REST). A Connect key can only answer for
+   * the apps it is asked about, so the service asks it about every app it knows of (service.ts appsToAsk).
+   */
+  readonly listsEveryApp?: boolean
   /** Null when the key works, otherwise what Composio said, in plain words. */
   verify(): Promise<string | null>
   /** Every account; `apps` narrows it (the Connect server can only list apps it is asked about). */
@@ -58,9 +63,12 @@ export interface ComposioBackend {
   /** Starts connecting an app and returns the sign-in link the person opens. */
   connectLink(app: string): Promise<string>
   disconnect(account: AppAccount): Promise<void>
-  /** The actions an app offers, as text for the model. */
+  /** The actions an app offers, as text (whole: apps_find_tools trims it for a model). */
   findTools(query: string, toolkit: string, limit: number): Promise<string>
-  /** Runs one action. The text is what the model sees; `ok` false means it failed. */
+  /**
+   * Runs one action. The text is the whole result (apps_run trims it for a model, never for a script); `ok` false
+   * means it failed.
+   */
   execute(slug: string, args: JsonObject, account: string | null): Promise<{ ok: boolean; text: string }>
   /** Every toolkit Composio offers, with logos. Null when this kind of key cannot list them. */
   toolkits?(): Promise<AppChoice[] | null>
@@ -127,6 +135,31 @@ export function parse(text: string): unknown {
   }
 }
 
+/**
+ * The apps a Composio reply says the person has a working account in: a tool search's
+ * toolkit_connection_statuses ({ toolkit, has_active_connection, accounts }), wherever in the reply it sits.
+ */
+export function connectedAppsIn(text: string): string[] {
+  const found = new Set<string>()
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 6 || value === null || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1)
+      return
+    }
+    const o = value as Record<string, unknown>
+    for (const raw of asArray(o['toolkit_connection_statuses'])) {
+      const s = asObject(raw)
+      const slug = asText(s['toolkit']).toLowerCase()
+      const active = s['has_active_connection'] === true || asArray(s['accounts']).some((a) => asText(asObject(a)['status']).toLowerCase() === 'active')
+      if (/^[a-z0-9_]{2,60}$/.test(slug) && active) found.add(slug)
+    }
+    for (const [key, child] of Object.entries(o)) if (key !== 'toolkit_connection_statuses') visit(child, depth + 1)
+  }
+  visit(parse(text), 0)
+  return [...found]
+}
+
 /** Escapes control characters that sit inside JSON strings, leaving the structure alone. Exported for tests. */
 export function escapeControlsInStrings(text: string): string {
   let out = ''
@@ -190,6 +223,7 @@ export function identity(account: unknown): string {
  */
 export class RestBackend implements ComposioBackend {
   readonly kind: ComposioKeyKind
+  readonly listsEveryApp = true
   private auth: Record<string, string> | null = null
 
   constructor(
@@ -376,7 +410,7 @@ export class RestBackend implements ComposioBackend {
       }
     })
     if (tools.length === 0) return 'No matching actions. Try other words, or another toolkit.'
-    return JSON.stringify(tools, null, 1).slice(0, 16_000)
+    return JSON.stringify(tools, null, 1)
   }
 
   async execute(slug: string, args: JsonObject, account: string | null): Promise<{ ok: boolean; text: string }> {
@@ -387,7 +421,7 @@ export class RestBackend implements ComposioBackend {
     })
     const ok = res['successful'] !== false
     if (!ok) return { ok, text: `Error: ${asText(res['error']) || 'the action failed'}` }
-    return { ok, text: JSON.stringify(res['data'] ?? res).slice(0, 20_000) }
+    return { ok, text: JSON.stringify(res['data'] ?? res) }
   }
 }
 
@@ -566,7 +600,7 @@ export class ConnectBackend implements ComposioBackend {
 
   async findTools(query: string, toolkit: string, _limit: number): Promise<string> {
     const useCase = toolkit === '' ? query : `${query} (in ${appName(toolkit)}, toolkit ${toolkit})`
-    return (await this.call('COMPOSIO_SEARCH_TOOLS', { queries: [{ use_case: useCase }] })).slice(0, 16_000)
+    return this.call('COMPOSIO_SEARCH_TOOLS', { queries: [{ use_case: useCase }] })
   }
 
   private placement: { top: string | null; item: string | null } | null = null
@@ -605,6 +639,6 @@ export class ConnectBackend implements ComposioBackend {
     const input: JsonObject = { tools: [entry] }
     if (account !== null && (where.top !== null || neither)) input[where.top ?? 'account'] = account
     const text = await this.call('COMPOSIO_MULTI_EXECUTE_TOOL', input)
-    return { ok: !text.startsWith('Error:'), text: text.slice(0, 20_000) }
+    return { ok: !text.startsWith('Error:'), text }
   }
 }
