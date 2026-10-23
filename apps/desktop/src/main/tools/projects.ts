@@ -8,7 +8,7 @@ import { mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
-import { MAIN_CHAT, PROFILE_COLORS, bool, findProjects, parseAliases, pickMatch, schema, str, NO_PICK, type AgentProfileInfo, type AiAccount, type AiPicks, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext } from '@agent/core'
+import { MAIN_CHAT, PROFILE_COLORS, bool, findProjects, parseAliases, pickMatch, schema, str, strList, NO_PICK, type AgentProfileInfo, type AiAccount, type AiPicks, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext } from '@agent/core'
 
 import { isIconImage } from '../../shared/project-icon'
 import type { DataStore } from '../runtime/data'
@@ -367,9 +367,10 @@ function projectUpdate(deps: ProjectToolDeps): Tool {
   return {
     spec: {
       name: 'project_update',
-      description: 'Change a project the user asked you to change: rename it, move it to another folder, change its profile, icon, colour, description or other names, or hide it from the rail and show it again. Pass only what changes.',
-      schema: schema(['project'], {
-        project: str('The project, by name or id'),
+      description: 'Change a project the user asked you to change: rename it, move it to another folder, change its profile, icon, colour, description or other names, or hide it from the rail and show it again. Pass only what changes. The same change on many projects is ONE call: project "all" (every project, hidden ones too) or projects with a list of names or ids; it returns one short summary.',
+      schema: schema([], {
+        project: str('The project, by name or id; or "all" for every project'),
+        projects: strList('Several projects by name or id: the same change goes to each (instead of project)'),
         name: str('New name'),
         path: str('New folder: its full path on this computer, or "none"'),
         description: str('New description'),
@@ -387,72 +388,117 @@ function projectUpdate(deps: ProjectToolDeps): Tool {
     },
     run: async (input) => {
       const projects = await deps.store.list('project')
-      const project = findProject(projects, text(input['project']))
-      if (project === null) return `No project called "${text(input['project'])}". project_list shows them.`
-      const patch: Partial<ProjectRow> & { id: string } = { id: project.id }
-      const changed: string[] = []
-      const name = text(input['name']).replace(/\s+/g, ' ').slice(0, 60)
-      if (name !== '' && name !== project.name) {
-        patch.name = name
-        changed.push(`named ${name}`)
+      const list = Array.isArray(input['projects']) ? input['projects'].map((item) => text(item)).filter((item) => item !== '') : []
+      const one = text(input['project'])
+      if (list.length === 0 && one === '') return 'Pass project (a name, an id or "all") or projects (a list).'
+      if (list.length === 0 && one.toLowerCase() !== 'all') {
+        const project = findProject(projects, one)
+        if (project === null) return `No project called "${one}". project_list shows them.`
+        const done = await updateOne(deps, project, input, projects)
+        return done.error ?? (done.changed.length === 0 ? 'Nothing to change.' : `${project.name}: ${done.changed.join(', ')}.`)
       }
-      if (typeof input['path'] === 'string') {
-        const raw = text(input['path'])
-        const path = raw.toLowerCase() === 'none' ? '' : folderPath(raw)
-        if (path !== '' && !(await isFolder(path))) return `There is no folder at ${path}. Find it with files_find or files_list and call again.`
-        patch.path = path
-        changed.push(path === '' ? 'no folder' : `folder ${path}`)
+      // The same change on many projects (23 Oct 2026): one call, one short summary.
+      if (text(input['name']) !== '') return 'A new name fits one project only: pass project with one name or id to rename it.'
+      const targets: ProjectRow[] = []
+      const missing: string[] = []
+      if (list.length === 0) targets.push(...projects)
+      for (const ref of list) {
+        const project = findProject(projects, ref)
+        if (project === null) missing.push(ref)
+        else if (!targets.some((p) => p.id === project.id)) targets.push(project)
       }
-      if (typeof input['description'] === 'string') {
-        patch.description = text(input['description']).slice(0, 600)
-        changed.push('description')
-      }
-      if (typeof input['aliases'] === 'string') {
-        patch.aliases = parseAliases(input['aliases'])
-        changed.push(patch.aliases.length === 0 ? 'no other names' : `other names ${patch.aliases.join(', ')}`)
-      }
-      if (typeof input['profile'] === 'string') {
-        const profile = profileByName(deps, text(input['profile']))
-        if (profile === null) return `No profile called "${text(input['profile'])}". The user's profiles: ${profileNames(deps)}.`
-        patch.profile = profile === 'general' ? '' : profile.id
-        changed.push(`profile ${profile === 'general' ? 'General' : profile.name}`)
-      }
-      const picture = await pictureFor(deps, text(input['icon_image']))
-      if (picture !== null && 'error' in picture) return picture.error
-      if (typeof input['icon'] === 'string' || typeof input['color'] === 'string' || picture !== null) {
-        const image = picture !== null ? picture.image : typeof input['icon'] === 'string' ? '' : (project.icon.image ?? '')
-        patch.icon = {
-          glyph: typeof input['icon'] === 'string' ? iconGlyph(text(input['icon'])) : project.icon.glyph,
-          color: typeof input['color'] === 'string' ? colorOf(text(input['color']), projects) : project.icon.color,
-          ...(image === '' ? {} : { image }),
+      if (targets.length === 0) return missing.length > 0 ? `No project called ${missing.map((m) => `"${m}"`).join(', ')}. project_list shows them.` : 'There are no projects yet.'
+      const changedNames: string[] = []
+      const same: string[] = []
+      const failed: string[] = []
+      let what: string[] = []
+      for (const project of targets) {
+        const done = await updateOne(deps, project, input, projects)
+        if (done.error !== undefined) {
+          // The same bad argument fails every project the same way: say it once.
+          if (changedNames.length === 0 && failed.length === 0 && done.fatal) return done.error
+          failed.push(`${project.name}: ${done.error}`)
+        } else if (done.changed.length === 0) same.push(project.name)
+        else {
+          changedNames.push(project.name)
+          what = done.changed
         }
-        changed.push(picture !== null ? (picture.image === '' ? 'icon back to its glyph' : 'its own picture as the icon') : 'icon')
       }
-      if (typeof input['hidden'] === 'boolean' && input['hidden'] !== project.hidden) {
-        patch.hidden = input['hidden']
-        changed.push(input['hidden'] ? 'hidden from the rail' : 'back on the rail')
-      }
-      if (['main_ai', 'main_model', 'helpers_ai', 'helpers_model'].some((key) => typeof input[key] === 'string')) {
-        const ai: AiPicks = { main: { ...(project.ai?.main ?? NO_PICK) }, helpers: { ...(project.ai?.helpers ?? NO_PICK) } }
-        for (const slot of ['main', 'helpers'] as const) {
-          const named = input[`${slot}_ai`]
-          if (typeof named === 'string') {
-            const account = accountByName(deps, named)
-            if (account === null) return `No AI account called "${text(named)}". The user's accounts: ${accountNames(deps)}.`
-            ai[slot] = { account: account === 'main' ? '' : account.id, model: ai[slot].model }
-            changed.push(`${slot === 'main' ? 'its agent' : 'its helpers'} think with ${account === 'main' ? "the main thread's AI" : account.label}`)
-          }
-          const model = input[`${slot}_model`]
-          if (typeof model === 'string') {
-            ai[slot] = { account: ai[slot].account, model: model.trim().slice(0, 120) }
-            changed.push(`${slot === 'main' ? 'its agent' : 'its helpers'} on ${model.trim() === '' ? 'the default model' : model.trim()}`)
-          }
-        }
-        patch.ai = ai
-      }
-      if (changed.length === 0) return 'Nothing to change.'
-      await deps.store.upsert('project', patch)
-      return `${project.name}: ${changed.join(', ')}.`
+      const lines: string[] = []
+      if (changedNames.length > 0) lines.push(`Changed ${changedNames.length} project${changedNames.length === 1 ? '' : 's'} (${what.join(', ')}): ${clip(changedNames.join(', '), 600)}.`)
+      if (same.length > 0) lines.push(`Nothing to change on ${same.length}: ${clip(same.join(', '), 300)}.`)
+      if (failed.length > 0) lines.push(`Failed on ${failed.length}: ${clip(failed.join('; '), 600)}`)
+      if (missing.length > 0) lines.push(`Not found: ${missing.join(', ')}.`)
+      return lines.join('\n')
     },
   }
+}
+
+/** One project's change. `fatal` marks an argument that is wrong for every project (an unknown account or profile). */
+async function updateOne(deps: ProjectToolDeps, project: ProjectRow, input: JsonObject, projects: ProjectRow[]): Promise<{ changed: string[]; error?: string; fatal?: boolean }> {
+  const fail = (error: string, fatal = true) => ({ changed: [], error, fatal })
+  const patch: Partial<ProjectRow> & { id: string } = { id: project.id }
+  const changed: string[] = []
+  const name = text(input['name']).replace(/\s+/g, ' ').slice(0, 60)
+  if (name !== '' && name !== project.name) {
+    patch.name = name
+    changed.push(`named ${name}`)
+  }
+  if (typeof input['path'] === 'string') {
+    const raw = text(input['path'])
+    const path = raw.toLowerCase() === 'none' ? '' : folderPath(raw)
+    if (path !== '' && !(await isFolder(path))) return fail(`There is no folder at ${path}. Find it with files_find or files_list and call again.`)
+    patch.path = path
+    changed.push(path === '' ? 'no folder' : `folder ${path}`)
+  }
+  if (typeof input['description'] === 'string') {
+    patch.description = text(input['description']).slice(0, 600)
+    changed.push('description')
+  }
+  if (typeof input['aliases'] === 'string') {
+    patch.aliases = parseAliases(input['aliases'])
+    changed.push(patch.aliases.length === 0 ? 'no other names' : `other names ${patch.aliases.join(', ')}`)
+  }
+  if (typeof input['profile'] === 'string') {
+    const profile = profileByName(deps, text(input['profile']))
+    if (profile === null) return fail(`No profile called "${text(input['profile'])}". The user's profiles: ${profileNames(deps)}.`)
+    patch.profile = profile === 'general' ? '' : profile.id
+    changed.push(`profile ${profile === 'general' ? 'General' : profile.name}`)
+  }
+  const picture = await pictureFor(deps, text(input['icon_image']))
+  if (picture !== null && 'error' in picture) return fail(picture.error)
+  if (typeof input['icon'] === 'string' || typeof input['color'] === 'string' || picture !== null) {
+    const image = picture !== null ? picture.image : typeof input['icon'] === 'string' ? '' : (project.icon.image ?? '')
+    patch.icon = {
+      glyph: typeof input['icon'] === 'string' ? iconGlyph(text(input['icon'])) : project.icon.glyph,
+      color: typeof input['color'] === 'string' ? colorOf(text(input['color']), projects) : project.icon.color,
+      ...(image === '' ? {} : { image }),
+    }
+    changed.push(picture !== null ? (picture.image === '' ? 'icon back to its glyph' : 'its own picture as the icon') : 'icon')
+  }
+  if (typeof input['hidden'] === 'boolean' && input['hidden'] !== project.hidden) {
+    patch.hidden = input['hidden']
+    changed.push(input['hidden'] ? 'hidden from the rail' : 'back on the rail')
+  }
+  if (['main_ai', 'main_model', 'helpers_ai', 'helpers_model'].some((key) => typeof input[key] === 'string')) {
+    const ai: AiPicks = { main: { ...(project.ai?.main ?? NO_PICK) }, helpers: { ...(project.ai?.helpers ?? NO_PICK) } }
+    for (const slot of ['main', 'helpers'] as const) {
+      const named = input[`${slot}_ai`]
+      if (typeof named === 'string') {
+        const account = accountByName(deps, named)
+        if (account === null) return fail(`No AI account called "${text(named)}". The user's accounts: ${accountNames(deps)}.`)
+        ai[slot] = { account: account === 'main' ? '' : account.id, model: ai[slot].model }
+        changed.push(`${slot === 'main' ? 'its agent' : 'its helpers'} think with ${account === 'main' ? "the main thread's AI" : account.label}`)
+      }
+      const model = input[`${slot}_model`]
+      if (typeof model === 'string') {
+        ai[slot] = { account: ai[slot].account, model: model.trim().slice(0, 120) }
+        changed.push(`${slot === 'main' ? 'its agent' : 'its helpers'} on ${model.trim() === '' ? 'the default model' : model.trim()}`)
+      }
+    }
+    patch.ai = ai
+  }
+  if (changed.length === 0) return { changed }
+  await deps.store.upsert('project', patch)
+  return { changed }
 }
