@@ -39,6 +39,8 @@ import type { HelperHost } from './helpers'
 import type { SettingsView } from './runner'
 import { deviceTools, type DeviceToolDeps } from '../tools/devices'
 import { deviceAgentTools, withDeviceArg, type DeviceToolHub } from '../devices/device-tools'
+import { withLearnedRoute } from '../devices/learned-route'
+import { BASE_PARTITION } from '../apps/profiles'
 import { appControlTools, appUpdateTools, type AppControlDeps } from '../tools/app-control'
 import { appActionTools } from '../tools/app-actions'
 import { vaultTools } from '../tools/vault'
@@ -96,7 +98,23 @@ export interface ToolsetDeps extends CoreToolDeps {
 function withDevices(tools: Tool[], deps: ToolsetDeps): Tool[] {
   const hub = deps.deviceHub
   if (hub === undefined) return tools
-  return [...withDeviceArg(tools, hub), ...deviceAgentTools({ hub })]
+  const learned = deps.learned
+  const browser = deps.browser
+  const apps = deps.apps
+  // Learned apps run on the device whose browser is signed in to them (devices/learned-route.ts).
+  const routed =
+    learned === undefined
+      ? tools
+      : withLearnedRoute(tools, hub, {
+          learned,
+          selfId: () => hub()?.selfId() ?? '',
+          siteHere: async (url, ctx) => {
+            if (browser?.hasSiteData === undefined) return null
+            const partition = apps === undefined ? BASE_PARTITION : apps.profiles.partitionOf(apps.profileOf(ctx.profile)?.id ?? null)
+            return browser.hasSiteData(partition, url)
+          },
+        })
+  return [...withDeviceArg(routed, hub), ...deviceAgentTools({ hub })]
 }
 
 /**

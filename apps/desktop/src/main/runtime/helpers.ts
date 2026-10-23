@@ -400,6 +400,7 @@ export class HelperManager implements HelperHost {
     // stops the whole call before anything starts, so the main agent can fix it and send them again.
     // Started from a project chat: helpers work in the project's profile unless the brief names another.
     const projectProfile = chat === MAIN_CHAT ? '' : await this.projectProfileOf(chat)
+    const projectFolder = chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), chat)
     const chosen: AgentProfileInfo[] = []
     for (const task of clean) {
       const wanted = (task.profile ?? '').trim() || projectProfile
@@ -420,7 +421,11 @@ export class HelperManager implements HelperHost {
       const profile = chosen[index] ?? this.generalProfile()
       const use = picked[index]!
       const link = this.link()
-      const placed = link === null ? null : await link.place({ text: `${label}\n${task.brief}`, account: use.pick.account, ...(task.device === undefined ? {} : { device: task.device }) })
+      // A helper of a project that works in a folder on this computer needs this computer, like the project chat itself.
+      const placed =
+        link === null
+          ? null
+          : await link.place({ text: `${label}\n${task.brief}`, account: use.pick.account, ...(task.device === undefined ? {} : { device: task.device }), ...(projectFolder === '' ? {} : { localFolder: true }) })
       // Placed on another brain: it carries this computer's choice for commands and files, which the person made here.
       const where =
         link === null

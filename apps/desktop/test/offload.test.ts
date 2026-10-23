@@ -63,6 +63,15 @@ describe('placement', () => {
     expect(choosePlacement({ ...job, localFolder: true }, [candidate()], 'desktop', 'best').device).toBeNull()
   })
 
+  it('keeps a job whose brief names this computer, by its device name or its host name', () => {
+    const names = ['Desk', 'WORKSTATION-01']
+    for (const text of ['Fix the app on WORKSTATION-01 and build it', 'Run it on desk, not the server']) {
+      expect(choosePlacement({ ...job, text, selfNames: names }, [candidate()], 'desktop', 'best')).toMatchObject({ device: null, why: 'it needs this computer' })
+    }
+    // Part of a word is not the name.
+    expect(choosePlacement({ ...job, text: 'Research desktops and compare three', selfNames: names }, [candidate()], 'desktop', 'best').device).toBe('dev_srv')
+  })
+
   it('never a brain that cannot run its AI, is offline, full or takes no work', () => {
     expect(choosePlacement(job, [candidate({ accounts: ['other'] })], 'desktop', 'best').device).toBeNull()
     expect(choosePlacement(job, [candidate({ up: false })], 'desktop', 'best').device).toBeNull()
@@ -232,6 +241,21 @@ function gate(): { tool: Tool; started: () => number; release: () => void } {
 }
 
 const text = (body: Record<string, unknown>): string => JSON.stringify(body['messages'] ?? [])
+
+describe('helpers of a project that works in a folder on this computer', () => {
+  it('stay on this computer, like the project chat itself', async () => {
+    const { pc, srv } = await twoNodes({
+      pc: { script: () => ({ text: 'Changed the code here.' }) },
+      server: { script: () => ({ text: 'Server should not think' }) },
+    })
+    await pc.db.upsert('project', { name: 'App', description: '', path: '/home/someone/app', profile: '', hidden: false, chats: ['proj-chat'] } as never)
+    const started = await pc.helpers.delegate([{ label: 'Fix it', brief: 'Research the market for standing desks and compare three' }], false, { chat: 'proj-chat' })
+    const id = idOf(started)
+    expect(pc.helpers.live().find((each) => each.id === id)?.remote).not.toBe(true)
+    await waitFor(() => pc.fake.requests.length >= 1, 8000)
+    expect(srv.fake.requests.length).toBe(0)
+  })
+})
 
 describe('helpers on another brain', () => {
   it('a helper delegated here runs on the server; its card works here and its result lands here', async () => {

@@ -163,10 +163,18 @@ export interface LearnedApp {
    * browsing in one of them may run it (tools/profile-gate.ts). Absent on apps saved before 0.2.71.
    */
   partitions?: string[]
+  /**
+   * The linked devices (device ids) whose browser ran one of its tools successfully, i.e. where its site is signed
+   * in. A brain whose own browser is not signed in runs the tool on one of them (devices/learned-route.ts). Absent on
+   * apps saved before 0.2.72.
+   */
+  devices?: string[]
 }
 
 /** At most this many partitions are remembered per app (one per profile browser is plenty). */
 export const MAX_PARTITIONS = 32
+/** At most this many devices are remembered per app. */
+export const MAX_DEVICES = 16
 
 export const MAX_APPS = 30
 export const MAX_TOOLS = 40
@@ -222,6 +230,9 @@ function toApp(raw: unknown): LearnedApp | null {
     ...(Array.isArray(o['partitions'])
       ? { partitions: [...new Set(o['partitions'].filter((p): p is string => typeof p === 'string' && p !== ''))].slice(0, MAX_PARTITIONS) }
       : {}),
+    ...(Array.isArray(o['devices'])
+      ? { devices: [...new Set(o['devices'].filter((d): d is string => typeof d === 'string' && d !== ''))].slice(0, MAX_DEVICES) }
+      : {}),
   }
 }
 
@@ -255,12 +266,14 @@ export class LearnedStore {
   save(app: LearnedApp): void {
     const old = this.list.find((a) => a.id === app.id)
     const partitions = [...new Set([...(old?.partitions ?? []), ...(app.partitions ?? [])])].slice(0, MAX_PARTITIONS)
+    const devices = [...new Set([...(old?.devices ?? []), ...(app.devices ?? [])])].slice(0, MAX_DEVICES)
     const next = {
       ...app,
       trusted: old?.trusted ?? false,
       updatedAt: this.now(),
       ...(old?.icon === undefined ? {} : { icon: old.icon }),
       ...(partitions.length === 0 ? {} : { partitions }),
+      ...(devices.length === 0 ? {} : { devices }),
     }
     this.list = [...this.list.filter((a) => a.id !== app.id), next]
     this.persist()
@@ -277,6 +290,15 @@ export class LearnedStore {
     if (app.partitions !== undefined && known.includes(partition)) return
     const partitions = [...new Set([...known, partition])].slice(-MAX_PARTITIONS)
     this.list = this.list.map((a) => (a.id === id ? { ...a, partitions } : a))
+    this.persist()
+  }
+
+  /** Remembers that an app worked in this device's browser (its site is signed in there). Written only when new. */
+  noteDevice(id: string, deviceId: string): void {
+    const app = this.list.find((a) => a.id === id)
+    if (app === undefined || deviceId === '' || (app.devices ?? []).includes(deviceId)) return
+    const devices = [...(app.devices ?? []), deviceId].slice(-MAX_DEVICES)
+    this.list = this.list.map((a) => (a.id === id ? { ...a, devices } : a))
     this.persist()
   }
 
