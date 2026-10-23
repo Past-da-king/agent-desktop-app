@@ -281,7 +281,13 @@ export class VaultStore {
   savePasskey(input: { rpId: string; rpName?: string; userName?: string; credentialId: string; userHandle: string; signCount: number; privateKey: string }, who: string): VaultItemMeta {
     const existing = this.file().items.find((item) => item.kind === 'passkey' && item.passkey?.credentialId === input.credentialId)
     const passkey: VaultPasskey = { rpId: input.rpId, credentialId: input.credentialId, userHandle: input.userHandle, signCount: input.signCount }
-    if (existing !== undefined) return this.save({ id: existing.id, name: existing.name, passkey, fields: { privateKey: input.privateKey } }, who)
+    if (existing !== undefined) {
+      // A sign-in: only the sign count moves. Logged as a use, and still a change, so the other brains get it.
+      const file = this.file()
+      const items = file.items.map((item) => (item.id === existing.id ? { ...item, passkey, lastUsedAt: this.now(), useCount: item.useCount + 1 } : item))
+      this.write({ ...file, items }, { at: this.now(), itemId: existing.id, name: existing.name, action: 'use', who })
+      return toMeta(items.find((item) => item.id === existing.id)!)
+    }
     const site = input.rpName !== undefined && input.rpName.trim() !== '' ? input.rpName.trim() : input.rpId
     return this.save({ name: `${site} passkey`, kind: 'passkey', username: input.userName ?? '', url: `https://${input.rpId}`, hosts: [input.rpId], passkey, source: 'browser', fields: { privateKey: input.privateKey } }, who)
   }

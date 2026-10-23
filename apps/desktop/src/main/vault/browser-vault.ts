@@ -104,7 +104,9 @@ export class BrowserVault {
   /** Start serving one page target. Returns a function that stops listening. */
   async attach(link: VaultLink, options: VaultAttachOptions): Promise<() => void> {
     const at: Attachment = { link, options, op: null, conditional: null, lastUsername: null }
-    const off = link.onEvent((method, params, sessionId) => {
+    const off = link.onEvent((method, params, rawSession) => {
+      // A page target's own session can arrive as '': that is no session.
+      const sessionId = rawSession === '' ? undefined : rawSession
       if (method === 'Runtime.bindingCalled' && params['name'] === VAULT_BINDING) {
         void this.onCall(at, String(params['payload'] ?? ''), Number(params['executionContextId']), sessionId)
       } else if (method === 'Target.attachedToTarget' && options.frames === true) {
@@ -234,7 +236,7 @@ export class BrowserVault {
         at.conditional = null
         // The person's click on the passkey in the list is the yes.
         await this.startPasskey(at, { pid: waiting.pid, kind: 'get', rpId: waiting.rpId, rpName: '', user: '' }, waiting.sessionId, [item])
-        await this.push(at.link, waiting.contextId, waiting.sessionId, { type: 'passkeyAnswer', id: waiting.pid, answer: 'vault' })
+        await this.push(at.link, waiting.contextId, waiting.sessionId, { type: 'passkeyAnswer', id: waiting.pid, answer: 'vault', allow: item.passkey === undefined ? [] : [item.passkey.credentialId] })
         return {}
       }
       case 'passkeyDone': {
@@ -322,7 +324,8 @@ export class BrowserVault {
     if (kind === 'get' && msg['conditional'] === true) {
       // Wait for the person to pick it in the list under the username field (or for the page to give up).
       at.conditional = { pid, rpId, host, contextId, sessionId }
-      return { answer: at.options.person() ? 'wait' : 'native' }
+      // Held for an agent too: passing it to the system would leave a request pending that blocks the real one.
+      return { answer: 'wait' }
     }
     const yes = await this.decide(at, kind, rpId, rpName || rpId, user, contextId, sessionId)
     if (yes === 'deny') {
@@ -331,7 +334,7 @@ export class BrowserVault {
     }
     if (yes === 'native') return { answer: 'native' }
     await this.startPasskey(at, { pid, kind, rpId, rpName, user }, sessionId, keys)
-    return { answer: 'vault' }
+    return { answer: 'vault', allow: keys.map((item) => item.passkey?.credentialId ?? '').filter((id) => id !== '') }
   }
 
   private async decide(at: Attachment, kind: 'get' | 'create', rpId: string, site: string, user: string, contextId: number, sessionId: string | undefined): Promise<'vault' | 'native' | 'deny'> {
@@ -355,6 +358,8 @@ export class BrowserVault {
   private async startPasskey(at: Attachment, op: Omit<PasskeyOp, 'sessionId' | 'authenticatorId'>, sessionId: string | undefined, keys: VaultRecord[]): Promise<void> {
     if (at.op !== null) await this.endPasskey(at)
     const send = (method: string, params: Record<string, unknown> = {}): Promise<unknown> => at.link.send(method, params, sessionId)
+    // A passkey call needs the page to have focus; an agent works in a tab in the background.
+    await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined)
     await send('WebAuthn.enable', { enableUI: false })
     const made = (await send('WebAuthn.addVirtualAuthenticator', {
       options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
@@ -405,6 +410,7 @@ export class BrowserVault {
     } finally {
       await send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: op.authenticatorId }).catch(() => undefined)
       await send('WebAuthn.disable').catch(() => undefined)
+      await send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined)
     }
   }
 }

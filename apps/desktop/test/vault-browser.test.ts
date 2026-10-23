@@ -185,7 +185,7 @@ describe('passkeys', () => {
     const prompt = page.pushes[0] as Record<string, string>
     expect(prompt).toMatchObject({ type: 'passkey', op: 'create', site: 'Demo', user: 'alice' })
     await page.call('passkeyAnswer', { token: prompt['token'], yes: true }, 'https://demo.example/register')
-    expect(await pending).toEqual({ answer: 'vault' })
+    expect(await pending).toMatchObject({ answer: 'vault' })
     expect(page.sent.map((s) => s.method)).toContain('WebAuthn.addVirtualAuthenticator')
     page.authenticatorCreds.push(made)
     await page.call('passkeyDone', { pid: 1 }, 'https://demo.example/register')
@@ -195,6 +195,13 @@ describe('passkeys', () => {
     expect(keys[0]!.username).toBe('alice')
     expect(JSON.stringify(vault.list())).not.toContain(made.privateKey)
     expect(page.sent.map((s) => s.method)).toContain('WebAuthn.removeVirtualAuthenticator')
+  })
+
+  it('holds a background (conditional) request while the vault has a key for the site, for agents too', async () => {
+    vault.savePasskey({ ...made, userName: 'alice' }, 'person')
+    const { page } = await attach(false)
+    expect(await page.call('passkey', { pid: 9, kind: 'get', rpId: 'demo.example', conditional: true }, 'https://demo.example/')).toEqual({ answer: 'wait' })
+    expect(await page.call('passkey', { pid: 10, kind: 'get', rpId: 'none.example', conditional: true }, 'https://none.example/')).toEqual({ answer: 'native' })
   })
 
   it('Not now leaves the page to the system; a page cannot ask for another site', async () => {
@@ -216,7 +223,7 @@ describe('passkeys', () => {
     expect(await page.call('passkey', { pid: 5, kind: 'get', rpId: 'demo.example' }, 'https://demo.example/login')).toEqual({ answer: 'deny' })
     await tool.run({ site: 'demo.example', why: 'sign in' }, testContext({ approve: async () => true }))
     expect(asked).toHaveLength(1)
-    expect(await page.call('passkey', { pid: 6, kind: 'get', rpId: 'demo.example' }, 'https://demo.example/login')).toEqual({ answer: 'vault' })
+    expect(await page.call('passkey', { pid: 6, kind: 'get', rpId: 'demo.example' }, 'https://demo.example/login')).toMatchObject({ answer: 'vault' })
     const added = page.sent.find((s) => s.method === 'WebAuthn.addCredential')
     expect((added?.params['credential'] as Record<string, unknown>)['privateKey']).toBe(made.privateKey)
     page.authenticatorCreds[0]!['signCount'] = 3
@@ -228,9 +235,9 @@ describe('passkeys', () => {
     vault.savePasskey({ ...made, userName: 'alice' }, 'person')
     vault.setPrefs({ dontAsk: true })
     const agent = await attach(false)
-    expect(await agent.page.call('passkey', { pid: 7, kind: 'get', rpId: 'demo.example' }, 'https://demo.example/')).toEqual({ answer: 'vault' })
+    expect(await agent.page.call('passkey', { pid: 7, kind: 'get', rpId: 'demo.example' }, 'https://demo.example/')).toMatchObject({ answer: 'vault' })
     const person = await attach(true)
-    expect(await person.page.call('passkey', { pid: 8, kind: 'get', rpId: 'demo.example' }, 'https://demo.example/')).toEqual({ answer: 'vault' })
+    expect(await person.page.call('passkey', { pid: 8, kind: 'get', rpId: 'demo.example' }, 'https://demo.example/')).toMatchObject({ answer: 'vault' })
     expect(person.page.pushes).toHaveLength(0)
   })
 })

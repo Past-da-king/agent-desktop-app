@@ -2154,9 +2154,10 @@ export function addressOf(raw: string): string | null {
 /** The line from the Vault into a page: its own debugger, frames included (sessionId). */
 function debuggerLink(wc: WebContents): VaultLink {
   return {
-    send: (method, params = {}, sessionId) => wc.debugger.sendCommand(method, params, sessionId),
+    // Electron names the page's own session '' in its events, and a command sent to session '' goes nowhere.
+    send: (method, params = {}, sessionId) => (sessionId ? wc.debugger.sendCommand(method, params, sessionId) : wc.debugger.sendCommand(method, params)),
     onEvent: (listener) => {
-      const handler = (_event: Electron.Event, method: string, params: Record<string, unknown>, sessionId?: string): void => listener(method, params, sessionId)
+      const handler = (_event: Electron.Event, method: string, params: Record<string, unknown>, sessionId?: string): void => listener(method, params, sessionId || undefined)
       wc.debugger.on('message', handler)
       return () => wc.debugger.removeListener('message', handler)
     },
