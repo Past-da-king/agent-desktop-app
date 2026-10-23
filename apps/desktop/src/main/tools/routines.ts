@@ -5,8 +5,12 @@
  * `daily` (a time of day) and `interval` (every N minutes); the phone's email and notification
  * triggers are not part of this app.
  *
- * A routine the agent creates is a lasting change to the person's setup, so it asks for approval
- * first. Listing and deleting do not need one.
+ * Creating, changing and deleting a routine raise no approval card (rule of 23 Oct 2026). Every run that holds
+ * these tools is the person's own agent: the main agent or a chat he is talking to, a helper one of them started,
+ * or a routine he already has (a scheduler routine that makes one `at` routine per meeting raised a card per meeting).
+ * A routine is the app's own bookkeeping, not his data, and it cannot act around him: whatever it does when it
+ * runs (send, pay, delete his things, touch a secret) asks there, in that run, as any other call does. The routine
+ * shows on the Routines page, and in the chat as an activity line, as soon as it is made.
  */
 import {
   bool,
@@ -66,14 +70,6 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
       const profile = kind === 'event' ? text(input['profile']).trim() : ''
       const device = kind === 'event' ? '' : text(input['device']).trim()
 
-      const approved = await ctx.approve(
-        `Create a routine: ${name}`,
-        `Runs ${plainSchedule(kind, spec)}.${
-          kind === 'event' ? ` Events are gathered for ${gather} seconds, and one standing helper${profile === '' ? '' : ` in ${profile}`} handles every run.` : ''
-        }\n\nEach time it will: ${prompt}`,
-      )
-      if (!approved) return 'The user declined.'
-
       const row = await store.upsert('trigger', {
         name,
         kind,
@@ -86,7 +82,9 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
         ...(device === '' ? {} : { device }),
       })
       await ctx.activity(`New routine: ${name}`, { tool: 'routine_create' })
-      return `Routine #${row.id} created.`
+      return `Routine #${row.id} created: runs ${plainSchedule(kind, spec)}.${
+        kind === 'event' ? ` Events are gathered for ${gather} seconds, and one standing helper${profile === '' ? '' : ` in ${profile}`} handles every run.` : ''
+      }`
     },
   }
 }
@@ -144,8 +142,6 @@ function routineUpdate(store: DataStore, now: () => Date): Tool {
       const said = [spec === '' ? '' : `runs ${plainSchedule(row.kind, spec)}`, enabled === null ? '' : enabled ? 'switched on' : 'switched off']
         .filter((part) => part !== '')
         .join(' and ')
-      const approved = await ctx.approve(`Change a routine: ${row.name}`, `It ${said}.`)
-      if (!approved) return 'The user declined.'
       await store.upsert('trigger', { id: row.id, ...(spec === '' ? {} : { spec }), ...(enabled === null ? {} : { enabled }) })
       await ctx.activity(`Changed routine: ${row.name}`, { tool: 'routine_update' })
       return `Routine #${row.id} now ${said}.`

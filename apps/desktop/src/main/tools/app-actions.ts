@@ -32,6 +32,8 @@ export interface AppActionRule {
   secretArgs?: number[]
   /** The first argument must be one of these (data.upsert: only rows the window's forms edit). */
   firstArgIn?: readonly string[]
+  /** For kind 'ask': a first argument that needs no card (data.remove 'trigger': a routine is not the person's data). */
+  freeFirstArgs?: readonly string[]
 }
 
 /**
@@ -90,7 +92,12 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'data.list': free('List rows of a kind: task, goal, routine, memory, project, chat, profile... (every list view)', 'entity'),
   'data.get': free('Read one row', 'entity, id'),
   'data.upsert': { ...free('Create or change a row (every edit form: task, goal, trigger = routine, project, memory)', 'entity, row'), firstArgIn: EDITABLE_ENTITIES },
-  'data.remove': { ...ask('Delete a row (every Delete button: task, goal, trigger = routine, project, memory)', 'entity, id'), firstArgIn: EDITABLE_ENTITIES },
+  'data.remove': {
+    ...ask('Delete a row (every Delete button: task, goal, trigger = routine, project, memory)', 'entity, id'),
+    firstArgIn: EDITABLE_ENTITIES,
+    // Deleting a routine is the app's own bookkeeping, as routine_delete is (tools/routines.ts).
+    freeFirstArgs: ['trigger'],
+  },
   // Chat
   'chat.send': free('Send a message into a chat (main, a project chat, a quick chat)', 'text, attachments[], chatId'),
   'chat.stop': free('Stop a chat that is working (Stop button)', 'chatId'),
@@ -349,7 +356,7 @@ function actionTool(deps: AppActionDeps): Tool {
       if (rule.firstArgIn !== undefined && !rule.firstArgIn.includes(String(args[0]))) return `${method} works on ${rule.firstArgIn.join(', ')} only; "${String(args[0])}" has its own tools.`
       const invoker = deps.invoker()
       if (invoker === null || !invoker.has(channel)) return `${method} is not available here (this app has no ${areaOf(method)} part running).`
-      if (rule.kind === 'ask') {
+      if (rule.kind === 'ask' && !(rule.freeFirstArgs?.includes(String(args[0])) ?? false)) {
         const shown = hideSecrets(args, rule)
         const yes = await ctx.approve(`${rule.about}`, `app_action ${method}(${shown.map((arg) => JSON.stringify(arg)).join(', ')})`)
         if (!yes) return `The person said no; ${method} was not done.`

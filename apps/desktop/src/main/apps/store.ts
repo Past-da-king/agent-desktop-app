@@ -2,7 +2,7 @@
  * Local files for connections, under the app's userData folder. Nothing here is a secret: the
  * Composio key lives in the secrets module only.
  *
- *   connected-apps.json  { userId, rules }   our Composio user id and the rules per account
+ *   connected-apps.json  { userId, rules, apps }   our Composio user id, the rules per account, apps seen with accounts
  *   learned-apps.json    [LearnedApp, ...]   sites the agent mapped and the tools it saved
  *
  * Learned apps are deliberately not a synced entity yet; they stay on this computer, as on the phone
@@ -15,6 +15,8 @@ import { dirname } from 'node:path'
 import { DEFAULT_ACCOUNT_RULES, type AccountRules, type AppRule, type JsonObject } from '@agent/core'
 
 const RULES: readonly AppRule[] = ['allow', 'ask', 'never']
+/** A Composio toolkit slug, as the backends check it. */
+const APP_SLUG = /^[a-z0-9_]{2,60}$/
 
 export function isRule(value: unknown): value is AppRule {
   return typeof value === 'string' && (RULES as readonly string[]).includes(value)
@@ -39,12 +41,20 @@ function writeJson(path: string, value: unknown): void {
 export class ConnectedAppsFile {
   private userIdValue: string
   private rules: Record<string, AccountRules>
+  /**
+   * Every app (toolkit slug) an account was ever found in here. A Composio Connect key cannot list all of the
+   * person's accounts, only those of the apps it is asked about, so these are asked about on every listing:
+   * an app that worked once (Fathom, used through apps_run) is never left off apps_connected again.
+   */
+  private appsSeen: string[]
 
   constructor(private readonly path: string) {
     const raw = readJson(path)
     const object = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
     const id = object['userId']
     this.userIdValue = typeof id === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(id) ? id : ''
+    const apps = object['apps']
+    this.appsSeen = Array.isArray(apps) ? [...new Set(apps.filter((app): app is string => typeof app === 'string' && APP_SLUG.test(app)))] : []
     this.rules = {}
     const rules = object['rules']
     if (rules !== null && typeof rules === 'object') {
@@ -102,8 +112,25 @@ export class ConnectedAppsFile {
     this.persist()
   }
 
+  /** The apps an account was found in here (see appsSeen). */
+  seenApps(): string[] {
+    return [...this.appsSeen]
+  }
+
+  /** Remember apps that have accounts; written only when one is new. */
+  rememberApps(apps: Iterable<string>): void {
+    let added = false
+    for (const raw of apps) {
+      const app = raw.toLowerCase()
+      if (!APP_SLUG.test(app) || this.appsSeen.includes(app)) continue
+      this.appsSeen.push(app)
+      added = true
+    }
+    if (added) this.persist()
+  }
+
   private persist(): void {
-    writeJson(this.path, { userId: this.userIdValue, rules: this.rules })
+    writeJson(this.path, { userId: this.userIdValue, rules: this.rules, apps: this.appsSeen })
   }
 }
 

@@ -9,7 +9,7 @@ import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
-import { enumOf, schema, str, type JsonObject, type Tool } from '@agent/core'
+import { enumOf, resultLimitOf, schema, str, type JsonObject, type Tool } from '@agent/core'
 
 import type { ProgramRef } from '../runtime/environment'
 import { spawnResolved } from '../runtime/spawn'
@@ -133,7 +133,7 @@ function runCodeTool(deps: CodeToolDeps): Tool {
         if ('error' in filled) return filled.error
         runnable = filled.code
       }
-      return execute({ language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input })
+      return execute({ language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input, outputLimit: resultLimitOf(ctx, MAX_CODE_OUTPUT_CHARS) })
     },
   }
 }
@@ -188,6 +188,8 @@ interface ExecuteRequest {
   deps: CodeToolDeps
   /** The call's own input object: the run is recorded against it for the chat row. */
   input?: JsonObject
+  /** How much output to keep: the model's limit, or a script's larger one (ToolContext.resultLimit). */
+  outputLimit?: number
 }
 
 async function execute(request: ExecuteRequest): Promise<string> {
@@ -209,7 +211,7 @@ async function execute(request: ExecuteRequest): Promise<string> {
     return `Could not write the program: ${messageOf(error)}`
   }
 
-  const sink = new OutputSink(MAX_CODE_OUTPUT_CHARS)
+  const sink = new OutputSink(request.outputLimit ?? MAX_CODE_OUTPUT_CHARS)
   const out = new StreamCapture()
   const err = new StreamCapture()
   const started = Date.now()
