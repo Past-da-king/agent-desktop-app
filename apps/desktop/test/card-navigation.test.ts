@@ -33,8 +33,6 @@ const { useData } = await import('../src/renderer/state/useData')
 const { cardTarget, mainCard, openCard, openTarget } = await import('../src/renderer/lib/card-open')
 const { helperCards, helperParentChat, cardInfo } = await import('../src/shared/helper-cards')
 const { HelperCardList, HelperDetail } = await import('../src/renderer/shell/HelpersPanel')
-const { ProjectChatRow } = await import('../src/renderer/views/Chat')
-const { helperView } = await import('../src/renderer/lib/helpers')
 const { routeTo } = await import('../src/renderer/state/keys')
 const { hashFor, parseHash } = await import('../src/renderer/state/route')
 const { chatPlaces } = await import('../src/renderer/lib/chat-place')
@@ -154,14 +152,12 @@ describe('a project chat card', () => {
     expect(useChats.getState().open).toBe('pcsrv1')
   })
 
-  it('in the main thread, a project chat row opens its chat instead of folding out a small detail', () => {
-    const items = rows()
-    const pa = items.find((item) => item.id === 'pa-pcweb1') as ChatItem
-    const html = renderToStaticMarkup(createElement(ProjectChatRow, { item: pa, helper: helperView(pa, items) }))
-    expect(html).toContain('aria-label="Open the Website chat"')
-    expect(html).toContain('data-chat="pcweb1"')
-    expect(html).toContain('Open chat')
-    expect(html).not.toContain('aria-expanded')
+  it('marks the card whose chat is on screen, and only that one', () => {
+    const html = renderToStaticMarkup(createElement(HelperCardList, { cards: cards(), main: mainCard(rows(), true, 0, 'Scout'), current: 'pcweb1', mascot: 'scout', onOpen: () => undefined }))
+    expect(html.match(/aria-current="true"/g)).toHaveLength(1)
+    expect(html).toMatch(/aria-current="true"[^>]*aria-label="Open the Website chat"|aria-label="Open the Website chat"[^>]*aria-current="true"/)
+    const onMain = renderToStaticMarkup(createElement(HelperCardList, { cards: cards(), main: mainCard(rows(), true, 0, 'Scout'), current: MAIN_CHAT, mascot: 'scout', onOpen: () => undefined }))
+    expect(onMain).toMatch(/data-kind="main"[^>]*aria-current="true"|aria-current="true"[^>]*data-kind="main"/)
   })
 })
 

@@ -5,7 +5,7 @@ import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { Icon } from '../ui/Icon'
-import { HelperCardList, useMainCard, usePanelCards } from './HelpersPanel'
+import { HelperCardList, useCurrentChat, useMainCard, usePanelCards } from './HelpersPanel'
 import { NeedsYou } from './NeedsYou'
 import { usePanelShown } from './Panel'
 
@@ -48,6 +48,7 @@ function WorkMenu(): JSX.Element {
   const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
   const cards = usePanelCards()
   const main = useMainCard()
+  const current = useCurrentChat()
   const box = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -69,7 +70,7 @@ function WorkMenu(): JSX.Element {
   return (
     <div className="work-menu" ref={box} role="dialog" aria-label="Working now and waiting for you">
       <div className="work-menu-h">
-        <b>Working now</b>
+        <b>Jump to a chat or helper</b>
         <button type="button" className="hp-x" aria-label="Close" onClick={close}>
           <Icon name="x" size={18} />
         </button>
@@ -79,6 +80,7 @@ function WorkMenu(): JSX.Element {
         <HelperCardList
           cards={cards}
           main={main}
+          current={current}
           mascot={mascot}
           onOpen={(target) => {
             close()
