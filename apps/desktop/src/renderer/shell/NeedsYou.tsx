@@ -3,10 +3,10 @@ import { useMemo, useState } from 'react'
 
 import { withNo } from '../../shared/ask-options'
 import { chat } from '../bridge'
+import { openChat } from '../lib/chat-actions'
 import { chatOf } from '../lib/chats'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { sourceOfChat, type ChatSource } from '../lib/source'
-import { useChats } from '../state/useChats'
 import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -99,9 +99,7 @@ export function NeedsYou(): JSX.Element | null {
   const items = useEntity('chat_item')
   const projects = useEntity('project')
   const agentName = useSettings((store) => store.settings?.agentName.trim()) || 'Your agent'
-  const openChat = useChats((store) => store.openChat)
-  const navigate = useUi((store) => store.navigate)
-  const focusComposer = useUi((store) => store.focusComposer)
+  const closeOverlay = useUi((store) => store.closeOverlay)
   const [all, setAll] = useState(false)
   const cards = useMemo(() => waiting.map((item) => ({ item, source: sourceOfChat(chatOf(item), items, projects, agentName) })), [waiting, items, projects, agentName])
   if (cards.length === 0) return null
@@ -119,9 +117,9 @@ export function NeedsYou(): JSX.Element | null {
             item={item}
             source={source}
             onOpen={() => {
+              // The chat it was asked in, in full: the same move as a card tap (lib/chat-actions.ts openChat).
+              closeOverlay()
               openChat(chatOf(item))
-              navigate({ page: 'chat' })
-              focusComposer()
             }}
           />
         ))}

@@ -194,7 +194,7 @@ const METHODS: Record<string, string[]> = {
   helpers: ['stop', 'stopAll', 'cards'],
   apps: ['status', 'setKey', 'catalog', 'connect', 'disconnect', 'setRules', 'learned', 'removeLearned', 'setTrusted'],
   profiles: ['list', 'create', 'update', 'remove', 'setMember'],
-  window: ['minimize', 'toggleMaximize', 'close', 'isMaximized'],
+  window: ['minimize', 'toggleMaximize', 'close', 'isMaximized', 'show'],
   files: ['pick', 'pickFolder', 'thumbnail'],
   system: ['info'],
   shell: ['openExternal', 'reveal'],
@@ -320,6 +320,23 @@ describe('registerIpc', () => {
     await invoke(CHANNELS.window.close)
     expect(await invoke(CHANNELS.window.isMaximized)).toBe(true)
     expect(windowCalls).toEqual(['minimize', 'toggleMaximize', 'close'])
+  })
+
+  it('puts a view on screen for the agent the way a tap does (window.show), and refuses one it does not know', async () => {
+    sent.length = 0
+    expect(await invoke(CHANNELS.window.show, { view: 'chat', id: 'pc1a2b3c' })).toBe(true)
+    expect(await invoke(CHANNELS.window.show, { view: 'chat', id: 'main' })).toBe(true)
+    expect(await invoke(CHANNELS.window.show, { view: 'helper', id: 'h_1' })).toBe(true)
+    expect(await invoke(CHANNELS.window.show, { view: 'back', id: '' })).toBe(true)
+    expect(await invoke(CHANNELS.window.show, { view: 'nowhere', id: '' })).toBe(false)
+    expect(await invoke(CHANNELS.window.show, { view: 'helper', id: '' })).toBe(false)
+    expect(await invoke(CHANNELS.window.show, { view: 'chat', id: '../x y' })).toBe(false)
+    expect(sent.filter((each) => each.channel === EVENTS.route).map((each) => each.payload)).toEqual([
+      { view: 'chat', id: 'pc1a2b3c' },
+      { view: 'chat', id: '' },
+      { view: 'helper', id: 'h_1' },
+      { view: 'back', id: '' },
+    ])
   })
 
   it('sends a chat message and answers with a notice when there is no key', async () => {
