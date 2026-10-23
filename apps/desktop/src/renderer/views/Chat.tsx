@@ -5,10 +5,9 @@ import { Suspense, createContext, lazy, memo, useCallback, useContext, useEffect
 import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
-import { helperOwner, helperView, type HelperView } from '../lib/helpers'
-import { projectChatOfRow } from '../../shared/helper-cards'
+import { helperView, type HelperView } from '../lib/helpers'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
-import { branchFrom, openChat as openChatInFull, startProjectChat } from '../lib/chat-actions'
+import { branchFrom, startProjectChat } from '../lib/chat-actions'
 import { projectOfChat, viaIcon, viaOf } from '../lib/projects'
 import { ProjectTile } from '../ui/ProjectTile'
 import { chatTitleOf, isSideRun, itemsOfChat, routeLine } from '../lib/chats'
@@ -697,37 +696,6 @@ function HelperRow({ helper }: { helper: HelperView }): JSX.Element {
   )
 }
 
-/**
- * A project chat at work, in the main thread (the main agent handed it a job): its project, its state and its line.
- * A tap opens that project chat in full, as from its project's page (lib/chat-actions.ts openChat).
- */
-export function ProjectChatRow({ item, helper }: { item: ChatItem; helper: HelperView }): JSX.Element {
-  const projects = useEntity('project')
-  const chat = projectChatOfRow(item)
-  const owner = helperOwner(item, projects)
-  const live = helper.state === 'working'
-  const tone = live ? 'pri' : helper.state === 'done' ? 'ok' : helper.state === 'failed' ? 'warn' : 'mute'
-  const label = live ? 'Working' : helper.state === 'done' ? 'Done' : helper.state === 'failed' ? 'Failed' : 'Stopped'
-  return (
-    <div className="hcard pc-card">
-      <div className="hrow">
-        <button type="button" className="hmain" data-chat={chat} aria-label={`Open the ${helper.label} chat`} onClick={() => openChatInFull(chat)}>
-          <span className="hs pc-tile">{owner.kind === 'project' ? <ProjectTile icon={owner.icon} size={36} /> : <Icon name="chat" size={20} />}</span>
-          <span className="hn">
-            <b>{helper.label}</b>
-            <Pill tone={tone}>{label}</Pill>
-            <div>{helper.summary || (live ? 'Working' : 'Finished')}</div>
-          </span>
-          <span className="pc-open">
-            Open chat
-            <Icon name="chev" size={18} />
-          </span>
-        </button>
-      </div>
-    </div>
-  )
-}
-
 /** One row of the thread. Memoised: a new row elsewhere in the chat leaves this one alone. */
 const Row = memo(function Row({
   item,
@@ -774,8 +742,6 @@ const Row = memo(function Row({
     case 'helper':
       if (helper === undefined) return <div className="from">{item.text}</div>
       if (isSideRun(item)) return <SideRunRow helper={helper} asked={asked} />
-      // A project chat the main agent handed work to is that project's own agent, not a helper: it opens its chat.
-      if (projectChatOfRow(item) !== '') return <ProjectChatRow item={item} helper={helper} />
       return <HelperRow helper={helper} />
     case 'report':
       return <ReportRow item={item} onOpen={onOpenReport} />

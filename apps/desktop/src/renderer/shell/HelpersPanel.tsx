@@ -13,6 +13,7 @@ import { useChats } from '../state/useChats'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { useSettings } from '../state/useSettings'
+import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
@@ -103,11 +104,14 @@ const CARD_STEPS = 3
 export function HelperCardList({
   cards,
   main = null,
+  current = '',
   mascot,
   onOpen,
 }: {
   cards: HelperCard[]
   main?: MainCard | null
+  /** The chat on screen ('' on any other page): its card is marked. */
+  current?: string
   mascot: MascotId
   onOpen: (target: CardTarget) => void
 }): JSX.Element | null {
@@ -122,7 +126,7 @@ export function HelperCardList({
       <ul className="hp-list">
         {main !== null ? (
           <li key="main" data-card="main">
-            <button type="button" className="hp-card hp-main" data-kind="main" onClick={() => onOpen({ kind: 'main' })} aria-label={`Open the main chat with ${main.label}`} title={main.line}>
+            <button type="button" className="hp-card hp-main" data-kind="main" aria-current={current === MAIN_CHAT ? true : undefined} onClick={() => onOpen({ kind: 'main' })} aria-label={`Open the main chat with ${main.label}`} title={main.line}>
               <span className="hp-av" aria-hidden="true">
                 <Mascot id={mascot} size={32} />
               </span>
@@ -144,7 +148,7 @@ export function HelperCardList({
           const opens = target.kind === 'project-chat' ? `Open the ${card.label} chat` : `Open ${card.label}, a helper`
           return (
             <li key={card.id} className={card.depth === 1 ? 'hp-sub' : undefined} data-card={card.id}>
-              <button type="button" className="hp-card" data-kind={target.kind} onClick={() => onOpen(target)} aria-label={opens} title={card.line}>
+              <button type="button" className="hp-card" data-kind={target.kind} aria-current={target.kind === 'project-chat' && current !== '' && target.chat === current ? true : undefined} onClick={() => onOpen(target)} aria-label={opens} title={card.line}>
                 <OwnerAvatar owner={card.owner} helper={card} mascot={mascot} size={card.depth === 1 ? 28 : 32} />
                 <span className="hp-t">
                   <b>
@@ -189,7 +193,15 @@ export function HelpersPanel(): JSX.Element | null {
   const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
   const cards = usePanelCards()
   const main = useMainCard()
-  return <HelperCardList cards={cards} main={main} mascot={mascot} onOpen={openTarget} />
+  const current = useCurrentChat()
+  return <HelperCardList cards={cards} main={main} current={current} mascot={mascot} onOpen={openTarget} />
+}
+
+/** The chat on screen, or '' when the window shows another page. */
+export function useCurrentChat(): string {
+  const onChat = useUi((state) => state.route.page === 'chat')
+  const open = useChats((state) => state.open)
+  return onChat ? open : ''
 }
 
 /**
