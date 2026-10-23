@@ -32,16 +32,24 @@ export function engineFolders(turn: Pick<CliTurn, 'workDir' | 'folder'>): { cwd:
 
 /**
  * The Codex SDK's settings for one turn. Codex has no hook the app can ask before its own tools run, so:
- *  - Run without asking: full access (its shell and patches work in the project folder and anywhere, with network),
- *    the same freedom Claude's own tools get then;
+ *  - Run without asking: workspace-write, so its shell and patches change files in the project folder and the
+ *    chat's own folder (with network) and nothing outside them; anything else goes through the app's tools, which
+ *    run without asking then too. On Windows the unelevated sandbox is used: the default one refuses every write
+ *    there unless an administrator set it up (seen 23 Oct 2026: "rejected by filesystem policy" inside the project);
  *  - otherwise its own shell is switched off and the sandbox is read-only, so every command and change goes
  *    through the app's tools (shell_run, files_write), which ask the person.
- * Either way Codex's own sub-agents are off: they live inside the one `codex exec` process and are killed the
- * moment the turn that started them ends (seen 23 Oct 2026: each was "interrupted" 0.06 s after its parent's
- * task_complete). Helpers are the app's own (delegate), which run to the end. Nothing from the person's own Codex
- * setup (skills, plugins, ChatGPT apps, AGENTS.md, goals) joins in, as settingSources: [] does for Claude.
+ * The app's tools are attached to every turn (the "agent" MCP server) and declared to the model up front: Codex
+ * 0.163 otherwise defers MCP tools behind a search inside its exec tool, so the model never saw delegate, memory or
+ * the rest and used its own sub-agents instead (bug of 23 Oct 2026). Codex's own sub-agents are off: they live
+ * inside the one `codex exec` process and are killed the moment the turn that started them ends (each was
+ * "interrupted" 0.06 s after its parent's task_complete). Helpers are the app's own (delegate), which run to the end.
+ * Nothing from the person's own Codex setup (skills, plugins, ChatGPT apps, AGENTS.md, goals) joins in, as
+ * settingSources: [] does for Claude.
  */
-export function codexSettings(turn: Pick<CliTurn, 'workDir' | 'folder' | 'access' | 'model' | 'mcp'>): {
+export function codexSettings(
+  turn: Pick<CliTurn, 'workDir' | 'folder' | 'access' | 'model' | 'mcp'>,
+  platform: NodeJS.Platform = process.platform,
+): {
   config: NonNullable<CodexOptions['config']>
   thread: ThreadOptions & { workingDirectory: string }
 } {
@@ -53,12 +61,15 @@ export function codexSettings(turn: Pick<CliTurn, 'workDir' | 'folder' | 'access
         agent: {
           url: turn.mcp.url,
           bearer_token_env_var: 'AGENT_MCP_TOKEN',
+          // In the model's own tool list from the first step, never only findable through Codex's tool search.
+          omit_tools_from: ['deferred'],
           // The app asks the person itself (approval cards), so Codex must not block its tools on top.
           default_tools_approval_mode: 'approve',
           // An approval card can wait for the person for hours.
           tool_timeout_sec: 6 * 60 * 60,
         },
       },
+      ...(free && platform === 'win32' ? { windows: { sandbox: 'unelevated' } } : {}),
       agents: { enabled: false },
       features: {
         multi_agent_v2: false,
@@ -75,7 +86,7 @@ export function codexSettings(turn: Pick<CliTurn, 'workDir' | 'folder' | 'access
       workingDirectory: cwd,
       ...(extra.length === 0 ? {} : { additionalDirectories: extra }),
       skipGitRepoCheck: true,
-      sandboxMode: free ? 'danger-full-access' : 'read-only',
+      sandboxMode: free ? 'workspace-write' : 'read-only',
       networkAccessEnabled: free,
       webSearchEnabled: true,
       approvalPolicy: 'never',
@@ -91,9 +102,9 @@ export function codexRules(turn: Pick<CliTurn, 'workDir' | 'folder' | 'access'>)
   return [
     `- You work in ${cwd}${project ? " (this project's folder)" : ''}.`,
     turn.access === 'free'
-      ? '- The person chose Run without asking: your own shell and apply_patch can read and change files in that folder and anywhere on this computer. Use them.'
+      ? `- The person chose Run without asking: your own shell and apply_patch can change files in that folder${project ? " and your chat's own folder" : ''}. For anything outside it (another folder, WSL, a system setting), use the agent tools shell_run and files_write: they run without asking too. The sandbox is not a blocker.`
       : '- Your own shell is off here and your sandbox is read-only: run commands and change files with the agent tools (shell_run, files_write, files_move), which ask the person when their settings say so. The sandbox is not a blocker.',
-    '- Helpers are the agent tool delegate (when you have it): they run to the end and report back. Codex sub-agents are not available here.',
+    '- The agent tools are your tools named mcp__agent__* (memory, tasks, browser, apps, delegate and the rest). Helpers are mcp__agent__delegate (when you have it): they run to the end and report back. Codex sub-agents are not available here.',
   ].join('\n')
 }
 

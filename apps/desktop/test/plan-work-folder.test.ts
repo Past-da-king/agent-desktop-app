@@ -27,13 +27,30 @@ function folder(): string {
 const MCP = { url: 'http://127.0.0.1:1/mcp', token: 't' }
 
 describe('Codex runs in the project folder with the access the person chose', () => {
-  it('Run without asking: full access in the project folder, its private folder added', () => {
-    const { thread } = codexSettings({ workDir: 'C:\\data\\cli\\codex\\chat_p1', folder: 'C:\\projects\\cms', access: 'free', mcp: MCP })
+  it('Run without asking: workspace-write on the project folder, its private folder added', () => {
+    const { thread, config } = codexSettings({ workDir: 'C:\\data\\cli\\codex\\chat_p1', folder: 'C:\\projects\\cms', access: 'free', mcp: MCP }, 'win32')
     expect(thread.workingDirectory).toBe('C:\\projects\\cms')
     expect(thread.additionalDirectories).toEqual(['C:\\data\\cli\\codex\\chat_p1'])
-    expect(thread.sandboxMode).toBe('danger-full-access')
+    expect(thread.sandboxMode).toBe('workspace-write')
     expect(thread.networkAccessEnabled).toBe(true)
     expect(thread.skipGitRepoCheck).toBe(true)
+    // The default Windows sandbox refuses every write unless an administrator set it up.
+    expect(config['windows']).toEqual({ sandbox: 'unelevated' })
+    expect(codexSettings({ workDir: '/w', folder: '/p', access: 'free', mcp: MCP }, 'linux').config['windows']).toBeUndefined()
+    expect(codexSettings({ workDir: '/w', folder: '/p', access: 'asked', mcp: MCP }, 'win32').config['windows']).toBeUndefined()
+  })
+
+  it('the app tools are attached to every turn and declared to the model up front, not deferred behind tool search', () => {
+    for (const access of ['free', 'asked'] as const) {
+      for (const folder of [undefined, '/projects/cms']) {
+        const { config } = codexSettings({ workDir: '/w', ...(folder === undefined ? {} : { folder }), access, mcp: MCP })
+        const agent = (config['mcp_servers'] as Record<string, Record<string, unknown>>)['agent']
+        expect(agent?.['url']).toBe(MCP.url)
+        expect(agent?.['bearer_token_env_var']).toBe('AGENT_MCP_TOKEN')
+        expect(agent?.['omit_tools_from']).toEqual(['deferred'])
+        expect(agent?.['default_tools_approval_mode']).toBe('approve')
+      }
+    }
   })
 
   it('asking: still in the project folder, its own shell off so every action goes through the app tools', () => {
@@ -67,6 +84,8 @@ describe('Codex runs in the project folder with the access the person chose', ()
   it('the agent is told where it works and that the sandbox is not a blocker', () => {
     expect(codexRules({ workDir: '/w', folder: '/projects/cms', access: 'free' })).toContain('/projects/cms')
     expect(codexRules({ workDir: '/w', folder: '/projects/cms', access: 'asked' })).toContain('shell_run')
+    // Codex names the app's tools mcp__agent__<name>: the agent is told so, and that helpers are delegate.
+    expect(codexRules({ workDir: '/w', access: 'free' })).toContain('mcp__agent__delegate')
   })
 })
 

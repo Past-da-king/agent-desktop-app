@@ -56,9 +56,9 @@ export interface CliTurnRequest {
  * Bump when the agent gains something a resumed conversation would not know about (a new way to answer, a
  * new setting). A session that started before it is told once, so it stops repeating what it said earlier.
  */
-export const PROMPT_REVISION = 4
+export const PROMPT_REVISION = 5
 const UPDATE_NOTE =
-  '[The Agent app was updated since earlier in this conversation. Read your instructions again: they now include GENERATIVE UI (OpenUI Lang), the "visual response" cards you draw by writing an openui-lang block, the user\'s current choice for commands and files, and run_script, which calls many of your tools in one script and returns only a small summary. You now work in the project\'s own folder when there is one, with the access the person chose, and helpers are the delegate tool (your engine\'s own sub-agents are gone). Anything you said before about not having these, or about a sandbox keeping you out of the project folder, is out of date.]'
+  '[The Agent app was updated since earlier in this conversation. Read your instructions again: they now include GENERATIVE UI (OpenUI Lang), the "visual response" cards you draw by writing an openui-lang block, the user\'s current choice for commands and files, and run_script, which calls many of your tools in one script and returns only a small summary. You now work in the project\'s own folder when there is one, with the access the person chose, your agent tools (memory, tasks, browser, apps, delegate and the rest) are the ones named mcp__agent__* in your tool list, and helpers are mcp__agent__delegate (your engine\'s own sub-agents are gone). Anything you said before about not having these, or about a sandbox keeping you out of the project folder, is out of date.]'
 
 /**
  * Helpers never delegate further, and a routine runs once with nobody to report to. Every chat's own agent
