@@ -190,7 +190,8 @@ describe('a file on this computer as a learned-tool input', () => {
     // The model sees the result only: never the bytes, as text or base64.
     expect(out).not.toContain('UNIQUE-FILE-CONTENT-MARKER')
     expect(out).not.toContain(bytes.subarray(0, 3000).toString('base64').slice(0, 40))
-    expect(asked[0]).toContain('clip.mp4 (5.0 MB)')
+    // Sending a file is ordinary work: no card (main/ask-rule.ts).
+    expect(asked).toEqual([])
     // The page lets go of it after the run.
     expect(Object.keys((page['__agentFiles'] as Record<string, unknown>) ?? {})).toEqual([])
 

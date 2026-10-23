@@ -72,6 +72,7 @@ import type { BrowserVault } from '../vault/browser-vault'
 import { attachVaultTo } from './vault-link'
 import { alive, ifAlive, whileAlive } from '../alive'
 import { pickTab } from './tab-pick'
+import { siteTabPlan } from './site-tab'
 import { checkBrowserUrl } from './url-policy'
 import { EMBED_WAIT_MS, guardWebview, isEmbeddedGuest } from './embed'
 import {
@@ -1652,6 +1653,35 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       }
     }
     this.emit()
+  }
+
+  /**
+   * Learned apps: one tab per site (see BrowserDriver.useSiteTab and site-tab.ts). The acting agent drives the tab
+   * already on the site in its partition; other agents that drove a duplicate are moved onto it and the duplicate
+   * is closed, so a one-session site (WhatsApp Web) never kicks itself off. The person's tab is never closed.
+   */
+  useSiteTab(url: string): boolean {
+    const partition = this.partitionNow()
+    const mine = this.activeTab()
+    const plan = siteTabPlan(
+      this.tabs.filter((tab) => !tab.wc.isDestroyed()).map((tab) => ({ id: tab.id, partition: tab.partition, url: safeUrl(tab.wc) })),
+      url,
+      partition,
+      mine?.id ?? null,
+      this.personTab,
+    )
+    if (plan === null) return false
+    const moved = [...this.ownerTabs].filter(([, tabId]) => plan.close.includes(tabId)).map(([owner]) => owner)
+    for (const id of plan.close) this.closeTab(id)
+    for (const owner of moved) this.ownerTabs.set(owner, plan.keep)
+    const owner = currentOwner()
+    if (owner !== undefined) this.ownerTabs.set(owner, plan.keep)
+    else if (this.activeId !== plan.keep) {
+      this.activeId = plan.keep
+      this.layout()
+      this.emit()
+    }
+    return true
   }
 
   /** Profiles: the agent browses in this partition from now on (see BrowserDriver.usePartition). */

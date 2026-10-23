@@ -207,6 +207,12 @@ function backTool(deps: BrowserToolDeps): Tool {
   }
 }
 
+/** A file that holds keys or secrets (an .env, a private key, a password store): uploading it asks first. */
+export function secretFile(path: string): boolean {
+  const name = path.replace(/\\/g, '/').split('/').pop() ?? ''
+  return /^[.]env([.]|$)|[.](env|pem|key|p12|pfx|kdbx|keychain|ppk|asc|gpg)$|^id_(rsa|dsa|ecdsa|ed25519)|credential|secret|password|passwd|api[ _-]?key|token/i.test(name)
+}
+
 function uploadTool(deps: BrowserToolDeps): Tool {
   return {
     spec: {
@@ -224,9 +230,12 @@ function uploadTool(deps: BrowserToolDeps): Tool {
       const path = text(input['path']).trim()
       if (path === '') return 'Pass the full path of the file to upload.'
       if (path.length > MAX_PATH) return 'That path is too long.'
-      // A file leaving this computer is the person's call, not the model's.
-      const approved = await ctx.approve(`Upload ${fileLabel(path)} to the page?`, path)
-      if (!approved) return 'The user declined the upload.'
+      // Uploading the file it was asked to is ordinary work (main/ask-rule.ts); a key, password store or secrets
+      // file leaving this computer still asks.
+      if (secretFile(path)) {
+        const approved = await ctx.approve(`Upload ${fileLabel(path)} to the page?`, path)
+        if (!approved) return 'The user declined the upload.'
+      }
       return call(() => deps.browser.upload(index, path))
     },
   }

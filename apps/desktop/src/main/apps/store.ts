@@ -145,6 +145,8 @@ export interface LearnedTool {
   required: string[]
   js: string
   readOnly: boolean
+  /** Saved as one that deletes, cannot be undone, costs money, deploys, touches DNS or secrets: asks before each run. */
+  asksFirst?: boolean
 }
 
 export interface LearnedApp {
@@ -153,8 +155,10 @@ export interface LearnedApp {
   startUrl: string
   about: string
   tools: LearnedTool[]
-  /** Its tools that change things run without asking each time. Only the person can turn this on. */
+  /** Nothing it does asks first, not even deleting or paying (tools/webapps.ts learnedAsks). */
   trusted: boolean
+  /** The person's opt-in (Connections): every tool that changes things asks first. Off by default. */
+  askFirst?: boolean
   updatedAt: number
   /** The site's own icon, fetched once and kept (a data: URL), so the list shows it with no network call. */
   icon?: string
@@ -210,6 +214,7 @@ function toTool(raw: unknown): LearnedTool | null {
     required,
     js: o['js'],
     readOnly: o['readOnly'] !== false,
+    ...(o['asksFirst'] === true ? { asksFirst: true } : {}),
   }
 }
 
@@ -225,6 +230,7 @@ function toApp(raw: unknown): LearnedApp | null {
     about: typeof o['about'] === 'string' ? o['about'] : '',
     tools,
     trusted: o['trusted'] === true,
+    ...(o['askFirst'] === true ? { askFirst: true } : {}),
     updatedAt: typeof o['updatedAt'] === 'number' ? o['updatedAt'] : 0,
     ...(typeof o['icon'] === 'string' && o['icon'].startsWith('data:image/') ? { icon: o['icon'] } : {}),
     ...(Array.isArray(o['partitions'])
@@ -270,6 +276,7 @@ export class LearnedStore {
     const next = {
       ...app,
       trusted: old?.trusted ?? false,
+      ...(old?.askFirst === true ? { askFirst: true } : {}),
       updatedAt: this.now(),
       ...(old?.icon === undefined ? {} : { icon: old.icon }),
       ...(partitions.length === 0 ? {} : { partitions }),
@@ -309,6 +316,17 @@ export class LearnedStore {
 
   setTrusted(id: string, trusted: boolean): void {
     this.list = this.list.map((a) => (a.id === id ? { ...a, trusted } : a))
+    this.persist()
+  }
+
+  /** The person's opt-in: every changing tool of this app asks first. */
+  setAskFirst(id: string, on: boolean): void {
+    this.list = this.list.map((a) => {
+      if (a.id !== id) return a
+      const { askFirst: _old, ...rest } = a
+      void _old
+      return on ? { ...rest, askFirst: true } : rest
+    })
     this.persist()
   }
 

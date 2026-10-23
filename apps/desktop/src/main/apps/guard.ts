@@ -9,6 +9,7 @@
  */
 import type { AccountRules, AgentProfileInfo, AppRule, ToolContext } from '@agent/core'
 
+import { needsYes } from '../ask-rule'
 import { appName } from './catalog'
 import type { AppAccount } from './composio'
 
@@ -138,7 +139,8 @@ export class AppGuard {
           account,
         }
       }
-      if (rule === 'ask') asks.push(where !== '' ? `${what} (${where})` : what)
+      // Allowed changes still ask when they delete, cannot be undone, cost money, deploy, touch DNS or secrets.
+      if (rule === 'ask' || (write && rule === 'allow' && needsYes(action))) asks.push(where !== '' ? `${what} (${where})` : what)
       if (picked !== undefined) account = picked.id
     }
     if (account === null && resolved.size > 1) {

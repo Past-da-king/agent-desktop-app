@@ -145,7 +145,9 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'apps.setRules': ask("Change what the agent may do in an account (Connections > account > rules)", 'accountId, { read, write }'),
   'apps.learned': free('The web apps the agent taught itself'),
   'apps.removeLearned': ask('Remove a learned web app', 'appId'),
-  'apps.setTrusted': ask("Trust a learned web app (its changing tools stop asking)", 'appId, trusted'),
+  // Trusting only removes asking, and taking it back only adds it: neither needs a card (23 Oct 2026).
+  'apps.setTrusted': free('Trust a learned web app (nothing it does asks first) or take that back', 'appId, trusted'),
+  'apps.setAskFirst': free('Make a learned web app ask before every change, or only before risky ones (Connections)', 'appId, on'),
   // Profiles
   'profiles.list': free('Profiles (Profiles)'),
   'profiles.create': free('Create a profile (Profiles > New)', '{ name, color, ... }'),

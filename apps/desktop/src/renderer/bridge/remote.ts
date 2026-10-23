@@ -383,6 +383,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       learned: rpc('apps.learned'),
       removeLearned: () => notHere('Removing a learned app'),
       setTrusted: () => notHere('Trusting a learned app'),
+      setAskFirst: () => notHere('Changing when a learned app asks'),
       onChanged: (callback) => wire.on(EVENTS.apps, () => callback()),
     },
 

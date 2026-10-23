@@ -182,7 +182,7 @@ describe('Composio accounts', () => {
     apps.setRules('a1', { read: 'never', change: 'never' })
     await apps.disconnect('a1')
     expect(fake.state.accounts).toHaveLength(0)
-    expect(apps.rulesFor('a1')).toEqual({ read: 'allow', change: 'ask' })
+    expect(apps.rulesFor('a1')).toEqual({ read: 'allow', change: 'allow' })
   })
 
   it('reads who an account is from the places apps keep it', () => {
@@ -258,14 +258,24 @@ describe('the apps_* tools', () => {
     expect(fake.state.executed[0]?.body).toEqual({ user_id: expect.any(String), arguments: { max: 3 }, connected_account_id: 'a1' })
   })
 
-  it('apps_run asks before a change, and a no means nothing is sent', async () => {
+  it('apps_run sends without a card, asks before deleting (a no means nothing happens), and asks every change when the person set Ask me', async () => {
     const fake = fakeComposio()
     fake.state.accounts = [account('a1', 'gmail', 'work@example.com')]
     secretValues.set(COMPOSIO_SECRET, 'ak_test')
-    const run = toolNamed(appTools(service(fake.fetchImpl)), 'apps_run')
-    const out = await run.run({ slug: 'GMAIL_SEND_EMAIL', arguments: { to: 'x@example.com' } }, testContext({ approve: async () => false }))
+    const apps = service(fake.fetchImpl)
+    const run = toolNamed(appTools(apps), 'apps_run')
+    const asked: string[] = []
+    const no = testContext({ approve: async (summary) => (asked.push(summary), false) })
+    await run.run({ slug: 'GMAIL_SEND_EMAIL', arguments: { to: 'x@example.com' } }, no)
+    expect(asked).toEqual([])
+    expect(fake.state.executed).toHaveLength(1)
+    const out = await run.run({ slug: 'GMAIL_MOVE_TO_TRASH', arguments: { message_id: 'm1' } }, no)
     expect(out).toContain('declined')
-    expect(fake.state.executed).toHaveLength(0)
+    expect(asked).toHaveLength(1)
+    expect(fake.state.executed).toHaveLength(1)
+    apps.setRules('a1', { read: 'allow', change: 'ask' })
+    expect(await run.run({ slug: 'GMAIL_SEND_EMAIL', arguments: { to: 'x@example.com' } }, no)).toContain('declined')
+    expect(fake.state.executed).toHaveLength(1)
   })
 
   it('apps_connect asks first, then opens the sign-in and waits', async () => {
