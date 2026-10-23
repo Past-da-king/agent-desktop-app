@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 
-import { openTarget } from '../lib/card-open'
+import { closeCard, openTarget } from '../lib/card-open'
+import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
@@ -23,7 +24,9 @@ export function WorkButton(): JSX.Element | null {
   const waiting = useWaiting()
   const count = cards.length + (main === null ? 0 : 1)
   if (shown || (count === 0 && waiting.length === 0)) return null
-  const label = `${count} working${waiting.length > 0 ? `, ${waiting.length} waiting for you` : ''}`
+  const replied = cards.filter((card) => card.waiting).length
+  const working = count - replied
+  const label = [working > 0 ? `${working} working` : '', replied > 0 ? `${replied} replied` : '', waiting.length > 0 ? `${waiting.length} waiting for you` : ''].filter((part) => part !== '').join(', ')
   return (
     <div className="tb-work-wrap">
       <button
@@ -36,7 +39,7 @@ export function WorkButton(): JSX.Element | null {
       >
         <span className="tb-work-dot" aria-hidden="true" />
         <span className="tb-work-n">{count + waiting.length}</span>
-        <span className="tb-work-t">{waiting.length > 0 ? 'Needs you' : 'Working'}</span>
+        <span className="tb-work-t">{waiting.length > 0 ? 'Needs you' : working > 0 ? 'Working' : 'Replied'}</span>
       </button>
       {open ? <WorkMenu /> : null}
     </div>
@@ -49,6 +52,7 @@ function WorkMenu(): JSX.Element {
   const cards = usePanelCards()
   const main = useMainCard()
   const current = useCurrentChat()
+  const projects = useEntity('project')
   const box = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -86,6 +90,7 @@ function WorkMenu(): JSX.Element {
             close()
             openTarget(target)
           }}
+          onClose={(card) => void closeCard(card, projects)}
         />
         {cards.length === 0 && main === null ? <p className="small muted">Nothing is working right now.</p> : null}
       </div>

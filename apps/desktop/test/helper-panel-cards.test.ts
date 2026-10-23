@@ -92,12 +92,11 @@ describe('side panel helper cards', () => {
     expect(html.match(/>Working</g)).toHaveLength(7)
   })
 
-  it('a helper whose project agent row has closed still shows, on its own, naming its project', () => {
+  it('a project chat whose agent row closed while its helpers still work stays a working card with them under it', () => {
     const rows = liveRows().map((item) => (item.id === 'pa-pc-cards' ? { ...item, meta: JSON.stringify({ ...JSON.parse(item.meta), state: 'failed' }) } : item))
     const cards = helperCards(rows, [app, secret])
-    expect(cards.filter((card) => card.id === 'h-cards' || card.id === 'h-400').map((card) => card.depth)).toEqual([0, 0])
-    const html = renderToStaticMarkup(createElement(HelperCardList, { cards, mascot: 'scout', onOpen: () => undefined }))
-    expect(html.match(/class="hp-where">Agent Desktop App</g)).toHaveLength(2)
+    expect(cards.filter((card) => card.id === 'h-cards' || card.id === 'h-400').map((card) => card.depth)).toEqual([1, 1])
+    expect(cards.find((card) => card.id === 'pa-pc-cards')).toMatchObject({ kind: 'project-chat', state: 'working', waiting: false })
   })
 
   it('never cuts the list to a few rows (the 196 px cap hid every helper after the third)', () => {
