@@ -161,6 +161,8 @@ export const VAULT_WORLD_SCRIPT = String.raw`(() => {
   }, true);
   document.addEventListener('focusout', () => setTimeout(() => { if (list && listFor !== document.activeElement) hideList(); }, 150), true);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideList(); }, true);
+  // Typing means the person is not picking from the list: it goes, as in a browser.
+  document.addEventListener('input', (e) => { if (list && e.isTrusted && e.target === listFor) hideList(); }, true);
   addEventListener('scroll', () => hideList(), true);
   addEventListener('resize', () => hideList());
 
@@ -238,7 +240,7 @@ export const VAULT_WORLD_SCRIPT = String.raw`(() => {
         { label: make ? 'Save in Vault' : 'Use passkey', main: true, run: () => void request('passkeyAnswer', { token: msg.token, yes: true }) },
       ]);
     }
-    if (msg.type === 'passkeyAnswer') document.dispatchEvent(new CustomEvent('__agentvault_pk_res', { detail: JSON.stringify({ id: msg.id, answer: msg.answer }) }));
+    if (msg.type === 'passkeyAnswer') document.dispatchEvent(new CustomEvent('__agentvault_pk_res', { detail: JSON.stringify({ id: msg.id, answer: msg.answer, allow: msg.allow || [] }) }));
   };
 
   // ---- the page's passkey requests (from PASSKEY_HOOK in the page's own world) ----
@@ -250,7 +252,7 @@ export const VAULT_WORLD_SCRIPT = String.raw`(() => {
     void request('passkey', { pid: msg.id, kind: msg.op, rpId: String(msg.rpId || ''), rpName: String(msg.rpName || ''), user: String(msg.user || ''), conditional: !!msg.conditional }).then((answer) => {
       const value = answer && answer.answer ? answer.answer : 'native';
       if (value === 'wait') return;
-      document.dispatchEvent(new CustomEvent('__agentvault_pk_res', { detail: JSON.stringify({ id: msg.id, answer: value }) }));
+      document.dispatchEvent(new CustomEvent('__agentvault_pk_res', { detail: JSON.stringify({ id: msg.id, answer: value, allow: (answer && answer.allow) || [] }) }));
     });
   });
 
@@ -271,7 +273,7 @@ export const PASSKEY_HOOK = String.raw`(() => {
       try { m = JSON.parse(String(e.detail)); } catch (err) { return; }
       if (!m || m.id !== id) return;
       document.removeEventListener('__agentvault_pk_res', onRes);
-      resolve(m.answer);
+      resolve(m);
     };
     document.addEventListener('__agentvault_pk_res', onRes);
     if (signal) signal.addEventListener('abort', () => {
@@ -289,10 +291,18 @@ export const PASSKEY_HOOK = String.raw`(() => {
     const info = op === 'create'
       ? { op, rpId: (pk.rp && pk.rp.id) || location.hostname, rpName: (pk.rp && pk.rp.name) || '', user: (pk.user && (pk.user.name || pk.user.displayName)) || '' }
       : { op, rpId: pk.rpId || location.hostname, conditional };
-    const answer = await ask(info, options.signal);
+    const reply = await ask(info, options.signal);
+    const answer = reply.answer;
     if (answer === 'deny') throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError');
     if (answer !== 'vault') return og.call(self, options);
-    const opts = conditional ? Object.assign({}, options, { mediation: 'optional' }) : options;
+    let opts = conditional ? Object.assign({}, options, { mediation: 'optional' }) : options;
+    // No credential named by the page (sign-in without a username): the vault names its own for this site,
+    // since this browser has no account picker for that case.
+    const allow = Array.isArray(reply.allow) ? reply.allow : [];
+    if (op === 'get' && allow.length > 0 && !(pk.allowCredentials && pk.allowCredentials.length)) {
+      const bytes = (b64) => { const s = atob(b64); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; };
+      opts = Object.assign({}, opts, { publicKey: Object.assign({}, pk, { allowCredentials: allow.map((id) => ({ type: 'public-key', id: bytes(id) })) }) });
+    }
     try {
       return await og.call(self, opts);
     } finally {
