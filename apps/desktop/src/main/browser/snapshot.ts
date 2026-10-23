@@ -226,7 +226,7 @@ for (const d of document.querySelectorAll('dialog[open],[role=dialog],[role=aler
 const text = clean(document.body ? document.body.innerText : '').toLowerCase();
 let note = '';
 if (/captcha|are you a robot|verify (that )?you are (a )?human|not a robot/.test(text)) note = 'This page has a captcha. A person may need to take over (browser_handoff).';
-else if (document.querySelector('input[type=password]')) note = 'This page has a sign-in form. Hand over (browser_handoff) if the details are not yours to use.';
+else if (document.querySelector('input[type=password]')) note = 'This page has a sign-in form. If the Vault has the login (vault_list), sign in with vault_login without seeing it; otherwise hand over (browser_handoff).';
 const active = document.activeElement;
 const focused = active && active !== document.body ? (roleOf(active) + ' "' + nameOf(active).slice(0, 60) + '"') : '';
 return { url: location.href, title: document.title, elements, headings, dialogs, frames: frames.slice(0, 8), total, note, focused };

@@ -6,6 +6,7 @@
  * private temporary folder, reads it there, and deletes the copy straight after: values are only ever in memory,
  * on their way into this vault's own encrypted file. Running it again updates what it brought in before.
  */
+import { spawnSync } from 'node:child_process'
 import { createDecipheriv } from 'node:crypto'
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -48,13 +49,9 @@ export function aosCandidates(platform: NodeJS.Platform = process.platform): str
   if (env !== undefined && env.trim() !== '') out.push(join(env.trim(), '.aos'), env.trim())
   out.push(join(homedir(), '.aos', '.aos'))
   if (platform === 'win32') {
+    // The root of \\wsl.localhost cannot be listed; WSL itself names its distributions.
+    const distros = wslDistros()
     for (const root of ['\\\\wsl.localhost', '\\\\wsl$']) {
-      let distros: string[] = []
-      try {
-        distros = readdirSync(root)
-      } catch {
-        continue
-      }
       for (const distro of distros) {
         let users: string[] = []
         try {
@@ -68,6 +65,21 @@ export function aosCandidates(platform: NodeJS.Platform = process.platform): str
     }
   }
   return out
+}
+
+/** The WSL distributions on this computer (wsl.exe -l -q writes UTF-16), or none. */
+function wslDistros(): string[] {
+  try {
+    const result = spawnSync('wsl.exe', ['-l', '-q'], { timeout: 8_000, windowsHide: true })
+    if (result.status !== 0 || result.stdout === null) return []
+    const text = Buffer.from(result.stdout).toString('utf16le').replace(/\0/g, '')
+    return text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => /^[A-Za-z0-9._-]{1,64}$/.test(line))
+  } catch {
+    return []
+  }
 }
 
 /** The first folder that holds both files, or null. A folder passed in is checked as given and with .aos below it. */
