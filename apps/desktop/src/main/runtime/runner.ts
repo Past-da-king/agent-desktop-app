@@ -45,6 +45,7 @@ import type { StepBudget } from './budget'
 import { chatBrainOf, isBrain, mainBrain, pickBrain, rosterFor, type Brain, type BrainDeps, type BrainLocks } from './brains'
 import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
+import { projectFolderOf } from './work-folder'
 import { buildSystemPrompt, type ProjectContext } from './prompt'
 import type { CliId } from './cli-agent'
 import { quietTapNote } from './openui-prompt'
@@ -1142,6 +1143,8 @@ export class Runner {
     line.turn = turn
     this.emitFor(chat, { type: 'thinking', step: 1 })
     let result: { text: string; error?: string }
+    // A project chat works in its project's folder (the engine's working folder, with the access the person chose).
+    const folder = chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), chat)
     try {
       result = await this.cli.turn({
         cli: brain.cli,
@@ -1151,6 +1154,7 @@ export class Runner {
         prompt: text,
         images,
         ...(brain.model === '' ? {} : { model: brain.model }),
+        ...(folder === '' ? {} : { folder }),
         context: this.toolContext(turn.signal, 'main', chat),
         signal: turn.signal,
         onEvent: (event) => this.render(event, chat),

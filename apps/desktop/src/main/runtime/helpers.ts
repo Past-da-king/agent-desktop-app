@@ -37,6 +37,7 @@ import {
 
 import { listWhere, type DataStore } from './data'
 import type { CliHost } from './cli-host'
+import { projectFolderOf } from './work-folder'
 import { brainFor, isBrain, pickFor, rosterFor, type Brain, type BrainDeps } from './brains'
 import { buildSystemPrompt } from './prompt'
 import { finishRun, runStarted } from './run-detail'
@@ -1693,6 +1694,8 @@ export class HelperManager implements HelperHost {
     let state: HelperState = 'failed'
     let result = ''
     try {
+      // Started from a project chat: it works in that project's folder, as the chat's own agent does.
+      const folder = run.chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), run.chat)
       const outcome = await cli.turn({
         cli: brain.cli,
         thread: `helper:${run.id}`,
@@ -1703,6 +1706,7 @@ export class HelperManager implements HelperHost {
         prompt: run.pushMessage ?? run.brief,
         ...(run.pushMessage === undefined && (run.images ?? []).length > 0 ? { images: run.images } : {}),
         ...(brain.model === '' ? {} : { model: brain.model }),
+        ...(folder === '' ? {} : { folder }),
         context: this.context(run, controller.signal),
         signal: controller.signal,
         onEvent: (event) => this.onEvent(run, event),
