@@ -146,9 +146,9 @@ export function HelperCardList({
           const s = card.waiting ? { label: 'Your turn', tone: 'ok' } : stateLabel(card)
           const closable = onClose !== undefined && card.kind === 'project-chat'
           const target = cardTarget(card)
-          // A project chat's card already reads as its project, and a helper under it sits in its group; any other
+          // A project chat's card reads as its project, named by its chat; a helper under it sits in its group; any other
           // project helper says which project it works in.
-          const where = target.kind === 'project-chat' ? 'Project chat' : card.owner.kind === 'project' && card.depth === 0 ? card.owner.name : ''
+          const where = target.kind === 'project-chat' ? card.chatTitle || 'Project chat' : card.owner.kind === 'project' && card.depth === 0 ? card.owner.name : ''
           const opens = target.kind === 'project-chat' ? `Open the ${card.label} chat` : `Open ${card.label}, a helper`
           return (
             <li key={card.id} className={`hp-li${card.depth === 1 ? ' hp-sub' : ''}${card.waiting ? ' waiting' : ''}${closable ? ' closable' : ''}`} data-card={card.id}>
