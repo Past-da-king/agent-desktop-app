@@ -5,9 +5,10 @@
  * them. Works the same in the desktop app and the headless node (both register it through main/ipc.ts).
  *
  * The feed starts on the first `helpers.cards` call, so a computer with nothing linked does no work for it. It keeps
- * the helper rows, their newest steps and the newest lines of each side chat in memory, follows every row change,
- * and sends a new list (debounced) only when it differs from the last one. Like the side panel, it carries working
- * cards only: a card that finished leaves the device's list at once.
+ * the helper rows, their newest steps, the newest lines of each side chat and when the person last wrote in it in
+ * memory, follows every row change, and sends a new list (debounced) only when it differs from the last one. Like
+ * the side panel, it carries every project chat that works or waits on the person until he closes it, and helpers
+ * while they work.
  */
 import { MAIN_CHAT, type ChatItem, type DataChange, type HelperCardsSnapshot, type ProjectRow } from '@agent/core'
 
@@ -22,6 +23,8 @@ const KEEP_LINES = 30
 export interface HelperFeedDeps {
   store: Pick<Store, 'list' | 'listWhere' | 'onChange'>
   emit(snapshot: HelperCardsSnapshot): void
+  /** Whether a chat has a turn running now (the runner's state). */
+  running?: (chat: string) => boolean
   now?: () => number
   debounceMs?: number
 }
@@ -54,6 +57,8 @@ export class HelperFeed {
   private readonly steps = new Map<string, ChatItem[]>()
   /** The newest lines (steps and replies) of each side chat, by chat id: a project agent card's steps. */
   private readonly chatLines = new Map<string, ChatItem[]>()
+  /** The person's newest message in each side chat: a chat whose agent spoke after it waits on him. */
+  private readonly said = new Map<string, ChatItem>()
   private projects: ProjectRow[] = []
   private started: Promise<void> | null = null
   private offChange: (() => void) | null = null
@@ -100,8 +105,12 @@ export class HelperFeed {
     this.helpers.clear()
     this.steps.clear()
     this.chatLines.clear()
+    this.said.clear()
+    // Every reply and message (a chat that waits on the person may be old); steps only from the lookback.
+    const all = async (kind: string): Promise<ChatItem[]> =>
+      store.listWhere !== undefined ? store.listWhere('chat_item', { kind }) : (await store.list('chat_item')).filter((row) => row.kind === kind)
     for (const row of helperRows) this.helpers.set(row.id, row)
-    for (const row of [...(await where('activity')), ...(await where('agent'))]) this.index(row)
+    for (const row of [...(await where('activity')), ...(await all('agent')), ...(await all('user'))]) this.index(row)
     this.projects = await store.list('project')
   }
 
@@ -110,8 +119,16 @@ export class HelperFeed {
       this.helpers.set(row.id, row)
       return true
     }
-    if (row.kind !== 'activity' && row.kind !== 'agent') return false
+    if (row.kind !== 'activity' && row.kind !== 'agent' && row.kind !== 'user') return false
     const meta = metaOf(row)
+    if (row.kind === 'user') {
+      const chat = text(meta, 'chat') || MAIN_CHAT
+      if (chat === MAIN_CHAT || text(meta, 'helper') !== '') return false
+      const before = this.said.get(chat)
+      if (before !== undefined && before.createdAt > row.createdAt) return false
+      this.said.set(chat, row)
+      return true
+    }
     const helper = row.kind === 'activity' ? text(meta, 'helper') : ''
     if (helper !== '') {
       this.steps.set(helper, put(this.steps.get(helper) ?? [], row))
@@ -162,10 +179,11 @@ export class HelperFeed {
     for (const row of rows) {
       const meta = metaOf(row)
       items.push(...(this.steps.get(text(meta, 'id') || row.id) ?? []))
-      const projectChat = text(meta, 'projectChat')
-      if (projectChat !== '') items.push(...(this.chatLines.get(projectChat) ?? []))
     }
-    const cards = helperCards(items, this.projects).map((card) => cardInfo(card))
+    for (const lines of this.chatLines.values()) items.push(...lines)
+    items.push(...this.said.values())
+    const running = this.deps.running
+    const cards = helperCards(items, this.projects, running === undefined ? {} : { running }).map((card) => cardInfo(card))
     const json = JSON.stringify(cards)
     if (json !== this.lastJson) {
       this.lastJson = json

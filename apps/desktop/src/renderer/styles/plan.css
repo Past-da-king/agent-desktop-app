@@ -46,6 +46,13 @@
 .hp-card{width:100%;display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--r-md);background:var(--s-low);text-align:left;color:var(--on-bg);transition:background var(--t-fast,160ms) var(--effects),transform .42s var(--spatial)}
 .hp-card:hover{background:var(--s-mid)}
 .hp-card:active{transform:scale(.985)}
+/* A project chat card's X: only while the card is hovered (or the X has keyboard focus); it takes the pill's place. */
+.hp-li{position:relative}
+.hp-close{position:absolute;right:10px;top:50%;width:28px;height:28px;margin-top:-14px;border-radius:999px;display:grid;place-items:center;background:var(--s-high);color:var(--on-sv);opacity:0;pointer-events:none;transition:opacity var(--t-fast,160ms) var(--effects),background var(--t-fast,160ms) var(--effects)}
+.hp-close:hover{background:var(--s-highest,var(--s-high));color:var(--on-bg)}
+.hp-li.closable:hover .hp-close,.hp-close:focus-visible{opacity:1;pointer-events:auto}
+.hp-li.closable:hover .hp-card>.pill,.hp-li.closable:has(.hp-close:focus-visible) .hp-card>.pill{visibility:hidden}
+@media (hover:none){.hp-li.closable .hp-close{opacity:1;pointer-events:auto}.hp-li.closable .hp-card>.pill{visibility:hidden}}
 .hp-ic{width:32px;height:32px;border-radius:12px;display:grid;place-items:center;flex:none;background:var(--s-high);color:var(--on-sv)}
 .hp-ic.pri{background:var(--pc);color:var(--on-pc)}
 .hp-ic.ok{background:var(--okc);color:var(--ok)}
