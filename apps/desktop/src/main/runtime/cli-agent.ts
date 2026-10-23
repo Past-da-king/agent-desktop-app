@@ -16,11 +16,97 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import type { AgentEvent, JsonObject } from '@agent/core'
+import type { CodexOptions, ThreadOptions } from '@openai/codex-sdk'
 
 import { SDK_TOOLS } from './sdk-permissions'
 import { markReleased } from '../tools/run-capture'
 
 export type CliId = 'claude' | 'codex'
+export type EngineAccess = 'free' | 'asked'
+
+/** Where an engine runs: the work's folder when there is one, its private folder too either way. */
+export function engineFolders(turn: Pick<CliTurn, 'workDir' | 'folder'>): { cwd: string; extra: string[] } {
+  const folder = turn.folder?.trim() ?? ''
+  return folder === '' ? { cwd: turn.workDir, extra: [] } : { cwd: folder, extra: [turn.workDir] }
+}
+
+/**
+ * The Codex SDK's settings for one turn. Codex has no hook the app can ask before its own tools run, so:
+ *  - Run without asking: workspace-write, so its shell and patches change files in the project folder and the
+ *    chat's own folder (with network) and nothing outside them; anything else goes through the app's tools, which
+ *    run without asking then too. On Windows the unelevated sandbox is used: the default one refuses every write
+ *    there unless an administrator set it up (seen 23 Oct 2026: "rejected by filesystem policy" inside the project);
+ *  - otherwise its own shell is switched off and the sandbox is read-only, so every command and change goes
+ *    through the app's tools (shell_run, files_write), which ask the person.
+ * The app's tools are attached to every turn (the "agent" MCP server) and declared to the model up front: Codex
+ * 0.163 otherwise defers MCP tools behind a search inside its exec tool, so the model never saw delegate, memory or
+ * the rest and used its own sub-agents instead (bug of 23 Oct 2026). Codex's own sub-agents are off: they live
+ * inside the one `codex exec` process and are killed the moment the turn that started them ends (each was
+ * "interrupted" 0.06 s after its parent's task_complete). Helpers are the app's own (delegate), which run to the end.
+ * Nothing from the person's own Codex setup (skills, plugins, ChatGPT apps, AGENTS.md, goals) joins in, as
+ * settingSources: [] does for Claude.
+ */
+export function codexSettings(
+  turn: Pick<CliTurn, 'workDir' | 'folder' | 'access' | 'model' | 'mcp'>,
+  platform: NodeJS.Platform = process.platform,
+): {
+  config: NonNullable<CodexOptions['config']>
+  thread: ThreadOptions & { workingDirectory: string }
+} {
+  const free = turn.access === 'free'
+  const { cwd, extra } = engineFolders(turn)
+  return {
+    config: {
+      mcp_servers: {
+        agent: {
+          url: turn.mcp.url,
+          bearer_token_env_var: 'AGENT_MCP_TOKEN',
+          // In the model's own tool list from the first step, never only findable through Codex's tool search.
+          omit_tools_from: ['deferred'],
+          // The app asks the person itself (approval cards), so Codex must not block its tools on top.
+          default_tools_approval_mode: 'approve',
+          // An approval card can wait for the person for hours.
+          tool_timeout_sec: 6 * 60 * 60,
+        },
+      },
+      ...(free && platform === 'win32' ? { windows: { sandbox: 'unelevated' } } : {}),
+      agents: { enabled: false },
+      features: {
+        multi_agent_v2: false,
+        apps: false,
+        plugins: false,
+        goals: false,
+        ...(free ? {} : { shell_tool: false, unified_exec: false }),
+      },
+      skills: { include_instructions: false },
+      include_apps_instructions: false,
+      project_doc_max_bytes: 0,
+    },
+    thread: {
+      workingDirectory: cwd,
+      ...(extra.length === 0 ? {} : { additionalDirectories: extra }),
+      skipGitRepoCheck: true,
+      sandboxMode: free ? 'workspace-write' : 'read-only',
+      networkAccessEnabled: free,
+      webSearchEnabled: true,
+      approvalPolicy: 'never',
+      ...(turn.model === undefined || turn.model.trim() === '' ? {} : { model: turn.model.trim() }),
+    },
+  }
+}
+
+/** What the agent is told about its own tools on Codex, so it does not judge its reach from the engine's sandbox notes. */
+export function codexRules(turn: Pick<CliTurn, 'workDir' | 'folder' | 'access'>): string {
+  const { cwd } = engineFolders(turn)
+  const project = (turn.folder?.trim() ?? '') !== ''
+  return [
+    `- You work in ${cwd}${project ? " (this project's folder)" : ''}.`,
+    turn.access === 'free'
+      ? `- The person chose Run without asking: your own shell and apply_patch can change files in that folder${project ? " and your chat's own folder" : ''}. For anything outside it (another folder, WSL, a system setting), use the agent tools shell_run and files_write: they run without asking too. The sandbox is not a blocker.`
+      : '- Your own shell is off here and your sandbox is read-only: run commands and change files with the agent tools (shell_run, files_write, files_move), which ask the person when their settings say so. The sandbox is not a blocker.',
+    '- The agent tools are your tools named mcp__agent__* (memory, tasks, browser, apps, delegate and the rest). Helpers are mcp__agent__delegate (when you have it): they run to the end and report back. Codex sub-agents are not available here.',
+  ].join('\n')
+}
 
 export interface CliTurn {
   cli: CliId
@@ -34,8 +120,18 @@ export interface CliTurn {
   sessionId: string | null
   model?: string
   mcp: { url: string; token: string }
-  /** A private folder the engine runs in (inside the app's data folder). */
+  /** The chat's own private folder (inside the app's data folder), always the engine's to use. */
   workDir: string
+  /**
+   * The folder the work is in: the project's folder for a project chat and the helpers it starts. The engine runs
+   * there, so relative paths, the shell and the engine's own sense of its workspace all point at the project.
+   */
+  folder?: string
+  /**
+   * What the engine's own shell and file tools may do: 'free' when the person chose Run without asking (they act
+   * anywhere, as Claude's tools do then), 'asked' otherwise (every action goes through the app's tools and cards).
+   */
+  access?: EngineAccess
   signal: AbortSignal
   onEvent: (event: AgentEvent) => Promise<void>
   /** Claude: asked before each of Claude Code's own tools runs (see sdk-permissions.ts). */
@@ -160,7 +256,8 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         systemPrompt: `${turn.system}\n\n${CLI_RULES}`,
         ...(turn.sessionId === null ? {} : { resume: turn.sessionId }),
         ...(turn.model === undefined || turn.model.trim() === '' ? {} : { model: turn.model.trim() }),
-        cwd: turn.workDir,
+        cwd: engineFolders(turn).cwd,
+        ...(engineFolders(turn).extra.length === 0 ? {} : { additionalDirectories: engineFolders(turn).extra }),
         env: engineEnv(),
         ...(turn.program === null ? {} : { pathToClaudeCodeExecutable: turn.program }),
         abortController,
@@ -271,34 +368,15 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
 
 async function runCodex(turn: CliTurn): Promise<CliResult> {
   const { Codex } = await import('@openai/codex-sdk')
+  const settings = codexSettings(turn)
   const codex = new Codex({
     ...(turn.program === null ? {} : { codexPathOverride: turn.program }),
     env: engineEnv({ AGENT_MCP_TOKEN: turn.mcp.token }),
-    config: {
-      mcp_servers: {
-        agent: {
-          url: turn.mcp.url,
-          bearer_token_env_var: 'AGENT_MCP_TOKEN',
-          // The app asks the person itself (approval cards), so Codex must not block its tools on top.
-          default_tools_approval_mode: 'approve',
-          // An approval card can wait for the person for hours.
-          tool_timeout_sec: 6 * 60 * 60,
-        },
-      },
-    },
+    config: settings.config,
   })
-  // Codex's own sandbox stays read-only with no network: anything that acts goes through the app's tools.
-  const options = {
-    workingDirectory: turn.workDir,
-    skipGitRepoCheck: true,
-    sandboxMode: 'read-only' as const,
-    networkAccessEnabled: false,
-    webSearchEnabled: true,
-    approvalPolicy: 'never' as const,
-    ...(turn.model === undefined || turn.model.trim() === '' ? {} : { model: turn.model.trim() }),
-  }
+  const options = settings.thread
   const thread = turn.sessionId === null ? codex.startThread(options) : codex.resumeThread(turn.sessionId, options)
-  const text = `${turn.system}\n\n${CLI_RULES}\n\n---\n\n${turn.prompt}`
+  const text = `${turn.system}\n\n${CLI_RULES}\n${codexRules(turn)}\n\n---\n\n${turn.prompt}`
   const input =
     turn.images.length === 0
       ? text
@@ -329,6 +407,29 @@ async function runCodex(turn: CliTurn): Promise<CliResult> {
           call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } },
           result: '',
           isError: false,
+        })
+      } else if (item['type'] === 'command_execution' && (e['type'] === 'item.started' || e['type'] === 'item.completed')) {
+        // Codex's own shell (Run without asking): shown in the chat like Claude's own commands.
+        const call = { t: 'call' as const, id: String(item['id'] ?? 'command'), name: process.platform === 'win32' ? 'PowerShell' : 'Bash', input: { command: String(item['command'] ?? '') } }
+        if (e['type'] === 'item.started') await turn.onEvent({ type: 'tool_started', call })
+        else {
+          const code = typeof item['exit_code'] === 'number' ? item['exit_code'] : null
+          await turn.onEvent({
+            type: 'tool_finished',
+            call,
+            result: String(item['aggregated_output'] ?? '').slice(-4000),
+            isError: item['status'] === 'failed' || (code !== null && code !== 0),
+          })
+        }
+      } else if (e['type'] === 'item.completed' && item['type'] === 'file_change') {
+        const changes = Array.isArray(item['changes']) ? (item['changes'] as Array<{ path?: unknown; kind?: unknown }>) : []
+        const call = { t: 'call' as const, id: String(item['id'] ?? 'patch'), name: 'Edit', input: { file_path: changes.map((c) => String(c.path ?? '')).join(', ') } }
+        await turn.onEvent({ type: 'tool_started', call })
+        await turn.onEvent({
+          type: 'tool_finished',
+          call,
+          result: changes.map((c) => `${String(c.kind ?? 'update')} ${String(c.path ?? '')}`).join('\n'),
+          isError: item['status'] === 'failed',
         })
       } else if (e['type'] === 'turn.failed' || e['type'] === 'error') {
         const err = e['error'] as { message?: string } | undefined

@@ -15,6 +15,7 @@ import type { AgentEvent, JsonObject, Settings, Tool, ToolContext } from '@agent
 import { planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
 import { startToolServer, type ToolServer } from './mcp-server'
 import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
+import { usableFolder } from './work-folder'
 
 export type { CliId }
 
@@ -42,6 +43,8 @@ export interface CliTurnRequest {
   prompt: string
   images?: string[]
   model?: string
+  /** The project folder the work is in (a project chat and the helpers it starts); absent for everything else. */
+  folder?: string
   context: ToolContext
   signal: AbortSignal
   onEvent: (event: AgentEvent) => Promise<void>
@@ -53,9 +56,9 @@ export interface CliTurnRequest {
  * Bump when the agent gains something a resumed conversation would not know about (a new way to answer, a
  * new setting). A session that started before it is told once, so it stops repeating what it said earlier.
  */
-export const PROMPT_REVISION = 3
+export const PROMPT_REVISION = 5
 const UPDATE_NOTE =
-  '[The Agent app was updated since earlier in this conversation. Read your instructions again: they now include GENERATIVE UI (OpenUI Lang), the "visual response" cards you draw by writing an openui-lang block, the user\'s current choice for commands and files, and run_script, which calls many of your tools in one script and returns only a small summary. Anything you said before about not having these is out of date.]'
+  '[The Agent app was updated since earlier in this conversation. Read your instructions again: they now include GENERATIVE UI (OpenUI Lang), the "visual response" cards you draw by writing an openui-lang block, the user\'s current choice for commands and files, and run_script, which calls many of your tools in one script and returns only a small summary. You now work in the project\'s own folder when there is one, with the access the person chose, your agent tools (memory, tasks, browser, apps, delegate and the rest) are the ones named mcp__agent__* in your tool list, and helpers are mcp__agent__delegate (your engine\'s own sub-agents are gone). Anything you said before about not having these, or about a sandbox keeping you out of the project folder, is out of date.]'
 
 /**
  * Helpers never delegate further, and a routine runs once with nobody to report to. Every chat's own agent
@@ -223,6 +226,13 @@ export class CliHost {
     const continues = request.thread !== 'routine'
     const generation = this.forgotten.get(request.thread) ?? 0
     const dir = join(this.workDir, request.cli, request.thread.replace(/[^a-z0-9-]/gi, '_'))
+    // A helper another computer placed here works with that computer's commands-and-files choice.
+    const settings = (): Settings => {
+      const own = this.settings()
+      const shell = request.context.shell
+      return shell === undefined ? own : { ...own, shell }
+    }
+    const folder = usableFolder(request.folder)
     try {
       const key = `${request.cli}:${request.thread}`
       const stored = continues ? (this.sessions()[key] ?? null) : null
@@ -238,15 +248,13 @@ export class CliHost {
           ...(request.model === undefined ? {} : { model: request.model }),
           mcp: { url: server.url, token },
           workDir: dir,
+          ...(folder === undefined ? {} : { folder }),
+          // Read when the turn starts: Run without asking frees the engine's own tools, as it frees Claude's.
+          access: settings().shell === 'always' ? 'free' : 'asked',
           signal: request.signal,
           onEvent: request.onEvent,
           permission: sdkPermission({
-            // A helper another computer placed here works with that computer's commands-and-files choice.
-            settings: () => {
-              const own = this.settings()
-              const shell = request.context.shell
-              return shell === undefined ? own : { ...own, shell }
-            },
+            settings,
             approve: (summary, details) => request.context.approve(summary, details, 'computer'),
             alsoAllowed: [dir],
           }),
