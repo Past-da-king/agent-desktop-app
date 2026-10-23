@@ -455,7 +455,11 @@ export function registerIpc(deps: IpcDeps): () => void {
   })
 
   // The helper cards a linked device shows: the same model as the side panel, built here and sent on each change.
-  const helperFeed = new HelperFeed({ store, emit: (snapshot) => send(EVENTS.helperCards, snapshot) })
+  const helperFeed = new HelperFeed({
+    store,
+    emit: (snapshot) => send(EVENTS.helperCards, snapshot),
+    running: (id) => (chat.states?.() ?? []).some((info) => info.chat === id && info.running),
+  })
   handle(CHANNELS.helpers.cards, async () => helperFeed.snapshot())
 
   handle(CHANNELS.helpers.stopAll, async () => {

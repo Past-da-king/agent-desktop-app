@@ -8,10 +8,11 @@
  *    works in, if it has one.
  * Every move keeps where the person was, so Back returns there.
  */
-import { MAIN_CHAT, type ChatItem } from '@agent/core'
+import { MAIN_CHAT, type ChatItem, type ProjectRow } from '@agent/core'
 
+import { agent } from '../bridge'
 import type { CardKind } from '../../shared/helper-cards'
-import { projectChatLines } from '../../shared/helper-cards'
+import { closePatch, projectChatLines } from '../../shared/helper-cards'
 import { openChat, openHelper } from './chat-actions'
 import { metaOf, metaText } from './meta'
 
@@ -56,4 +57,17 @@ export function mainCard(items: ChatItem[], running: boolean, waiting: number, a
   const text = step === undefined ? '' : (metaText(metaOf(step), 'summary') || step.text).replace(/\s+/g, ' ').trim()
   const line = waiting > 0 ? (waiting === 1 ? 'Waiting for you' : `${waiting} waiting for you`) : text === '' ? 'Working' : text.length > 160 ? `${text.slice(0, 159)}…` : text
   return { kind: 'main', id: MAIN_CHAT, label: agentName, line, waiting: waiting > 0 }
+}
+
+/**
+ * A project chat card's X: the card leaves the side panel (and the collapsed strip, the title bar's list, a linked
+ * device's list) until that chat moves again. It only hides the card: the chat and its helpers keep going and
+ * nothing is deleted. Kept on the project row, so it lasts through a restart.
+ */
+export async function closeCard(card: { projectChat: string; activityAt: number }, projects: ProjectRow[]): Promise<void> {
+  const chat = card.projectChat
+  if (chat === '') return
+  const project = projects.find((each) => each.chats.includes(chat))
+  if (project === undefined) return
+  await agent.data.upsert('project', { id: project.id, panelHidden: closePatch(project, chat, card.activityAt) })
 }

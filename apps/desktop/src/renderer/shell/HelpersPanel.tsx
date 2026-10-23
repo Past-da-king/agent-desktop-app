@@ -3,7 +3,7 @@ import { PlaceChip } from '../ui/PlaceChip'
 import { useEffect, useMemo, useState } from 'react'
 
 import { agent } from '../bridge'
-import { cardTarget, mainCard, openTarget, type CardTarget, type MainCard } from '../lib/card-open'
+import { cardTarget, closeCard, mainCard, openTarget, type CardTarget, type MainCard } from '../lib/card-open'
 import { openChat } from '../lib/chat-actions'
 import { chatOf, chatTitleOf, itemsOfChat } from '../lib/chats'
 import { helperCards, helperIdOf, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
@@ -75,21 +75,19 @@ function useStop(): { stopping: string | null; stop: (id: string) => void } {
 }
 
 /**
- * Every helper working right now, from any chat (the main thread, any project, hidden ones too), each with its chat
- * row, whose it is and its one line. A project agent's card comes first with its project's helpers under it.
- */
-export function useWorkingHelpers(): HelperCard[] {
-  const items = useEntity('chat_item')
-  const projects = useEntity('project')
-  return useMemo(() => helperCards(items, projects), [items, projects])
-}
-
-/**
- * The side panel's cards: what is working right now and nothing else. A card that finished (done, failed or
- * stopped) leaves the moment it does; a project agent's last answer is in its project chat.
+ * The side panel's cards (shared/helper-cards.ts helperCards): every project chat that works or waits on the person
+ * until he closes it, the helpers it started under it, and every other helper while it works.
  */
 export function usePanelCards(): HelperCard[] {
-  return useWorkingHelpers()
+  const items = useEntity('chat_item')
+  const projects = useEntity('project')
+  const runs = useChats((state) => state.runs)
+  return useMemo(() => helperCards(items, projects, { running: (chat) => runs[chat]?.running === true }), [items, projects, runs])
+}
+
+/** The same cards (the collapsed strip's faces and older callers). */
+export function useWorkingHelpers(): HelperCard[] {
+  return usePanelCards()
 }
 
 /** A project agent's newest steps under its card while it works (the line above already says the one it is on). */
@@ -107,6 +105,7 @@ export function HelperCardList({
   current = '',
   mascot,
   onOpen,
+  onClose,
 }: {
   cards: HelperCard[]
   main?: MainCard | null
@@ -114,14 +113,18 @@ export function HelperCardList({
   current?: string
   mascot: MascotId
   onOpen: (target: CardTarget) => void
+  /** A project chat card's X: off the panel until that chat moves again. No X when it is not given. */
+  onClose?: (card: HelperCard) => void
 }): JSX.Element | null {
   if (cards.length === 0 && main === null) return null
   const working = cards.filter((card) => card.state === 'working').length + (main === null ? 0 : 1)
+  const replied = cards.filter((card) => card.waiting).length
+  const counts = [working > 0 || replied === 0 ? `${working} working` : '', replied > 0 ? `${replied} replied` : ''].filter((part) => part !== '').join(', ')
   return (
-    <section className="hp" aria-label="Working now">
+    <section className="hp" aria-label="Chats and helpers">
       <div className="hp-title">
-        <span className="eyebrow">WORKING NOW</span>
-        <span className="small muted">{working} working</span>
+        <span className="eyebrow">CHATS AND HELPERS</span>
+        <span className="small muted">{counts}</span>
       </div>
       <ul className="hp-list">
         {main !== null ? (
@@ -140,14 +143,15 @@ export function HelperCardList({
           </li>
         ) : null}
         {cards.map((card) => {
-          const s = stateLabel(card)
+          const s = card.waiting ? { label: 'Your turn', tone: 'ok' } : stateLabel(card)
+          const closable = onClose !== undefined && card.kind === 'project-chat'
           const target = cardTarget(card)
           // A project chat's card already reads as its project, and a helper under it sits in its group; any other
           // project helper says which project it works in.
           const where = target.kind === 'project-chat' ? 'Project chat' : card.owner.kind === 'project' && card.depth === 0 ? card.owner.name : ''
           const opens = target.kind === 'project-chat' ? `Open the ${card.label} chat` : `Open ${card.label}, a helper`
           return (
-            <li key={card.id} className={card.depth === 1 ? 'hp-sub' : undefined} data-card={card.id}>
+            <li key={card.id} className={`hp-li${card.depth === 1 ? ' hp-sub' : ''}${card.waiting ? ' waiting' : ''}${closable ? ' closable' : ''}`} data-card={card.id}>
               <button type="button" className="hp-card" data-kind={target.kind} aria-current={target.kind === 'project-chat' && current !== '' && target.chat === current ? true : undefined} onClick={() => onOpen(target)} aria-label={opens} title={card.line}>
                 <OwnerAvatar owner={card.owner} helper={card} mascot={mascot} size={card.depth === 1 ? 28 : 32} />
                 <span className="hp-t">
@@ -170,6 +174,17 @@ export function HelperCardList({
                 </span>
                 <span className={`pill ${s.tone}`}>{s.label}</span>
               </button>
+              {closable ? (
+                <button
+                  type="button"
+                  className="hp-close"
+                  aria-label={`Close the ${card.label} card. The chat keeps going`}
+                  title="Close this card (the chat keeps going, and comes back when it moves)"
+                  onClick={() => onClose?.(card)}
+                >
+                  <Icon name="x" size={16} />
+                </button>
+              ) : null}
             </li>
           )
         })}
@@ -194,7 +209,8 @@ export function HelpersPanel(): JSX.Element | null {
   const cards = usePanelCards()
   const main = useMainCard()
   const current = useCurrentChat()
-  return <HelperCardList cards={cards} main={main} current={current} mascot={mascot} onOpen={openTarget} />
+  const projects = useEntity('project')
+  return <HelperCardList cards={cards} main={main} current={current} mascot={mascot} onOpen={openTarget} onClose={(card) => void closeCard(card, projects)} />
 }
 
 /** The chat on screen, or '' when the window shows another page. */
