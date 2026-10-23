@@ -5,7 +5,7 @@
  * desktop changes PLAN.md 5.2 asks for: it lives on the person's computer rather than a handheld, and
  * the parts about connected apps, machines, cards and voice are gone. Branches are not in v1.
  */
-import type { AgentProfileInfo, EnvironmentReport, Found, GoalRow, MemoryRow, Settings, TaskRow } from '@agent/core'
+import { SCRIPT_PROMPT_LINE, type AgentProfileInfo, type EnvironmentReport, type Found, type GoalRow, type MemoryRow, type Settings, type TaskRow } from '@agent/core'
 
 import { existsSync } from 'node:fs'
 
@@ -359,6 +359,12 @@ export function buildSystemPrompt(input: PromptInput): string {
       lines.push(...projectMemoryLines(project.name))
     }
   }
+
+  // Every agent (main, project chats, routines, helpers, offloaded runs) batches with run_script (23 Oct 2026).
+  if (lines[lines.length - 1] !== '') lines.push('')
+  lines.push('BATCHING TOOL CALLS')
+  lines.push(SCRIPT_PROMPT_LINE)
+  lines.push('')
 
   if (input.role === undefined || input.role === 'main') {
     if (project !== null) {

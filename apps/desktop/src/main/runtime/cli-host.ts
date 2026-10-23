@@ -53,9 +53,9 @@ export interface CliTurnRequest {
  * Bump when the agent gains something a resumed conversation would not know about (a new way to answer, a
  * new setting). A session that started before it is told once, so it stops repeating what it said earlier.
  */
-export const PROMPT_REVISION = 2
+export const PROMPT_REVISION = 3
 const UPDATE_NOTE =
-  '[The Agent app was updated since earlier in this conversation. Read your instructions again: they now include GENERATIVE UI (OpenUI Lang), the "visual response" cards you draw by writing an openui-lang block, and the user\'s current choice for commands and files. Anything you said before about not having these is out of date.]'
+  '[The Agent app was updated since earlier in this conversation. Read your instructions again: they now include GENERATIVE UI (OpenUI Lang), the "visual response" cards you draw by writing an openui-lang block, the user\'s current choice for commands and files, and run_script, which calls many of your tools in one script and returns only a small summary. Anything you said before about not having these is out of date.]'
 
 /**
  * Helpers never delegate further, and a routine runs once with nobody to report to. Every chat's own agent
@@ -76,6 +76,11 @@ export function toolsForTurn(request: Pick<CliTurnRequest, 'tools' | 'thread' | 
       // Claude brings its own (better) shell and file tools, asked through the app; Codex keeps the app's.
       !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name)),
   )
+}
+
+/** What run_script may call in a turn: the turn's tools without the delegation ones, the app's shell and files kept. */
+export function scriptToolsForTurn(request: Pick<CliTurnRequest, 'tools' | 'thread' | 'delegates'>): Tool[] {
+  return request.tools.filter((tool) => request.delegates === true || threadDelegates(request.thread) || !NOT_ON_CLI.test(tool.spec.name))
 }
 
 /** A native binary inside app.asar cannot be started; electron-builder unpacks it next to the archive. */
@@ -209,6 +214,8 @@ export class CliHost {
     const server = await this.ensureServer()
     const token = server.open({
       tools: toolsForTurn(request),
+      // A script reaches the app's own shell and file tools even where Claude's replace them for the model.
+      scriptTools: scriptToolsForTurn(request),
       context: request.context,
       onCall: request.onCall,
       onResult: request.onResult,

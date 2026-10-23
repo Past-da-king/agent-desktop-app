@@ -10,7 +10,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
-import type { JsonObject, Tool, ToolContext } from '@agent/core'
+import { SCRIPT_TOOL, scriptTools, type JsonObject, type Tool, type ToolContext } from '@agent/core'
 
 export interface ToolServer {
   url: string
@@ -28,6 +28,27 @@ export interface ToolRun {
   /** Called around each tool call, so the chat shows it as it happens. */
   onCall?: (call: { id: string; name: string; input: JsonObject }) => void | Promise<void>
   onResult?: (call: { id: string; name: string; input: JsonObject }, result: string, isError: boolean) => void | Promise<void>
+  /**
+   * What run_script may call when it is not the same list (a Claude plan run leaves the app's shell and file tools out
+   * of the model's list because Claude brings its own, but a script can only reach the app's). Default: tools.
+   */
+  scriptTools?: Tool[]
+}
+
+/** The run's tools plus run_script over them; inner calls show in the trail through onCall and onResult. */
+export function runTools(run: ToolRun): Tool[] {
+  if (run.tools.length === 0 || run.tools.some((tool) => tool.spec.name === SCRIPT_TOOL)) return run.tools
+  const inner = run.scriptTools ?? run.tools
+  return [
+    ...run.tools,
+    ...scriptTools({
+      tools: () => inner,
+      events: {
+        started: (call) => run.onCall?.({ id: call.id, name: call.name, input: call.input }),
+        finished: (call, result, isError) => run.onResult?.({ id: call.id, name: call.name, input: call.input }, result, isError),
+      },
+    }),
+  ]
 }
 
 const PROTOCOL = '2025-03-26'
@@ -79,9 +100,17 @@ let callSeq = 0
 
 export async function startToolServer(): Promise<ToolServer> {
   const runs = new Map<string, ToolRun>()
+  const listed = new WeakMap<ToolRun, Tool[]>()
   const find = (given: string): ToolRun | undefined => {
     for (const [token, run] of runs) if (same(given, token)) return run
     return undefined
+  }
+  const toolsOf = (run: ToolRun): Tool[] => {
+    const known = listed.get(run)
+    if (known !== undefined) return known
+    const all = runTools(run)
+    listed.set(run, all)
+    return all
   }
 
   const handle = async (rpc: RpcRequest, run: ToolRun): Promise<unknown> => {
@@ -96,7 +125,7 @@ export async function startToolServer(): Promise<ToolServer> {
         return {}
       case 'tools/list':
         return {
-          tools: run.tools.map((tool) => ({
+          tools: toolsOf(run).map((tool) => ({
             name: tool.spec.name,
             description: tool.spec.description,
             inputSchema: tool.spec.schema,
@@ -106,7 +135,7 @@ export async function startToolServer(): Promise<ToolServer> {
         const name = String(rpc.params?.['name'] ?? '')
         const raw = rpc.params?.['arguments']
         const input: JsonObject = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as JsonObject) : {}
-        const tool = run.tools.find((item) => item.spec.name === name)
+        const tool = toolsOf(run).find((item) => item.spec.name === name)
         const call = { id: `mcp-${(callSeq += 1)}`, name, input }
         if (tool === undefined) return { content: [{ type: 'text', text: `Unknown tool ${name}` }], isError: true }
         await run.onCall?.(call)

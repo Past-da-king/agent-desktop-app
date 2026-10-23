@@ -20,6 +20,7 @@ import type {
 } from './model'
 import { ProviderException, msgText, msgToolCalls } from './model'
 import { flatten, repair } from './repair'
+import { withScriptTools } from './script'
 import { trimFit } from './trim'
 
 export const IMAGE_MARKER = /\[\[image:([^\]]+)]]/g
@@ -54,14 +55,12 @@ export class AgentLoop {
   private readonly model: string
   private readonly tools: Tool[]
   private readonly maxSteps: number
-  private readonly byName: Map<string, Tool>
 
   constructor(options: AgentLoopOptions) {
     this.provider = options.provider
     this.model = options.model
     this.tools = options.tools
     this.maxSteps = options.maxSteps ?? Number.MAX_SAFE_INTEGER
-    this.byName = new Map(options.tools.map((tool) => [tool.spec.name, tool]))
   }
 
   async run(
@@ -73,6 +72,16 @@ export class AgentLoop {
     const { onEvent, onAppend, incoming, signal } = hooks
     const prefix = hooks.notePrefix ?? '[The main agent, while you work] '
     let lastText = ''
+    // run_script over this run's own tools: its inner calls show in the same work trail as ordinary calls.
+    const tools =
+      this.tools.length === 0
+        ? this.tools
+        : withScriptTools(this.tools, {
+            started: (call) => onEvent?.({ type: 'tool_started', call }),
+            finished: (call, result, isError) => onEvent?.({ type: 'tool_finished', call, result, isError }),
+          })
+    const byName = new Map(tools.map((tool) => [tool.spec.name, tool]))
+    const specs = tools.map((tool) => tool.spec)
 
     for (let step = 1; step <= this.maxSteps; step++) {
       if (signal?.aborted) break
@@ -97,7 +106,7 @@ export class AgentLoop {
 
       let completion: Completion
       try {
-        completion = await this.provider.complete(system, history, this.specs(), this.model)
+        completion = await this.provider.complete(system, history, specs, this.model)
       } catch (e) {
         // A history the provider calls malformed would block every message from now on. Rebuild it
         // without the earlier tool exchanges and try once more instead of making the user clear their data.
@@ -106,7 +115,7 @@ export class AgentLoop {
         const fixed = flatten(repair(history))
         history.length = 0
         history.push(...fixed)
-        completion = await this.provider.complete(system, history, this.specs(), this.model)
+        completion = await this.provider.complete(system, history, specs, this.model)
       }
 
       // Stop was pressed while the provider was answering: drop the reply and end the run cleanly.
@@ -127,7 +136,7 @@ export class AgentLoop {
       const results: ToolResultBlock[] = []
       for (const call of calls) {
         await onEvent?.({ type: 'tool_started', call })
-        const tool = this.byName.get(call.name)
+        const tool = byName.get(call.name)
         let out: string
         let isError: boolean
         if (tool === undefined) {
@@ -168,9 +177,6 @@ export class AgentLoop {
     )
   }
 
-  private specs() {
-    return this.tools.map((tool) => tool.spec)
-  }
 }
 
 function imagePaths(content: string): string[] {
