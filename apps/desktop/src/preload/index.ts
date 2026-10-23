@@ -197,6 +197,7 @@ const api: AgentApi = {
       void call<void>(CHANNELS.window.close)
     },
     isMaximized: () => call<boolean>(CHANNELS.window.isMaximized),
+    show: (target) => call<boolean>(CHANNELS.window.show, target),
     onMaximizeChange: (callback) => on<boolean>(EVENTS.maximize, callback),
     onQuickAsk: (callback) => on<null>(EVENTS.quickAsk, () => callback()),
     onRoute: (callback) => on<RouteTarget>(EVENTS.route, callback),

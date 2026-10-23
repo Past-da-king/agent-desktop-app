@@ -1,9 +1,40 @@
-import type { MemoryKind } from '@agent/core'
+import { MAIN_CHAT, type MemoryKind } from '@agent/core'
 import { create } from 'zustand'
 
 import { hashFor, isAppPage, parseHash, rememberLastView, type AppPage, type Route } from './route'
+import { useChats } from './useChats'
 
-export type OverlayName = 'palette' | 'quick' | null
+/** Places kept for Back; older ones fall off. */
+const MAX_BACK = 50
+
+/** A route as a place: the chat page always with its chat. */
+function placeOf(route: Route, openChat: string): Route {
+  return route.page === 'chat' ? { page: 'chat', chat: route.chat ?? openChat } : route
+}
+
+function samePlace(a: Route, b: Route): boolean {
+  if (a.page !== b.page) return false
+  if (a.page === 'project' && b.page === 'project') return a.id === b.id
+  if (a.page === 'chat' && b.page === 'chat') return (a.chat ?? MAIN_CHAT) === (b.chat ?? MAIN_CHAT)
+  if (a.page === 'onboarding' && b.page === 'onboarding') return a.step === b.step
+  return true
+}
+
+/** Only the app's own pages are places to go back to (never onboarding or the small windows). */
+function isBackPlace(route: Route): boolean {
+  return route.page === 'project' || isAppPage(route.page)
+}
+
+function writeHash(hash: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (window.location.hash !== hash) window.location.hash = hash
+  } catch {
+    // Hash routing is best-effort in odd embeds; the store still changes.
+  }
+}
+
+export type OverlayName = 'palette' | 'quick' | 'work' | null
 export type TaskTab = 'todos' | 'agent'
 export type MemoryFilter = 'all' | MemoryKind
 
@@ -24,7 +55,12 @@ interface UiState {
   composerDraft: string
   /** Bumped when New chat should bring the newest part of the thread back into view. */
   chatScroll: number
-  navigate: (route: Route) => void
+  /** Where the person was before each move, newest last: the title bar's Back (and Alt+Left) goes to the last one. */
+  back: Route[]
+  /** Moves to a page. `replace` moves without leaving a way back (boot, a redirect). */
+  navigate: (route: Route, options?: { replace?: boolean }) => void
+  /** Back to where the person was before the last move; false when there is nowhere to go back to. */
+  goBack: () => boolean
   applyHash: (hash: string) => void
   setOverlay: (overlay: OverlayName) => void
   openPalette: () => void
@@ -57,23 +93,45 @@ export const useUi = create<UiState>((set) => ({
   composerDraft: '',
   chatScroll: 0,
 
-  navigate: (route) => {
-    const hash = hashFor(route)
-    if (window.location.hash !== hash) {
-      try {
-        window.location.hash = hash
-      } catch {
-        // Hash routing is best-effort in odd embeds; the store still changes below.
-      }
-    }
-    set({ route })
-    if (isAppPage(route.page)) rememberLastView(route.page)
+  back: [],
+
+  navigate: (route, options) => {
+    const state = useUi.getState()
+    const chats = useChats.getState()
+    // The chat page always names its chat, so the place it leaves can be gone back to exactly.
+    const next: Route = route.page === 'chat' ? { page: 'chat', chat: route.chat ?? chats.open } : route
+    const here = placeOf(state.route, chats.open)
+    const moving = !samePlace(here, next)
+    if (moving && options?.replace !== true && isBackPlace(here)) set({ back: [...state.back, here].slice(-MAX_BACK) })
+    if (next.page === 'chat' && next.chat !== undefined && next.chat !== chats.open) chats.openChat(next.chat)
+    writeHash(hashFor(next))
+    set({ route: next })
+    if (isAppPage(next.page)) rememberLastView(next.page)
+  },
+
+  goBack: () => {
+    const state = useUi.getState()
+    const previous = state.back[state.back.length - 1]
+    if (previous === undefined) return false
+    set({ back: state.back.slice(0, -1), overlay: null })
+    if (previous.page === 'chat' && previous.chat !== undefined && previous.chat !== useChats.getState().open) useChats.getState().openChat(previous.chat)
+    writeHash(hashFor(previous))
+    set({ route: previous })
+    if (isAppPage(previous.page)) rememberLastView(previous.page)
+    return true
   },
 
   applyHash: (hash) => {
     const route = parseHash(hash)
     if (!route) return
-    set({ route })
+    // An address with no chat in it is the main chat (`#/chat`); one with a chat opens that chat.
+    if (route.page === 'chat') {
+      const chat = route.chat ?? MAIN_CHAT
+      if (chat !== useChats.getState().open) useChats.getState().openChat(chat)
+      set({ route: { page: 'chat', chat } })
+    } else {
+      set({ route })
+    }
     if (isAppPage(route.page)) rememberLastView(route.page)
   },
 

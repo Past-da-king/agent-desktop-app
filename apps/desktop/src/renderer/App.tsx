@@ -36,7 +36,7 @@ function Loading({ children }: { children: ReactNode }): JSX.Element {
 }
 import { Home } from './views/Home'
 import { Project } from './views/Project'
-import { BrowserStage, ChatPanel } from './shell/Panel'
+import { BrowserStage, ChatPanel, HelperFloat } from './shell/Panel'
 import { Palette } from './shell/Palette'
 import { QuickAsk } from './shell/QuickAsk'
 import { QuickWindow } from './shell/QuickWindow'
@@ -125,6 +125,7 @@ function Main({ route }: { route: Route }): JSX.Element {
       <TitleBar onboarding={onboarding} />
       <div className="stage">{onboarding ? <Loading><Onboarding step={route.step} /></Loading> : <Page />}</div>
       {onboarding ? null : <BrowserStage />}
+      {onboarding ? null : <HelperFloat />}
       <div className="overlay">
         <Palette />
         <QuickAsk />
@@ -178,14 +179,14 @@ export function App(): JSX.Element {
     }
     if (!settings?.onboarded) {
       const step = parsed?.page === 'onboarding' ? parsed.step : 'signin'
-      useUi.getState().navigate({ page: 'onboarding', step })
+      useUi.getState().navigate({ page: 'onboarding', step }, { replace: true })
       return
     }
     if (parsed && parsed.page !== 'onboarding') {
-      useUi.getState().navigate(parsed)
+      useUi.getState().navigate(parsed, { replace: true })
       return
     }
-    useUi.getState().navigate({ page: lastView() })
+    useUi.getState().navigate({ page: lastView() }, { replace: true })
   }, [ready])
 
   // The small windows know what they are from their address, before settings have loaded.

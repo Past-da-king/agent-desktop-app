@@ -142,7 +142,17 @@ export function helperView(item: ChatItem, items: ChatItem[]): HelperView {
  */
 export type HelperOwner = HelperCardOwner
 
+/**
+ * What a card stands for, and so what a tap on it does. A project chat (a project's own agent, with its own context
+ * and its own thread) and a helper (one job with a brief, steps and a result) are different things: a project chat's
+ * card opens that chat in full; a helper's card opens the helper's own view.
+ */
+export type CardKind = 'project-chat' | 'helper'
+
 export interface HelperCard extends HelperView {
+  kind: CardKind
+  /** For a helper working inside a project chat: that chat, so its view can open it ('' otherwise). */
+  parentChat: string
   row: ChatItem
   owner: HelperOwner
   /** The one line under its name: the step it is on, else its status line. */
@@ -182,6 +192,21 @@ export function helperOwner(item: ChatItem, projects: ProjectRow[]): HelperOwner
   if (project !== null) return project.hidden ? { kind: 'plain' } : { kind: 'project', id: project.id, name: project.name, icon: project.icon }
   if (fromMeta !== null) return { kind: 'project', ...fromMeta }
   return chatOfRow(item) === MAIN_CHAT ? { kind: 'main' } : { kind: 'plain' }
+}
+
+/** A project agent row: it stands for a project chat (`meta.projectChat`), it is not a helper run. */
+export function projectChatOfRow(item: ChatItem): string {
+  return metaText(metaOf(item), 'projectChat')
+}
+
+/**
+ * The project chat a helper works in, for the "open its chat" link in the helper's view: the chat its row sits in
+ * when a project holds that chat. '' for the main chat's helpers, quick chats, and project agent rows themselves.
+ */
+export function helperParentChat(item: ChatItem, projects: ProjectRow[]): string {
+  if (projectChatOfRow(item) !== '') return ''
+  const chat = chatOfRow(item)
+  return projectOfChat(projects, chat) === null ? '' : chat
 }
 
 function stepText(step: ChatItem): string {
@@ -232,7 +257,8 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[]): HelperCa
       const projectChat = metaText(metaOf(item), 'projectChat')
       const lines = projectChat === '' ? view.activity : projectChatLines(items, projectChat)
       const line = projectChat === '' ? helperLine(view) : projectLine(view, lines)
-      return { ...view, row: item, owner: helperOwner(item, projects), line, depth: 0, projectChat, steps: lines }
+      const kind: CardKind = projectChat === '' ? 'helper' : 'project-chat'
+      return { ...view, kind, parentChat: helperParentChat(item, projects), row: item, owner: helperOwner(item, projects), line, depth: 0, projectChat, steps: lines }
     })
     .filter((card) => card.state === 'working')
     // Running cards first, then queued ones; oldest first within each.
@@ -277,6 +303,8 @@ export function cardInfo(card: HelperCard): HelperCardInfo {
   const brief = card.projectChat !== '' ? metaText(metaOf(card.row), 'lastBrief') || card.brief : card.brief
   return {
     id: card.id,
+    kind: card.kind,
+    parentChat: card.parentChat,
     row: card.row.id,
     chat: chatOfRow(card.row),
     label: card.label,

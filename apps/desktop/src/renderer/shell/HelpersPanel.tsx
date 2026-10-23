@@ -1,14 +1,19 @@
-import { type ChatItem, type MascotId } from '@agent/core'
+import { MAIN_CHAT, type ChatItem, type MascotId, type ProjectRow } from '@agent/core'
 import { PlaceChip } from '../ui/PlaceChip'
 import { useEffect, useMemo, useState } from 'react'
 
 import { agent } from '../bridge'
+import { cardTarget, mainCard, openTarget, type CardTarget, type MainCard } from '../lib/card-open'
 import { openChat } from '../lib/chat-actions'
+import { chatOf, chatTitleOf, itemsOfChat } from '../lib/chats'
 import { helperCards, helperIdOf, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
 import { metaText, parseMeta } from '../lib/meta'
+import { helperParentChat } from '../../shared/helper-cards'
+import { useChats } from '../state/useChats'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { useSettings } from '../state/useSettings'
+import { useWaiting } from '../state/useWaiting'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
 import { Mascot } from '../ui/Mascot'
@@ -90,28 +95,56 @@ export function usePanelCards(): HelperCard[] {
 const CARD_STEPS = 3
 
 /**
- * The helpers working right now, under the agent's browser in the side panel, drawn from the cards it is given.
- * Every working helper is here and nothing is cut off: the side panel scrolls. A project agent's card opens its
- * project chat; a helper's card opens it full size (HelperStage).
+ * The cards working right now (the main chat's while it works or waits, then project chats with their helpers under
+ * them, then the other helpers), under the agent's browser in the side panel and in the title bar's list. Nothing is
+ * cut off: the list scrolls. What a tap does is the caller's `onOpen` (lib/card-open.ts openTarget everywhere): a
+ * project chat's card and the main card open that chat in full; a helper's card opens the helper's own view.
  */
-export function HelperCardList({ cards, mascot, onOpen }: { cards: HelperCard[]; mascot: MascotId; onOpen: (card: HelperCard) => void }): JSX.Element | null {
-  if (cards.length === 0) return null
+export function HelperCardList({
+  cards,
+  main = null,
+  mascot,
+  onOpen,
+}: {
+  cards: HelperCard[]
+  main?: MainCard | null
+  mascot: MascotId
+  onOpen: (target: CardTarget) => void
+}): JSX.Element | null {
+  if (cards.length === 0 && main === null) return null
+  const working = cards.filter((card) => card.state === 'working').length + (main === null ? 0 : 1)
   return (
-    <section className="hp" aria-label="Helpers working now">
+    <section className="hp" aria-label="Working now">
       <div className="hp-title">
-        <span className="eyebrow">HELPERS</span>
-        <span className="small muted">{cards.filter((card) => card.state === 'working').length} working</span>
+        <span className="eyebrow">WORKING NOW</span>
+        <span className="small muted">{working} working</span>
       </div>
       <ul className="hp-list">
+        {main !== null ? (
+          <li key="main" data-card="main">
+            <button type="button" className="hp-card hp-main" data-kind="main" onClick={() => onOpen({ kind: 'main' })} aria-label={`Open the main chat with ${main.label}`} title={main.line}>
+              <span className="hp-av" aria-hidden="true">
+                <Mascot id={mascot} size={32} />
+              </span>
+              <span className="hp-t">
+                <b>{main.label}</b>
+                <span className="hp-where">Main chat</span>
+                <span className="hp-line">{main.line}</span>
+              </span>
+              <span className={`pill ${main.waiting ? 'warn' : 'pri'}`}>{main.waiting ? 'Needs you' : 'Working'}</span>
+            </button>
+          </li>
+        ) : null}
         {cards.map((card) => {
           const s = stateLabel(card)
-          // A project agent's card already reads as its project, and a helper under it sits in its group; any other
+          const target = cardTarget(card)
+          // A project chat's card already reads as its project, and a helper under it sits in its group; any other
           // project helper says which project it works in.
-          const where = card.owner.kind === 'project' && card.projectChat === '' && card.depth === 0 ? card.owner.name : ''
-          const opens = card.projectChat !== '' ? `Open the ${card.label} chat` : `Open ${card.label} full size`
+          const where = target.kind === 'project-chat' ? 'Project chat' : card.owner.kind === 'project' && card.depth === 0 ? card.owner.name : ''
+          const opens = target.kind === 'project-chat' ? `Open the ${card.label} chat` : `Open ${card.label}, a helper`
           return (
-            <li key={card.id} className={card.depth === 1 ? 'hp-sub' : undefined}>
-              <button type="button" className="hp-card" onClick={() => onOpen(card)} aria-label={opens} title={card.line}>
+            <li key={card.id} className={card.depth === 1 ? 'hp-sub' : undefined} data-card={card.id}>
+              <button type="button" className="hp-card" data-kind={target.kind} onClick={() => onOpen(target)} aria-label={opens} title={card.line}>
                 <OwnerAvatar owner={card.owner} helper={card} mascot={mascot} size={card.depth === 1 ? 28 : 32} />
                 <span className="hp-t">
                   <b>
@@ -120,7 +153,7 @@ export function HelperCardList({ cards, mascot, onOpen }: { cards: HelperCard[];
                   </b>
                   {where !== '' ? <span className="hp-where">{where}</span> : null}
                   <span className={card.state === 'working' ? 'hp-line' : 'hp-line idle'}>{card.line}</span>
-                  {card.projectChat !== '' && card.state === 'working' && card.steps.length > 1 ? (
+                  {target.kind === 'project-chat' && card.state === 'working' && card.steps.length > 1 ? (
                     <span className="hp-steps-mini" aria-label="Its newest steps">
                       {card.steps
                         .slice(-CARD_STEPS - 1, -1)
@@ -141,20 +174,22 @@ export function HelperCardList({ cards, mascot, onOpen }: { cards: HelperCard[];
   )
 }
 
+/** The main chat's card while the main chat works or waits on the person, else null. */
+export function useMainCard(): MainCard | null {
+  const items = useEntity('chat_item')
+  const running = useChats((state) => state.runs[MAIN_CHAT]?.running === true)
+  const waiting = useWaiting()
+  const agentName = useSettings((store) => store.settings?.agentName.trim()) || 'Your agent'
+  const inMain = useMemo(() => waiting.filter((item) => chatOf(item) === MAIN_CHAT).length, [waiting])
+  return useMemo(() => mainCard(items, running, inMain, agentName), [items, running, inMain, agentName])
+}
+
+/** The side panel's card list (and the title bar's): a tap goes where lib/card-open.ts says. */
 export function HelpersPanel(): JSX.Element | null {
-  const openHelper = usePanel((store) => store.openHelper)
   const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
   const cards = usePanelCards()
-  return (
-    <HelperCardList
-      cards={cards}
-      mascot={mascot}
-      onOpen={(card) => {
-        if (card.projectChat !== '') openChat(card.projectChat)
-        else openHelper(card.id)
-      }}
-    />
-  )
+  const main = useMainCard()
+  return <HelperCardList cards={cards} main={main} mascot={mascot} onOpen={openTarget} />
 }
 
 /**
@@ -165,9 +200,7 @@ export function HelperStage(): JSX.Element | null {
   const id = usePanel((store) => store.helper)
   const close = usePanel((store) => store.closeHelper)
   const items = useEntity('chat_item')
-  const { stopping, stop } = useStop()
-  const row = id === null ? undefined : items.find((item) => isHelper(item) && helperIdOf(item) === id)
-  const helper = row === undefined ? null : helperView(row, items)
+  const projects = useEntity('project')
 
   useEffect(() => {
     if (id === null) return
@@ -179,6 +212,18 @@ export function HelperStage(): JSX.Element | null {
   }, [id, close])
 
   if (id === null) return null
+  return <HelperDetail id={id} items={items} projects={projects} onClose={close} />
+}
+
+/** The helper's view itself, drawn from the rows it is given (HelperStage gives it the live ones). */
+export function HelperDetail({ id, items, projects, onClose: close }: { id: string; items: ChatItem[]; projects: ProjectRow[]; onClose: () => void }): JSX.Element {
+  const { stopping, stop } = useStop()
+  const row = items.find((item) => isHelper(item) && helperIdOf(item) === id)
+  const helper = row === undefined ? null : helperView(row, items)
+  // A helper working inside a project chat links to that chat; the chat is the project's own agent, not this job.
+  const parentChat = row === undefined ? '' : helperParentChat(row, projects)
+  const parentProject = parentChat === '' ? null : (projects.find((project) => project.chats.includes(parentChat)) ?? null)
+
   if (helper === null) {
     return (
       <div className="hp-stage" role="dialog" aria-modal="true" aria-label="Helper">
@@ -219,6 +264,18 @@ export function HelperStage(): JSX.Element | null {
               <Markdown text={helper.brief} />
             </div>
             {helper.where !== '' ? <p className="small muted hp-where">{helper.state === 'working' ? 'Runs on' : 'Ran on'} <PlaceChip name={helper.where} /></p> : null}
+            {parentChat !== '' ? (
+              <button type="button" className="hp-parent" data-chat={parentChat} onClick={() => openChat(parentChat)}>
+                {parentProject !== null ? <ProjectTile icon={parentProject.icon} size={22} /> : <Icon name="chat" size={18} />}
+                <span className="hp-parent-t">
+                  <b>Open the project chat</b>
+                  <span>
+                    {parentProject?.name ?? 'Project'} · {chatTitleOf(itemsOfChat(items, parentChat))}
+                  </span>
+                </span>
+                <Icon name="chev" size={16} />
+              </button>
+            ) : null}
           </section>
           {current !== undefined ? (
             <div className="hp-now">
