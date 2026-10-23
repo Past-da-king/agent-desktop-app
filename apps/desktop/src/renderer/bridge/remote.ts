@@ -19,6 +19,7 @@ import {
 import { EVENTS } from '../../shared/channels'
 import { DEVICES_EVENTS } from '../../shared/devices-channels'
 import { MEMORY_EVENTS } from '../../shared/memory-channels'
+import { VAULT_EVENTS } from '../../shared/vault-channels'
 import { decodeWire, encodeWire } from '../../shared/rpc-methods'
 
 const CALL_TIMEOUT_MS = 60_000
@@ -512,6 +513,17 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       setSecret: () => notHere('Adding a worker key'),
       openFolder: () => notHere('Opening a folder'),
       onChange: noop,
+    },
+    // The Vault is listed from the computer; values never come to this device.
+    vault: {
+      list: () => wire.call('vault.list', []) as never,
+      save: () => notHere('Changing the vault'),
+      remove: () => notHere('Changing the vault'),
+      reveal: () => notHere('Showing a vault value'),
+      copy: () => notHere('Copying a vault value'),
+      audit: async () => [],
+      importAos: () => notHere('Importing a vault'),
+      onChange: (callback) => wire.on(VAULT_EVENTS.changed, () => callback()),
     },
   }
   return api

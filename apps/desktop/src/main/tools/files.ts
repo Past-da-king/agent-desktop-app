@@ -230,7 +230,7 @@ async function accessPath(
   const allowed =
     granted.some((folder) => insideFolder(target, folder, platform)) ||
     isPicked(target, deps.picks, platform)
-  if (allowed || deps.settings.get().shell === 'always') return { path: target }
+  if (allowed || (ctx.shell ?? deps.settings.get().shell) === 'always') return { path: target }
 
   const verb = mode === 'read' ? 'Read' : 'Write to'
   const approved = await ctx.approve(

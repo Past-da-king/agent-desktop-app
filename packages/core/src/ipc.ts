@@ -11,6 +11,7 @@
  */
 // Type-only: erased at build time, so this file still imports nothing at run time.
 import type { WorkersApi } from './workers'
+import type { VaultApi } from './vault'
 
 // ---------------------------------------------------------------------------------------------------------------
 // Settings
@@ -135,8 +136,25 @@ export interface Settings {
    * this computer), 'here', or one linked brain's device id. This computer only.
    */
   helpersRunOn: string
-  /** Devices (s12): how many helpers this computer runs at once for the person's other devices; 0 = none. */
-  devicesJobCap: number
+  /**
+   * Devices (s12): how many helpers this computer runs at once for the person's other devices.
+   * 0 = no limit (the default), -1 = none, a number = at most that many.
+   */
+  devicesJobLimit: number
+  /** How many helpers run at once on this computer; 0 = no limit (the default). The rest wait their turn. */
+  helpersAtOnce: number
+  /** How many steps one helper may take before it stops and says so; 0 = no limit (the default). */
+  helperMaxSteps: number
+  /** How many routine desks work at once; 0 = no limit (the default). */
+  routinesAtOnce: number
+}
+
+/** The node row's `cap` for "no limit": older brains read cap <= 0 as "takes no work", so no limit is a big number. */
+export const NO_LIMIT_CAP = 1_000_000
+
+/** A limit setting as a number to compare against: 0 (or anything not a positive number) = no limit. */
+export function limitOf(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : Number.POSITIVE_INFINITY
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -175,7 +193,10 @@ export const DEFAULT_SETTINGS: Settings = {
   devicesPreferred: {},
   devicesShareGroups: {},
   helpersRunOn: 'best',
-  devicesJobCap: 4,
+  devicesJobLimit: 0,
+  helpersAtOnce: 0,
+  helperMaxSteps: 0,
+  routinesAtOnce: 0,
 }
 
 export interface ModelOption {
@@ -1329,6 +1350,9 @@ export interface AgentApi {
 
   /** Background workers and the events they emit (workers.ts). */
   workers: WorkersApi
+
+  /** The Vault: passwords and keys the agent uses without seeing (vault.ts). Never values, except reveal. */
+  vault: VaultApi
 
   settings: {
     get(): Promise<Settings>

@@ -6,6 +6,8 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { redactVault } from './vault/redact'
+
 export type LogLevel = 'info' | 'warn' | 'error'
 export type LogMeta = Record<string, unknown>
 
@@ -42,7 +44,8 @@ const CREDENTIAL_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 ]
 
 export function redactSecrets(text: string): string {
-  let result = text
+  // Vault values first, by name ([vault:groq]), before the patterns turn them into a nameless [redacted].
+  let result = redactVault(text)
   for (const [pattern, replacement] of CREDENTIAL_PATTERNS) result = result.replace(pattern, replacement)
   return result
 }

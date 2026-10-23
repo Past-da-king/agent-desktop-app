@@ -9,7 +9,7 @@ import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, relative, resolve } from 'node:path'
 
-import type { JsonObject, ToolCallBlock } from '@agent/core'
+import { SCRIPT_RESULT_TOOL, SCRIPT_TOOL, callLines, takeScriptOutcome, type JsonObject, type ToolCallBlock } from '@agent/core'
 
 import { capText, RUN_STREAM_CAP, snippetOf, TOOL_STREAM_CAP, type RunKind, type RunRecord, type RunState } from '../../shared/run-record'
 import { redactSecrets } from '../logger'
@@ -159,8 +159,35 @@ function toolRecord(
   }
 }
 
+/** run_script's row: the script it ran, what came back, and every tool call it made inside (never sent to the model). */
+function scriptStarted(call: ToolCallBlock): RunRecord {
+  return finish({ kind: 'code', input: text(call.input['code']), label: 'script', stdout: '', stderr: '', exitCode: null, ms: null, state: 'running', trimmed: false })
+}
+
+function scriptFinished(call: ToolCallBlock, result: string, isError: boolean, elapsed: number): RunRecord {
+  const outcome = takeScriptOutcome(call.input)
+  const input = call.name === SCRIPT_TOOL ? text(call.input['code']) : `run_script_result ${text(call.input['id'])}`
+  if (outcome === undefined) {
+    return finish({ kind: 'code', input, label: 'script', stdout: isError ? '' : result, stderr: isError ? result : '', exitCode: null, ms: elapsed, state: isError ? 'failed' : 'ok', trimmed: false })
+  }
+  const inner = outcome.calls.length === 0 ? '' : `\n\nTool calls inside the script (${outcome.calls.length}):\n${callLines(outcome)}`
+  return finish({
+    kind: 'code',
+    input,
+    label: 'script',
+    stdout: `${result}${inner}`,
+    stderr: '',
+    exitCode: null,
+    ms: outcome.ms,
+    state: outcome.ok ? 'ok' : outcome.timedOut === true ? 'timeout' : 'failed',
+    trimmed: false,
+    ...(outcome.ok ? {} : { note: outcome.error ?? 'The script failed.' }),
+  })
+}
+
 /** The record while the call runs: what it is running, nothing back yet. */
 export function runStarted(call: ToolCallBlock): RunRecord | null {
+  if (call.name === SCRIPT_TOOL) return scriptStarted(call)
   if (!hasRunRecord(call.name)) return toolRecord(call, { stdout: '', stderr: '', ms: null, state: 'running' })
   const what = inputOf(call)
   return finish({
@@ -191,6 +218,7 @@ export function runFinished(
   const released = takeReleased(call.id)
   const waited = released !== undefined && released > startedAt ? released - startedAt : 0
   const elapsed = Math.max(0, now - (released !== undefined && released > startedAt ? released : startedAt))
+  if (call.name === SCRIPT_TOOL || (call.name === SCRIPT_RESULT_TOOL && !isError)) return scriptFinished(call, result, isError, elapsed)
   if (!hasRunRecord(call.name)) {
     const firstLine = result.split('\n')[0] ?? ''
     if (DECLINED.test(firstLine)) return toolRecord(call, { stdout: '', stderr: '', ms: 0, state: 'declined', note: firstLine })

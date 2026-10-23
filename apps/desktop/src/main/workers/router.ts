@@ -6,7 +6,7 @@
  * Nothing is lost: an event stays `new` until a desk run that took it has finished, so a run cut short by the app
  * closing is offered again on the next start.
  */
-import { matchesEvent, parseEventFilter, type TriggerRow, type WorkerEvent } from '@agent/core'
+import { limitOf, matchesEvent, parseEventFilter, type TriggerRow, type WorkerEvent } from '@agent/core'
 
 import type { DataStore } from '../runtime/data'
 import type { DeskOutcome, DeskSpec } from '../runtime/helpers'
@@ -22,8 +22,8 @@ export interface RouterDeps {
   store: DataStore
   workers: WorkerStore
   desk: DeskHost
-  /** Two routine runs at once (decision D6). */
-  maxRuns?: number
+  /** How many desks work at once; a function reads the person's setting each time. Unset: no limit. */
+  maxRuns?: number | (() => number)
   now?: () => number
   /** A desk run failed: the person sees it. */
   onFailed?: (trigger: TriggerRow, why: string) => void
@@ -47,7 +47,7 @@ export class EventRouter {
   private readonly store: DataStore
   private readonly workers: WorkerStore
   private readonly desk: DeskHost
-  private readonly maxRuns: number
+  private readonly limit: () => number
   private readonly now: () => number
   private readonly onFailed: (trigger: TriggerRow, why: string) => void
   private readonly onChange: () => void
@@ -64,7 +64,9 @@ export class EventRouter {
     this.store = deps.store
     this.workers = deps.workers
     this.desk = deps.desk
-    this.maxRuns = deps.maxRuns ?? 2
+    const runs = deps.maxRuns
+    // Settings > Routines at once: 0 = no limit, the default (rule of 23 Oct 2026: never a ceiling of our own).
+    this.limit = typeof runs === 'function' ? () => limitOf(runs()) : () => limitOf(runs)
     this.now = deps.now ?? Date.now
     this.onFailed = deps.onFailed ?? (() => undefined)
     this.onChange = deps.onChange ?? (() => undefined)
@@ -162,7 +164,7 @@ export class EventRouter {
   private async flush(routineId: string): Promise<string | null> {
     const lane = this.lane(routineId)
     if (lane.running || lane.pending.size === 0) return null
-    if (this.active >= this.maxRuns) {
+    if (this.active >= this.limit()) {
       if (!lane.queued) {
         lane.queued = true
         this.waiting.push(routineId)
@@ -229,7 +231,7 @@ export class EventRouter {
   private next(finished: string): void {
     const own = this.lanes.get(finished)
     if (own !== undefined && own.pending.size > 0 && own.timer === null) void this.flush(finished)
-    while (this.active < this.maxRuns && this.waiting.length > 0) {
+    while (this.active < this.limit() && this.waiting.length > 0) {
       const id = this.waiting.shift()
       if (id === undefined) break
       const lane = this.lanes.get(id)

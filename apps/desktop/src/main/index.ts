@@ -77,6 +77,10 @@ import { allowMicrophone } from './voice/permissions'
 import { VoiceService } from './voice/service'
 import { EventRouter } from './workers/router'
 import { registerWorkersIpc } from './workers/ipc'
+import { VaultStore } from './vault/store'
+import { setVaultRedactor } from './vault/redact'
+import { registerVaultIpc } from './vault/ipc'
+import { VAULT_EVENTS } from '../shared/vault-channels'
 import { killLeftover, killTree, spawnWorker } from './workers/spawn'
 import { WorkerStore } from './workers/store'
 import { Supervisor } from './workers/supervisor'
@@ -171,6 +175,7 @@ let voice: VoiceService | null = null
 let cliHost: CliHost | null = null
 let scheduler: Scheduler | null = null
 let workerStore: WorkerStore | null = null
+let vaultStore: VaultStore | null = null
 let supervisor: Supervisor | null = null
 let eventRouter: EventRouter | null = null
 let workersChangedTimer: NodeJS.Timeout | null = null
@@ -575,6 +580,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const settings = new SettingsStore(join(dir, 'settings.json'))
   settingsStore = settings
   const secrets = new Secrets(join(dir, 'secrets'), safeStorage)
+  // The Vault (vault/store.ts): from here on no vault value is written into a row, a log or a tool result.
+  const vault = new VaultStore(secrets)
+  vaultStore = vault
+  setVaultRedactor((text) => vault.redact(text))
+  vault.onChange(() => broadcast(VAULT_EVENTS.changed, null))
   // The old single AI choice becomes the first account, once; after that the accounts list is the truth.
   migrateLegacyAccount(settings, secrets)
   const accounts = new AccountStore(settings, secrets)
@@ -773,6 +783,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     apps,
     learned,
     workers: workerTools,
+    vault,
   })
   // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
   // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
@@ -822,6 +833,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     learned,
     voiceNotes: () => (voice !== null && voice.hasKey() ? voice : null),
     workers: workerTools,
+    vault,
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
     deviceHub: () => devicesState.sync?.tools ?? null,
     devices: {
@@ -859,6 +871,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     store,
     workers,
     desk: helpers,
+    maxRuns: () => settings.get().routinesAtOnce,
     onChange: workersChanged,
     workerName: (id) => {
       try {
@@ -875,6 +888,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   runner = new Runner({
     devices: {
       leases,
+      shellFor: (chat) => offloadWire?.shellFor(chat),
       selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },
@@ -1027,6 +1041,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // Workers come back on every start; each one catches up from its cursor on what it missed while closed.
   supervisor.start()
   registerWorkersIpc(ipcMain, { store: workers, supervisor, openPath: (path) => shell.openPath(path) })
+  registerVaultIpc(ipcMain, { vault, clipboard: { write: (text) => clipboard.writeText(text), read: () => clipboard.readText() } })
 
   const paths = quickAskPaths(__dirname)
   quickAsk = new QuickAskWindow({
@@ -1231,6 +1246,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
           profiles: apps.profiles,
           learned,
           connected: connectedApps,
+          ...(vaultStore === null ? {} : { vault: vaultStore }),
           passes: ready.passTable(),
           projects: () => store === null ? Promise.resolve([]) : store.list('project'),
         },

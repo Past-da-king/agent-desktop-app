@@ -119,3 +119,5 @@
 .ap-search{background:var(--s-lowest);box-shadow:inset 0 0 0 1px var(--outline-v)}
 .ap-search:focus-within{box-shadow:inset 0 0 0 2px var(--primary)}
 .ap-count{margin-left:6px;letter-spacing:0;text-transform:none;font-weight:500;color:var(--on-sv)}
+.place-chip{display:inline-flex;align-items:center;flex:none;margin-left:8px;padding:1px 8px;border-radius:999px;font:500 11px/1.5 var(--font);background:var(--s-high);color:var(--on-sv);vertical-align:middle;white-space:nowrap}
+.pj-row-t b .place-chip{font-size:11px}

@@ -6,12 +6,13 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { join, normalize, resolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
+import { networkInterfaces } from 'node:os'
 
 import type { DeviceJoinResult, DeviceRow, DevicesStatus, PairingOfferInfo } from '@agent/core'
 
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../../shared/devices-channels'
 import { qrMatrix } from '../../shared/qr'
-import { DevicesConfigFile, advertisedUrls, normaliseUrl, type DevicesConfig, type JoinedPeer } from './config'
+import { DevicesConfigFile, advertisedUrls, normaliseUrl, type DevicesConfig, type InterfaceMap, type JoinedPeer } from './config'
 import { cleanRoles, platformOf } from './facts'
 import { joinMesh, loadIdentity, type NodeIdentity } from './identity'
 import { OverlayNet, setOverlayNet } from './net'
@@ -30,6 +31,8 @@ import type { BrainRef, DeviceFacts, DeviceKind, DeviceRecord, DeviceRole, Devic
 
 const SEEN_EVERY_MS = 60_000
 const COOKIE_DAYS = 400
+/** How long a read of the network interfaces is reused (a new address shows within this). */
+const INTERFACES_TTL_MS = 5_000
 
 /** The bits of the Store this service uses (main/db.ts). */
 export interface DeviceStoreLike {
@@ -202,7 +205,17 @@ export class DevicesService {
           if (row === undefined) return this.deps.knownPeer?.(id) ?? (this.config.get().peers.some((peer) => peer.id === id) ? ['brain', 'hands'] : null)
           return row.revoked ? null : row.roles
         },
-        self: () => ({ id: this.identity.nodeId, facts: this.selfFacts() }),
+        // Most callers want only the id (selfId on every turn, command and sync step): the facts read the network
+        // interfaces and the tool list, so they are worked out only when asked for.
+        self: () => {
+          const facts = (): DeviceFacts => this.selfFacts()
+          return {
+            id: this.identity.nodeId,
+            get facts(): DeviceFacts {
+              return facts()
+            },
+          }
+        },
         callRpc: (session, method, args) => callAllowed(this.deps.registry, this.server.added(), session, method, args),
         onConnections: () => this.changed(),
         onSeen: (id) => this.seen(id),
@@ -716,8 +729,17 @@ export class DevicesService {
     // The overlay addresses go first while the overlay is up: they reach this node from anywhere, where interface
     // addresses only work on the same network (devices try urls in order, with a parallel probe).
     const out = this.net.urls(port)
-    for (const url of advertisedUrls(this.config.get(), undefined, this.ipv6)) if (!out.includes(url)) out.push(url)
+    for (const url of advertisedUrls(this.config.get(), this.interfaces(), this.ipv6)) if (!out.includes(url)) out.push(url)
     return out
+  }
+
+  private ifaces: { at: number; map: InterfaceMap } | null = null
+
+  /** The network interfaces, read at most every few seconds: reading them is slow on Windows and urls() is hot. */
+  private interfaces(): InterfaceMap {
+    const now = Date.now()
+    if (this.ifaces === null || now - this.ifaces.at > INTERFACES_TTL_MS) this.ifaces = { at: now, map: networkInterfaces() }
+    return this.ifaces.map
   }
 
   /** The overlay follows the server: it forwards to the server's port while that listens. */

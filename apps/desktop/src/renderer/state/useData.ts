@@ -23,26 +23,61 @@ interface DataState {
   load: <E extends EntityName>(entity: E) => Promise<void>
   /** One row changed: the list is patched in place, in its order, without reading it all again. */
   patch: (change: DataChange) => void
+  /** Several rows changed: every list is patched in one store update. */
+  patchMany: (changes: DataChange[]) => void
 }
 
 let subscribed = false
 /** A change that arrived while that list was loading: read it again once the load ends, or the change is missed. */
 const again = new Set<EntityName>()
 
+/**
+ * Changes that arrived since the last frame. A helper at work, replication and the devices feed send rows in bursts;
+ * each change applied on its own would redraw every screen that lists rows once per row, so they are applied
+ * together, one store update (one redraw) per frame at most.
+ */
+let pending: DataChange[] = []
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+export const DATA_BATCH_MS = 16
+
+function hear(change: DataChange): void {
+  const state = useData.getState()
+  // A list not on screen yet is read whole when something first asks for it.
+  if (!state.loaded[change.entity] && !state.loading[change.entity]) return
+  pending.push(change)
+  if (flushTimer === null) flushTimer = setTimeout(flushChanges, DATA_BATCH_MS)
+}
+
+/** Applies every change heard since the last flush in one store update (exported for tests). */
+export function flushChanges(): void {
+  if (flushTimer !== null) clearTimeout(flushTimer)
+  flushTimer = null
+  const changes = pending
+  pending = []
+  const state = useData.getState()
+  const reload = new Set<EntityName>()
+  const patches: DataChange[] = []
+  for (const change of changes) {
+    if (reload.has(change.entity)) continue
+    if (change.reset === true || (change.row === undefined && change.id === undefined) || state.loading[change.entity]) {
+      reload.add(change.entity)
+      continue
+    }
+    patches.push(change)
+  }
+  // A list that is read whole again needs none of its single changes.
+  const kept = patches.filter((change) => !reload.has(change.entity))
+  if (kept.length > 0) state.patchMany(kept)
+  for (const entity of reload) {
+    again.add(entity)
+    if (!state.loading[entity]) void state.load(entity)
+  }
+}
+
 function subscribeOnce(): void {
   if (subscribed) return
   subscribed = true
-  agent.data.onChanged((change) => {
-    const state = useData.getState()
-    // A list not on screen yet is read whole when something first asks for it.
-    if (!state.loaded[change.entity] && !state.loading[change.entity]) return
-    if (change.reset === true || (change.row === undefined && change.id === undefined) || state.loading[change.entity]) {
-      again.add(change.entity)
-      if (!state.loading[change.entity]) void state.load(change.entity)
-      return
-    }
-    state.patch(change)
-  })
+  agent.data.onChanged(hear)
 }
 
 export const useData = create<DataState>((set, get) => ({
@@ -82,11 +117,16 @@ export const useData = create<DataState>((set, get) => ({
     if (again.delete(entity)) void get().load(entity)
   },
 
-  patch: (change) => {
+  patch: (change) => get().patchMany([change]),
+
+  patchMany: (changes) => {
+    if (changes.length === 0) return
     set((state) => {
       const nextRows = { ...state.rows } as Record<EntityName, unknown[]>
-      const current = state.rows[change.entity] as Array<{ id: string; createdAt: number }>
-      nextRows[change.entity] = patched(current, change)
+      for (const change of changes) {
+        const current = nextRows[change.entity] as Array<{ id: string; createdAt: number }>
+        nextRows[change.entity] = patched(current, change)
+      }
       return { rows: nextRows as unknown as RowStore }
     })
   },

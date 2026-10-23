@@ -1,9 +1,10 @@
 import { type ChatItem, type MascotId } from '@agent/core'
+import { PlaceChip } from '../ui/PlaceChip'
 import { useEffect, useMemo, useState } from 'react'
 
 import { agent } from '../bridge'
 import { openChat } from '../lib/chat-actions'
-import { helperCards, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
+import { helperCards, helperIdOf, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
 import { metaText, parseMeta } from '../lib/meta'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -165,7 +166,7 @@ export function HelperStage(): JSX.Element | null {
   const close = usePanel((store) => store.closeHelper)
   const items = useEntity('chat_item')
   const { stopping, stop } = useStop()
-  const row = id === null ? undefined : items.find((item) => isHelper(item) && helperView(item, items).id === id)
+  const row = id === null ? undefined : items.find((item) => isHelper(item) && helperIdOf(item) === id)
   const helper = row === undefined ? null : helperView(row, items)
 
   useEffect(() => {
@@ -217,7 +218,7 @@ export function HelperStage(): JSX.Element | null {
             <div className="hp-brief a-prose">
               <Markdown text={helper.brief} />
             </div>
-            {helper.where !== '' ? <p className="small muted hp-where">{helper.state === 'working' ? 'Runs on' : 'Ran on'} {helper.where}</p> : null}
+            {helper.where !== '' ? <p className="small muted hp-where">{helper.state === 'working' ? 'Runs on' : 'Ran on'} <PlaceChip name={helper.where} /></p> : null}
           </section>
           {current !== undefined ? (
             <div className="hp-now">

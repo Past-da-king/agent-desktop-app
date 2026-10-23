@@ -232,7 +232,10 @@ export class DevicesServer implements DevicesHost {
     // A device that gives up during the handshake (a pin mismatch on its side, a wrong port) shows here.
     server.on('tlsClientError', (error: Error & { code?: string }, socket: { remoteAddress?: string }) => {
       const from = peerOf(socket)
-      this.connLog.note(`tls:${error.code ?? error.message}:${from}`, 'Devices TLS handshake failed', { code: error.code ?? '', message: error.message.slice(0, 200), from })
+      // A peer that hangs up mid-handshake (a port scanner, a probe, a client that gave up) is one kind of event however many
+      // addresses it comes from, so it is said once a minute with a count, not once per address.
+      const quiet = error.code === 'ECONNRESET' || error.code === 'EPIPE'
+      this.connLog.note(quiet ? `tls:${error.code}` : `tls:${error.code ?? error.message}:${from}`, 'Devices TLS handshake failed', { code: error.code ?? '', message: error.message.slice(0, 200), from })
     })
     server.on('clientError', (error: Error & { code?: string }, socket: Duplex & { remoteAddress?: string }) => {
       const from = peerOf(socket)

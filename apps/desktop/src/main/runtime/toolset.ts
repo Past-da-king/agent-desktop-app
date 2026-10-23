@@ -41,6 +41,9 @@ import { deviceTools, type DeviceToolDeps } from '../tools/devices'
 import { deviceAgentTools, withDeviceArg, type DeviceToolHub } from '../devices/device-tools'
 import { appControlTools, appUpdateTools, type AppControlDeps } from '../tools/app-control'
 import { appActionTools } from '../tools/app-actions'
+import { vaultTools } from '../tools/vault'
+import { guardTools } from '../vault/guard'
+import type { VaultStore } from '../vault/store'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -79,6 +82,11 @@ export interface ToolsetDeps extends CoreToolDeps {
    * the main agent only. Without it there are none.
    */
   appControl?: AppControlDeps
+  /**
+   * The Vault (vault/store.ts): vault_* tools, and every tool wrapped by the vault guard so `{{vault:ref}}` works in
+   * its input and no vault value comes back out. Without it there is no vault.
+   */
+  vault?: VaultStore
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -140,6 +148,11 @@ function asOwner(tools: Tool[]): Tool[] {
 }
 
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
+  // The vault guard sits outermost of all: what any tool returns, on any path, has vault values taken out.
+  return guardTools(workerToolsets(deps), deps.vault)
+}
+
+function workerToolsets(deps: ToolsetDeps): Tool[] {
   const tools = withDevices(workerTools(deps), deps)
   const apps = deps.apps
   // Outermost, so everything a tool does (the profile switch included) is done as its own agent.
@@ -193,6 +206,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     // The developer tools replace the learned apps' in-page network watcher: every tab records from the start.
     ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
     ...(deps.appControl?.invoker === undefined ? [] : appActionTools({ invoker: deps.appControl.invoker })), // app_actions, app_action: every button in the window
+    ...(deps.vault === undefined ? [] : vaultTools({ vault: deps.vault, ...(deps.browser === undefined ? {} : { browser: deps.browser }) })), // vault_list, vault_fill, vault_login, vault_save, vault_reveal
     ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
   ]
 }
@@ -213,7 +227,8 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
   // No step counter any more (21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.
-  return tools
+  // The ones added here are guarded too (the worker ones already are; guardTools skips a tool it has wrapped).
+  return guardTools(tools, deps.vault)
 }
 
 /** Re-exported so a caller only needs this module to build a toolset. */

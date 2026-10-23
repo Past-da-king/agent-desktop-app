@@ -15,6 +15,7 @@ import type { RunState } from '../../shared/run-record'
 import type { EnvironmentFs, ResolvedCommand } from '../runtime/environment'
 import { spawnResolved, type SpawnResolvedOptions } from '../runtime/spawn'
 import { recordRun, StreamCapture, type ToolRun } from './run-capture'
+import { currentVaultRun, hasPlaceholder, shellCommand, vaultEnv } from '../vault/placeholders'
 
 export const DEFAULT_TIMEOUT_SEC = 60
 export const MAX_TIMEOUT_SEC = 600
@@ -252,10 +253,13 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       }),
     },
     run: async (input, ctx) => {
-      const command = text(input['command']).trim()
-      if (command === '') return 'Pass the command to run.'
+      const asked = text(input['command']).trim()
+      if (asked === '') return 'Pass the command to run.'
+      let command = asked
 
-      if (deps.settings.get().shell === 'never') {
+      // A helper another computer placed here works with that computer's choice (ctx.shell).
+      const policy = ctx.shell ?? deps.settings.get().shell
+      if (policy === 'never') {
         recordRun(input, declinedRun(command, 'Shell commands are turned off in Settings.'))
         return 'Shell commands are turned off in Settings, so I did not run it.'
       }
@@ -271,7 +275,7 @@ function shellRunTool(deps: ShellToolDeps): Tool {
         if (info === null || !info.isDirectory()) return `${cwd} is not a folder.`
       }
 
-      const plan = chooseShell({
+      let plan = chooseShell({
         platform: deps.platform ?? process.platform,
         env: deps.env ?? process.env,
         command,
@@ -281,9 +285,29 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       })
       if ('error' in plan) return plan.error
 
+      // {{vault:ref}}: the value goes in as an environment variable; the command (and the card) only names it.
+      if (hasPlaceholder(command)) {
+        const run = currentVaultRun()
+        if (run === undefined) return 'There is no vault here, so {{vault:...}} cannot be used.'
+        const kind = plan.id === 'cmd' ? 'cmd' : plan.id === 'pwsh' || plan.id === 'powershell' ? 'powershell' : 'posix'
+        const rewritten = shellCommand(command, kind, run)
+        if ('error' in rewritten) return rewritten.error
+        command = rewritten.command
+        const again = chooseShell({
+          platform: deps.platform ?? process.platform,
+          env: deps.env ?? process.env,
+          command,
+          ...(deps.environment === undefined ? {} : { resolve: (name: string) => deps.environment?.resolve(name) ?? null }),
+          ...(deps.exists === undefined ? {} : { exists: deps.exists }),
+          ...(text(input['shell']).trim() === '' ? {} : { requested: text(input['shell']).trim() }),
+        })
+        if ('error' in again) return again.error
+        plan = again
+      }
+
       // The person chose "Run without asking" for this computer.
       const approved =
-        deps.settings.get().shell === 'always' ||
+        policy === 'always' ||
         (await ctx.approve(
         `Run: ${command}`,
         `${cwd === undefined ? '' : `In ${cwd}\n`}Shell: ${plan.label}\nThis runs a real command on this computer. It stops after ${timeoutSec} seconds.`,
@@ -316,7 +340,8 @@ function declinedRun(command: string, note: string): ToolRun {
 
 async function runCommand(request: RunRequest): Promise<string> {
   const platform = request.deps.platform ?? process.platform
-  const env = sanitiseEnv({ ...(request.deps.env ?? process.env) })
+  // A vault value the command names comes in here, after the clean-up that drops anything looking like a key.
+  const env = { ...sanitiseEnv({ ...(request.deps.env ?? process.env) }), ...vaultEnv() }
 
   // No folder named means the person's home folder, as the tool tells the model, never the app's install folder.
   const cwd = request.cwd ?? (request.deps.home ?? homedir)()
