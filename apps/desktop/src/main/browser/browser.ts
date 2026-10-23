@@ -68,7 +68,9 @@ import {
 } from './snapshot'
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, ViewRequest } from './types'
 import { planWindowOpen, popupSize } from './popup'
-import type { BrowserVault, VaultLink } from '../vault/browser-vault'
+import type { BrowserVault } from '../vault/browser-vault'
+import { attachVaultTo } from './vault-link'
+import { alive, ifAlive, whileAlive } from '../alive'
 import { pickTab } from './tab-pick'
 import { checkBrowserUrl } from './url-policy'
 import { EMBED_WAIT_MS, guardWebview, isEmbeddedGuest } from './embed'
@@ -147,11 +149,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   private async attachVault(wc: WebContents, person: () => boolean): Promise<void> {
     const vault = this.vault
-    if (vault === null || wc.isDestroyed() || this.vaultAttached.has(wc)) return
+    if (vault === null || !alive(wc) || this.vaultAttached.has(wc)) return
     this.vaultAttached.add(wc)
     try {
-      const stop = await vault.attach(debuggerLink(wc), { person, frames: true })
-      wc.once('destroyed', stop)
+      await attachVaultTo(vault, wc, { person, frames: true })
     } catch {
       this.vaultAttached.delete(wc)
     }
@@ -1689,23 +1690,27 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private wireTab(tab: Tab): void {
     const wc = tab.wc
     wc.setAudioMuted(this.sites.muted())
-    wc.on('audio-state-changed', () => this.emit())
+    // Every listener runs only while the page is alive: a tab closing mid-navigation must never throw (alive.ts).
+    wc.on('audio-state-changed', whileAlive(wc, 'tab audio', () => this.emit()))
 
-    const guard = (event: Electron.Event, url: string): void => {
+    const guard = whileAlive(wc, 'tab navigation guard', (event: Electron.Event, url: string): void => {
       const policy = checkBrowserUrl(url, { personTyped: tab.id === this.personTab })
       if (policy.ok) return
       event.preventDefault()
       this.blockedReason = policy.reason
       this.emit()
-    }
+    })
     wc.on('will-navigate', guard)
     wc.on('will-redirect', guard)
 
     // A click, a tap or a key of the person's is what makes a window.open a window they asked for.
-    wc.on('input-event', (_event, input) => {
-      const types = ['mouseDown', 'mouseUp', 'keyDown', 'rawKeyDown', 'gestureTap']
-      if (types.includes(input.type)) this.lastGesture.set(tab.id, Date.now())
-    })
+    wc.on(
+      'input-event',
+      whileAlive(wc, 'tab input', (_event: Electron.Event, input: Electron.InputEvent) => {
+        const types = ['mouseDown', 'mouseUp', 'keyDown', 'rawKeyDown', 'gestureTap']
+        if (types.includes(input.type)) this.lastGesture.set(tab.id, Date.now())
+      }),
+    )
 
     const persons = tab.id === this.personTab
     wc.setWindowOpenHandler((details) => {
@@ -1751,55 +1756,76 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return { action: 'deny' }
     })
 
-    wc.on('before-input-event', (event, input) => {
-      // Escape shrinks the full-size page back into the panel, as the bar says.
-      if (this.expanded && input.type === 'keyDown' && input.key === 'Escape' && !input.shift && !input.control && !input.alt && !input.meta) {
-        event.preventDefault()
-        this.setExpanded(false)
-        return
-      }
-      // A key the agent sends itself must still reach the page.
-      if (tab.id !== this.personTab && !this.injectingInput) event.preventDefault()
-    })
+    wc.on(
+      'before-input-event',
+      whileAlive(wc, 'tab key', (event: Electron.Event, input: Electron.Input) => {
+        // Escape shrinks the full-size page back into the panel, as the bar says.
+        if (this.expanded && input.type === 'keyDown' && input.key === 'Escape' && !input.shift && !input.control && !input.alt && !input.meta) {
+          event.preventDefault()
+          this.setExpanded(false)
+          return
+        }
+        // A key the agent sends itself must still reach the page.
+        if (tab.id !== this.personTab && !this.injectingInput) event.preventDefault()
+      }),
+    )
 
-    wc.on('did-navigate', (_event, _url, httpResponseCode) => {
-      tab.status = httpResponseCode > 0 ? httpResponseCode : null
-      // Inserted CSS belongs to the old document; ask for it again on the new one.
-      this.inputCss.delete(tab.id)
-      tab.siteCss = []
-      void this.refreshInputGuard(tab)
-      this.emit()
-    })
-    wc.on('did-fail-load', (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
-      // -3 is an aborted load (a redirect or a newer navigation), not a failure.
-      if (isMainFrame && errorCode !== -3) tab.loadError = `net::${errorDescription}`
-    })
-    wc.on('did-start-navigation', (details) => {
-      if (!details.isMainFrame || details.isSameDocument || this.opening) return
-      // Following a link to another site: present the way that site needs, as browser_open would.
-      const from = siteOf(safeUrl(tab.wc))
-      const to = siteOf(details.url)
-      if (to === null || to === from) return
-      const wanted = this.sites.viewFor(details.url)
-      if (sameView(wanted, this.currentView)) return
-      this.currentView = wanted
-      void this.applyEmulation(tab).then(() => {
-        this.layout()
+    wc.on(
+      'did-navigate',
+      whileAlive(wc, 'tab did-navigate', (_event: Electron.Event, _url: string, httpResponseCode: number) => {
+        tab.status = httpResponseCode > 0 ? httpResponseCode : null
+        // Inserted CSS belongs to the old document; ask for it again on the new one.
+        this.inputCss.delete(tab.id)
+        tab.siteCss = []
+        void this.refreshInputGuard(tab)
         this.emit()
-      })
-    })
-    wc.on('dom-ready', () => {
-      void this.applySiteFixes(tab)
-    })
-    wc.on('did-navigate-in-page', () => this.emit())
-    wc.on('page-title-updated', () => this.emit())
-    wc.on('did-finish-load', () => {
-      void this.refreshInputGuard(tab)
-      this.emit()
-    })
-    wc.on('render-process-gone', () => this.emit())
+      }),
+    )
+    wc.on(
+      'did-fail-load',
+      whileAlive(wc, 'tab did-fail-load', (_event: Electron.Event, errorCode: number, errorDescription: string, _validatedUrl: string, isMainFrame: boolean) => {
+        // -3 is an aborted load (a redirect or a newer navigation), not a failure.
+        if (isMainFrame && errorCode !== -3) tab.loadError = `net::${errorDescription}`
+      }),
+    )
+    wc.on(
+      'did-start-navigation',
+      whileAlive(wc, 'tab did-start-navigation', (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>) => {
+        if (!details.isMainFrame || details.isSameDocument || this.opening) return
+        // Following a link to another site: present the way that site needs, as browser_open would.
+        const from = siteOf(safeUrl(tab.wc))
+        const to = siteOf(details.url)
+        if (to === null || to === from) return
+        const wanted = this.sites.viewFor(details.url)
+        if (sameView(wanted, this.currentView)) return
+        this.currentView = wanted
+        void this.applyEmulation(tab)
+          .then(() => {
+            this.layout()
+            this.emit()
+          })
+          .catch(() => undefined)
+      }),
+    )
+    wc.on(
+      'dom-ready',
+      whileAlive(wc, 'tab dom-ready', () => {
+        void this.applySiteFixes(tab).catch(() => undefined)
+      }),
+    )
+    wc.on('did-navigate-in-page', whileAlive(wc, 'tab in-page', () => this.emit()))
+    wc.on('page-title-updated', whileAlive(wc, 'tab title', () => this.emit()))
+    wc.on(
+      'did-finish-load',
+      whileAlive(wc, 'tab did-finish-load', () => {
+        void this.refreshInputGuard(tab)
+        this.emit()
+      }),
+    )
+    // The page's process went; the page itself may already be gone, so this one does not ask alive().
+    wc.on('render-process-gone', () => ifAlive('tab render-process-gone', () => this.emit()))
     // The renderer went away (a reload, a crash) and took the <webview> with it: the tab is gone too.
-    wc.on('destroyed', () => this.closeTab(tab.id))
+    wc.on('destroyed', () => ifAlive('tab destroyed', () => this.closeTab(tab.id)))
   }
 
   /**
@@ -1836,13 +1862,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     child.on('closed', () => this.popups.delete(child))
     const wc = child.webContents
     // Still this computer's rules: no local or private address, whatever the page asks for.
-    const guard = (event: Electron.Event, url: string): void => {
+    const guard = whileAlive(wc, 'popup navigation guard', (event: Electron.Event, url: string): void => {
       const policy = checkBrowserUrl(url, { personTyped: true })
       if (policy.ok) return
       event.preventDefault()
       this.blockedReason = policy.reason
       this.emit()
-    }
+    })
     wc.on('will-navigate', guard)
     wc.on('will-redirect', guard)
     // A window opened from inside a sign-in window becomes a checked tab, never a second window.
@@ -1851,19 +1877,24 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return { action: 'deny' }
     })
     // A sign-in window gets the Vault too, as whoever uses the tab that opened it.
-    wc.once('dom-ready', () => {
-      try {
-        if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
-        void this.attachVault(wc, () => this.personTab === opener.id)
-      } catch {
-        // Another tool holds its debugger: no autofill in this window.
-      }
-    })
-    child.once('ready-to-show', () => {
-      if (child.isDestroyed()) return
-      child.show()
-      child.focus()
-    })
+    wc.once(
+      'dom-ready',
+      whileAlive(wc, 'popup dom-ready', () => {
+        try {
+          if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
+          void this.attachVault(wc, () => this.personTab === opener.id)
+        } catch {
+          // Another tool holds its debugger: no autofill in this window.
+        }
+      }),
+    )
+    child.once(
+      'ready-to-show',
+      whileAlive(child, 'popup show', () => {
+        child.show()
+        child.focus()
+      }),
+    )
     return wc
   }
 
@@ -2151,15 +2182,3 @@ export function addressOf(raw: string): string | null {
   return `https://www.google.com/search?q=${encodeURIComponent(text)}`
 }
 
-/** The line from the Vault into a page: its own debugger, frames included (sessionId). */
-function debuggerLink(wc: WebContents): VaultLink {
-  return {
-    // Electron names the page's own session '' in its events, and a command sent to session '' goes nowhere.
-    send: (method, params = {}, sessionId) => (sessionId ? wc.debugger.sendCommand(method, params, sessionId) : wc.debugger.sendCommand(method, params)),
-    onEvent: (listener) => {
-      const handler = (_event: Electron.Event, method: string, params: Record<string, unknown>, sessionId?: string): void => listener(method, params, sessionId || undefined)
-      wc.debugger.on('message', handler)
-      return () => wc.debugger.removeListener('message', handler)
-    },
-  }
-}

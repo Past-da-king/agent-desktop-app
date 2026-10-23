@@ -32,6 +32,7 @@ import { AgentBrowser } from './browser/browser'
 import { runDevtoolsProbe } from './browser/devtools-probe'
 import { Store } from './db'
 import { Logger } from './logger'
+import { onDestroyedSkip, safeSend, uncaughtHandler, whileAlive } from './alive'
 import { Notifier } from './notify'
 import { QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
 import { HotkeyManager } from './hotkeys'
@@ -142,10 +143,17 @@ function showCalmDialog(detail: string, offerRestart: boolean): void {
     })
 }
 
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught exception', { message: error.message, stack: error.stack })
-  showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true)
-})
+// A page or window that closed under one of its callbacks is logged and skipped (alive.ts); a real fault asks.
+onDestroyedSkip((what, error) =>
+  logger.warn('Skipped a closed page or window', { what, stack: error instanceof Error ? error.stack : String(error) }),
+)
+process.on(
+  'uncaughtException',
+  uncaughtHandler({
+    log: (message, fields) => logger.error(message, fields),
+    dialog: () => showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true),
+  }),
+)
 
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled promise rejection', { reason: String(reason) })
@@ -209,9 +217,7 @@ const filePicks = new Set<string>()
 let devices: DevicesService | null = null
 
 function broadcast(channel: string, payload?: unknown): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(channel, payload)
-  }
+  for (const win of BrowserWindow.getAllWindows()) safeSend(win, channel, payload)
   // Paired devices hear the same events (only the ones they may: shared/rpc-methods.ts RPC_EVENTS).
   devices?.broadcast(channel, payload)
 }
@@ -277,8 +283,8 @@ function finiteInRange(value: unknown, min: number, max: number): number | null 
 }
 
 function watchMaximize(win: BrowserWindow): void {
-  win.on('maximize', () => win.webContents.send(EVENTS.maximize, true))
-  win.on('unmaximize', () => win.webContents.send(EVENTS.maximize, false))
+  win.on('maximize', () => safeSend(win, EVENTS.maximize, true))
+  win.on('unmaximize', () => safeSend(win, EVENTS.maximize, false))
 }
 
 function startSmokeCheck(win: BrowserWindow): void {
@@ -406,19 +412,25 @@ function createWindow(stateFile: string): BrowserWindow {
     return { action: 'deny' }
   })
 
-  win.webContents.on('will-navigate', (event, url) => {
-    if (url !== win.webContents.getURL()) event.preventDefault()
-  })
+  win.webContents.on(
+    'will-navigate',
+    whileAlive(win, 'window will-navigate', (event: Electron.Event, url: string) => {
+      if (url !== win.webContents.getURL()) event.preventDefault()
+    }),
+  )
 
   // The shortcut is registered before the renderer is ready, so a fresh window is told the result.
   win.webContents.on('did-finish-load', () => {
-    for (const status of lastHotkeyStatuses) win.webContents.send(EVENTS.hotkey, status)
+    for (const status of lastHotkeyStatuses) safeSend(win, EVENTS.hotkey, status)
   })
 
-  win.on('page-title-updated', (event) => {
-    event.preventDefault()
-    win.setTitle(windowTitle())
-  })
+  win.on(
+    'page-title-updated',
+    whileAlive(win, 'window title', (event: Electron.Event) => {
+      event.preventDefault()
+      win.setTitle(windowTitle())
+    }),
+  )
 
   watchMaximize(win)
 
