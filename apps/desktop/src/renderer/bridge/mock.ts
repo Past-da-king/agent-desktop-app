@@ -50,6 +50,9 @@ import { DEMO_CHATS } from './chats-demo'
 import { mockHotkeys } from './mock-hotkeys'
 import { readMode, seedFor, type DemoMode } from './seed'
 import { cardInfo, helperCards } from '../../shared/helper-cards'
+import { localRoutes } from '../../shared/route-target'
+
+const mockRoutes = localRoutes()
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
 
@@ -1312,14 +1315,17 @@ export const mockAgent: AgentApi = {
     async isMaximized() {
       return false
     },
+    show(target: RouteTarget): Promise<boolean> {
+      return mockRoutes.show(target)
+    },
     onMaximizeChange(_callback: (maximized: boolean) => void): Unsubscribe {
       return () => undefined
     },
     onQuickAsk(_callback: () => void): Unsubscribe {
       return () => undefined
     },
-    onRoute(_callback: (target: RouteTarget) => void): Unsubscribe {
-      return () => undefined
+    onRoute(callback: (target: RouteTarget) => void): Unsubscribe {
+      return mockRoutes.onRoute(callback)
     },
     onHotkeyStatus(_callback: (status: HotkeyStatus) => void): Unsubscribe {
       return () => undefined

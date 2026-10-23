@@ -43,6 +43,7 @@ import { isProfileColor } from './apps/profiles'
 import { asWriter } from './memory/history'
 import { isIconImage } from '../shared/project-icon'
 import { lightRow } from '../shared/light-row'
+import { parseRouteTarget } from '../shared/route-target'
 import { picksFrom } from './settings'
 import type { AccountStore } from './accounts'
 import { listPeople, type PeopleSource } from './browser/people'
@@ -631,6 +632,14 @@ export function registerIpc(deps: IpcDeps): () => void {
     windows.close()
   })
   handle(CHANNELS.window.isMaximized, async () => windows.isMaximized())
+  // Puts a view on screen as a tap does (renderer state/keys.ts routeTo): a chat in full, a helper's view, Back. The
+  // window's own buttons do it in the renderer; this is the same for the agent (app_action window.show).
+  handle(CHANNELS.window.show, async (_event, rawTarget) => {
+    const target = parseRouteTarget(rawTarget)
+    if (target === null) return false
+    send(EVENTS.route, target)
+    return true
+  })
 
   // ---- shell ----
 

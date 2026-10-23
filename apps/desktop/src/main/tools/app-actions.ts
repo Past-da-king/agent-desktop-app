@@ -149,6 +149,10 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'window.toggleMaximize': free('Maximise or restore the window'),
   'window.close': ask('Close the window'),
   'window.isMaximized': free('Is the window maximised'),
+  'window.show': free(
+    'Put a view on screen as tapping it does: a chat in full at its newest message, cursor in the box ({ view: "chat", id: chatId, "" for the main chat }), a helper\'s own view ({ view: "helper", id: helperId }), a page ({ view: "settings" }, { view: "project", id }) or Back ({ view: "back" })',
+    '{ view, id }',
+  ),
   // Files
   'files.pick': tool('Pick files with the system picker', 'files_pick'),
   'files.pickFolder': no('Pick a folder with the system picker', 'the picker is for the person; the agent passes a folder path straight to what needs it'),
