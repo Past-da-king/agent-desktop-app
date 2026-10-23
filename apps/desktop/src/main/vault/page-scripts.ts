@@ -155,8 +155,10 @@ export const VAULT_WORLD_SCRIPT = String.raw`(() => {
     const field = e.target;
     const kind = kindOf(field);
     if (!kind) return;
+    const before = field.value;
     const answer = await request('suggest', { field: kind });
-    if (!answer || document.activeElement !== field) return;
+    // Not when the person moved on or started typing while it was on its way.
+    if (!answer || document.activeElement !== field || field.value !== before) return;
     showList(field, answer.rows || [], answer.head || '');
   }, true);
   document.addEventListener('focusout', () => setTimeout(() => { if (list && listFor !== document.activeElement) hideList(); }, 150), true);
