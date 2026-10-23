@@ -4,7 +4,7 @@
  * Why not synthetic DOM events: many sites ignore an untrusted `.click()` or a value set from script,
  * and CDP input goes through the browser's real input pipeline, so `event.isTrusted` is true and the
  * click hit-tests across frame boundaries, reaching a cross-origin sign-in button that
- * `webContents.sendInputEvent` cannot (learned in the A.O.S browser). Coordinates passed here are in
+ * `webContents.sendInputEvent` cannot (hard sites ignore synthetic events). Coordinates passed here are in
  * page CSS pixels; under device emulation the view is drawn scaled, and CDP input is in view pixels,
  * so every point is multiplied by the current draw scale first.
  *

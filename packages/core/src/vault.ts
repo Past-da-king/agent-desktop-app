@@ -53,7 +53,7 @@ export interface VaultItemMeta {
   revealable: boolean
   /** A passkey: who it is for and which credential. None of this is secret; the private key is a field. */
   passkey?: VaultPasskey
-  /** Where it came from, e.g. "A.O.S" for an imported item. */
+  /** Where it came from, e.g. "Bitwarden" for an imported item, "browser" for one saved while signing in. */
   source: string
   createdAt: number
   updatedAt: number
@@ -119,7 +119,9 @@ export interface VaultImportResult {
   updated: number
   skipped: number
   names: string[]
-  /** Plain words when it could not read the folder. */
+  /** The format it was read as: "Chrome or Edge", "Bitwarden", "1Password", "a JSON file". */
+  format?: string
+  /** Plain words when it could not read the file. */
   error?: string
 }
 
@@ -132,8 +134,13 @@ export interface VaultApi {
   /** Copies one field to the clipboard in the main process (cleared again after 30 s). Logged. */
   copy(id: string, field?: string): Promise<void>
   audit(limit?: number): Promise<VaultAuditEntry[]>
-  /** Import an A.O.S credential vault: the folder holding its credentials.db and credentials.key. */
-  importAos(folder?: string): Promise<VaultImportResult>
+  /**
+   * Import a password export: Chrome or Edge CSV, Bitwarden CSV or JSON (unencrypted), 1Password CSV, or a JSON file
+   * of names and values. Same site and username updates the item already there. Only counts and names come back.
+   */
+  importText(text: string, fileName?: string): Promise<VaultImportResult>
+  /** The same, from a file on this computer. */
+  importFile(path: string): Promise<VaultImportResult>
   prefs(): Promise<VaultPrefs>
   setPrefs(patch: Partial<VaultPrefs>): Promise<VaultPrefs>
   onChange(cb: () => void): () => void

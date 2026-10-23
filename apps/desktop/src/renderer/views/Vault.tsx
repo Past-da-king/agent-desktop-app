@@ -7,8 +7,8 @@
  * a field left empty keeps it. Below the list: when the Vault asks (asking is the default, each can be switched off,
  * and one switch turns all asking off).
  */
-import { VAULT_DEFAULT_FIELD, registrableDomain, type VaultItemMeta, type VaultKind, type VaultPrefs } from '@agent/core'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { VAULT_DEFAULT_FIELD, registrableDomain, type VaultImportResult, type VaultItemMeta, type VaultKind, type VaultPrefs } from '@agent/core'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
 import { timeAgo } from '../lib/format'
@@ -52,6 +52,25 @@ function siteOf(item: VaultItemMeta): string {
   return host === '' ? OTHER : registrableDomain(host)
 }
 
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`
+}
+
+/** "Imported 12 and updated 3 from Bitwarden", or the reason it could not. */
+export function importTitle(result: VaultImportResult): string {
+  if (result.error !== undefined) return 'Nothing imported'
+  if (result.imported === 0 && result.updated === 0) return 'Nothing to import in that file'
+  const parts = [result.imported > 0 ? `Imported ${plural(result.imported, 'item', 'items')}` : '', result.updated > 0 ? `${result.imported > 0 ? 'updated' : 'Updated'} ${result.updated}` : ''].filter((p) => p !== '')
+  return `${parts.join(' and ')}${result.format !== undefined ? ` from ${result.format}` : ''}`
+}
+
+export function importLine(result: VaultImportResult): string {
+  if (result.error !== undefined) return result.error
+  const read = `${plural(result.found, 'row', 'rows')} read`
+  const skipped = result.skipped > 0 ? `, ${result.skipped} skipped (no password or value)` : ''
+  return `${read}${skipped}. Delete the export file now: it holds your passwords in plain text.`
+}
+
 export function VaultSettings(): JSX.Element {
   const [items, setItems] = useState<VaultItemMeta[] | null>(null)
   const [query, setQuery] = useState('')
@@ -59,6 +78,9 @@ export function VaultSettings(): JSX.Element {
   const [editing, setEditing] = useState<VaultItemMeta | 'new' | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [shown, setShown] = useState<Record<string, string>>({})
+  const [importing, setImporting] = useState(false)
+  const [imported, setImported] = useState<VaultImportResult | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const remote = agent.remote !== undefined
 
   const load = useCallback(() => {
@@ -120,6 +142,23 @@ export function VaultSettings(): JSX.Element {
       toast('Copied. It leaves the clipboard in 30 seconds.')
     } catch (cause) {
       toast(cause instanceof Error ? cause.message : 'Could not copy it.')
+    }
+  }
+
+  const importExport = async (file: File): Promise<void> => {
+    if (file.size > 20 * 1024 * 1024) {
+      setImported({ found: 0, imported: 0, updated: 0, skipped: 0, names: [], error: 'That file is too big to be a password export.' })
+      return
+    }
+    setImporting(true)
+    try {
+      const result = await agent.vault.importText(await file.text(), file.name)
+      setImported(result)
+      if (result.error === undefined) toast(importTitle(result))
+    } catch (cause) {
+      setImported({ found: 0, imported: 0, updated: 0, skipped: 0, names: [], error: cause instanceof Error ? cause.message : 'Could not import it.' })
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -201,13 +240,43 @@ export function VaultSettings(): JSX.Element {
           </label>
           {remote ? null : (
             <div className="vault-head-acts">
+              <Button variant="text" size="sm" disabled={importing} onClick={() => fileRef.current?.click()} title="Chrome or Edge CSV, Bitwarden CSV or JSON, 1Password CSV, or JSON of names and values">
+                {importing ? 'Importing...' : 'Import'}
+              </Button>
               <Button variant="tonal" size="sm" onClick={() => setEditing('new')}>
                 <Icon name="plus" size={16} />
                 Add
               </Button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,.json,text/csv,application/json"
+                aria-label="Import a password export"
+                style={{ display: 'none' }}
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (file !== undefined) void importExport(file)
+                }}
+              />
             </div>
           )}
         </div>
+
+        {imported === null ? null : (
+          <div className="rowc vault-import-result" role="status">
+            <div className="ri">
+              <Icon name={imported.error === undefined ? 'check' : 'x'} size={22} />
+            </div>
+            <div className="rt">
+              <b>{importTitle(imported)}</b>
+              <span>{importLine(imported)}</span>
+            </div>
+            <Button variant="text" size="sm" onClick={() => setImported(null)}>
+              Close
+            </Button>
+          </div>
+        )}
 
         {items === null ? null : visibleGroups.length === 0 ? (
           <div className="rowc">
@@ -216,7 +285,7 @@ export function VaultSettings(): JSX.Element {
             </div>
             <div className="rt">
               <b>{query.trim() === '' ? 'The vault is empty' : `Nothing matches "${query.trim()}"`}</b>
-              <span>{query.trim() === '' ? 'Add a login or a key, or sign in on a site in the browser and save it. Your agent fills it in for you and never sees it.' : 'Try a name, a website or a tag.'}</span>
+              <span>{query.trim() === '' ? 'Add a login or a key, import the passwords your browser or password manager exported, or sign in on a site in the browser and save it. Your agent fills it in for you and never sees it.' : 'Try a name, a website or a tag.'}</span>
             </div>
           </div>
         ) : (

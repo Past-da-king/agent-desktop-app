@@ -1,4 +1,4 @@
-/** Voice notes the A.O.S way: the agent's own script, the style as speech metadata, tags never read out. */
+/** Voice notes done properly: the agent's own script, the style as speech metadata, tags never read out. */
 import { describe, expect, it } from 'vitest'
 
 import { DEFAULT_CHOICE, stripTags, voiceNoteAudio, wavOf } from '../src/main/voice/gemini'

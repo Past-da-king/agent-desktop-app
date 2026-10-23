@@ -1661,15 +1661,15 @@ let mockUpkeep: UpkeepReport | null = null
 const upkeepListeners = new Set<(report: UpkeepReport | null) => void>()
 
 // Tidying a bank with the agent, simulated: the real export's numbers, a few steps a tick so the states show.
-const TIDY_PROJECTS = ['aos', 'crm-1', 'creek', 'growos', 'applications', 'lender-ls', 'agency', 'studycvns', 'rmblr', 'shop-website', 'initech-erp']
+const TIDY_PROJECTS = ['home', 'crm', 'garden', 'travel', 'applications', 'loans', 'agency', 'studies', 'music', 'shop-website', 'erp']
 let mockTidy: MemoryTidyProgress | null = null
 let mockTidyTimer: ReturnType<typeof setInterval> | null = null
 const tidyListeners = new Set<(progress: MemoryTidyProgress) => void>()
 
 function mockTidyPlan(includeAll: boolean): MemoryTidyPlan {
   return includeAll
-    ? { ok: true, message: '4,562 notes in 27 projects, read in 236 steps.', source: 'A.O.S Memory Bank', notes: 4562, projects: 27, steps: 236, chars: 9_695_241, olderState: 0, retired: 0 }
-    : { ok: true, message: '1,717 notes in 25 projects, read in 110 steps.', source: 'A.O.S Memory Bank', notes: 1717, projects: 25, steps: 110, chars: 4_104_229, olderState: 754, retired: 2091 }
+    ? { ok: true, message: '4,562 notes in 27 projects, read in 236 steps.', source: 'Memory Bank', notes: 4562, projects: 27, steps: 236, chars: 9_695_241, olderState: 0, retired: 0 }
+    : { ok: true, message: '1,717 notes in 25 projects, read in 110 steps.', source: 'Memory Bank', notes: 1717, projects: 25, steps: 110, chars: 4_104_229, olderState: 754, retired: 2091 }
 }
 
 function emitTidy(): void {
@@ -1690,8 +1690,8 @@ function mockImportPreview(includeAll: boolean): MemoryImportPreview {
     : { decision: 464, fact: 553, 'how-to': 465, person: 28, project: 24, organisation: 5 }
   return {
     ok: true,
-    message: 'From the A.O.S Memory Bank.',
-    source: 'A.O.S Memory Bank',
+    message: 'From the Memory Bank export.',
+    source: 'Memory Bank',
     total: 4562,
     byKind,
     skippedRetired: includeAll ? 0 : 2091,
@@ -1910,7 +1910,20 @@ function mockVault(): AgentApi['vault'] {
       audit.push({ at: Date.now(), itemId: id, name: item.name, action: 'copy', who: 'person' })
     },
     audit: async () => [...audit].reverse(),
-    importAos: async () => ({ found: 0, imported: 0, updated: 0, skipped: 0, names: [], error: 'There is no A.O.S vault in the preview.' }),
+    // The preview reads a simple CSV (name,url,username,password); the computer reads every supported format.
+    importText: async (text) => {
+      const rows = text.replace(/^﻿/, '').split(/\r?\n/).filter((line) => line.trim() !== '').slice(1)
+      const names: string[] = []
+      for (const line of rows) {
+        const [name = '', url = '', username = '', password = ''] = line.split(',')
+        if (password === '') continue
+        items.push({ ...make(`v_${Math.random().toString(16).slice(2, 8)}`, name || url, 'login', username, url, { password }), source: 'Chrome or Edge' })
+        names.push(name || url)
+      }
+      changed()
+      return { found: rows.length, imported: names.length, updated: 0, skipped: rows.length - names.length, names, format: 'Chrome or Edge' }
+    },
+    importFile: async () => ({ found: 0, imported: 0, updated: 0, skipped: 0, names: [], error: 'There are no files in the preview.' }),
     onChange: (cb) => {
       listeners.add(cb)
       return () => listeners.delete(cb)
