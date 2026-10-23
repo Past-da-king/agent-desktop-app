@@ -106,7 +106,14 @@ export function VaultSettings(): JSX.Element {
   const importAos = async (): Promise<void> => {
     setImporting(true)
     try {
-      const result = await agent.vault.importAos()
+      let result = await agent.vault.importAos()
+      // Not where A.O.S usually keeps it: let the person point at the folder.
+      if (result.error !== undefined && result.found === 0) {
+        toast(`${result.error} Pick the A.O.S folder that holds credentials.db.`)
+        const folder = await agent.files.pickFolder()
+        if (folder === null) return
+        result = await agent.vault.importAos(folder)
+      }
       if (result.error !== undefined) toast(result.error)
       else toast(`From A.O.S: ${result.found} found, ${result.imported} added, ${result.updated} updated${result.skipped > 0 ? `, ${result.skipped} could not be read` : ''}.`)
     } catch (cause) {
