@@ -14,6 +14,7 @@
  */
 import type { WebContents } from 'electron'
 
+import { alive, ifAlive } from '../alive'
 import { Cdp } from './cdp'
 import { ConsoleLog, EAGER_BODY_CHARS, NetworkLog, bodyText, isApiType, type NetEntry } from './devtools-log'
 
@@ -203,16 +204,18 @@ const byTarget = new WeakMap<object, TabDevtools>()
 
 /** The channel for an Electron webContents: its own debugger, kept attached. */
 export function electronChannel(wc: WebContents): DevtoolsChannel {
-  const cdp = new Cdp(wc.debugger, 30_000)
+  // The debugger is taken once, while the page is alive: reading wc.debugger later, after the tab closed, throws.
+  const dbg = wc.debugger
+  const cdp = new Cdp(dbg, 30_000)
   return {
-    send: (method, params) => cdp.send(method, params ?? {}),
+    send: (method, params) => (alive(wc) ? cdp.send(method, params ?? {}) : Promise.reject(new Error('The page has closed.'))),
     onEvent: (listener) => {
-      wc.debugger.on('message', (_event, method, params) => listener(method, params))
+      dbg.on('message', (_event, method, params) => ifAlive('devtools event', () => listener(method, params)))
     },
     onDetach: (listener) => {
-      wc.debugger.on('detach', () => listener())
+      dbg.on('detach', () => ifAlive('devtools detach', () => listener()))
     },
-    url: () => (wc.isDestroyed() ? '' : wc.getURL()),
+    url: () => (alive(wc) ? wc.getURL() : ''),
   }
 }
 

@@ -19,6 +19,7 @@ import { electronClipboard, keySenderFor, typeText, type KeySender } from './pas
 import { PillWindow, type PillOptions } from './pill'
 import { dictationTarget, type DictationSurface } from './target'
 import { EVENTS } from '../../shared/channels'
+import { safeSend } from '../alive'
 import { LiveTranscriber, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, languageHint, replayRecording } from './transcriber'
 
 export interface DictationSetup {
@@ -113,8 +114,7 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
 
   const sendDraft = (view: DictationView): void => {
     const target = draftTarget
-    if (target === null || target.isDestroyed()) return
-    target.webContents.send(EVENTS.dictationDraft, view)
+    safeSend(target, EVENTS.dictationDraft, view)
     if (view.phase === 'hidden') draftTarget = null
   }
   const pillWithDraft = {
