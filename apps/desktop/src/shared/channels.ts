@@ -68,6 +68,7 @@ export const CHANNELS = {
     newTab: 'agent:browser.newTab',
     attach: 'agent:browser.attach',
     devtools: 'agent:browser.devtools',
+    fixSite: 'agent:browser.fixSite',
     setMuted: 'agent:browser.setMuted',
     people: 'agent:browser.people',
     usePerson: 'agent:browser.usePerson',

@@ -133,6 +133,8 @@ export interface BrowserControl {
   /** A <webview> in the main window is attached for a tab; `senderId` is the asking renderer's webContents id. */
   attachGuest?(tabId: string, guestId: number, senderId: number | null): boolean
   openDevTools?(): void
+  /** The person's Fix this site: forget what was learned for the site and reload as this computer's own browser. */
+  fixSite?(): Promise<string>
   setMuted?(on: boolean): void
   personPartition?(): string
   usePersonPartition?(partition: string): void
@@ -515,6 +517,7 @@ export function registerIpc(deps: IpcDeps): () => void {
   handle(CHANNELS.browser.devtools, async () => {
     deps.browser?.openDevTools?.()
   })
+  handle(CHANNELS.browser.fixSite, async () => (await deps.browser?.fixSite?.()) ?? 'The browser is not running.')
   handle(CHANNELS.browser.setMuted, async (_event, rawOn) => {
     if (typeof rawOn !== 'boolean') throw new Error('muted must be true or false')
     deps.browser?.setMuted?.(rawOn)

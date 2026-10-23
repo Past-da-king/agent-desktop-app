@@ -37,6 +37,23 @@ describe('site profiles', () => {
     expect(siteOf('file:///etc/passwd')).toBeNull()
   })
 
+  it("drops a saved user agent that only repeats this computer's own Chrome, so a stale version never ships", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sites-ua-'))
+    const file = join(dir, 'sites.json')
+    const token = process.platform === 'win32' ? 'Windows NT 10.0; Win64; x64' : process.platform === 'darwin' ? 'Macintosh; Intel Mac OS X 10_15_7' : 'X11; Linux x86_64'
+    const stale = `Mozilla/5.0 (${token}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36`
+    const android = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36'
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      defaultView: { ...presetView('desktop'), userAgent: stale },
+      sites: { 'a.example': { at: 1, view: { ...presetView('phone'), userAgent: android }, outcome: 'works', pinned: true } },
+    }))
+    const store = new SiteStore(file)
+    expect(store.defaultView().userAgent).toBe('')
+    // A user agent that names another device is a real choice and stays (its version is corrected when it is used).
+    expect(store.viewFor('https://a.example/').userAgent).toBe(android)
+  })
+
   it('keeps views, fixes and headers in a JSON file and reads them back', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'sites-')), 'browser-sites.json')
     const store = new SiteStore(file, () => 42)
