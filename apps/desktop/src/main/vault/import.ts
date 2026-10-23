@@ -130,13 +130,10 @@ export function saveImported(vault: VaultStore, parsed: ParsedImport, who = 'per
 function siteOfUrl(url: string): string {
   const text = url.trim()
   if (text === '') return ''
-  try {
-    const parsed = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`)
-    if (parsed.protocol === 'android:') return ''
-    return registrableDomain(parsed.hostname)
-  } catch {
-    return ''
-  }
+  if (/^android:/i.test(text)) return ''
+  // The host at the start, also when the field holds more than a URL ("https://mail.tm (API at api.mail.tm)").
+  const host = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]*@)?([a-z0-9-]+(?:\.[a-z0-9-]+)+|localhost)(?=[:/\s?#]|$)/i.exec(text)
+  return host === null ? '' : registrableDomain(host[1]!.toLowerCase())
 }
 
 function keyOf(kind: VaultKind, name: string, site: string, username: string): string {
@@ -150,7 +147,8 @@ function matchKeyOf(item: ImportedItem): string {
 }
 
 function matchKey(item: VaultItemMeta): string {
-  const site = item.hosts[0] !== undefined ? registrableDomain(item.hosts[0]) : siteOfUrl(item.url)
+  // The same reading of the URL as for an imported row, so a file imported again matches what it added.
+  const site = siteOfUrl(item.url) || (item.hosts[0] !== undefined ? registrableDomain(item.hosts[0]) : '')
   return keyOf(item.kind, item.name, site, item.username)
 }
 
