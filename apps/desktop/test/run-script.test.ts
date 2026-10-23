@@ -108,7 +108,7 @@ describe('the run_script row in the work trail', () => {
     expect(result).not.toContain('DETAIL')
     const record = runFinished(call, result, false, Date.now() - 50)
     expect(record?.state).toBe('ok')
-    expect(record?.stdout).toContain('Result: "two set"')
+    expect(record?.stdout).toContain('Result: two set')
     expect(record?.stdout).toContain('Tool calls inside the script (3):')
     expect(record?.stdout).toMatch(/ok {4} {2}project_update {2}\{"id":"a"\} {2}\d+ ms/)
     expect(record?.stdout).toMatch(/FAILED {2}boom {2}\{\} {2}\d+ ms/)
@@ -129,7 +129,7 @@ describe('safety inside a script', () => {
     const tools = coreTools({ store })
     const out = await runTool(tools).run({ code: `const a = await tools.request_approval({ summary: 'Delete 3 files', details: 'a, b, c' }); return a` }, ctx)
     expect(asked).toEqual([{ summary: 'Delete 3 files', details: 'a, b, c' }])
-    expect(out).toContain('Result: "The user declined."')
+    expect(out).toContain('Result: The user declined.')
   })
 
   it('a helper script cannot use an app or a learned app outside its profile', async () => {

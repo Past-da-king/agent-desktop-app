@@ -354,7 +354,14 @@ export function formatOutcome(outcome: ScriptOutcome): string {
     data['partialLog'] = log
     return `${JSON.stringify(data, null, 1)}\n${callsLine(outcome)}`
   }
-  const value = outcome.value ?? 'null'
+  // A returned string reads as itself (its own lines), anything else as JSON.
+  let value = outcome.value ?? 'null'
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (typeof parsed === 'string') value = parsed
+  } catch {
+    // not JSON: shown as it is
+  }
   const shown = value.length > SCRIPT_RESULT_CAP ? `${value.slice(0, SCRIPT_RESULT_CAP)}\n...[truncated: the result was ${value.length} chars; return a smaller summary]` : value
   return [`Result: ${shown}`, ...(log === '' ? [] : ['Log:', log]), callsLine(outcome)].join('\n')
 }
