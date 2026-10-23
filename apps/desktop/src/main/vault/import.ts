@@ -84,37 +84,41 @@ export function importText(vault: VaultStore, text: string, fileName = '', who =
   return saveImported(vault, parsed, who)
 }
 
-/** Add or update every item. Same site and username (or same name and username without a site) is an update. */
+/**
+ * Add or update every item. A login matches one already in the vault with the same site and username; a key, token
+ * or note matches the same name, username and kind. Each item already there is matched at most once per import (the
+ * one with the same name first), so two rows of one file for the same site and username stay two items, and the
+ * same file imported again updates each of them in place.
+ */
 export function saveImported(vault: VaultStore, parsed: ParsedImport, who = 'person'): VaultImportResult {
   const result: VaultImportResult = { found: parsed.items.length + parsed.skipped, imported: 0, updated: 0, skipped: parsed.skipped, names: [], format: parsed.format }
   const nameCount = new Map<string, number>()
   for (const item of parsed.items) nameCount.set(item.name.toLowerCase(), (nameCount.get(item.name.toLowerCase()) ?? 0) + 1)
-  let existing = vault.list()
+  const before = vault.list()
+  const used = new Set<string>()
   for (const item of parsed.items) {
-    const before = existing.find((other) => matchKey(other) === matchKeyOf(item))
+    const key = matchKeyOf(item)
+    const candidates = before.filter((other) => !used.has(other.id) && matchKey(other) === key)
+    const match = candidates.find((other) => other.name.trim().toLowerCase() === item.name.trim().toLowerCase()) ?? candidates[0]
     const user = item.username.trim()
     const shared = (nameCount.get(item.name.toLowerCase()) ?? 0) > 1
     const input: VaultItemInput = {
-      ...(before === undefined ? {} : { id: before.id }),
+      ...(match === undefined ? {} : { id: match.id }),
       name: item.name,
-      ...(before === undefined && shared && user !== '' ? { ref: `${vaultRefOf(item.name).slice(0, 40).replace(/-+$/, '')}-${vaultRefOf(user.split('@')[0] ?? user).slice(0, 22)}` } : {}),
+      ...(match === undefined && shared && user !== '' ? { ref: `${vaultRefOf(item.name).slice(0, 40).replace(/-+$/, '')}-${vaultRefOf(user.split('@')[0] ?? user).slice(0, 22)}` } : {}),
       kind: item.kind,
       username: user,
       url: item.url,
       notes: item.notes,
-      tags: before === undefined ? item.tags : [...new Set([...before.tags, ...item.tags])],
+      tags: match === undefined ? item.tags : [...new Set([...match.tags, ...item.tags])],
       source: parsed.format,
       fields: item.fields,
     }
     try {
       const saved = vault.save(input, who)
-      if (before === undefined) {
-        result.imported += 1
-        existing = [...existing, saved]
-      } else {
-        result.updated += 1
-        existing = existing.map((other) => (other.id === saved.id ? saved : other))
-      }
+      used.add(saved.id)
+      if (match === undefined) result.imported += 1
+      else result.updated += 1
       result.names.push(item.name)
     } catch {
       result.skipped += 1
@@ -135,14 +139,19 @@ function siteOfUrl(url: string): string {
   }
 }
 
-function matchKeyOf(item: { name: string; url: string; username: string }): string {
-  const site = siteOfUrl(item.url)
-  return site !== '' ? `site:${site}|${item.username.trim().toLowerCase()}` : `name:${item.name.trim().toLowerCase()}|${item.username.trim().toLowerCase()}`
+function keyOf(kind: VaultKind, name: string, site: string, username: string): string {
+  const user = username.trim().toLowerCase()
+  if (kind === 'login' && site !== '') return `login|${site}|${user}`
+  return `${kind}|name:${name.trim().toLowerCase()}|${user}`
+}
+
+function matchKeyOf(item: ImportedItem): string {
+  return keyOf(item.kind, item.name, siteOfUrl(item.url), item.username)
 }
 
 function matchKey(item: VaultItemMeta): string {
   const site = item.hosts[0] !== undefined ? registrableDomain(item.hosts[0]) : siteOfUrl(item.url)
-  return site !== '' ? `site:${site}|${item.username.trim().toLowerCase()}` : `name:${item.name.trim().toLowerCase()}|${item.username.trim().toLowerCase()}`
+  return keyOf(item.kind, item.name, site, item.username)
 }
 
 function str(value: unknown): string {
@@ -336,7 +345,10 @@ function parseBitwarden(data: { encrypted?: boolean; items: BitwardenItem[]; fol
   return { format: 'Bitwarden', items, skipped }
 }
 
-/** { "Name": "value" } or [{ name, value | password | key | token | text | fields, username?, url?, kind?, notes?, tags? }]. */
+/**
+ * { "Name": "value" }, [{ name, value | password | key | token | text | fields, username?, url?, kind?, notes?, tags? }]
+ * or { source?, items: [the same] }.
+ */
 function parsePlain(data: unknown): ParsedImport {
   const items: ImportedItem[] = []
   let skipped = 0
@@ -386,5 +398,7 @@ function parsePlain(data: unknown): ParsedImport {
     const tags = Array.isArray(entry['tags']) ? (entry['tags'] as unknown[]).map(str).filter((t) => t !== '') : []
     items.push({ name: nameFor(name, url, username), kind, username: username.trim(), url: url.trim(), notes: str(entry['notes'] ?? entry['note']).trim(), tags, fields })
   }
-  return { format: 'a JSON file', items, skipped }
+  // { source: "My old vault", items: [...] } names where it came from (shown as "From My old vault").
+  const named = typeof data === 'object' && data !== null && !Array.isArray(data) && Array.isArray((data as { items?: unknown }).items) ? str((data as { source?: unknown }).source).trim().slice(0, 40) : ''
+  return { format: named !== '' ? named : 'a JSON file', items, skipped }
 }
