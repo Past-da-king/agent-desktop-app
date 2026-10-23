@@ -98,7 +98,7 @@ const blockerNote = () => {
     return 'This page is asking for a sign-in or verification code. A person may need to take over.';
   }
   if (document.querySelector('input[type=password]')) {
-    return 'This page has a sign-in form. A person may need to take over if the details are not yours to use.';
+    return 'This page has a sign-in form. If the Vault has the login (vault_list), sign in with vault_login without seeing it; otherwise a person may need to take over.';
   }
   return '';
 };
