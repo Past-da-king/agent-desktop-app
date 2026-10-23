@@ -439,7 +439,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     // Typing an address in a tab makes it the person's tab.
     this.personTab = tab.id
     for (const each of this.tabs) void this.refreshInputGuard(each)
-    this.currentView = this.sites.viewFor(url)
+    this.currentView = this.viewForTab(url, tab)
     await this.prepare(tab).catch(() => undefined)
     await tab.wc.loadURL(url).catch(() => undefined)
     this.emit()
@@ -1385,9 +1385,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
     await this.settle(300)
     let page = await this.readText(tab)
-    if (page.text.trim().length < 25 && tab.loadError === null) {
-      // Single-page apps often paint their text a moment after load.
-      await this.settle(1500)
+    // Single-page apps often paint their text a while after load (x.com takes a few seconds): give them up to
+    // eight before calling the page empty, so a slow site is never mistaken for one refusing this browser.
+    for (let waited = 0; page.text.trim().length < 25 && tab.loadError === null && waited < 8_000; waited += 500) {
+      await this.settle(500)
       page = await this.readText(tab)
     }
     return { status: tab.status, error: tab.loadError, title: page.title, text: page.text }
@@ -1474,6 +1475,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   private async trustedInput<T>(action: () => Promise<T>): Promise<T> {
     this.injectingInput = true
+    const tab = this.activeTab()
+    if (tab !== null) this.lastGesture.set(tab.id, Date.now())
     try {
       return await action()
     } finally {
@@ -1520,6 +1523,45 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return tab !== undefined && tab.partition === this.partitionNow() ? tab : null
     }
     return pickTab(this.tabs, this.activeId, this.current)
+  }
+
+  /**
+   * The view a tab opens a site in. What the agent learned by itself (a site that loaded empty, so it tried a
+   * phone) is for the agent's own tabs; the person's tab presents this computer as it really is unless they chose
+   * a view for that site by hand. An emulated phone on a PC is exactly what sign-in risk checks refuse.
+   */
+  private viewForTab(url: string, tab: Tab): ViewSpec {
+    if (tab.id === this.personTab && this.sites.get(url)?.pinned !== true) return this.sites.defaultView()
+    return this.sites.viewFor(url)
+  }
+
+  /**
+   * The person's one tap when a site misbehaves (a sign-in that fails, a page that will not load): drop everything
+   * learned or forced for the site (view, user agent, headers, scripts, CSS), clear its caches and service workers
+   * (its sign-ins stay), present this computer's own browser and reload. The agent's browser_fix forget plus
+   * clear_data in one step, without signing them out.
+   */
+  async fixSite(): Promise<string> {
+    const tab = this.shownTab()
+    if (tab === null || !isRealPage(tab.wc)) return 'No page is open.'
+    const url = safeUrl(tab.wc)
+    const site = siteOf(url)
+    if (site === null) return 'This page is not a website.'
+    for (const key of tab.siteCss.splice(0)) await tab.wc.removeInsertedCSS(key).catch(() => undefined)
+    this.sites.forget(url)
+    try {
+      await tab.wc.session.clearStorageData({ origin: new URL(url).origin, storages: ['serviceworkers', 'cachestorage', 'shadercache'] })
+    } catch {
+      // Nothing cached to clear.
+    }
+    const base = this.sites.defaultView()
+    this.currentView = base.mode === 'phone' || base.mode === 'tablet' ? presetView('desktop') : { ...base, userAgent: '' }
+    for (const each of this.tabs) await this.applyEmulation(each)
+    this.layout()
+    tab.wc.reload()
+    await this.waitForLoad(tab, 10_000)
+    this.emit()
+    return `Fixed ${site}: forgot what was learned for it, cleared its caches and opened it again as this computer's own browser.`
   }
 
   /** The tab in front of the person, whichever partition it is in. */
@@ -1796,7 +1838,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         const from = siteOf(safeUrl(tab.wc))
         const to = siteOf(details.url)
         if (to === null || to === from) return
-        const wanted = this.sites.viewFor(details.url)
+        const wanted = this.viewForTab(details.url, tab)
         if (sameView(wanted, this.currentView)) return
         this.currentView = wanted
         void this.applyEmulation(tab)
@@ -1921,7 +1963,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
           return
         }
         const headers = { ...details.requestHeaders }
-        if (view !== undefined && view.userAgent !== '') headers['User-Agent'] = view.userAgent
+        if (view !== undefined && view.userAgent !== '') headers['User-Agent'] = userAgentFor(view, this.engine)
         for (const [name, value] of Object.entries(extra ?? {})) headers[name] = value
         callback({ requestHeaders: headers })
       } catch {

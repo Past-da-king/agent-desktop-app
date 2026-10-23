@@ -148,6 +148,7 @@ const api: AgentApi = {
     go: (address) => call<void>(CHANNELS.browser.go, address),
     newTab: () => call<void>(CHANNELS.browser.newTab),
     devtools: () => call<void>(CHANNELS.browser.devtools),
+    fixSite: () => call<string>(CHANNELS.browser.fixSite),
     setMuted: (on: boolean) => call<void>(CHANNELS.browser.setMuted, on),
     people: () => call<BrowserPerson[]>(CHANNELS.browser.people),
     usePerson: (id: string) => call<void>(CHANNELS.browser.usePerson, id),

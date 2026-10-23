@@ -361,6 +361,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       go: () => notHere('Browsing'),
       newTab: () => notHere('Browsing'),
       devtools: async () => undefined,
+      fixSite: async () => '',
       setMuted: async () => undefined,
       people: rpc('browser.people'),
       usePerson: async () => undefined,

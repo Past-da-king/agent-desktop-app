@@ -1059,6 +1059,9 @@ export const mockAgent: AgentApi = {
     async devtools() {
       return undefined
     },
+    async fixSite() {
+      return ''
+    },
     async people(): Promise<BrowserPerson[]> {
       const own = profiles.filter((p) => !p.general && p.browser === '')
       const signedIn: Record<string, string[]> = { mine: seededApps ? ['sam@example.com'] : [], p_work: seededApps ? ['ana@example.com'] : [] }
