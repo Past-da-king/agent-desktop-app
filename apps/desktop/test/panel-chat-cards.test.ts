@@ -70,6 +70,8 @@ describe('project chat cards stay until he closes them', () => {
     expect(done.map((card) => [card.id, card.kind, card.state, card.waiting, card.projectChat])).toEqual([['pa-pc1', 'project-chat', 'done', true, 'pc1']])
     expect(done[0]!.line).toBe('Fixed: the checkout button submits again.')
     expect(done[0]!.owner).toMatchObject({ kind: 'project', name: 'Shop Site' })
+    // Named by its chat (his first message), so two chats of one project are told apart.
+    expect(done[0]!.chatTitle).toBe('Fix the checkout')
     // Nothing removes it by itself: days later it is still there.
     expect(cards(answered(), [site])).toHaveLength(1)
   })
@@ -94,6 +96,11 @@ describe('project chat cards stay until he closes them', () => {
       ['h-now', 1],
     ])
     expect(list[1]!.line).toBe('Cart is fine')
+  })
+
+  it('a working chat with nothing of its own to show yet says its helpers are on it, not Starting', () => {
+    const items = [row('u1', 'user', 1_000, { chat: 'pc1' }, 'Compress the images'), row('h1', 'helper', 1_010, { id: 'h1', chat: 'pc1', label: 'Squeeze', state: 'working', startedAt: 1_010 })]
+    expect(helperCards(items, [project(['pc1'])])[0]!.line).toBe('1 helper working')
   })
 
   it('working cards first, then the chats waiting on him, newest first', () => {

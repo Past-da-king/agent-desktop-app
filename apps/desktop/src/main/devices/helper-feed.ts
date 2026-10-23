@@ -59,6 +59,8 @@ export class HelperFeed {
   private readonly chatLines = new Map<string, ChatItem[]>()
   /** The person's newest message in each side chat: a chat whose agent spoke after it waits on him. */
   private readonly said = new Map<string, ChatItem>()
+  /** The person's first message in each side chat: it names the chat on its card. */
+  private readonly first = new Map<string, ChatItem>()
   private projects: ProjectRow[] = []
   private started: Promise<void> | null = null
   private offChange: (() => void) | null = null
@@ -106,6 +108,7 @@ export class HelperFeed {
     this.steps.clear()
     this.chatLines.clear()
     this.said.clear()
+    this.first.clear()
     // Every reply and message (a chat that waits on the person may be old); steps only from the lookback.
     const all = async (kind: string): Promise<ChatItem[]> =>
       store.listWhere !== undefined ? store.listWhere('chat_item', { kind }) : (await store.list('chat_item')).filter((row) => row.kind === kind)
@@ -124,9 +127,10 @@ export class HelperFeed {
     if (row.kind === 'user') {
       const chat = text(meta, 'chat') || MAIN_CHAT
       if (chat === MAIN_CHAT || text(meta, 'helper') !== '') return false
+      const opening = this.first.get(chat)
+      if (row.text.trim() !== '' && (opening === undefined || opening.createdAt > row.createdAt)) this.first.set(chat, row)
       const before = this.said.get(chat)
-      if (before !== undefined && before.createdAt > row.createdAt) return false
-      this.said.set(chat, row)
+      if (before === undefined || before.createdAt <= row.createdAt) this.said.set(chat, row)
       return true
     }
     const helper = row.kind === 'activity' ? text(meta, 'helper') : ''
@@ -182,6 +186,7 @@ export class HelperFeed {
     }
     for (const lines of this.chatLines.values()) items.push(...lines)
     items.push(...this.said.values())
+    for (const [chat, row] of this.first) if (this.said.get(chat) !== row) items.push(row)
     const running = this.deps.running
     const cards = helperCards(items, this.projects, running === undefined ? {} : { running }).map((card) => cardInfo(card))
     const json = JSON.stringify(cards)

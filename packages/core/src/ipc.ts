@@ -1034,6 +1034,8 @@ export interface HelperCardInfo {
   waiting?: boolean
   /** When its group last moved; a card closed at or after this stays closed. Absent from older computers. */
   activityAt?: number
+  /** A project chat card: the chat's name (the person's first message in it). Absent from older computers. */
+  title?: string
 }
 
 /** Every card right now. `seq` grows with each new list, so a device can drop one that arrives late. */
