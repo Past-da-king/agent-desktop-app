@@ -11,7 +11,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { JsonObject, Tool, ToolContext } from '@agent/core'
 
 import { LearnedStore } from '../src/main/apps/store'
-import { catalogueOf, groupOf, shareOf, type DeviceToolHub, type ToolOutcome } from '../src/main/devices/device-tools'
+import { Store } from '../src/main/db'
+import { DeviceToolHub as Hub, catalogueOf, groupOf, shareOf, type DeviceToolHub, type ToolOutcome } from '../src/main/devices/device-tools'
 import { learnedTarget, withLearnedRoute } from '../src/main/devices/learned-route'
 import { testContext } from './support'
 
@@ -123,10 +124,112 @@ describe('a learned tool runs on the device where its app is signed in', () => {
     expect(JSON.stringify(tool.spec.schema)).toContain('"device"')
   })
 
+  it('a failure here that is not about sign-in is not tried again elsewhere (a send is never doubled)', async () => {
+    const learned = new LearnedStore(join(dir, 'learned.json'))
+    learned.save({ id: 'chat', name: 'Chat', startUrl: 'https://chat.example', about: '', tools: [{ name: 'send', description: '', params: {}, required: [], js: '', readOnly: false }], trusted: false, updatedAt: 0 })
+    learned.noteDevice('chat', 'dev_pc')
+    const local: Tool = { spec: { name: 'webapp_run', description: '', schema: { type: 'object', properties: {} } }, run: async () => 'Error: The message box was not found.' }
+    const { hub, calls } = fakeHub('dev_pc', [{ ...PC, self: true }, { ...SERVER, id: 'dev_lap', name: 'Lap', self: false, kind: 'laptop' }])
+    const [tool] = withLearnedRoute([local], () => hub, { learned, selfId: () => 'dev_pc', siteHere: async () => true })
+    expect(await tool!.run({ app: 'Chat', tool: 'send' }, testContext())).toBe('Error: The message box was not found.')
+    expect(calls).toEqual([])
+  })
+
   it("a device shares webapp_run with the others as a browser tool, so they can run it there", () => {
     expect(groupOf('webapp_run')).toBe('browser')
     expect(groupOf('webapp_test')).toBe('browser')
     const shared = catalogueOf([{ spec: { name: 'webapp_run', description: '', schema: { type: 'object' } }, run: async () => '' }], shareOf({}))
     expect(shared.map((t) => t.name)).toEqual(['webapp_run'])
+  })
+})
+
+describe('with no device named, it finds the browser that is signed in (23 Oct 2026)', () => {
+  const ROW = { platform: 'linux', urls: [], fp: '', facts: {}, pairedAt: 1, revoked: false, roles: ['brain', 'hands'] }
+  const OFFERS = [{ name: 'webapp_run', description: '', params: { type: 'object' }, group: 'browser', readOnly: false }]
+
+  function chatApp(learned: LearnedStore, devices: string[]): void {
+    learned.save({
+      id: 'chat',
+      name: 'Chat',
+      startUrl: 'https://chat.example',
+      about: '',
+      tools: [{ name: 'list_chats', description: '', params: {}, required: [], js: '', readOnly: true }],
+      trusted: false,
+      updatedAt: 0,
+      ...(devices.length === 0 ? {} : { devices }),
+    })
+  }
+
+  const NOT_HERE = 'Error: Chat is not signed in or still loading. Open chat.example in the agent browser.'
+
+  it('a helper on a server routes to the computer that dials in to it (no link from the server side)', async () => {
+    const store = new Store(':memory:')
+    const now = Date.now()
+    await store.upsert('device', { ...ROW, id: 'dev_srv', name: 'Box', kind: 'server', priority: 1, lastSeen: now, tools: OFFERS })
+    // The computer reaches the server, the server cannot dial it back: no RPC session, no replication link from here.
+    await store.upsert('device', { ...ROW, id: 'dev_pc', name: 'Desk', kind: 'desktop', priority: 0, lastSeen: now - 20_000, tools: OFFERS })
+    const hub = new Hub({ store, selfId: () => 'dev_srv', noteBack: () => undefined })
+    const calls: string[] = []
+    hub.call = async (ref: string) => {
+      calls.push(ref)
+      return { ok: true, state: 'done', device: 'Desk', text: '[{"chat":"Family"}]' }
+    }
+    expect((await hub.list()).find((d) => d.id === 'dev_pc')?.online).toBe(true)
+
+    const learned = new LearnedStore(join(dir, 'learned.json'))
+    chatApp(learned, ['dev_pc'])
+    const ran: JsonObject[] = []
+    const local: Tool = { spec: { name: 'webapp_run', description: '', schema: { type: 'object', properties: {} } }, run: async (i) => (ran.push(i), NOT_HERE) }
+    const [tool] = withLearnedRoute([local], () => hub, { learned, selfId: () => 'dev_srv' })
+    const out = await tool!.run({ app: 'Chat', tool: 'list_chats', args: { limit: 3 } }, testContext({ owner: 'helper:h1' } as Partial<ToolContext>))
+    expect(calls).toEqual(['dev_pc'])
+    expect(ran).toEqual([])
+    expect(out).toBe('On Desk (its browser is where Chat is signed in): [{"chat":"Family"}]')
+
+    // Not heard from for minutes: offline, and the answer says so.
+    await store.upsert('device', { id: 'dev_pc', lastSeen: now - 10 * 60_000 } as never)
+    expect((await hub.list()).find((d) => d.id === 'dev_pc')?.online).toBe(false)
+    store.close()
+  })
+
+  it('a run here that is not signed in falls over to the linked device that is', async () => {
+    const learned = new LearnedStore(join(dir, 'learned.json'))
+    // This device once ran it (a stale record), so it is tried here first.
+    chatApp(learned, ['dev_pc'])
+    const ran: JsonObject[] = []
+    const local: Tool = { spec: { name: 'webapp_run', description: '', schema: { type: 'object', properties: {} } }, run: async (i) => (ran.push(i), NOT_HERE) }
+    const LAP: Device = { id: 'dev_lap', name: 'Lap', kind: 'laptop', online: true, self: false, tools: ['webapp_run'] }
+    const { hub, calls } = fakeHub('dev_pc', [{ ...PC, self: true }, { ...SERVER, self: false }, LAP])
+    const [tool] = withLearnedRoute([local], () => hub, { learned, selfId: () => 'dev_pc', siteHere: async () => null })
+    const out = await tool!.run({ app: 'Chat', tool: 'list_chats' }, testContext())
+    expect(ran).toHaveLength(1)
+    expect(calls.map((c) => c.ref)).toEqual(['dev_lap'])
+    expect(out).toContain('On Lap')
+    expect(out).toContain('"Family"')
+    expect(learned.find('chat')?.devices).toContain('dev_lap')
+  })
+
+  it('signed in nowhere: the error names every device it checked', async () => {
+    const learned = new LearnedStore(join(dir, 'learned.json'))
+    chatApp(learned, [])
+    const local: Tool = { spec: { name: 'webapp_run', description: '', schema: { type: 'object', properties: {} } }, run: async () => NOT_HERE }
+    const LAP: Device = { id: 'dev_lap', name: 'Lap', kind: 'laptop', online: false, self: false, tools: ['webapp_run'] }
+    const devices = [SERVER, PC, LAP]
+    const asked: string[] = []
+    const hub = {
+      selfId: () => 'dev_srv',
+      list: async () => devices,
+      call: async (ref: string): Promise<ToolOutcome> => {
+        asked.push(ref)
+        return { ok: true, state: 'done', device: 'Desk', text: 'Error: Chat is not signed in. Scan the QR code.' }
+      },
+    } as unknown as DeviceToolHub
+    const [tool] = withLearnedRoute([local], () => hub, { learned, selfId: () => 'dev_srv', siteHere: async () => null })
+    const out = await tool!.run({ app: 'Chat', tool: 'list_chats' }, testContext())
+    expect(asked).toEqual(['dev_pc'])
+    expect(out).toMatch(/^Error: Chat is not signed in on any device that could run it \(chat\.example\)\. Checked: /)
+    expect(out).toContain('Desk: Error: Chat is not signed in')
+    expect(out).toContain('Box (here): Error: Chat is not signed in or still loading')
+    expect(out).toContain('Lap: offline')
   })
 })
