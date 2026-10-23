@@ -79,7 +79,15 @@ interface RowIndex {
   steps: Map<string, ChatItem[]>
   lines: Map<string, ChatItem[]>
   /** When the person last wrote in each chat, and when its agent last replied (helpers' replies not counted). */
-  talk: Map<string, { user: number; agent: number }>
+  talk: Map<string, Talk>
+}
+
+interface Talk {
+  user: number
+  agent: number
+  /** The person's first message in it, which names the chat ('' for none). */
+  title: string
+  titleAt: number
 }
 
 const indexCache = new WeakMap<readonly ChatItem[], RowIndex>()
@@ -99,7 +107,7 @@ function rowIndex(items: readonly ChatItem[]): RowIndex {
     if (list === undefined) map.set(key, [item])
     else list.push(item)
   }
-  const talk = new Map<string, { user: number; agent: number }>()
+  const talk = new Map<string, Talk>()
   for (const item of items) {
     // Each row's kind is read once: this walk runs over every row of a big install on each change.
     const kind = item.kind
@@ -107,9 +115,14 @@ function rowIndex(items: readonly ChatItem[]): RowIndex {
     const helper = metaText(metaOf(item), 'helper')
     if (kind !== 'activity' && helper === '') {
       const chat = chatOfRow(item)
-      const said = talk.get(chat) ?? { user: 0, agent: 0 }
-      if (kind === 'user') said.user = Math.max(said.user, item.createdAt)
-      else said.agent = Math.max(said.agent, item.createdAt)
+      const said = talk.get(chat) ?? { user: 0, agent: 0, title: '', titleAt: Number.POSITIVE_INFINITY }
+      if (kind === 'user') {
+        said.user = Math.max(said.user, item.createdAt)
+        if (item.createdAt < said.titleAt && item.text.trim() !== '') {
+          said.title = item.text
+          said.titleAt = item.createdAt
+        }
+      } else said.agent = Math.max(said.agent, item.createdAt)
       talk.set(chat, said)
     }
     if (kind === 'user') continue
@@ -186,6 +199,8 @@ export interface HelperCard extends HelperView {
    * or finishing). A card closed with its X stays away until this passes the stamp it was closed at.
    */
   activityAt: number
+  /** A project chat's name: the person's first message in it, one line ('' when there is none). */
+  chatTitle: string
 }
 
 function projectMetaOf(meta: Meta): { id: string; name: string; icon: ProjectIcon } | null {
@@ -356,6 +371,7 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       projectChat: '',
       steps: view.activity,
       waiting: false,
+      chatTitle: '',
       activityAt: Math.max(view.startedAt, view.endedAt ?? 0),
     }
   }
@@ -364,7 +380,7 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
   const groups: Array<{ head: HelperCard; children: HelperCard[] }> = []
   const chats = new Set<string>([...projectOf.keys(), ...agentRows.keys()])
   for (const chat of chats) {
-    const said = index.talk.get(chat) ?? { user: 0, agent: 0 }
+    const said = index.talk.get(chat) ?? { user: 0, agent: 0, title: '', titleAt: 0 }
     const agentRow = agentRows.get(chat)
     const agentMeta = agentRow === undefined ? {} : metaOf(agentRow)
     const inChat = helpersIn.get(chat) ?? []
@@ -395,6 +411,8 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
     if ((closed.get(chat) ?? -1) >= activityAt) continue
     const project = projectOf.get(chat)
     const answer = lastAgentLine(lines)
+    // While it works with nothing of its own to say yet, its line says its helpers are on it rather than Starting.
+    const helpersWorking = children.filter((child) => child.state === 'working').length
     const row: ChatItem =
       agentRow ??
       ({
@@ -420,17 +438,19 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       state: running ? 'working' : base.state === 'working' ? 'done' : base.state,
       result: !running && answer !== undefined && answer.createdAt >= endedAtOf(agentMeta) ? answer.text : base.result,
     }
+    const line = projectLine(view, lines)
     const head: HelperCard = {
       ...view,
       kind: 'project-chat',
       parentChat: '',
       row,
       owner: helperOwner(row, projects),
-      line: projectLine(view, lines),
+      line: line === 'Starting' && helpersWorking > 0 ? (helpersWorking === 1 ? '1 helper working' : `${helpersWorking} helpers working`) : line,
       depth: 0,
       projectChat: chat,
       steps: lines,
       waiting,
+      chatTitle: oneLine(said.title, 60),
       activityAt,
     }
     groups.push({ head, children })
@@ -500,5 +520,6 @@ export function cardInfo(card: HelperCard): HelperCardInfo {
     steps,
     waiting: card.waiting,
     activityAt: card.activityAt,
+    title: card.chatTitle,
   }
 }
