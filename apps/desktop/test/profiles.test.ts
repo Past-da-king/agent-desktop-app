@@ -161,7 +161,7 @@ describe('browser sign-ins per profile', () => {
     expect(used).toEqual([partitionFor(work.value.id), BASE_PARTITION, BASE_PARTITION])
   })
 
-  it('runs a learned app only inside a profile that has it, and files one a helper saves in its profile', async () => {
+  it('runs a learned app inside a profile that has it or the browser it is signed in to, and files one a helper saves in its profile', async () => {
     const learned = new LearnedStore(join(dir, 'learned.json'))
     learned.save({ id: 'shop', name: 'Shop', startUrl: 'https://shop.example', about: '', tools: [], trusted: false, updatedAt: 0 })
     const profiles = store()
@@ -175,8 +175,9 @@ describe('browser sign-ins per profile', () => {
     }
     const run = gateTool({ spec: { name: 'webapp_run', description: '', schema: { type: 'object' } }, run: async () => 'ran' }, deps)
     const save = gateTool({ spec: { name: 'webapp_save', description: '', schema: { type: 'object' } }, run: async () => 'Saved Shop with 1 tool' }, deps)
-    expect(await run.run({ app: 'Shop', tool: 'x' }, testContext({ profile: work.value.id }))).toContain('not in your profile (Work)')
-    expect(await run.run({ app: 'Shop', tool: 'x' }, testContext({ profile: GENERAL_ID }))).toContain('not in your profile (General)')
+    expect(await run.run({ app: 'Shop', tool: 'x' }, testContext({ profile: work.value.id }))).toContain("this helper works in profile 'Work'")
+    // General browses in the main agent's browser, where the app was learned (23 Oct 2026: learned apps follow the sign-in).
+    expect(await run.run({ app: 'Shop', tool: 'x' }, testContext({ profile: GENERAL_ID }))).toBe('ran')
     expect(await run.run({ app: 'Shop', tool: 'x' }, testContext())).toBe('ran')
     await save.run({ name: 'Shop' }, testContext({ profile: work.value.id }))
     expect(await run.run({ app: 'Shop', tool: 'x' }, testContext({ profile: work.value.id }))).toBe('ran')
