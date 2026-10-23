@@ -621,11 +621,12 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
 }
 
 /**
- * What the collapsed side panel still shows: what waits on the person, the faces of the helpers working now
- * (a tap opens that helper), and the agent's browser when a page is open.
+ * What the collapsed side panel still shows: what waits on the person, the faces of the side panel's cards (project
+ * chats working or waiting on him, helpers working; a tap opens it), and the agent's browser when a page is open.
  */
 function MiniStrip({ onOpen }: { onOpen: () => void }): JSX.Element {
-  const helpers = useWorkingHelpers()
+  // One face per card group: a project chat (working or waiting on him) or a helper on its own.
+  const helpers = useWorkingHelpers().filter((card) => card.depth === 0)
   const waiting = useWaiting()
   const state = useBrowserState()
   const page = state?.tabs.find((tab) => tab.active) ?? state?.tabs[0]
@@ -642,7 +643,8 @@ function MiniStrip({ onOpen }: { onOpen: () => void }): JSX.Element {
           type="button"
           className="mini-helper"
           title={`${helper.label}: ${helper.line}`}
-          aria-label={`Open ${helper.label}, working`}
+          data-card={helper.id}
+          aria-label={`Open ${helper.label}, ${helper.waiting ? 'your turn' : helper.state === 'working' ? 'working' : 'done'}`}
           onClick={() => {
             // A project chat's face opens that chat in full; a helper's opens its own view in the side panel.
             const target = cardTarget(helper)
@@ -651,7 +653,7 @@ function MiniStrip({ onOpen }: { onOpen: () => void }): JSX.Element {
           }}
         >
           <HelperAvatar row={helper.row} helper={helper} size={30} />
-          <i className="mini-dot" aria-hidden="true" />
+          <i className={`mini-dot${helper.state === 'working' ? '' : ' done'}`} aria-hidden="true" />
         </button>
       ))}
       {helpers.length > 6 ? <span className="small muted">+{helpers.length - 6}</span> : null}

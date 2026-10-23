@@ -1,7 +1,8 @@
 /**
- * The side panel is for what is working right now: a helper or project agent card that finished (done, failed or
- * stopped) leaves at once, in the window and in the feed a linked phone hears. A project chat that was stopped is
- * recorded as stopped, not done.
+ * A helper card that finished (done, failed or stopped) leaves the side panel at once, in the window and in the feed
+ * a linked phone hears. A project chat's card is different (decision of 23 Oct 2026): once its agent has answered it
+ * stays, waiting on the person, until he closes it (test/panel-chat-cards.test.ts); with nothing waiting it leaves.
+ * A project chat that was stopped is recorded as stopped, not done.
  */
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -42,34 +43,49 @@ function projectCard(state: 'working' | 'done' | 'stopped', now: number): ChatIt
   return { id: 'pa-pc1', kind: 'helper', text: 'Fix the checkout', meta: JSON.stringify(meta), createdAt: now - 60_000, updatedAt: now } as ChatItem
 }
 
-describe('finished cards leave the side panel', () => {
-  it('a project agent card shows while it works and is gone the moment it is done or stopped', () => {
+const shop = { id: 'p1', createdAt: 1, updatedAt: 1, name: 'Shop Site', description: '', icon: { glyph: 'globe', color: 'iris' }, path: '', profile: '', hidden: false, chats: ['pc1'] }
+
+function reply(now: number): ChatItem {
+  return { id: 'r1', kind: 'agent', text: 'Done. Checkout is fixed.', meta: JSON.stringify({ chat: 'pc1' }), createdAt: now - 1_000 } as ChatItem
+}
+
+describe('finished cards and the side panel', () => {
+  it('a project chat card stays once it is done and its agent answered, saying it is his turn; stopped with nothing to read, it leaves', () => {
     const now = Date.now()
+    rows.project = [shop]
     rows.chat_item = [projectCard('working', now)]
     const live = renderToStaticMarkup(createElement(HelpersPanel))
     expect(live).toContain('Shop Site')
     expect(live).toContain('1 working')
 
-    rows.chat_item = [projectCard('done', now)]
-    expect(renderToStaticMarkup(createElement(HelpersPanel))).toBe('')
+    rows.chat_item = [projectCard('done', now), reply(now)]
+    const done = renderToStaticMarkup(createElement(HelpersPanel))
+    expect(done).toContain('Shop Site')
+    expect(done).toContain('Your turn')
+    expect(done).toContain('1 replied')
+    expect(done).toContain('Done. Checkout is fixed.')
+
+    // Nothing from its agent to read (it was stopped before it said anything): no card.
     rows.chat_item = [projectCard('stopped', now)]
     expect(renderToStaticMarkup(createElement(HelpersPanel))).toBe('')
   })
 
-  it('the phone feed drops a finished project agent card at once too', async () => {
+  it('the phone feed keeps the answered project chat card too', async () => {
     const store = new Store(':memory:')
     const heard: HelperCardsSnapshot[] = []
     const feed = new HelperFeed({ store, emit: (s) => heard.push(s), debounceMs: 10 })
     cleanups.push(() => feed.dispose())
     cleanups.push(() => store.close())
     const now = Date.now()
+    await store.upsert('project', { id: 'p1', name: 'Shop Site', description: '', icon: { glyph: 'globe', color: 'iris' }, path: '', profile: '', hidden: false, chats: ['pc1'] })
     const working = projectCard('working', now)
     await store.upsert('chat_item', { id: working.id, kind: 'helper', text: working.text, meta: working.meta })
     expect((await feed.snapshot()).cards.map((c) => c.id)).toEqual(['pa-pc1'])
+    await store.upsert('chat_item', { kind: 'agent', text: 'Done. Checkout is fixed.', meta: JSON.stringify({ chat: 'pc1' }) })
     const done = projectCard('done', now)
     await store.upsert('chat_item', { id: done.id, kind: 'helper', text: done.text, meta: done.meta })
-    await waitFor(() => heard.length > 0 && heard[heard.length - 1]!.cards.length === 0, 2000)
-    expect((await feed.snapshot()).cards).toEqual([])
+    await waitFor(() => heard.length > 0 && heard[heard.length - 1]!.cards[0]?.state === 'done', 2000)
+    expect((await feed.snapshot()).cards.map((c) => [c.id, c.waiting, c.done])).toEqual([['pa-pc1', true, 'Done. Checkout is fixed.']])
   })
 })
 
