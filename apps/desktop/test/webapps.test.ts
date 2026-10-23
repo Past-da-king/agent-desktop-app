@@ -91,14 +91,13 @@ describe('page scripts', () => {
 })
 
 describe('learning a site', () => {
-  it('saves only after the person approves, as JSON under userData', async () => {
+  it('saves straight away with no card (ordinary work), as JSON under userData', async () => {
     const { list } = tools()
-    const declined = await toolNamed(list, 'webapp_save').run(
+    const saved1 = await toolNamed(list, 'webapp_save').run(
       { name: 'News Site', start_url: 'https://news.example.com', tools: [readTool] as never },
       testContext({ approve: async () => false }),
     )
-    expect(declined).toContain('Not saved')
-    expect(store.apps()).toHaveLength(0)
+    expect(saved1).toContain('Saved News Site with 1 tool')
     expect(await saveExample(list)).toContain('Saved News Site with 1 tool')
     const saved = JSON.parse(readFileSync(join(dir, 'learned-apps.json'), 'utf8')) as Array<{ id: string; startUrl: string }>
     expect(saved[0]).toMatchObject({ id: 'news_site', startUrl: 'https://news.example.com' })
@@ -148,17 +147,20 @@ describe('running saved tools', () => {
     expect(fake.opened).toEqual([])
   })
 
-  it('a tool that changes things asks first, and a no means it never runs', async () => {
+  it('an ordinary change runs without asking; with Ask before every change on, it asks and a no means it never runs', async () => {
     const posted: string[] = []
     const { list } = tools({ posted })
     await saveExample(list, [writeTool])
     const run = toolNamed(list, 'webapp_run')
-    const no = await run.run({ app: 'News Site', tool: 'post_comment', args: { text: 'hi' } }, testContext({ approve: async () => false }))
-    expect(no).toContain('DECLINED')
-    expect(posted).toEqual([])
-    const yes = await run.run({ app: 'News Site', tool: 'post_comment', args: { text: 'hi' } }, testContext({ approve: async () => true }))
-    expect(yes).toBe('posted')
+    expect(await run.run({ app: 'News Site', tool: 'post_comment', args: { text: 'hi' } }, testContext({ approve: async () => false }))).toBe('posted')
     expect(posted).toEqual(['hi'])
+    store.setAskFirst('news_site', true)
+    const no = await run.run({ app: 'News Site', tool: 'post_comment', args: { text: 'again' } }, testContext({ approve: async () => false }))
+    expect(no).toContain('DECLINED')
+    expect(posted).toEqual(['hi'])
+    const yes = await run.run({ app: 'News Site', tool: 'post_comment', args: { text: 'again' } }, testContext({ approve: async () => true }))
+    expect(yes).toBe('posted')
+    expect(posted).toEqual(['hi', 'again'])
   })
 
   it('a trusted app runs its changes without asking; missing inputs are caught first', async () => {

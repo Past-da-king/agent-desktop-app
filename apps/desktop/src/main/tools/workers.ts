@@ -3,7 +3,7 @@
  * tests it, saves it once with the person's approval, and from then on the app keeps it running. Everything about a
  * source (a chat app, a mailbox, a folder, a page) lives in the script, never in the app.
  */
-import { enumOf, int, normaliseManifest, schema, str, strList, type JsonObject, type Tool, type WorkerInfo, type WorkerManifest } from '@agent/core'
+import { enumOf, int, normaliseManifest, schema, str, strList, type JsonObject, type Tool, type ToolContext, type WorkerInfo, type WorkerManifest } from '@agent/core'
 
 import type { WorkerStore } from '../workers/store'
 import type { Supervisor } from '../workers/supervisor'
@@ -11,6 +11,16 @@ import type { Supervisor } from '../workers/supervisor'
 export interface WorkerToolDeps {
   store: WorkerStore
   supervisor: Supervisor
+  /**
+   * This computer's "Run without asking" choice for commands (Settings). A worker is code that runs on this
+   * computer, so with 'always' adding or changing one needs no card, like a command (main/ask-rule.ts).
+   */
+  commands?: () => 'always' | 'ask' | 'never'
+}
+
+/** Adding or changing a worker asks only when commands on this computer ask too. */
+function workerAsks(deps: WorkerToolDeps, ctx: ToolContext): boolean {
+  return (ctx.shell ?? deps.commands?.() ?? 'ask') !== 'always'
 }
 
 export const WORKER_GUIDE = `WRITING A WORKER (a background process that tells you when something happens)
@@ -34,7 +44,7 @@ KEYS. Declare secret NAMES in the manifest ("secrets": ["CHAT_TOKEN"]). Each arr
 
 RUNTIME. "node" runs on the app's own engine (no install needed): Node 22+, global fetch and WebSocket, no npm packages, so use built-ins only. "python", "powershell" or "command" only when that program is on this computer. mode "stay" stays alive (a socket, a watcher); mode "every" runs, emits, exits, and runs again every everyMinutes (polling).
 
-STEPS. 1) Write it. 2) worker_create (the person approves the code once). 3) Set its keys. 4) worker_test until the events look right. 5) routine_create kind "event" with spec {"worker":"<id>"} and a standing brief. 6) worker_list / worker_logs / worker_events to watch it.
+STEPS. 1) Write it. 2) worker_create (the person approves the code once, unless commands run without asking). 3) Set its keys. 4) worker_test until the events look right. 5) routine_create kind "event" with spec {"worker":"<id>"} and a standing brief. 6) worker_list / worker_logs / worker_events to watch it.
 
 NODE TEMPLATE (mode stay):
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
@@ -77,7 +87,7 @@ function create(deps: WorkerToolDeps): Tool {
   return {
     spec: {
       name: 'worker_create',
-      description: 'Save a new background worker and start it. The person approves the code once. Read worker_guide first.',
+      description: 'Save a new background worker and start it. The person approves the code once, unless commands on this computer run without asking. Read worker_guide first.',
       schema: schema(['name', 'entry', 'files'], MANIFEST_PROPS),
     },
     run: async (input, ctx) => {
@@ -88,7 +98,7 @@ function create(deps: WorkerToolDeps): Tool {
       const files = filesOf(input['files'])
       if (typeof files === 'string') return `Not created: ${files}`
       if (manifest.runtime !== 'command' && files[manifest.entry] === undefined) return `Not created: files must include the entry, ${manifest.entry}.`
-      const approved = await ctx.approve(`Add a background worker: ${manifest.name}`, approvalText(manifest, files, null), 'computer')
+      const approved = !workerAsks(deps, ctx) || (await ctx.approve(`Add a background worker: ${manifest.name}`, approvalText(manifest, files, null), 'computer'))
       if (!approved) return 'The user declined.'
       try {
         deps.store.write(manifest, files)
@@ -122,7 +132,7 @@ function update(deps: WorkerToolDeps): Tool {
       if (typeof files === 'string') return `Not changed: ${files}`
       const before: Record<string, string | null> = {}
       for (const name of Object.keys(files)) before[name] = safeRead(deps, id, name)
-      const approved = await ctx.approve(`Change the worker: ${merged.name}`, approvalText(merged, files, before), 'computer')
+      const approved = !workerAsks(deps, ctx) || (await ctx.approve(`Change the worker: ${merged.name}`, approvalText(merged, files, before), 'computer'))
       if (!approved) return 'The user declined.'
       try {
         deps.store.write({ ...merged, updatedAt: Date.now() }, files)

@@ -203,7 +203,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...(deps.searchChats === undefined ? [] : chatTools({ store: deps.store, search: deps.searchChats })), // chats_search, chat_read
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
     ...routineTools(deps.store, deps.now), // routine_create, routine_list, routine_update, routine_delete
-    ...backgroundWorkerTools(deps.workers), // worker_guide, worker_create, worker_update, worker_test, worker_list, worker_logs, worker_events, worker_control, worker_delete, worker_secret_set
+    ...backgroundWorkerTools(deps.workers === undefined ? undefined : { commands: () => settings.get().shell, ...deps.workers }), // worker_guide, worker_create, worker_update, worker_test, worker_list, worker_logs, worker_events, worker_control, worker_delete, worker_secret_set
     ...fileTools({
       settings,
       ...(deps.filePicks === undefined ? {} : { picks: deps.filePicks }),

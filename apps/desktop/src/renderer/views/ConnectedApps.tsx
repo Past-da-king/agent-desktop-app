@@ -426,6 +426,7 @@ function AccountLine({
               onChange={(change) => setRules({ ...account.rules, change })}
             />
           </div>
+          {account.rules.change === 'allow' ? <p className="cacct-note">Deleting, paying and anything that cannot be undone still asks you.</p> : null}
           {accountChips(account, profiles)}
         </div>
       )}
@@ -766,7 +767,7 @@ export function LearnedAppsSection({ bare = false }: { bare?: boolean }): JSX.El
               <b>Nothing learned yet</b>
               <span>
                 Ask your agent to learn a site, for example: Learn news.ycombinator.com so you can read the front page. It maps the
-                site once in its own browser and saves tools that read it. Anything that changes something asks you first.
+                site once in its own browser and saves tools for it. Deleting, paying and anything that cannot be undone asks you first.
               </span>
             </div>
           </div>
@@ -848,14 +849,14 @@ function LearnedRow({ app, profiles, onRemove }: { app: LearnedAppInfo; profiles
           {changes ? (
             <div className="learned-trust">
               <span>
-                <b>Let changes run without asking</b>
-                <span>Off: you approve each change in Chat first</span>
+                <b>Ask before every change</b>
+                <span>Off: only deleting, paying and anything that cannot be undone asks you</span>
               </span>
               <Switch
-                on={app.trusted}
-                label={`Let ${app.name} changes run without asking`}
+                on={app.askFirst === true}
+                label={`Ask before every ${app.name} change`}
                 onToggle={(next) => {
-                  agent.apps.setTrusted(app.id, next).catch((cause: unknown) => {
+                  agent.apps.setAskFirst(app.id, next).catch((cause: unknown) => {
                     toast(errorText(cause, 'That could not be saved.'))
                   })
                 }}

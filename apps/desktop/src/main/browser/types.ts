@@ -39,6 +39,11 @@ export interface BrowserDriver {
    * to it, or the site's own stored data), i.e. the site has been signed in to there. Optional.
    */
   hasSiteData?(partition: string, url: string): Promise<boolean>
+  /**
+   * Learned apps: drive the tab already on this site in the agent's partition (one tab per site; duplicates are
+   * closed). False when no tab is on the site yet. Optional.
+   */
+  useSiteTab?(url: string): boolean
 }
 
 /** Stands in until the window exists, and in tests that do not care about the browser. */
