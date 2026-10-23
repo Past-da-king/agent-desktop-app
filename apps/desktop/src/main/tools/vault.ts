@@ -12,15 +12,18 @@
 import { VAULT_DEFAULT_FIELD, VAULT_KINDS, bool, enumOf, int, schema, str, strList, type JsonObject, type Tool, type VaultItemMeta, type VaultKind } from '@agent/core'
 
 import { isBrowserPro, type BrowserDriver } from '../browser/types'
+import type { BrowserVault } from '../vault/browser-vault'
 import type { VaultStore } from '../vault/store'
 
 export interface VaultToolDeps {
   vault: VaultStore
   browser?: BrowserDriver
+  /** The Vault in the browser, for passkeys. */
+  browserVault?: BrowserVault
 }
 
 export function vaultTools(deps: VaultToolDeps): Tool[] {
-  return [listTool(deps), fillTool(deps), loginTool(deps), saveTool(deps), revealTool(deps)]
+  return [listTool(deps), fillTool(deps), loginTool(deps), saveTool(deps), revealTool(deps), ...(deps.browserVault === undefined ? [] : [passkeyTool(deps, deps.browserVault)])]
 }
 
 const PLACEHOLDER_HELP =
@@ -32,6 +35,7 @@ function line(item: VaultItemMeta): string {
   if (item.hosts.length > 0) bits.push(`hosts ${item.hosts.join(' ')}`)
   bits.push(`fields ${item.fields.length === 0 ? '(none)' : item.fields.join(', ')}`)
   if (item.tags.length > 0) bits.push(`tags ${item.tags.join(', ')}`)
+  if (item.passkey !== undefined) bits.push(`passkey for ${item.passkey.rpId}`)
   if (item.revealable) bits.push('revealable')
   return bits.join(' | ')
 }
@@ -158,7 +162,7 @@ function loginTool(deps: VaultToolDeps): Tool {
       }
       let ref = text(input['item']).trim()
       if (ref === '') {
-        const matches = deps.vault.list(ctx.profile).filter((item) => item.kind === 'login' && item.hosts.some((h) => host === h || host.endsWith(`.${h}`) || h.endsWith(`.${host}`)))
+        const matches = deps.vault.loginsFor(host, ctx.profile)
         if (matches.length === 0) return `No vault login is for ${host}. vault_list shows what is there; pass item.`
         if (matches.length > 1) return `${matches.length} vault logins are for ${host}: ${matches.map((m) => `${m.ref} (${m.username || 'no username'})`).join('; ')}. Pass item.`
         ref = matches[0]!.ref
@@ -260,7 +264,7 @@ function revealTool(deps: VaultToolDeps): Tool {
     spec: {
       name: 'vault_reveal',
       description:
-        'Show yourself a vault value. Only when there is truly no other way: placeholders, vault_fill and vault_login use a value without seeing it. Asks the person first unless the item is marked revealable. Every reveal is logged. Never repeat the value in a reply, a memory or a file.',
+        'Show yourself a vault value. Only when there is truly no other way: placeholders, vault_fill and vault_login use a value without seeing it. Asks the person first (unless they switched asking off or marked the item revealable). Every reveal is logged. Never repeat the value in a reply, a memory or a file.',
       schema: schema(['item', 'why'], {
         item: str('The vault item: its ref, id or exact name'),
         field: str('Which field, default the main secret'),
@@ -272,12 +276,43 @@ function revealTool(deps: VaultToolDeps): Tool {
       const hit = deps.vault.resolve(text(input['item']), field === '' ? undefined : field, ctx.profile)
       if ('error' in hit) return hit.error
       const why = text(input['why']).trim() || 'No reason given.'
-      if (!hit.item.revealable) {
+      // Asking is the default (Settings > Vault); the person can switch it off, or allow this one item.
+      if (!hit.item.revealable && deps.vault.asks('reveal')) {
         const ok = await ctx.approve(`Show ${ctx.agentLabel} the ${hit.field} of "${hit.item.name}"`, `The agent asks to SEE this value, not just use it.\nWhy: ${why}\nIt is logged in the Vault.`)
         if (!ok) return 'The person did not approve showing it. Use it through a placeholder, vault_fill or vault_login instead.'
       }
       deps.vault.log(hit.item.id, 'reveal', ctx.agentLabel)
       return `${hit.item.ref}.${hit.field}: ${hit.value}\n(Do not repeat it in a reply, memory or file. It is kept out of the saved chat.)`
+    },
+  }
+}
+
+function passkeyTool(deps: VaultToolDeps, browserVault: BrowserVault): Tool {
+  return {
+    spec: {
+      name: 'vault_passkey',
+      description:
+        "Get the person's yes to sign in (or register) with a passkey from the Vault on a site, in your browser, for the next 3 minutes. Then click the site's passkey button: the browser answers with the vault's key. Without it a passkey request from you is refused (unless the person switched asking off).",
+      schema: schema(['site', 'why'], {
+        site: str('The site, e.g. example.com'),
+        why: str('Why, in one line, for the person'),
+      }),
+    },
+    run: async (input, ctx) => {
+      const raw = text(input['site']).trim().toLowerCase()
+      let host = raw
+      try {
+        host = new URL(raw.includes('://') ? raw : `https://${raw}`).hostname
+      } catch {
+        return 'Pass the site, e.g. example.com.'
+      }
+      const keys = deps.vault.list(ctx.profile).filter((item) => item.kind === 'passkey' && item.passkey !== undefined && (host === item.passkey.rpId || host.endsWith(`.${item.passkey.rpId}`) || item.passkey.rpId.endsWith(`.${host}`)))
+      if (deps.vault.asks('passkey')) {
+        const ok = await ctx.approve(`Let ${ctx.agentLabel} use a passkey on ${host}`, `${keys.length === 0 ? 'There is no passkey for it in the Vault yet: this lets the agent make one there.' : `The Vault has ${keys.length} passkey${keys.length === 1 ? '' : 's'} for it.`}\nWhy: ${text(input['why']).trim() || 'No reason given.'}\nFor the next 3 minutes.`)
+        if (!ok) return 'The person did not allow it. Do not try the passkey.'
+      }
+      browserVault.arm(host)
+      return `You may use a passkey on ${host} for 3 minutes${keys.length === 0 ? ' (none saved yet: registering one saves it in the Vault)' : ''}. Click the site's passkey button now.`
     },
   }
 }

@@ -36,6 +36,7 @@ import {
   snapshotScript,
 } from '../main/browser/snapshot'
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, ViewRequest } from '../main/browser/types'
+import type { BrowserVault } from '../main/vault/browser-vault'
 
 const NO_PAGE = 'No page is open yet. Use browser_open with a web address.'
 const MAX_TABS = 6
@@ -114,8 +115,13 @@ class TabSocket implements DebuggerLike {
       else waiter.resolve(message.result)
       return
     }
-    if (typeof message.method === 'string') for (const listener of this.listeners.get(message.method) ?? []) listener(message.params ?? {})
+    if (typeof message.method === 'string') {
+      for (const listener of this.listeners.get(message.method) ?? []) listener(message.params ?? {})
+      for (const listener of this.anyListeners) listener(message.method, message.params ?? {})
+    }
   }
+
+  readonly anyListeners = new Set<(method: string, params: Record<string, unknown>) => void>()
 
   isAttached(): boolean {
     return this.open
@@ -179,6 +185,12 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private readonly idleMs: number
   private styles: string[] = []
+  private vault: BrowserVault | null = null
+
+  /** The Vault in every tab from now on: agents' passkeys (after the person's yes) and sign-ins. */
+  setVault(vault: BrowserVault): void {
+    this.vault = vault
+  }
 
   constructor(private readonly options: HeadlessBrowserOptions) {
     this.idleMs = options.idleMs ?? 10 * 60_000
@@ -283,6 +295,21 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
     await cdp.send('Page.enable')
     await cdp.send('Runtime.enable')
     for (const css of this.styles) await this.injectStyle(cdp, css)
+    if (this.vault !== null) {
+      // No person at a server's browser: only agents use it, so a passkey needs the person's yes (vault_passkey).
+      await this.vault
+        .attach(
+          {
+            send: (method, params) => socket.sendCommand(method, params ?? {}),
+            onEvent: (listener) => {
+              socket.anyListeners.add(listener)
+              return () => socket.anyListeners.delete(listener)
+            },
+          },
+          { person: () => false },
+        )
+        .catch(() => undefined)
+    }
     const tab: Tab = { id: target.id, socket, cdp, url: '' }
     this.tabs.set(owner, tab)
     return tab

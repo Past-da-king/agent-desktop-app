@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS, pickModel, resolvePick, vaultRefOf, type VaultAuditEntry, type VaultItemMeta } from '@agent/core'
+import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS, pickModel, resolvePick, vaultRefOf, DEFAULT_VAULT_PREFS, type VaultAuditEntry, type VaultItemMeta, type VaultPrefs } from '@agent/core'
 import { mockDevices } from './mock-devices'
 import type {
   WorkerEvent,
@@ -1842,6 +1842,7 @@ function mockVault(): AgentApi['vault'] {
   const items: Item[] = [
     make('v_000001', 'Example AI key', 'api_key', '', 'https://console.example.com', { key: 'demo-key-123456' }, ['ai']),
     make('v_000002', 'Example site login', 'login', 'me@example.com', 'https://login.example.com', { password: 'demo-pass-123' }),
+    { ...make('v_000003', 'Example passkey', 'passkey', 'me@example.com', 'https://login.example.com', { privateKey: 'demo-private' }), passkey: { rpId: 'example.com', credentialId: 'AAAA', userHandle: 'AA==', signCount: 2 } },
   ]
   const meta = (item: Item): VaultItemMeta => {
     const { values, ...rest } = item
@@ -1853,7 +1854,14 @@ function mockVault(): AgentApi['vault'] {
     return item
   }
   const audit: VaultAuditEntry[] = []
+  let prefs: VaultPrefs = { ...DEFAULT_VAULT_PREFS, never: [] }
   return {
+    prefs: async () => prefs,
+    setPrefs: async (patch) => {
+      prefs = { ...prefs, ...patch }
+      changed()
+      return prefs
+    },
     list: async () => items.map(meta).sort((a, b) => a.name.localeCompare(b.name)),
     save: async (input) => {
       const existing = input.id === undefined ? undefined : items.find((item) => item.id === input.id)

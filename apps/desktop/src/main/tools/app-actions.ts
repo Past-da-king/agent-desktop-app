@@ -237,6 +237,8 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'vault.reveal': tool('See a vault value (Settings > Vault > Show)', 'vault_reveal'),
   'vault.copy': no('Copy a vault value (Settings > Vault > Copy)', "it puts a secret on the person's clipboard; use a placeholder or vault_fill"),
   'vault.audit': free('Who showed or copied what (Settings > Vault > History)', 'limit?'),
+  'vault.prefs': free('When the Vault asks (Settings > Vault)'),
+  'vault.setPrefs': ask('Change when the Vault asks (Settings > Vault switches)', 'patch'),
   'vault.importAos': free('Import the A.O.S credential vault (Settings > Vault > Import from A.O.S)', 'folder?'),
 }
 

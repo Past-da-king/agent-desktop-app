@@ -523,6 +523,8 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       copy: () => notHere('Copying a vault value'),
       audit: async () => [],
       importAos: () => notHere('Importing a vault'),
+      prefs: () => wire.call('vault.prefs', []) as never,
+      setPrefs: () => notHere('Changing when the Vault asks'),
       onChange: (callback) => wire.on(VAULT_EVENTS.changed, () => callback()),
     },
   }

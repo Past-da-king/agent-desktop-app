@@ -43,7 +43,7 @@ import type {
   WorkerLogLine,
 } from '@agent/core'
 import type { CallHandoffResult, CallTarget, LiveTokenResult } from '@agent/core'
-import type { VaultAuditEntry, VaultImportResult, VaultItemMeta } from '@agent/core'
+import type { VaultAuditEntry, VaultImportResult, VaultItemMeta, VaultPrefs } from '@agent/core'
 import type { DeviceJoinResult, DeviceRow, DevicesStatus, HelperCardsSnapshot, PairingOfferInfo } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
@@ -334,6 +334,8 @@ const api: AgentApi = {
     copy: (id, field) => call<void>(VAULT_CHANNELS.copy, id, field ?? ''),
     audit: (limit) => call<VaultAuditEntry[]>(VAULT_CHANNELS.audit, limit ?? 100),
     importAos: (folder) => call<VaultImportResult>(VAULT_CHANNELS.importAos, folder ?? ''),
+    prefs: () => call<VaultPrefs>(VAULT_CHANNELS.prefs),
+    setPrefs: (patch) => call<VaultPrefs>(VAULT_CHANNELS.setPrefs, patch),
     onChange: (callback) => on<null>(VAULT_EVENTS.changed, () => callback()),
   },
 }

@@ -44,6 +44,7 @@ import { appActionTools } from '../tools/app-actions'
 import { vaultTools } from '../tools/vault'
 import { guardTools } from '../vault/guard'
 import type { VaultStore } from '../vault/store'
+import type { BrowserVault } from '../vault/browser-vault'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -87,6 +88,8 @@ export interface ToolsetDeps extends CoreToolDeps {
    * its input and no vault value comes back out. Without it there is no vault.
    */
   vault?: VaultStore
+  /** The Vault in the browser: vault_passkey arms a passkey for an agent after the person's yes. */
+  browserVault?: BrowserVault
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -206,7 +209,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     // The developer tools replace the learned apps' in-page network watcher: every tab records from the start.
     ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
     ...(deps.appControl?.invoker === undefined ? [] : appActionTools({ invoker: deps.appControl.invoker })), // app_actions, app_action: every button in the window
-    ...(deps.vault === undefined ? [] : vaultTools({ vault: deps.vault, ...(deps.browser === undefined ? {} : { browser: deps.browser }) })), // vault_list, vault_fill, vault_login, vault_save, vault_reveal
+    ...(deps.vault === undefined ? [] : vaultTools({ vault: deps.vault, ...(deps.browser === undefined ? {} : { browser: deps.browser }), ...(deps.browserVault === undefined ? {} : { browserVault: deps.browserVault }) })), // vault_list, vault_fill, vault_login, vault_save, vault_reveal
     ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
   ]
 }
