@@ -11,7 +11,8 @@
  */
 import { clipResult, enumOf, int, resultLimitOf, schema, str, type JsonObject, type JsonValue, type Tool, type ToolContext } from '@agent/core'
 
-import { netClear, netLog, netStart, netStop, runScript, syntaxError } from '../apps/page-js'
+import { FILE_KEY, FILE_TYPE, prepareFileArgs, runTimeoutFor, sendFilesToPage, sizeText, type FileArg } from '../apps/page-files'
+import { netClear, netLog, netStart, netStop, runScript, runScriptWithFiles, syntaxError } from '../apps/page-js'
 import { MAX_APPS, MAX_JS, MAX_TOOLS, hostOf, slugOf, type LearnedApp, type LearnedStore, type LearnedTool } from '../apps/store'
 import type { BrowserDriver } from '../browser/types'
 import { checkBrowserUrl } from '../browser/url-policy'
@@ -27,6 +28,10 @@ The idea: map the app once, then write tools so next time you call a tool instea
 5. TEST BEFORE SAVING. Run the body with browser_eval first (set const args = {...} at the top for the test), then save with webapp_save, then run each tool once with webapp_test. If a tool fails, fix it and save again (same name replaces).
 6. IT SAVES FOR NEXT TIME. webapp_save asks the person to approve the tool set. After that you and your helpers call them with webapp_run. If the site changes and a tool breaks, remap that tool and save again.
 
+FILES (upload, send a photo, video or document): declare the input with type "file". Whoever runs the tool passes the file's full path on this computer (or {"${'$'}file": "C:/path/clip.mp4"} for any input), and the app itself reads the file and moves it into the page in chunks: in the body that input is a real File (a Blob with .name, .type and .size), however big (up to 1 GB). Use it as the site would: new FormData().append('file', args.video), await args.video.arrayBuffer(), or hand it to the site's own upload code. Never make a tool take file bytes as base64: that sends the whole file through the model.
+
+WHO MAY RUN THEM: a learned app follows the browser sign-in. You, General helpers and routines browse in the same browser, so they can all run what is signed in there; a helper in another profile runs the apps in its profile's list plus any whose site is signed in in its profile's browser.
+
 BACKSLASHES: your tool call is JSON, and backslashes inside code are the main reason a save fails. Write code that needs none: [0-9] not \\d, [.] not \\., [/] not \\/, single quotes inside selectors, and new RegExp(...) built from those.
 
 Rules: never put a password, token or cookie value in a tool or in your reply. Reading is fine; anything that sends, posts or deletes on the person's behalf goes through approval. If a site's terms forbid automation, or it needs a CAPTCHA every time, say so instead of working around it.`
@@ -38,16 +43,19 @@ export const EXAMPLE =
 export interface PageRunner {
   /** Get the browser onto the app's site. Signing in is the person's job. */
   ensure(app: LearnedApp): Promise<void>
-  /** Runs a tool body that sees `args`; resolves {ok, v} or {ok:false, e}. */
-  run(body: string, args: JsonObject): Promise<{ ok: boolean; v?: unknown; e?: string }>
+  /**
+   * Runs a tool body that sees `args`; resolves {ok, v} or {ok:false, e}. With `files` (apps/page-files.ts)
+   * the files are sent into the page first and the body sees each as a File.
+   */
+  run(body: string, args: JsonObject, files?: FileArg[]): Promise<{ ok: boolean; v?: unknown; e?: string }>
   /** Runs raw script text in the page (browser_eval, browser_network). */
-  evaluate(code: string): Promise<unknown>
+  evaluate(code: string, timeoutMs?: number): Promise<unknown>
 }
 
 export function browserRunner(browser: BrowserDriver): PageRunner {
-  const evaluate = async (code: string): Promise<unknown> => {
+  const evaluate = async (code: string, timeoutMs?: number): Promise<unknown> => {
     if (browser.evaluateRaw === undefined) throw new Error('The browser is not open right now.')
-    return browser.evaluateRaw(code)
+    return timeoutMs === undefined ? browser.evaluateRaw(code) : browser.evaluateRaw(code, timeoutMs)
   }
   return {
     async ensure(app) {
@@ -56,9 +64,12 @@ export function browserRunner(browser: BrowserDriver): PageRunner {
       const onSite = host !== '' && (now === host || now.endsWith(`.${host}`))
       if (!onSite) await browser.open(app.startUrl)
     },
-    async run(body, args) {
+    async run(body, args, files = []) {
       try {
-        const out = await evaluate(runScript(body, args))
+        if (files.length > 0) await sendFilesToPage(files, evaluate)
+        const out = await (files.length === 0
+          ? evaluate(runScript(body, args))
+          : evaluate(runScriptWithFiles(body, args, files.map((f) => f.key)), runTimeoutFor(files)))
         const o = out !== null && typeof out === 'object' ? (out as Record<string, unknown>) : {}
         if (o['ok'] === true) return { ok: true, v: o['v'] }
         return { ok: false, e: typeof o['e'] === 'string' ? o['e'] : 'failed' }
@@ -72,7 +83,7 @@ export function browserRunner(browser: BrowserDriver): PageRunner {
 
 const TOOL_NAME = /^[a-z][a-z0-9_]{1,29}$/
 const PARAM_NAME = /^[a-zA-Z][a-zA-Z0-9_]{0,29}$/
-const PARAM_TYPES = new Set(['string', 'number', 'integer', 'boolean'])
+const PARAM_TYPES = new Set(['string', 'number', 'integer', 'boolean', FILE_TYPE])
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -99,7 +110,7 @@ export function problem(t: LearnedTool): string | null {
   if (t.js.length > MAX_JS) return `${t.name}: the js is too long (${t.js.length} characters, limit ${MAX_JS}). Split it into smaller tools.`
   for (const [key, value] of Object.entries(t.params)) {
     if (!PARAM_NAME.test(key) || !PARAM_TYPES.has(text(asObject(value)['type']))) {
-      return `${t.name}: each input needs a plain name and a type of string, number, integer or boolean.`
+      return `${t.name}: each input needs a plain name and a type of string, number, integer, boolean or file.`
     }
   }
   if (t.required.some((r) => !(r in t.params))) return `${t.name}: required lists an input that is not defined.`
@@ -129,10 +140,16 @@ export function toolFromInput(raw: unknown): LearnedTool {
 export async function callLearned(app: LearnedApp, tool: LearnedTool, input: JsonObject, ctx: ToolContext, runner: PageRunner): Promise<string> {
   const missing = tool.required.filter((r) => input[r] === undefined || input[r] === null)
   if (missing.length > 0) return `Missing input: ${missing.join(', ')}.`
-  if (!tool.readOnly && !app.trusted) {
+  // Files on this computer named in the inputs: checked now, sent into the page by the app itself (page-files.ts).
+  const prepared = await prepareFileArgs(tool.params, input)
+  if (!prepared.ok) return `Error: ${prepared.error}`
+  const files = prepared.files
+  // Handing a file from this computer to a site asks like a change does, unless the person trusts the app.
+  if ((!tool.readOnly || files.length > 0) && !app.trusted) {
     const keys = Object.keys(input)
     const what = keys.length === 0 ? 'No inputs.' : keys.map((k) => `${k}: ${JSON.stringify(input[k]).slice(0, 600)}`).join('\n')
-    const yes = await ctx.approve(`${app.name}: ${tool.description.slice(0, 90)}`, what)
+    const sent = files.length === 0 ? '' : `\nFiles from this computer it hands to the site: ${files.map((f) => `${f.name} (${sizeText(f.size)})`).join(', ')}`
+    const yes = await ctx.approve(`${app.name}: ${tool.description.slice(0, 90)}`, `${what}${sent}`)
     if (!yes) return 'DECLINED, or nobody was around to approve. Do not do it.'
   }
   const label = `${app.name}: ${tool.name.replace(/_/g, ' ')}`
@@ -140,7 +157,7 @@ export async function callLearned(app: LearnedApp, tool: LearnedTool, input: Jso
   let out: string
   try {
     await runner.ensure(app)
-    out = resultText(await runner.run(tool.js, input), resultLimitOf(ctx, 20_000))
+    out = resultText(await (files.length === 0 ? runner.run(tool.js, input) : runner.run(tool.js, prepared.args, files)), resultLimitOf(ctx, 20_000))
   } catch (cause) {
     out = `Error: could not run ${tool.name} (${cause instanceof Error ? cause.message : String(cause)}).`
   }
@@ -204,7 +221,11 @@ function saveTool(store: LearnedStore): Tool {
     properties: {
       name: str('Tool name: lower-case letters, digits, underscores, 2 to 30 characters, e.g. search_items'),
       description: str('What it does and when to use it, one or two lines'),
-      params: { type: 'object', description: 'Inputs: {inputName: {type: string|number|integer|boolean, description: ...}}' },
+      params: {
+        type: 'object',
+        description:
+          'Inputs: {inputName: {type: string|number|integer|boolean|file, description: ...}}. type file: the caller passes a full path on this computer and the body gets a File (name, type, bytes), however big; never take file bytes as base64.',
+      },
       required: { type: 'array', items: { type: 'string' } },
       js: str('The BODY of an async function. It sees `args` and returns something JSON-able. No function wrapper.'),
       read_only: { type: 'boolean', description: 'true only if it changes nothing. Sending, posting, deleting, buying: false.' },
@@ -272,12 +293,12 @@ function runTool(store: LearnedStore, runner: PageRunner, name: 'webapp_run' | '
       name,
       description:
         name === 'webapp_run'
-          ? 'Run one tool of a web app you taught yourself (see webapp_list). Tools that only read run straight away; tools that change things ask the person first, unless they trust the app.'
-          : 'Run one tool of a saved web app now, to check it works. Same rules as webapp_run: tools that change things ask the person first.',
+          ? `Run one tool of a web app you taught yourself (see webapp_list). Tools that only read run straight away; tools that change things ask the person first, unless they trust the app. A file on this computer goes in as its full path (an input of type file) or as {"${FILE_KEY}": "C:/path/video.mp4"}: the app moves the bytes into the page itself, any size up to 1 GB, never base64 through you.`
+          : 'Run one tool of a saved web app now, to check it works. Same rules as webapp_run: tools that change things ask the person first; files go in as a path.',
       schema: schema(['app', 'tool'], {
         app: str("The app's name"),
         tool: str("The tool's name, e.g. search_items"),
-        args: { type: 'object', description: 'Inputs, e.g. {"query":"rust"}' },
+        args: { type: 'object', description: `Inputs, e.g. {"query":"rust"}. A file: its full path for an input of type file, or {"${FILE_KEY}": "C:/path/file.pdf"} for any input.` },
       }),
     },
     run: async (input, ctx) => {

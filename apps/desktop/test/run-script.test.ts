@@ -158,7 +158,7 @@ describe('safety inside a script', () => {
       return { slack, shop }`
     const helper = await runTool(tools).run({ code }, testContext({ profile: work.value.id }))
     expect(helper).toContain('has no Slack account')
-    expect(helper).toContain('not in your profile (Work)')
+    expect(helper).toContain("this helper works in profile 'Work'")
     const general = await runTool(tools).run({ code }, testContext({ profile: GENERAL_ID }))
     expect(general).toContain('none of the person')
     // The main agent has no profile: the same script runs the learned app.

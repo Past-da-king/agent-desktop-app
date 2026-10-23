@@ -160,7 +160,7 @@ function workerToolsets(deps: ToolsetDeps): Tool[] {
   const apps = deps.apps
   // Outermost, so everything a tool does (the profile switch included) is done as its own agent.
   if (apps === undefined) return asOwner(tools)
-  // Each helper's profile: its own browser sign-ins and only its learned apps (profile-gate.ts).
+  // Each helper's profile: its own browser sign-ins, and the learned apps of its profile or signed in in its browser (profile-gate.ts).
   const browser = deps.browser
   return asOwner(tools.map((tool) =>
     gateTool(tool, {
@@ -169,6 +169,9 @@ function workerToolsets(deps: ToolsetDeps): Tool[] {
       ...(browser?.usePartition === undefined ? {} : { usePartition: (partition: string) => browser.usePartition?.(partition) }),
       ...(deps.learned === undefined ? {} : { learned: deps.learned }),
       addLearned: (profileId, appId) => apps.profiles.setLearned(profileId, appId, true),
+      profiles: () => apps.profiles.all(),
+      // Learned apps follow the browser sign-in: the partition's own session says whether the site is signed in.
+      ...(browser?.hasSiteData === undefined ? {} : { siteSignedIn: (partition: string, url: string) => browser.hasSiteData?.(partition, url) ?? Promise.resolve(false) }),
     }),
   ))
 }

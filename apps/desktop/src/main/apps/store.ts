@@ -158,7 +158,15 @@ export interface LearnedApp {
   updatedAt: number
   /** The site's own icon, fetched once and kept (a data: URL), so the list shows it with no network call. */
   icon?: string
+  /**
+   * The browser partitions it was saved or run in successfully, i.e. where its site is signed in. Any agent
+   * browsing in one of them may run it (tools/profile-gate.ts). Absent on apps saved before 0.2.71.
+   */
+  partitions?: string[]
 }
+
+/** At most this many partitions are remembered per app (one per profile browser is plenty). */
+export const MAX_PARTITIONS = 32
 
 export const MAX_APPS = 30
 export const MAX_TOOLS = 40
@@ -211,6 +219,9 @@ function toApp(raw: unknown): LearnedApp | null {
     trusted: o['trusted'] === true,
     updatedAt: typeof o['updatedAt'] === 'number' ? o['updatedAt'] : 0,
     ...(typeof o['icon'] === 'string' && o['icon'].startsWith('data:image/') ? { icon: o['icon'] } : {}),
+    ...(Array.isArray(o['partitions'])
+      ? { partitions: [...new Set(o['partitions'].filter((p): p is string => typeof p === 'string' && p !== ''))].slice(0, MAX_PARTITIONS) }
+      : {}),
   }
 }
 
@@ -243,8 +254,29 @@ export class LearnedStore {
   /** Saving over an app of the same id replaces its tools but keeps what the person decided about trust. */
   save(app: LearnedApp): void {
     const old = this.list.find((a) => a.id === app.id)
-    const next = { ...app, trusted: old?.trusted ?? false, updatedAt: this.now(), ...(old?.icon === undefined ? {} : { icon: old.icon }) }
+    const partitions = [...new Set([...(old?.partitions ?? []), ...(app.partitions ?? [])])].slice(0, MAX_PARTITIONS)
+    const next = {
+      ...app,
+      trusted: old?.trusted ?? false,
+      updatedAt: this.now(),
+      ...(old?.icon === undefined ? {} : { icon: old.icon }),
+      ...(partitions.length === 0 ? {} : { partitions }),
+    }
     this.list = [...this.list.filter((a) => a.id !== app.id), next]
+    this.persist()
+  }
+
+  /**
+   * Remembers that an app worked in a browser partition (its site is signed in there). Written only when new.
+   * `seed`: where an app saved before this was recorded counts as signed in, kept when the first one is noted.
+   */
+  notePartition(id: string, partition: string, seed: string[] = []): void {
+    const app = this.list.find((a) => a.id === id)
+    if (app === undefined || partition === '') return
+    const known = app.partitions ?? seed
+    if (app.partitions !== undefined && known.includes(partition)) return
+    const partitions = [...new Set([...known, partition])].slice(-MAX_PARTITIONS)
+    this.list = this.list.map((a) => (a.id === id ? { ...a, partitions } : a))
     this.persist()
   }
 

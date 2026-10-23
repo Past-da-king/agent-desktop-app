@@ -9,6 +9,8 @@ import { Script } from 'node:vm'
 
 import type { JsonObject } from '@agent/core'
 
+import { FILE_REVIVE } from './page-files'
+
 /**
  * A saved tool's body (the text of an async function that sees `args`) wrapped so the page resolves
  * with {ok:true,v} or {ok:false,e}. The text is injected by the app itself, so a site's policy does not
@@ -21,6 +23,25 @@ export function runScript(body: string, args: JsonObject): string {
     '\n})(' +
     JSON.stringify(args) +
     ').then(function(v){return {ok:true,v:v===undefined?null:v}},function(e){return {ok:false,e:String(e&&e.message||e)}})'
+  )
+}
+
+/**
+ * runScript for a call that carries files (apps/page-files.ts): the files were sent into the page first;
+ * each {__agentFile:key} in args becomes a File before the body runs, and they are dropped after it.
+ */
+export function runScriptWithFiles(body: string, args: JsonObject, keys: string[]): string {
+  return (
+    '(function(){var keys=' +
+    JSON.stringify(keys) +
+    ';function drop(r){var F=window.__agentFiles||{};keys.forEach(function(k){delete F[k]});return r}var a;try{a=(' +
+    FILE_REVIVE +
+    ')(' +
+    JSON.stringify(args) +
+    ')}catch(e){return Promise.resolve(drop({ok:false,e:String(e&&e.message||e)}))}' +
+    'return (async function(args){\n' +
+    body +
+    '\n})(a).then(function(v){return drop({ok:true,v:v===undefined?null:v})},function(e){return drop({ok:false,e:String(e&&e.message||e)})})})()'
   )
 }
 

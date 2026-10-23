@@ -1609,6 +1609,34 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     return emails
   }
 
+  /**
+   * Learned apps: whether a profile's browser holds site data for an address, read from the session itself:
+   * cookies that would be sent to it, or the site's own IndexedDB (sites like chat apps keep their sign-in
+   * there, not in cookies). Never reads a value, only whether something is there.
+   */
+  async hasSiteData(partition: string, url: string): Promise<boolean> {
+    let origin: URL
+    try {
+      origin = new URL(url)
+    } catch {
+      return false
+    }
+    const session = electronSession.fromPartition(partition)
+    try {
+      if ((await session.cookies.get({ url: origin.origin })).length > 0) return true
+    } catch {
+      // A session that cannot list its cookies is checked by its stored data below.
+    }
+    const dir = session.getStoragePath()
+    if (dir === null || dir === undefined) return false
+    const key = `${origin.protocol.replace(':', '')}_${origin.hostname}_${origin.port === '' ? '0' : origin.port}`
+    try {
+      return statSync(join(dir, 'IndexedDB', `${key}.indexeddb.leveldb`)).isDirectory()
+    } catch {
+      return false
+    }
+  }
+
   /** Signs a browser profile out of everything: its cookies, storage and caches go, and its open tabs reload. */
   async signOutPartition(partition: string): Promise<void> {
     const session = electronSession.fromPartition(partition)
