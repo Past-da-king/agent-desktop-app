@@ -49,6 +49,12 @@ export const DEFAULT_SHARE: Readonly<Record<DeviceToolGroup, boolean>> = {
 export const DEFAULT_DEADLINE_MS = 120_000
 export const BROWSER_DEADLINE_MS = 600_000
 const QUEUE_TTL_MS = 10 * 60_000
+/**
+ * Another node heard from this recently counts as online even with no link from this side: a computer that dials in
+ * to a server the server cannot dial back (a firewall, a userspace VPN) still replicates its commands both ways.
+ * Its row's lastSeen is refreshed about once a minute while it talks to us (devices/service.ts seen).
+ */
+export const HEARD_MS = 150_000
 const MAX_RESULT_CHARS = 1_500_000
 const MAX_TEXT_TO_AGENT = 12_000
 /** Work that is slow or heavy on a phone: a phone is the last choice for it. */
@@ -222,7 +228,11 @@ export class DeviceToolHub {
   isOnline(row: DeviceRow): boolean {
     if (row.id === this.deps.selfId()) return true
     if (this.host?.isConnected(row.id) === true) return true
-    return this.deps.reachable?.(row.id) === true
+    if (this.deps.reachable?.(row.id) === true) return true
+    // A node (not a phone, which only an RPC connection reaches) that talked to us a moment ago.
+    if (row.kind === 'phone' || row.kind === 'tablet') return false
+    const seen = typeof row.lastSeen === 'number' ? row.lastSeen : 0
+    return seen > 0 && this.now() - seen < HEARD_MS
   }
 
   /** What devices_list shows. */
