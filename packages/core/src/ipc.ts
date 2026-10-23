@@ -435,6 +435,11 @@ export interface ProjectRow extends RowBase {
   chats: string[]
   /** What its chats think with: the agent in each chat, and the helpers it starts. '' = the main thread's choice. */
   ai?: AiPicks
+  /**
+   * Its chats the person closed in the side panel (a card's X), each with the activity stamp it was closed at: the
+   * card stays away until that chat moves again. Optional: rows from older builds have none.
+   */
+  panelHidden?: Record<string, number>
 }
 
 /** Where old chats from the days of several chats at once live, so nothing is lost. */
@@ -1025,6 +1030,10 @@ export interface HelperCardInfo {
   result: string
   /** Its newest steps, oldest first (a project agent's card: the newest lines of its project chat). */
   steps: Array<{ text: string; status: string; at: number }>
+  /** A project chat that is done and waits on the person (its agent spoke last). Absent from older computers. */
+  waiting?: boolean
+  /** When its group last moved; a card closed at or after this stays closed. Absent from older computers. */
+  activityAt?: number
 }
 
 /** Every card right now. `seq` grows with each new list, so a device can drop one that arrives late. */

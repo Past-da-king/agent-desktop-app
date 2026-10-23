@@ -65,11 +65,16 @@ describe('helper cards for linked devices', () => {
     // A new step: the live line moves, and the device hears the whole new list.
     await store.upsert('chat_item', { id: 'a3', kind: 'activity', text: 'Comparing prices', meta: JSON.stringify({ helper: 'h-proj', chat: 'pc1', status: 'running' }) })
     await waitFor(() => heard.some((s) => s.cards.find((c) => c.id === 'h-proj')?.line === 'Comparing prices'))
-    // It finishes: its card leaves the device's list at once (the list is what works right now).
+    // It finishes: it stays threaded under its project chat's card (that chat's latest turn), with its done line.
     await store.upsert('chat_item', { id: 'h-proj', kind: 'helper', text: 'Find seeds', meta: JSON.stringify({ id: 'h-proj', chat: 'pc1', label: 'Seeds', state: 'done', startedAt: t - 200, endedAt: Date.now(), result: '## Found\nThree shops sell **heirloom** seeds.\nMore detail' }) })
-    await waitFor(() => heard.length > 0 && heard[heard.length - 1]!.cards.every((c) => c.id !== 'h-proj'))
+    await waitFor(() => heard.length > 0 && heard[heard.length - 1]!.cards.find((c) => c.id === 'h-proj')?.state === 'done')
     const last = heard[heard.length - 1]!
-    expect(last.cards.map((c) => c.id)).toEqual(['h-main', 'pa-pc1'])
+    expect(last.cards.map((c) => [c.id, c.depth])).toEqual([
+      ['h-main', 0],
+      ['pa-pc1', 0],
+      ['h-proj', 1],
+    ])
+    expect(last.cards[2]!.done).toBe('Found')
     expect(last.seq).toBeGreaterThan(first.seq)
     // Nothing changed: nothing is sent.
     const count = heard.length

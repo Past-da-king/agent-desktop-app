@@ -110,6 +110,7 @@ button.wait-line:hover{background:color-mix(in srgb,var(--tc) 90%,var(--on-tc))}
 .mini-globe{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--s-high);color:var(--on-sv)}
 .mini-dot{position:absolute;right:3px;bottom:3px;width:10px;height:10px;border-radius:50%;background:var(--primary);border:2px solid var(--bg);animation:mini-pulse 1.6s ease-in-out infinite}
 .mini-dot.needs{background:var(--tert);animation:none}
+.mini-dot.done{background:var(--ok);animation:none}
 @keyframes mini-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.7);opacity:.6}}
 @media (prefers-reduced-motion:reduce){.mini-dot{animation:none}}
 .hp-step.run{padding:0;display:block}
