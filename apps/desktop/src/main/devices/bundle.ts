@@ -61,7 +61,7 @@ export interface BundleSecrets {
   /** deviceId -> sha256(pass) hex. */
   passes: Record<string, string>
   /** The Vault, values and all (vault/store.ts). Only ever sent to a brain, like the keys above. */
-  vault?: { changedAt: number; items: unknown[] }
+  vault?: { changedAt: number; items: unknown[]; prefs?: unknown }
 }
 
 export interface StateBundle {
@@ -87,7 +87,7 @@ export interface BundleSources {
   passes?: PassTable
   projects?: () => Promise<ProjectRow[]>
   /** The Vault: the whole of it travels to another brain, newest wins. */
-  vault?: { exportAll(): { changedAt: number; items: unknown[] }; replaceAll(incoming: { changedAt: number; items: unknown[] }, force?: boolean): boolean; onChange?(listener: () => void): () => void }
+  vault?: { exportAll(): { changedAt: number; items: unknown[]; prefs?: unknown }; replaceAll(incoming: { changedAt: number; items: unknown[]; prefs?: unknown }, force?: boolean): boolean; onChange?(listener: () => void): () => void }
   /** Kept on this device only: the bundle's hash and changedAt. */
   local: { localValue(key: string): string | null; setLocalValue(key: string, value: string): void }
   now?: () => number
@@ -373,7 +373,7 @@ export function parseBundle(value: unknown): StateBundle | null {
     if (typeof s['composioUserId'] === 'string') bundle.secrets.composioUserId = s['composioUserId']
     if (typeof s['geminiKey'] === 'string') bundle.secrets.geminiKey = s['geminiKey']
     const v = s['vault']
-    if (isRecord(v) && typeof v['changedAt'] === 'number' && Array.isArray(v['items'])) bundle.secrets.vault = { changedAt: v['changedAt'], items: v['items'] as unknown[] }
+    if (isRecord(v) && typeof v['changedAt'] === 'number' && Array.isArray(v['items'])) bundle.secrets.vault = { changedAt: v['changedAt'], items: v['items'] as unknown[], ...(v['prefs'] === undefined ? {} : { prefs: v['prefs'] }) }
   }
   return bundle
 }
