@@ -359,6 +359,28 @@ export function formatOutcome(outcome: ScriptOutcome): string {
   return [`Result: ${shown}`, ...(log === '' ? [] : ['Log:', log]), callsLine(outcome)].join('\n')
 }
 
+// ---- what the work trail shows ------------------------------------------------------------------------------
+
+/**
+ * The outcome of a finished script, kept against the very input object it was called with, so the activity row for
+ * that call can list its inner calls (name, arguments, ok or failed, time) without the model ever reading them.
+ */
+const outcomes = new WeakMap<object, ScriptOutcome>()
+
+/** The outcome run_script kept for this call's input, once. */
+export function takeScriptOutcome(input: object): ScriptOutcome | undefined {
+  const outcome = outcomes.get(input)
+  outcomes.delete(input)
+  return outcome
+}
+
+/** The inner calls as lines for a person: "ok  project_update  {"project":"p1"}  12 ms". */
+export function callLines(outcome: ScriptOutcome, limit = 200): string {
+  const lines = outcome.calls.slice(0, limit).map((call) => `${call.ok ? 'ok    ' : 'FAILED'}  ${call.name}  ${call.args}  ${call.ms} ms`)
+  if (outcome.calls.length > limit) lines.push(`... and ${outcome.calls.length - limit} more`)
+  return lines.join('\n')
+}
+
 // ---- background scripts ------------------------------------------------------------------------------------
 
 interface Job {
@@ -420,6 +442,7 @@ export function scriptTools(options: ScriptToolOptions): Tool[] {
       const tools = options.tools()
       if (!background) {
         const outcome = await runScript({ code, tools, ctx, timeoutMs, signal: ctx.signal, ...(options.events === undefined ? {} : { events: options.events }) })
+        outcomes.set(input, outcome)
         return formatOutcome(outcome)
       }
       const id = `scr_${Date.now().toString(36)}${(scriptSeq += 1)}`
@@ -454,6 +477,7 @@ export function scriptTools(options: ScriptToolOptions): Tool[] {
       }
       const outcome = job.outcome ?? (await Promise.race([job.promise, Promise.resolve(undefined)]))
       if (outcome === undefined) return `${id} is still running (${Math.round((Date.now() - job.started) / 1000)} s so far).`
+      outcomes.set(input, outcome)
       return formatOutcome(outcome)
     },
   }
