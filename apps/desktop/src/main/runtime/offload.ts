@@ -17,6 +17,8 @@
  * Nothing here is on while Devices is off (no self id), or while no other brain beats a fresh node row: both apps
  * then work exactly as before, alone.
  */
+import { hostname } from 'node:os'
+
 import { MAIN_CHAT, type DataChange, type DeviceRow, type JobRow } from '@agent/core'
 
 import type { DataStore } from './data'
@@ -56,6 +58,16 @@ export interface PlaceRequest {
   device?: string
   /** It works in a project folder on this computer. */
   localFolder?: boolean
+  /** This computer's own names (device name, host name): a brief that names one needs this computer. Filled in by place(). */
+  selfNames?: string[]
+}
+
+/** Does the text name this device (its whole name, not part of a word)? Names under 3 characters never count. */
+export function namesDevice(text: string, name: string): boolean {
+  const wanted = name.trim()
+  if (wanted.length < 3) return false
+  const escaped = wanted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^A-Za-z0-9])${escaped}($|[^A-Za-z0-9])`, 'i').test(text)
 }
 
 export interface PlaceCandidate {
@@ -133,7 +145,7 @@ export function choosePlacement(req: PlaceRequest, candidates: PlaceCandidate[],
     return { device: found.id, name: found.name, why: 'asked for' }
   }
 
-  const needsHere = req.localFolder === true || NEEDS_HERE.test(req.text)
+  const needsHere = req.localFolder === true || NEEDS_HERE.test(req.text) || (req.selfNames ?? []).some((each) => namesDevice(req.text, each))
   if (needsHere) {
     if (selfKind !== 'server') return here('it needs this computer')
     const computer = candidates.filter((each) => each.kind !== 'server' && fits(each, req.account)).sort((a, b) => load(a) - load(b))[0]
@@ -247,8 +259,10 @@ export class Offload {
     if (this.deps.selfId() === '') return { device: null, name: '', why: 'Devices is off' }
     const candidates = await this.candidates()
     if (candidates.length === 0 && (req.device ?? '').trim() === '') return { device: null, name: '', why: 'no other brain' }
-    const selfKind = (await this.selfRow())?.kind ?? this.deps.capacity().kind
-    const result = choosePlacement(req, candidates, selfKind, this.deps.mode())
+    const selfRow = await this.selfRow()
+    const selfKind = selfRow?.kind ?? this.deps.capacity().kind
+    const selfNames = req.selfNames ?? [...new Set([selfRow?.name ?? '', this.deps.capacity().name, hostname()].filter((each) => each !== ''))]
+    const result = choosePlacement({ ...req, selfNames }, candidates, selfKind, this.deps.mode())
     this.deps.log?.('Placement', { to: result.device === null ? 'here' : 'other', why: result.why })
     return result
   }

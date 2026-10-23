@@ -56,7 +56,8 @@ const HEAVY: ReadonlySet<DeviceToolGroup> = new Set(['browser', 'shell', 'files'
 
 /** Which group a tool of this app belongs to, by name, for a node's own catalogue. */
 export function groupOf(name: string): DeviceToolGroup {
-  if (name.startsWith('browser_')) return 'browser'
+  // A learned app's tools run in the browser, so a device with the site signed in can run them for another.
+  if (name.startsWith('browser_') || name === 'webapp_run' || name === 'webapp_test') return 'browser'
   if (name === 'notify_user' || name.startsWith('notification')) return 'notifications'
   if (name === 'send_file' || name === 'open_url' || name.startsWith('files_') || name.startsWith('file_')) return 'files'
   if (name === 'shell_run' || name === 'run_code') return 'shell'
@@ -211,6 +212,11 @@ export class DeviceToolHub {
       if (JSON.stringify(tools) === JSON.stringify(toolsOfRow(row))) continue
       await this.deps.store.upsert('device', { id: row.id, tools } as Partial<DeviceRow> & { id: string })
     }
+  }
+
+  /** This node's own device id. */
+  selfId(): string {
+    return this.deps.selfId()
   }
 
   isOnline(row: DeviceRow): boolean {
