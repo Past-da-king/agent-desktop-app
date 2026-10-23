@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as R
 import { agent, chat } from '../bridge'
 import { skyHopDemo } from '../bridge/seed'
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, browserTucked, displayUrl, openedMode } from '../lib/panel'
-import { openChat } from '../lib/chat-actions'
+import { cardTarget, openTarget } from '../lib/card-open'
 import { parseMeta, metaStrings } from '../lib/meta'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -626,7 +626,6 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
  */
 function MiniStrip({ onOpen }: { onOpen: () => void }): JSX.Element {
   const helpers = useWorkingHelpers()
-  const openHelper = usePanel((store) => store.openHelper)
   const waiting = useWaiting()
   const state = useBrowserState()
   const page = state?.tabs.find((tab) => tab.active) ?? state?.tabs[0]
@@ -645,13 +644,10 @@ function MiniStrip({ onOpen }: { onOpen: () => void }): JSX.Element {
           title={`${helper.label}: ${helper.line}`}
           aria-label={`Open ${helper.label}, working`}
           onClick={() => {
-            // A project agent's face opens its project chat; a helper's opens it full size.
-            if (helper.projectChat !== '') {
-              openChat(helper.projectChat)
-              return
-            }
-            onOpen()
-            openHelper(helper.id)
+            // A project chat's face opens that chat in full; a helper's opens its own view in the side panel.
+            const target = cardTarget(helper)
+            if (target.kind === 'helper') onOpen()
+            openTarget(target)
           }}
         >
           <HelperAvatar row={helper.row} helper={helper} size={30} />
@@ -709,13 +705,48 @@ export function ChatPanel({ parked = false }: { parked?: boolean }): JSX.Element
           <MiniStrip onOpen={() => setCollapsed(false)} />
         </aside>
       ) : null}
-      {!parked && !reportOpen && !collapsed && helperOpen ? (
+      {!parked && !reportOpen && !collapsed && helperOpen && !narrow ? (
         <aside className="panel-w panel-helper" aria-label="Helper">
           <HelperStage />
         </aside>
       ) : null}
       <PanelBody parked={parked || collapsed || helperOpen || reportOpen || narrow} />
     </>
+  )
+}
+
+/**
+ * Whether the side panel is on screen, open, holding its cards: a chat or project page, the window wide enough and
+ * the panel not collapsed. Elsewhere the title bar lists the cards (WorkMenu) and a helper's view opens over the window.
+ */
+export function usePanelShown(): boolean {
+  const page = useUi((store) => store.route.page)
+  const collapsed = usePanel((store) => store.collapsed)
+  const narrow = useNarrow()
+  return (page === 'chat' || page === 'project') && !collapsed && !narrow
+}
+
+/**
+ * A helper's own view when the side panel cannot hold it (Settings, any page without the panel, a narrow window, the
+ * panel collapsed): the same view, over the window. Its X, Esc or a tap outside closes it.
+ */
+export function HelperFloat(): JSX.Element | null {
+  const helper = usePanel((store) => store.helper)
+  const report = usePanel((store) => store.report)
+  const close = usePanel((store) => store.closeHelper)
+  const shown = usePanelShown()
+  if (helper === null || report !== null || shown) return null
+  return (
+    <div
+      className="hp-float"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) close()
+      }}
+    >
+      <aside className="hp-float-card" aria-label="Helper">
+        <HelperStage />
+      </aside>
+    </div>
   )
 }
 
