@@ -152,7 +152,9 @@ export function VaultSettings(): JSX.Element {
     }
     setImporting(true)
     try {
-      const result = await agent.vault.importText(await file.text(), file.name)
+      // The computer reads the file itself when it has a path (the window may not be allowed to); the text otherwise.
+      const path = agent.files.pathsFor([file])[0] ?? ''
+      const result = path !== '' ? await agent.vault.importFile(path) : await agent.vault.importText(await file.text(), file.name)
       setImported(result)
       if (result.error === undefined) toast(importTitle(result))
     } catch (cause) {
