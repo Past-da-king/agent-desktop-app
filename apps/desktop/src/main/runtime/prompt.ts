@@ -144,9 +144,9 @@ export function profileLines(profiles: AgentProfileInfo[], learnedNames: Record<
     out.push(`- ${p.name}: ${parts.join('; ')}`)
   }
   const generalName = general?.name ?? 'General'
-  out.push(`- ${generalName}: none of the user's accounts and no learned apps (the default)`)
+  out.push(`- ${generalName}: none of the user's accounts; it browses in your own browser, so it runs every learned app signed in there (the default)`)
   out.push(
-    `- Name the profile for each brief with \`profile\` in delegate. A helper can ONLY use its profile's accounts and learned apps, and browses with that profile's own sign-ins; with one account of an app in it, that one is picked for it. Jobs that need none of their accounts (web research, files on this computer) go in ${generalName}, which is also what a helper gets when you name none.`,
+    `- Name the profile for each brief with \`profile\` in delegate. A helper can ONLY use its profile's accounts, and the learned apps in its profile or signed in in its browser; it browses with that profile's own sign-ins; with one account of an app in it, that one is picked for it. Jobs that need none of their accounts (web research, files on this computer) go in ${generalName}, which is also what a helper gets when you name none.`,
   )
   out.push('- If no profile fits the job, make one with profile_create (a clear name, the apps it needs) before delegating. The user sees it in Connections in its own colour.')
   out.push('- You yourself may use any account in any profile; helpers may not.')
@@ -158,13 +158,14 @@ export function profileLines(profiles: AgentProfileInfo[], learnedNames: Record<
 export function helperProfileLines(profile: AgentProfileInfo, learnedNames: Record<string, string> = {}): string[] {
   if (profile.general || (profile.accounts.length === 0 && profile.learned.length === 0)) {
     return [
-      `YOUR PROFILE: ${profile.name}. It has none of the user's connected accounts and no learned apps, so apps_* and webapp_run will refuse. If the job needs one, say so in your result and the main agent will send it to the right profile.`,
+      `YOUR PROFILE: ${profile.name}. It has none of the user's connected accounts, so apps_* will refuse; if the job needs one, say so in your result and the main agent will send it to the right profile.`,
+      `Learned apps (webapp_list, webapp_run) follow the browser sign-in: you may run every one whose site is signed in in your browser${profile.general ? " (the main agent's own)" : ''}. Use them instead of clicking through the site; a file goes in as its path.`,
     ]
   }
   const accounts = profile.accounts.map((a) => `${appName(a.app)} ${a.label} (account ${a.id})`.trim()).join(', ')
   const learned = profile.learned.map((id) => learnedNames[id] ?? id).join(', ')
   return [
-    `YOUR PROFILE: ${profile.name}. This job belongs to that part of the user's life. Use ONLY these connected accounts: ${accounts === '' ? 'none' : accounts}.${learned === '' ? '' : ` Learned apps you may run: ${learned}.`} Any other account is off limits and the app refuses it; if the job needs one that is not here, say so in your result.`,
+    `YOUR PROFILE: ${profile.name}. This job belongs to that part of the user's life. Use ONLY these connected accounts: ${accounts === '' ? 'none' : accounts}.${learned === '' ? '' : ` Learned apps you may run: ${learned}, plus any whose site is signed in in your browser (webapp_list says which).`} Any other account is off limits and the app refuses it; if the job needs one that is not here, say so in your result.`,
     `Your browser is signed in as this profile (its own cookies and sign-ins), so sites you open see ${profile.name}'s accounts.`,
   ]
 }

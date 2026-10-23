@@ -34,6 +34,11 @@ export interface BrowserDriver {
    * The agent's tab becomes that partition's latest tab, or a new one on the next open.
    */
   usePartition?(partition: string): void
+  /**
+   * Learned apps: whether a partition's browser holds site data for an address (cookies that would be sent
+   * to it, or the site's own stored data), i.e. the site has been signed in to there. Optional.
+   */
+  hasSiteData?(partition: string, url: string): Promise<boolean>
 }
 
 /** Stands in until the window exists, and in tests that do not care about the browser. */
