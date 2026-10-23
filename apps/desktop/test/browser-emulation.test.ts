@@ -7,6 +7,9 @@ import {
   presetView,
   resolveView,
   userAgentFor,
+  customUserAgentMetadata,
+  truthfulUserAgent,
+  isOwnDesktopUserAgent,
   userAgentMetadata,
   viewLabel,
   viewModeOf,
@@ -83,6 +86,28 @@ describe('browser emulation', () => {
     const override = custom.find((c) => c.method === 'Emulation.setUserAgentOverride')
     expect(override?.params['userAgent']).toBe('Custom/1.0')
     expect(override?.params['userAgentMetadata']).toBeUndefined()
+  })
+
+  it('never lets a hand-written Chrome user agent claim another engine version, and always gives it matching hints', () => {
+    // 23 Oct 2026: a saved Chrome/141 user agent on a 152 engine with empty client hints got X's Continue with
+    // Google refused ("An unexpected error occurred"); the engine's own identity signs in.
+    const stale = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
+    const view = resolveView(presetView('desktop'), { userAgent: stale })
+    expect(userAgentFor(view, engine)).toBe('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.167 Safari/537.36')
+    const override = emulationCommands(view, engine, { bounds: slot, scale: 1 }).find((c) => c.method === 'Emulation.setUserAgentOverride')
+    expect(override?.params['userAgent']).toContain('Chrome/152.0.7977.167')
+    const hints = override?.params['userAgentMetadata'] as Record<string, unknown>
+    expect(hints['platform']).toBe('Windows')
+    expect(hints['mobile']).toBe(false)
+    expect((hints['brands'] as Array<{ brand: string; version: string }>).find((b) => b.brand === 'Google Chrome')?.version).toBe('152')
+    expect(override?.params['platform']).toBe('Win32')
+    // A hand-written Android Chrome agrees with itself too.
+    const android = customUserAgentMetadata('Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36', engine)
+    expect(android).toMatchObject({ platform: 'Android', mobile: true, model: 'SM-G991B' })
+    expect(customUserAgentMetadata('Custom/1.0', engine)).toBeNull()
+    expect(truthfulUserAgent('Custom/1.0', engine)).toBe('Custom/1.0')
+    expect(isOwnDesktopUserAgent(stale, 'win32')).toBe(true)
+    expect(isOwnDesktopUserAgent(stale, 'darwin')).toBe(false)
   })
 
   it('names views plainly and understands the words models use', () => {

@@ -13,7 +13,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-import { isViewMode, presetView, resolveView, type ViewMode, type ViewSpec } from './emulation'
+import { isOwnDesktopUserAgent, isViewMode, presetView, resolveView, type ViewMode, type ViewSpec } from './emulation'
 
 export interface SiteProfile {
   /** The view that last got through, or that the agent pinned. */
@@ -234,13 +234,17 @@ function viewFrom(value: unknown): ViewSpec | null {
   if (!isViewMode(mode)) return null
   const num = (key: string): number | undefined => (typeof raw[key] === 'number' ? (raw[key] as number) : undefined)
   const base = presetView(mode)
+  // A saved user agent that is only this computer's own Chrome (at whatever version it was saved) adds nothing but
+  // a stale version, and a version the engine cannot back up gets sign-ins refused: the engine's own is used instead.
+  const savedUa = typeof raw['userAgent'] === 'string' ? raw['userAgent'] : undefined
+  const userAgent = savedUa !== undefined && isOwnDesktopUserAgent(savedUa, process.platform) ? '' : savedUa
   return resolveView(base, {
     ...(num('width') === undefined ? {} : { width: num('width') }),
     ...(num('height') === undefined ? {} : { height: num('height') }),
     ...(num('dpr') === undefined ? {} : { dpr: num('dpr') }),
     ...(num('zoom') === undefined ? {} : { zoom: num('zoom') }),
     ...(typeof raw['touch'] === 'boolean' ? { touch: raw['touch'] } : {}),
-    ...(typeof raw['userAgent'] === 'string' ? { userAgent: raw['userAgent'] } : {}),
+    ...(userAgent === undefined ? {} : { userAgent }),
   })
 }
 

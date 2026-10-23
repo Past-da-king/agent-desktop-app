@@ -186,7 +186,7 @@ export function chromeVersionOf(userAgent: string): string {
  * No Electron or app token: sites treat those as an embedded shell.
  */
 export function userAgentFor(view: ViewSpec, engine: EngineInfo): string {
-  if (view.userAgent !== '') return view.userAgent
+  if (view.userAgent !== '') return truthfulUserAgent(view.userAgent, engine)
   const v = engine.chromeVersion
   if (view.mode === 'phone') {
     return `Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v} Mobile Safari/537.36`
@@ -197,6 +197,44 @@ export function userAgentFor(view: ViewSpec, engine: EngineInfo): string {
   return `Mozilla/5.0 (${desktopPlatformToken(engine.platform)}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v} Safari/537.36`
 }
 
+/** A user agent written the way Chrome writes its own, on any system (Windows, macOS, Linux, Android). */
+const CHROME_SHAPED = /^Mozilla\/5\.0 \(([^)]+)\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/[\d.]+( Mobile)? Safari\/537\.36$/
+
+export function isChromeShaped(userAgent: string): boolean {
+  return CHROME_SHAPED.test(userAgent.trim())
+}
+
+/**
+ * A hand-written Chrome user agent may change the system and device it names, never the engine's version.
+ * Sign-in risk checks (X's, Google's) compare what the page claims with what the engine really does: a
+ * Chrome/141 user agent on a 152 engine reads as a bot and the sign-in is refused (X: "An unexpected error
+ * occurred" right after Continue with Google, 23 Oct 2026). Any other user agent is left exactly as written.
+ */
+export function truthfulUserAgent(userAgent: string, engine: EngineInfo): string {
+  const ua = userAgent.trim()
+  if (!isChromeShaped(ua)) return userAgent
+  return ua.replace(/Chrome\/[\d.]+/, `Chrome/${engine.chromeVersion}`)
+}
+
+/** True when `userAgent` is only this computer's own desktop Chrome user agent, at any version. */
+export function isOwnDesktopUserAgent(userAgent: string, platform: string): boolean {
+  const match = CHROME_SHAPED.exec(userAgent.trim())
+  return match !== null && match[2] === undefined && match[1] === desktopPlatformToken(platform)
+}
+
+type HintPlatform = 'Windows' | 'macOS' | 'Linux' | 'Android'
+
+/** The system a Chrome-shaped user agent names, so the client hints can agree with it. */
+function systemOfUserAgent(userAgent: string): { platform: HintPlatform; mobile: boolean; model: string } | null {
+  const match = CHROME_SHAPED.exec(userAgent.trim())
+  if (match === null) return null
+  const system = match[1] ?? ''
+  if (/Android/.test(system)) return { platform: 'Android', mobile: match[2] !== undefined, model: /;\s*([^;]+)$/.exec(system)?.[1]?.trim() ?? '' }
+  if (/Windows/.test(system)) return { platform: 'Windows', mobile: false, model: '' }
+  if (/Macintosh|Mac OS X/.test(system)) return { platform: 'macOS', mobile: false, model: '' }
+  return { platform: 'Linux', mobile: false, model: '' }
+}
+
 function desktopPlatformToken(platform: string): string {
   if (platform === 'win32') return 'Windows NT 10.0; Win64; x64'
   if (platform === 'darwin') return 'Macintosh; Intel Mac OS X 10_15_7'
@@ -205,10 +243,26 @@ function desktopPlatformToken(platform: string): string {
 
 /** Client hints that match the user agent, so Sec-CH-UA and navigator.userAgentData agree with it. */
 export function userAgentMetadata(view: ViewSpec, engine: EngineInfo): Record<string, unknown> {
-  const full = engine.chromeVersion
-  const major = full.split('.')[0] ?? '130'
   const handheld = view.mode === 'phone' || view.mode === 'tablet'
   const platform = handheld ? 'Android' : desktopHintPlatform(engine.platform)
+  const model = view.mode === 'phone' ? 'Pixel 8' : view.mode === 'tablet' ? 'Pixel Tablet' : ''
+  return hintsFor(engine, platform, view.mode === 'phone', model)
+}
+
+/**
+ * Client hints for a hand-written user agent: matching hints when it is Chrome-shaped (so Sec-CH-UA and
+ * navigator.userAgentData never contradict it or come back empty, which reads as a bot), none otherwise.
+ */
+export function customUserAgentMetadata(userAgent: string, engine: EngineInfo): Record<string, unknown> | null {
+  const system = systemOfUserAgent(userAgent)
+  if (system === null) return null
+  return hintsFor(engine, system.platform, system.mobile, system.model)
+}
+
+function hintsFor(engine: EngineInfo, platform: string, mobile: boolean, model: string): Record<string, unknown> {
+  const full = engine.chromeVersion
+  const major = full.split('.')[0] ?? '130'
+  const handheld = platform === 'Android'
   return {
     brands: [
       { brand: 'Not?A_Brand', version: '99' },
@@ -222,10 +276,10 @@ export function userAgentMetadata(view: ViewSpec, engine: EngineInfo): Record<st
     ],
     fullVersion: full,
     platform,
-    platformVersion: handheld ? '14.0.0' : engine.platform === 'win32' ? '10.0.0' : engine.platform === 'darwin' ? '10.15.7' : '6.5.0',
-    architecture: handheld ? '' : engine.platform === 'darwin' ? 'arm' : 'x86',
-    model: view.mode === 'phone' ? 'Pixel 8' : view.mode === 'tablet' ? 'Pixel Tablet' : '',
-    mobile: view.mode === 'phone',
+    platformVersion: handheld ? '14.0.0' : platform === 'Windows' ? '10.0.0' : platform === 'macOS' ? '10.15.7' : '6.5.0',
+    architecture: handheld ? '' : platform === 'macOS' ? 'arm' : 'x86',
+    model,
+    mobile,
     bitness: handheld ? '' : '64',
     wow64: false,
   }
@@ -238,6 +292,14 @@ function desktopHintPlatform(platform: string): string {
 }
 
 function navigatorPlatform(view: ViewSpec, platform: string): string {
+  const named = view.userAgent === '' ? null : systemOfUserAgent(view.userAgent)
+  if (named !== null) {
+    // navigator.platform agrees with the system a hand-written user agent names.
+    if (named.platform === 'Android') return 'Linux armv8l'
+    if (named.platform === 'Windows') return 'Win32'
+    if (named.platform === 'macOS') return 'MacIntel'
+    return 'Linux x86_64'
+  }
   if (view.mode === 'phone' || view.mode === 'tablet') return 'Linux armv8l'
   if (platform === 'win32') return 'Win32'
   if (platform === 'darwin') return 'MacIntel'
@@ -254,7 +316,7 @@ function navigatorPlatform(view: ViewSpec, platform: string): string {
  */
 export function emulationCommands(view: ViewSpec, engine: EngineInfo, fit: FitResult, followElement = false): CdpCommand[] {
   const commands: CdpCommand[] = []
-  const custom = view.userAgent !== ''
+  const hints = view.userAgent === '' ? userAgentMetadata(view, engine) : customUserAgentMetadata(view.userAgent, engine)
   commands.push({
     method: 'Emulation.setUserAgentOverride',
     params: {
@@ -262,8 +324,8 @@ export function emulationCommands(view: ViewSpec, engine: EngineInfo, fit: FitRe
       // A plain list: Chromium adds the q-values itself (passing them doubled them, "en;q=0.9;q=0.9").
       acceptLanguage: 'en-US,en',
       platform: navigatorPlatform(view, engine.platform),
-      // A hand-written user agent cannot be parsed back into hints; sending none is closer to the truth.
-      ...(custom ? {} : { userAgentMetadata: userAgentMetadata(view, engine) }),
+      // A hand-written user agent that is not Chrome-shaped cannot be parsed back into hints; sending none is closer to the truth.
+      ...(hints === null ? {} : { userAgentMetadata: hints }),
     },
   })
   if (view.mode === 'fit') {

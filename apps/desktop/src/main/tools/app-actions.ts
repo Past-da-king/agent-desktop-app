@@ -126,6 +126,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'browser.newTab': free('Browser panel: new tab'),
   'browser.attach': no('Join a tab to the panel', WINDOW_PLUMBING),
   'browser.devtools': free('Browser panel: open developer tools'),
+  'browser.fixSite': free("Browser panel: Fix this site (forget what was learned for it, clear its caches, reload as this computer's own browser; sign-ins stay)"),
   'browser.setMuted': free('Browser panel: mute or unmute', 'on'),
   'browser.people': free('Browser panel: the signed-in browser profiles'),
   'browser.usePerson': free('Browser panel: switch browser profile', 'profileId'),

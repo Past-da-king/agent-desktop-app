@@ -228,6 +228,16 @@ function BrowserChrome({
         </form>
         <BrowserPeople state={state} compact={!full} />
         <IconButton
+          icon="bolt"
+          label="Fix this site (sign-in failing or page broken): forget what was learned for it and reload as this computer's own browser"
+          size={18}
+          className="br-expand"
+          disabled={!hasPage}
+          onClick={() => {
+            void agent.browser.fixSite()
+          }}
+        />
+        <IconButton
           icon="ext"
           label="Open in my browser"
           size={18}

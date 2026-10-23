@@ -1481,6 +1481,8 @@ export interface AgentApi {
     newTab(): Promise<void>
     /** Opens Chromium's own DevTools for the tab in front, in a window of its own. */
     devtools(): Promise<void>
+    /** Fix this site: forget what was learned for the site in front, clear its caches, reload as this computer's own browser. */
+    fixSite(): Promise<string>
     /** Turns the sound of every tab off or back on. */
     setMuted(on: boolean): Promise<void>
     /** The browser profiles: Mine, the agents' shared one, and each profile with sign-ins of its own. */
