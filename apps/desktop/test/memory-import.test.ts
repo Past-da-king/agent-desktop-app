@@ -109,7 +109,7 @@ describe('memory import', () => {
     expect(() => parseExport('{"hello":1}')).toThrow('no list of memories')
   })
 
-  // The real export of the A.O.S bank, when it has been made on this machine (.night is git-ignored).
+  // A real memory bank export, when it has been made on this machine (.night is git-ignored).
   const real = join(__dirname, '../../../.night/memory-bank-export.json')
   it.skipIf(!existsSync(real))('imports the real memory bank export', async () => {
     const raw = readFileSync(real, 'utf8')

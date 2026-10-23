@@ -1,5 +1,5 @@
 /**
- * The stronger browser tools, after the A.O.S browser that agents drive well even on hard sites:
+ * The stronger browser tools, the ones that let agents drive even hard sites well:
  * the agent changes how the browser presents itself when a site is broken (browser_view), fixes the
  * site on the fly and has the fix remembered (browser_fix), reads the page as numbered elements with
  * role, name and state (browser_snapshot), acts by name with trusted input (browser_act), and runs a

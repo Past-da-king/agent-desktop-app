@@ -23,7 +23,7 @@ afterEach(() => {
   store.close()
 })
 
-/** An export shaped like the A.O.S Memory Bank one: two projects, general notes, retired and old state notes. */
+/** An export shaped like a real memory bank export: two projects, general notes, retired and old state notes. */
 function fixture(): string {
   const memories: Array<Record<string, unknown>> = []
   const add = (id: string, project: string, kind: string, title: string, text: string, daysAgo: number, status = 'active'): void => {
@@ -36,7 +36,7 @@ function fixture(): string {
   add('m4', 'londacorp-erp', 'project', 'LondaCorp ERP', 'An ERP for Londa Corp. Speech-to-text writes it Londercorp.', 5)
   add('m5', '', 'fact', 'Ayanda lives in Durban', 'Ayanda lives in Durban, South Africa.', 50)
   add('r1', 'creek', 'decision', 'Creek stays on Wix', 'Old decision, replaced.', 60, 'retired')
-  return JSON.stringify({ format: 'agent-memory-export', version: 1, source: 'A.O.S Memory Bank', memories })
+  return JSON.stringify({ format: 'agent-memory-export', version: 1, source: 'Memory Bank', memories })
 }
 
 /** A fake model: a project page for the project in the prompt, plus one page per note title it sees. */

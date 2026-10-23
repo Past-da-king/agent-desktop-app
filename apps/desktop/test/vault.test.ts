@@ -1,9 +1,9 @@
 /**
  * The Vault: an agent uses a secret without seeing it. Values never in a tool result, a run record, an activity line,
- * a stored row or the list; placeholders resolve in shell, code and fetch; reveal asks; A.O.S imports by count and hash.
+ * a stored row or the list; placeholders resolve in shell, code and fetch; reveal asks. Importing exports is in vault-import.test.ts.
  */
-import { createCipheriv, createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,7 +23,6 @@ import { codeTools } from '../src/main/tools/code'
 import { takeRun } from '../src/main/tools/run-capture'
 import { shellTools } from '../src/main/tools/shell'
 import { vaultTools } from '../src/main/tools/vault'
-import { importAos } from '../src/main/vault/aos-import'
 import { guardTool, guardTools } from '../src/main/vault/guard'
 import { codeText, shellCommand, type VaultRun } from '../src/main/vault/placeholders'
 import { setVaultRedactor } from '../src/main/vault/redact'
@@ -266,7 +265,7 @@ describe('vault tools', () => {
   })
 })
 
-describe('devices and A.O.S', () => {
+describe('devices', () => {
   it('the whole vault rides in the brain bundle and a newer one replaces the other side', async () => {
     const settingsA = new SettingsStore(join(dir, 'a.json'))
     const kv = new Map<string, string>()
@@ -283,43 +282,5 @@ describe('devices and A.O.S', () => {
       expect('error' in hit ? '' : hit.value).toBe(SECRET)
       expect(JSON.stringify(await keeper.build(false))).not.toContain(SECRET)
     }
-  })
-
-  it('imports every A.O.S item, by count and by hash, and again as an update', () => {
-    const aos = join(dir, 'aos')
-    const key = randomBytes(32)
-    mkdirSync(aos, { recursive: true })
-    const db = new DatabaseSync(join(aos, 'credentials.db'))
-    writeFileSync(join(aos, 'credentials.key'), key.toString('base64') + '\n')
-    db.exec(`CREATE TABLE credentials (id TEXT PRIMARY KEY, service TEXT NOT NULL, username TEXT, url TEXT, kind TEXT NOT NULL, identity TEXT, notes TEXT, tags TEXT NOT NULL, iv TEXT NOT NULL, tag_b64 TEXT NOT NULL, secret TEXT NOT NULL, created_at INTEGER, updated_at INTEGER, created_by TEXT, last_read_at INTEGER, read_count INTEGER)`)
-    const plain: Record<string, string> = {}
-    const add = (id: string, service: string, username: string | null, kind: string, value: string): void => {
-      const iv = randomBytes(12)
-      const c = createCipheriv('aes-256-gcm', key, iv)
-      const enc = Buffer.concat([c.update(value, 'utf8'), c.final()])
-      db.prepare('INSERT INTO credentials VALUES (?,?,?,?,?,?,?,?,?,?,?,0,0,?,NULL,0)').run(id, service, username, 'https://portal.example.org/login', kind, 'Personal', 'reset via email', '["school"]', iv.toString('base64'), c.getAuthTag().toString('base64'), enc.toString('base64'), 'op')
-      plain[id] = value
-    }
-    add('c_1', 'Portal', 'one@example.org', 'password', 'pw-one-' + randomBytes(4).toString('hex'))
-    add('c_2', 'Portal', 'two@example.org', 'password', 'pw-two-' + randomBytes(4).toString('hex'))
-    add('c_3', 'Some API', null, 'api-key', 'key-' + randomBytes(8).toString('hex'))
-    db.close()
-
-    const result = importAos(vault, aos)
-    expect(result).toMatchObject({ found: 3, imported: 3, updated: 0, skipped: 0 })
-    const imported = vault.list().filter((item) => item.source === 'A.O.S')
-    expect(imported.map((item) => item.ref).sort()).toEqual(['portal-one', 'portal-two', 'some-api'])
-    // Compare by hash in-process: the values are never printed.
-    const hash = (text: string): string => createHash('sha256').update(text).digest('hex')
-    for (const item of imported) {
-      const aosId = item.tags.find((tag) => tag.startsWith('aos:'))!.slice(4)
-      const hit = vault.resolve(item.ref)
-      expect('error' in hit ? '' : hash(hit.value)).toBe(hash(plain[aosId]!))
-    }
-    expect(imported.find((item) => item.ref === 'some-api')?.kind).toBe('api_key')
-    expect(imported.find((item) => item.ref === 'portal-one')?.notes).toContain('Account: Personal')
-    expect(JSON.stringify(result)).not.toContain('pw-one-')
-    expect(importAos(vault, aos)).toMatchObject({ found: 3, imported: 0, updated: 3 })
-    expect(vault.list().filter((item) => item.source === 'A.O.S')).toHaveLength(3)
   })
 })

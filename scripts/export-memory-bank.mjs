@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Exports an A.O.S-style memory bank (a SQLite file with `memories`, `person_profiles` and `project_profiles`) to the
+// Exports a memory bank (a SQLite file with `memories`, `person_profiles` and `project_profiles`) to the
 // JSON the Agent app imports (Settings > Memory > Import). The bank is opened READ-ONLY. Every title, body and topic
 // goes through the app's own secret redaction (apps/desktop/src/main/memory/redact.ts) before it is written.
 //
@@ -135,7 +135,7 @@ for (const m of memories) {
 const out = {
   format: 'agent-memory-export',
   version: 1,
-  source: 'A.O.S Memory Bank',
+  source: 'Memory Bank',
   exportedAt: new Date().toISOString(),
   redactions: hits,
   memories,
