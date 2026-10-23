@@ -184,8 +184,9 @@ describe('a default the person owns', () => {
     expect(listed).toContain('End of day')
     expect(listed).toContain('memory pass')
     const update = toolNamed(tools, 'routine_update')
-    expect(await update.run({ id: MEMORY_DAILY_ROUTINE, spec: '22:00' }, testContext())).toBe('The user declined.')
-    expect(await update.run({ id: MEMORY_DAILY_ROUTINE, spec: '22:00', enabled: false }, testContext({ approve: async () => true }))).toContain('22:00')
+    // No card: changing a routine's time is the app's own bookkeeping (tools/routines.ts).
+    expect(await update.run({ id: MEMORY_DAILY_ROUTINE, spec: '22:00' }, testContext())).toContain('now runs every day at 22:00')
+    expect(await update.run({ id: MEMORY_DAILY_ROUTINE, spec: '22:00', enabled: false }, testContext())).toContain('22:00')
     expect(await store.get('trigger', MEMORY_DAILY_ROUTINE)).toMatchObject({ spec: '22:00', enabled: false, name: DAILY_ROUTINE_NAME })
     expect(await update.run({ id: MEMORY_DAILY_ROUTINE, spec: '9pm' }, testContext())).toContain('Not changed')
   })

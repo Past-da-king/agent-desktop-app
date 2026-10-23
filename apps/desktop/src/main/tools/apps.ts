@@ -3,11 +3,15 @@
  * phone tools/Composio.kt (AppsListTool, AppsConnectTool, AppsFindToolsTool, AppsRunTool) and the
  * guarded run in AgentRuntime.kt. Every action goes through the per-account rules in AppGuard.
  */
-import { int, schema, str, type JsonObject, type Tool } from '@agent/core'
+import { clipResult, int, resultLimitOf, schema, str, type JsonObject, type Tool } from '@agent/core'
 
 import { appName } from '../apps/catalog'
 import { NO_KEY, type AppsService } from '../apps/service'
 
+/** The most of one action's result a model reads; a script reads all of it (ToolContext.resultLimit). */
+export const APP_RESULT_CHARS = 20_000
+/** The most of a tool search a model reads. */
+const FIND_RESULT_CHARS = 16_000
 const CONNECT = 'Connect'
 const DECLINE = 'Decline'
 
@@ -43,12 +47,17 @@ function connectedTool(apps: AppsService): Tool {
         }
         if (list.length === 0) return 'No apps connected yet. Use apps_connect to offer one.'
         const head = profile === null ? '' : `Your profile (${profile.name}) has these accounts:\n`
+        // A Connect key answers only for the apps it is asked about (service.ts appsToAsk): say so, never "not connected".
+        const foot =
+          profile === null && apps.backend()?.listsEveryApp !== true
+            ? '\n(Composio Connect lists only the apps it is asked about: the common ones and every app used here. An app not listed may still be connected: apps_find_tools with its name shows it, and it is listed from then on.)'
+            : ''
         return head + list
           .map((a) => {
             const r = apps.rulesFor(a.id)
             return `${a.app}: ${a.status} · ${a.label} · account ${a.id} · reading ${r.read}, changing ${r.change}`
           })
-          .join('\n')
+          .join('\n') + foot
       } catch (cause) {
         return failure(cause)
       }
@@ -76,7 +85,10 @@ function findToolsTool(apps: AppsService): Tool {
       const raw = input['limit']
       const limit = typeof raw === 'number' && raw > 0 ? Math.min(Math.floor(raw), 20) : 6
       try {
-        return await backend.findTools(text(input['query']), text(input['toolkit']).trim().toLowerCase(), limit)
+        const found = await backend.findTools(text(input['query']), text(input['toolkit']).trim().toLowerCase(), limit)
+        // A search also says which apps the person has a working account in: listed by apps_connected from then on.
+        apps.noteConnectedApps(found)
+        return clipResult(found, resultLimitOf(ctx, FIND_RESULT_CHARS))
       } catch (cause) {
         return failure(cause)
       }
@@ -113,7 +125,7 @@ function runTool(apps: AppsService): Tool {
       try {
         const res = await backend.execute(slug, args, verdict.account)
         await ctx.updateActivity(id, `${res.ok ? 'Used' : 'Failed:'} ${what}`, { tool: 'apps' })
-        return res.text
+        return clipResult(res.text, resultLimitOf(ctx, APP_RESULT_CHARS))
       } catch (cause) {
         await ctx.updateActivity(id, `Failed: ${what}`, { tool: 'apps' })
         return failure(cause)

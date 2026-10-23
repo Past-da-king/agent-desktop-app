@@ -14,7 +14,7 @@
 import { Worker } from 'node:worker_threads'
 
 import type { JsonObject, Tool, ToolCallBlock, ToolContext } from './model'
-import { bool, int, schema, str } from './model'
+import { bool, clipResult, int, schema, str } from './model'
 
 export const SCRIPT_TOOL = 'run_script'
 export const SCRIPT_RESULT_TOOL = 'run_script_result'
@@ -31,8 +31,13 @@ export const SCRIPT_RESULT_CAP = 12_000
 export const SCRIPT_LOG_CAP = 4_000
 /** Inner calls running at once (Promise.all over 200 items must not start 200 browser tabs). */
 export const SCRIPT_PARALLEL = 8
-/** What one inner result may hand the script (a page dump of tens of MB would stall the worker). */
-const INNER_RESULT_CAP = 2_000_000
+/**
+ * What one inner result may hand the script. Each inner call runs with this as its ToolContext.resultLimit, so a tool
+ * that trims its result for a model (a connected app's 20,000 characters) gives a script the whole of it. Only a
+ * result past this (a page dump of tens of MB would stall the worker) is cut, and then as a valid object with
+ * truncated: true, never as broken JSON.
+ */
+export const SCRIPT_INNER_RESULT_CAP = 4_000_000
 /** What one inner result shows in the work trail, the same as an ordinary call. */
 const TRAIL_CLIP = 24_000
 
@@ -182,6 +187,8 @@ export function runScript(options: RunScriptOptions): Promise<ScriptOutcome> {
   let logSize = 0
   let logDropped = 0
   const calls: ScriptCall[] = []
+  // Inner calls hand the script their whole result: a tool's own trim is sized for a model, not for code.
+  const innerCtx: ToolContext = { ...options.ctx, resultLimit: SCRIPT_INNER_RESULT_CAP }
   let callSeq = 0
   let active = 0
   const queue: Array<() => void> = []
@@ -268,7 +275,7 @@ export function runScript(options: RunScriptOptions): Promise<ScriptOutcome> {
       let text: string
       let ok = true
       try {
-        text = await tool.run(input, options.ctx)
+        text = await tool.run(input, innerCtx)
       } catch (error) {
         ok = false
         text = error instanceof Error ? error.message || error.name : String(error)
@@ -284,7 +291,7 @@ export function runScript(options: RunScriptOptions): Promise<ScriptOutcome> {
         // as above
       }
       if (ok) {
-        reply({ id: callId, ok: true, text: text.length > INNER_RESULT_CAP ? `${text.slice(0, INNER_RESULT_CAP)}\n...(cut, ${text.length} chars total)` : text })
+        reply({ id: callId, ok: true, text: clipResult(text, SCRIPT_INNER_RESULT_CAP) })
       } else {
         reply({ id: callId, ok: false, message: `${name} failed: ${text}` })
       }

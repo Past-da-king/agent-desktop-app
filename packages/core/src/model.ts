@@ -186,6 +186,46 @@ export interface ToolContext {
    * here works with the choice the person made on that computer. Absent: this computer's Settings.
    */
   shell?: 'always' | 'ask' | 'never'
+  /**
+   * How many characters of its result a tool may hand back. Absent: the tool's own limit, sized for a model to read.
+   * Inside run_script it is the script's large limit, so a script reads the whole result as data (script.ts).
+   */
+  resultLimit?: number
+}
+
+/** How much a tool hands back: the run's own limit (a script's) when it has one, else the tool's default for a model. */
+export function resultLimitOf(ctx: Pick<ToolContext, 'resultLimit'>, fallback: number): number {
+  const limit = ctx.resultLimit
+  return typeof limit === 'number' && Number.isFinite(limit) && limit > fallback ? limit : fallback
+}
+
+/**
+ * A result cut to `limit` characters, never broken JSON: a JSON result that is too long comes back as a valid object
+ * `{ truncated: true, totalChars, shownChars, note, partial }` (partial is the first characters, as text), anything
+ * else as its start and a plain note.
+ */
+export function clipResult(text: string, limit: number): string {
+  if (text.length <= limit) return text
+  const head = text.trimStart()[0]
+  if (head === '{' || head === '[') {
+    const wrap = (room: number): string =>
+      JSON.stringify({
+        truncated: true,
+        totalChars: text.length,
+        shownChars: room,
+        note: `The result was ${text.length} characters, more than the ${limit} that fit here, so only its start is in partial (as text). Inside run_script the whole result comes back as parsed JSON.`,
+        partial: text.slice(0, room),
+      })
+    // Escaping can make the partial text longer than it was: shrink it until the whole object fits.
+    let room = Math.max(0, limit - 400)
+    let out = wrap(room)
+    while (out.length > limit && room > 0) {
+      room = Math.max(0, Math.floor(room * (limit - 400) / Math.max(1, out.length - 400 + 1)) - 1)
+      out = wrap(room)
+    }
+    return out
+  }
+  return `${text.slice(0, limit)}\n...(cut: ${text.length} characters in all${limit < 1_000_000 ? '; inside run_script the whole result comes back' : ''})`
 }
 
 export interface Usage {
