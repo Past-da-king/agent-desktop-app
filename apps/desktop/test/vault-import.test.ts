@@ -182,17 +182,19 @@ describe('vault import', () => {
           { name: 'Office (tenant B)', url: 'https://www.office.com', username: 'admin@corp.test', password: v[2] },
           { name: 'Mail API key', kind: 'api_key', url: 'https://mail.test', username: 'me', value: v[3] },
           { name: 'Mail API key (second)', kind: 'api_key', url: 'https://mail.test', username: 'me', value: v[4] },
+          { name: 'Mailbox', url: 'https://mail.test (API at https://api.mail.test, account 12)', username: 'box', password: v[0] },
+          { name: 'Odd', url: '?', username: 'u', password: v[1] },
         ],
       })
-    expect(importText(vault, file(values), 'move.json')).toMatchObject({ format: 'My old vault', found: 5, imported: 5, updated: 0 })
-    expect(vault.list()).toHaveLength(5)
+    expect(importText(vault, file(values), 'move.json')).toMatchObject({ format: 'My old vault', found: 7, imported: 7, updated: 0 })
+    expect(vault.list()).toHaveLength(7)
     expect(vault.list()[0]!.source).toBe('My old vault')
     const stored = (): string[] => vault.list().map((item) => hash(valueOf(item.id))).sort()
-    expect(stored()).toEqual(values.map(hash).sort())
+    expect(stored()).toEqual([...values, values[0]!, values[1]!].map(hash).sort())
     const next = values.map(() => pw())
-    expect(importText(vault, file(next), 'move.json')).toMatchObject({ imported: 0, updated: 5 })
-    expect(vault.list()).toHaveLength(5)
-    expect(stored()).toEqual(next.map(hash).sort())
+    expect(importText(vault, file(next), 'move.json')).toMatchObject({ imported: 0, updated: 7 })
+    expect(vault.list()).toHaveLength(7)
+    expect(stored()).toEqual([...next, next[0]!, next[1]!].map(hash).sort())
   })
 
   it('gives refs that tell apart two logins with the same name', () => {
