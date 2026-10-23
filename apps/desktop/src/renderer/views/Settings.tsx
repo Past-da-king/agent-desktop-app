@@ -24,6 +24,7 @@ import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
 import { DevicesSettings } from './Devices'
 import { WorkLimits } from './WorkLimits'
+import { VaultSettings } from './Vault'
 
 function ResetDialog({ onClose }: { onClose: () => void }): JSX.Element {
   const navigate = useUi((state) => state.navigate)
@@ -290,6 +291,8 @@ export function Settings(): JSX.Element {
           <VoiceSettings />
             </>
           )}
+
+          <VaultSettings />
         </div>
 
         <div className="stack">

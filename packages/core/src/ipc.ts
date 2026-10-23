@@ -11,6 +11,7 @@
  */
 // Type-only: erased at build time, so this file still imports nothing at run time.
 import type { WorkersApi } from './workers'
+import type { VaultApi } from './vault'
 
 // ---------------------------------------------------------------------------------------------------------------
 // Settings
@@ -1349,6 +1350,9 @@ export interface AgentApi {
 
   /** Background workers and the events they emit (workers.ts). */
   workers: WorkersApi
+
+  /** The Vault: passwords and keys the agent uses without seeing (vault.ts). Never values, except reveal. */
+  vault: VaultApi
 
   settings: {
     get(): Promise<Settings>

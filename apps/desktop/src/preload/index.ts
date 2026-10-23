@@ -43,6 +43,7 @@ import type {
   WorkerLogLine,
 } from '@agent/core'
 import type { CallHandoffResult, CallTarget, LiveTokenResult } from '@agent/core'
+import type { VaultAuditEntry, VaultImportResult, VaultItemMeta } from '@agent/core'
 import type { DeviceJoinResult, DeviceRow, DevicesStatus, HelperCardsSnapshot, PairingOfferInfo } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
 
@@ -51,6 +52,7 @@ import { MEMORY_CHANNELS, MEMORY_EVENTS } from '../shared/memory-channels'
 import { MEMORY_HISTORY_CHANNELS } from '../shared/memory-history-channels'
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../shared/devices-channels'
 import { WORKER_CHANNELS, WORKER_EVENTS } from '../shared/workers-channels'
+import { VAULT_CHANNELS, VAULT_EVENTS } from '../shared/vault-channels'
 
 const platform: AgentApi['platform'] =
   process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
@@ -323,6 +325,16 @@ const api: AgentApi = {
     setSecret: (id, name, value) => call<void>(WORKER_CHANNELS.setSecret, id, name, value),
     openFolder: (id) => call<void>(WORKER_CHANNELS.openFolder, id),
     onChange: (callback) => on<null>(WORKER_EVENTS.changed, () => callback()),
+  },
+  vault: {
+    list: () => call<VaultItemMeta[]>(VAULT_CHANNELS.list),
+    save: (input) => call<VaultItemMeta>(VAULT_CHANNELS.save, input),
+    remove: (id) => call<void>(VAULT_CHANNELS.remove, id),
+    reveal: (id, field) => call<string>(VAULT_CHANNELS.reveal, id, field ?? ''),
+    copy: (id, field) => call<void>(VAULT_CHANNELS.copy, id, field ?? ''),
+    audit: (limit) => call<VaultAuditEntry[]>(VAULT_CHANNELS.audit, limit ?? 100),
+    importAos: (folder) => call<VaultImportResult>(VAULT_CHANNELS.importAos, folder ?? ''),
+    onChange: (callback) => on<null>(VAULT_EVENTS.changed, () => callback()),
   },
 }
 

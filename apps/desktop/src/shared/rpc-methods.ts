@@ -7,6 +7,7 @@ import { CHANNELS, EVENTS } from './channels'
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from './devices-channels'
 import { MEMORY_CHANNELS, MEMORY_EVENTS } from './memory-channels'
 import { MEMORY_HISTORY_CHANNELS } from './memory-history-channels'
+import { VAULT_CHANNELS, VAULT_EVENTS } from './vault-channels'
 
 type Tree = { readonly [key: string]: string | Tree }
 
@@ -21,7 +22,7 @@ function flatten(tree: Tree, prefix: string, out: Record<string, string>): Recor
 
 /** Dotted method name to IPC channel, for every method the main process serves. */
 export const RPC_CHANNELS: Readonly<Record<string, string>> = flatten(
-  { ...CHANNELS, memory: { ...MEMORY_CHANNELS, ...MEMORY_HISTORY_CHANNELS }, devices: DEVICES_CHANNELS },
+  { ...CHANNELS, memory: { ...MEMORY_CHANNELS, ...MEMORY_HISTORY_CHANNELS }, devices: DEVICES_CHANNELS, vault: VAULT_CHANNELS },
   '',
   {},
 )
@@ -82,6 +83,8 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'memory.restoreVersion',
   'devices.status',
   'devices.list',
+  // The Vault: names only. Values never go to another device (show and copy are this window's own clicks).
+  'vault.list',
 ])
 
 /** Main-process events a paired device hears (the rest are about this computer's own window and hardware). */
@@ -98,6 +101,7 @@ export const RPC_EVENTS: ReadonlySet<string> = new Set([
   MEMORY_EVENTS.upkeep,
   MEMORY_EVENTS.tidy,
   DEVICES_EVENTS.changed,
+  VAULT_EVENTS.changed,
 ])
 
 export const NOT_AVAILABLE = 'not available on this device'

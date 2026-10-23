@@ -1,0 +1,20 @@
+/* Settings > Vault (views/Vault.tsx): a searchable list of names, never values. */
+.vault-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 8px 10px}
+.vault-search{flex:1 1 240px;height:46px;min-width:0}
+.vault-search input{flex:1;min-width:0;border:0;background:transparent;color:var(--on-bg);font:400 15px/1.3 var(--font);outline:none}
+.vault-head-acts{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.vault .vault-row{align-items:center;flex-wrap:wrap;row-gap:6px}
+.vault .vault-row .rt{flex:1 1 220px;min-width:0}
+.vault .vault-row .rt span{overflow-wrap:anywhere}
+.vault-ref{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+.vault-ref code,.vault-foot code{font:400 12px/1.4 var(--mono,ui-monospace,monospace);background:var(--s-high);color:var(--on-sv);border-radius:6px;padding:1px 6px}
+.vault-ref code.vault-value{background:var(--pc);color:var(--on-pc);user-select:all}
+.vault-pills{display:flex;gap:6px;flex-wrap:wrap}
+.vault-more{display:flex;justify-content:center;padding:4px 0}
+.vault-foot{margin:6px 10px 4px;line-height:1.5}
+.vault-notes{height:auto;min-height:76px;padding:10px 14px;resize:vertical;font:400 15px/1.4 var(--font)}
+@media (max-width: 640px){
+  .vault-head-acts{width:100%;justify-content:flex-start}
+  .vault .vault-row .ai-row-acts{grid-column:1 / -1;width:100%;justify-content:flex-start;margin-left:0;gap:0}
+  .vault .vault-row .vault-pills:empty{display:none}
+}

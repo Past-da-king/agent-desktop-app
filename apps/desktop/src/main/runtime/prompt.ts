@@ -150,7 +150,7 @@ export function profileLines(profiles: AgentProfileInfo[], learnedNames: Record<
   )
   out.push('- If no profile fits the job, make one with profile_create (a clear name, the apps it needs) before delegating. The user sees it in Connections in its own colour.')
   out.push('- You yourself may use any account in any profile; helpers may not.')
-  out.push("- The user's own browser profile (Mine) is theirs: no agent browses with their sign-ins unless they lent them to a profile above. When a site needs an account that is not signed in where you browse, hand the page over with browser_handoff so the user signs in there; never ask them for a password.")
+  out.push("- The user's own browser profile (Mine) is theirs: no agent browses with their sign-ins unless they lent them to a profile above. When a site needs an account that is not signed in where you browse, look in the Vault first (vault_list, then vault_login or vault_fill: you use it without seeing it); if it is not there, hand the page over with browser_handoff so the user signs in there; never ask them for a password.")
   return out
 }
 

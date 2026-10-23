@@ -4,6 +4,7 @@
  */
 export * from './ipc'
 export * from './workers'
+export * from './vault'
 export * from './attachments'
 export * from './providers/catalog'
 export * from './accounts'

@@ -24,6 +24,11 @@ import { HandlerRegistry, recordHandlers } from '../main/devices/registry'
 import { devicesState, ownBrainIds, type DevicesSyncDeps } from '../main/devices/sync'
 import { TurnLeases } from '../main/runtime/turns'
 import { registerWorkersIpc } from '../main/workers/ipc'
+import { VaultStore } from '../main/vault/store'
+import { setVaultRedactor } from '../main/vault/redact'
+import { registerVaultIpc } from '../main/vault/ipc'
+import { guardTools } from '../main/vault/guard'
+import { VAULT_EVENTS } from '../shared/vault-channels'
 import { registerVoiceIpc } from '../main/voice/ipc'
 import { HelperFeed } from '../main/devices/helper-feed'
 import { VoiceService } from '../main/voice/service'
@@ -132,6 +137,8 @@ export interface HeadlessRuntime {
   store: Store
   settings: SettingsStore
   secrets: Secrets
+  /** The Vault (main/vault/store.ts). */
+  vault: VaultStore
   accounts: AccountStore
   account: AccountService
   runner: Runner
@@ -199,6 +206,10 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const store = new Store(join(dir, 'agent.db'))
   const settings = new SettingsStore(join(dir, 'settings.json'))
   const secrets = new Secrets(join(dir, 'secrets'), new FileKeyCipher(join(dir, 'secrets.key')))
+  // The Vault, as on the computer: its own encrypted file here, filled from a brain through the bundle.
+  const vault = new VaultStore(secrets)
+  setVaultRedactor((text) => vault.redact(text))
+  vault.onChange(() => broadcast(VAULT_EVENTS.changed, null))
   migrateLegacyAccount(settings, secrets)
   const accounts = new AccountStore(settings, secrets)
   const brainLocks = new FileBrainLocks(join(dir, 'brain-locks.json'))
@@ -317,7 +328,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const deviceHub = (): NonNullable<typeof devicesState.sync>['tools'] | null => devicesState.sync?.tools ?? null
   // The node's own controls as tools (tools/app-control.ts): Devices (once started) and Settings. No self update here.
   const appControl: AppControlDeps = { devices: () => getDevicesService(), links: () => devicesState.sync?.replicator.status() ?? [], settings, invoker: () => registryInvoker(registry) }
-  const workerToolList = [...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps })), ...nodeTools]
+  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault })), ...nodeTools], vault)
   const helpers = new HelperManager({
     leases,
     store,
@@ -338,7 +349,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     profiles: apps.profiles,
     learnedNames,
   })
-  const tools = browserTools([
+  const tools = guardTools(browserTools([
     ...buildToolset({
       appControl,
       store,
@@ -354,6 +365,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
       deviceHub,
       workers: workerDeps,
+      vault,
       devices: {
         selfId: () => devicesState.sync?.selfId() ?? '',
         commands: () => devicesState.sync?.commands ?? null,
@@ -379,7 +391,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       },
     }),
     ...nodeTools,
-  ])
+  ]), vault)
   eventRouter = new EventRouter({
     store,
     workers,
@@ -524,6 +536,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     supervisor.start()
   }
   registerWorkersIpc(ipcMain, { store: workers, supervisor, openPath: async () => '' })
+  registerVaultIpc(ipcMain, { vault })
 
   // Voice: a paired phone with no Google key of its own gets a one-use Live token from the key the bundle brought
   // here, and its call lands in this chat. Live calls held on this node itself need a screen, so none start here.
@@ -592,6 +605,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     store,
     settings,
     secrets,
+    vault,
     accounts,
     account,
     runner: theRunner,

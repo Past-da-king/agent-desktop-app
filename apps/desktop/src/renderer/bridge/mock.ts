@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS, pickModel, resolvePick } from '@agent/core'
+import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS, pickModel, resolvePick, vaultRefOf, type VaultAuditEntry, type VaultItemMeta } from '@agent/core'
 import { mockDevices } from './mock-devices'
 import type {
   WorkerEvent,
@@ -1462,6 +1462,7 @@ export const mockAgent: AgentApi = {
 
   ...mockHotkeys(() => settings),
   workers: mockWorkers(),
+  vault: mockVault(),
   memory: {
     async newChat(target) {
       const chatOfRow = (item: ChatItem): string => String(parseMeta(item.meta)['chat'] ?? MAIN_CHAT)
@@ -1802,6 +1803,100 @@ function mockWorkers(): AgentApi['workers'] {
       changed()
     },
     openFolder: async () => undefined,
+    onChange: (cb) => {
+      listeners.add(cb)
+      return () => listeners.delete(cb)
+    },
+  }
+}
+
+/** The Vault in the browser preview: a few made-up items, values kept only in this page. */
+function mockVault(): AgentApi['vault'] {
+  const listeners = new Set<() => void>()
+  const changed = (): void => {
+    for (const cb of listeners) cb()
+  }
+  const now = Date.now()
+  type Item = VaultItemMeta & { values: Record<string, string> }
+  const make = (id: string, name: string, kind: VaultItemMeta['kind'], username: string, url: string, values: Record<string, string>, tags: string[] = []): Item => ({
+    id,
+    name,
+    ref: vaultRefOf(name),
+    kind,
+    username,
+    url,
+    hosts: url === '' ? [] : [new URL(url).hostname],
+    notes: '',
+    tags,
+    profile: '',
+    fields: Object.keys(values),
+    revealable: false,
+    source: '',
+    createdAt: now - 86_400_000,
+    updatedAt: now - 3_600_000,
+    lastUsedAt: 0,
+    useCount: 0,
+    revealCount: 0,
+    values,
+  })
+  const items: Item[] = [
+    make('v_000001', 'Example AI key', 'api_key', '', 'https://console.example.com', { key: 'demo-key-123456' }, ['ai']),
+    make('v_000002', 'Example site login', 'login', 'me@example.com', 'https://login.example.com', { password: 'demo-pass-123' }),
+  ]
+  const meta = (item: Item): VaultItemMeta => {
+    const { values, ...rest } = item
+    return { ...rest, fields: Object.keys(values) }
+  }
+  const find = (id: string): Item => {
+    const item = items.find((entry) => entry.id === id)
+    if (item === undefined) throw new Error('There is no such vault item.')
+    return item
+  }
+  const audit: VaultAuditEntry[] = []
+  return {
+    list: async () => items.map(meta).sort((a, b) => a.name.localeCompare(b.name)),
+    save: async (input) => {
+      const existing = input.id === undefined ? undefined : items.find((item) => item.id === input.id)
+      const values = { ...(existing?.values ?? {}) }
+      for (const [k, v] of Object.entries(input.fields ?? {})) {
+        if (v === '') delete values[k]
+        else values[k] = v
+      }
+      const item: Item = {
+        ...(existing ?? make(`v_${Math.random().toString(16).slice(2, 8)}`, input.name, input.kind ?? 'login', '', '', {})),
+        name: input.name,
+        ref: input.ref ?? existing?.ref ?? vaultRefOf(input.name),
+        kind: input.kind ?? existing?.kind ?? 'login',
+        username: input.username ?? existing?.username ?? '',
+        url: input.url ?? existing?.url ?? '',
+        notes: input.notes ?? existing?.notes ?? '',
+        tags: input.tags ?? existing?.tags ?? [],
+        revealable: input.revealable ?? existing?.revealable ?? false,
+        updatedAt: Date.now(),
+        values,
+        fields: Object.keys(values),
+      }
+      if (existing === undefined) items.push(item)
+      else items.splice(items.indexOf(existing), 1, item)
+      changed()
+      return meta(item)
+    },
+    remove: async (id) => {
+      const index = items.findIndex((item) => item.id === id)
+      if (index >= 0) items.splice(index, 1)
+      changed()
+    },
+    reveal: async (id, field) => {
+      const item = find(id)
+      audit.push({ at: Date.now(), itemId: id, name: item.name, action: 'reveal', who: 'person' })
+      return item.values[field ?? item.fields[0] ?? ''] ?? ''
+    },
+    copy: async (id) => {
+      const item = find(id)
+      audit.push({ at: Date.now(), itemId: id, name: item.name, action: 'copy', who: 'person' })
+    },
+    audit: async () => [...audit].reverse(),
+    importAos: async () => ({ found: 0, imported: 0, updated: 0, skipped: 0, names: [], error: 'There is no A.O.S vault in the preview.' }),
     onChange: (cb) => {
       listeners.add(cb)
       return () => listeners.delete(cb)

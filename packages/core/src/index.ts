@@ -1,5 +1,6 @@
 export * from './ipc'
 export * from './workers'
+export * from './vault'
 export * from './accounts'
 export * from './attachments'
 export * from './model'
