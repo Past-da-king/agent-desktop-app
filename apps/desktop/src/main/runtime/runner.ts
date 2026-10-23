@@ -1660,6 +1660,10 @@ export function describeCall(call: ToolCallBlock): string {
       return 'Changed a routine'
     case 'routine_delete':
       return 'Deleted a routine'
+    case 'run_script':
+      return input['background'] === true ? 'Started a script in the background' : 'Ran a script'
+    case 'run_script_result':
+      return 'Checked a background script'
     default:
       return call.name.replace(/_/g, ' ')
   }

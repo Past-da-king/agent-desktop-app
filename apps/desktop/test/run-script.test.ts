@@ -19,6 +19,8 @@ import { Store } from '../src/main/db'
 import { scriptToolsForTurn, toolsForTurn } from '../src/main/runtime/cli-host'
 import { startToolServer, type ToolServer } from '../src/main/runtime/mcp-server'
 import { buildSystemPrompt } from '../src/main/runtime/prompt'
+import { runFinished, runStarted } from '../src/main/runtime/run-detail'
+import { describeCall } from '../src/main/runtime/runner'
 import { appTools } from '../src/main/tools/apps'
 import { coreTools } from '../src/main/tools/core'
 import { gateTool } from '../src/main/tools/profile-gate'
@@ -92,6 +94,24 @@ describe('run_script on the plan path (the in-app tool server)', () => {
     const request = { tools, thread: 'helper:1', cli: 'claude' as const }
     expect(toolsForTurn(request).map((t) => t.spec.name)).toEqual(['memory_search'])
     expect(scriptToolsForTurn(request).map((t) => t.spec.name)).toEqual(['memory_search', 'shell_run', 'files_read'])
+  })
+})
+
+describe('the run_script row in the work trail', () => {
+  it('shows the script, and lists every inner call with its arguments, ok or failed, and time; the model gets only the summary', async () => {
+    const tools = [plain('project_update', async (input) => `${String(input['id'])}: done ${'DETAIL '.repeat(50)}`), plain('boom', async () => { throw new Error('kaput') })]
+    const input: JsonObject = { code: `for (const id of ['a', 'b']) await tools.project_update({ id }); try { await tools.boom({}) } catch (e) {} return 'two set'` }
+    const call = { t: 'call' as const, id: 'c1', name: 'run_script', input }
+    expect(describeCall(call)).toBe('Ran a script')
+    expect(runStarted(call)).toMatchObject({ kind: 'code', label: 'script', state: 'running', input: input['code'] })
+    const result = await runTool(tools).run(input, testContext())
+    expect(result).not.toContain('DETAIL')
+    const record = runFinished(call, result, false, Date.now() - 50)
+    expect(record?.state).toBe('ok')
+    expect(record?.stdout).toContain('Result: "two set"')
+    expect(record?.stdout).toContain('Tool calls inside the script (3):')
+    expect(record?.stdout).toMatch(/ok {4} {2}project_update {2}\{"id":"a"\} {2}\d+ ms/)
+    expect(record?.stdout).toMatch(/FAILED {2}boom {2}\{\} {2}\d+ ms/)
   })
 })
 
