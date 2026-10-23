@@ -727,6 +727,11 @@ export function registerIpc(deps: IpcDeps): () => void {
     deps.apps?.setTrusted(requireString(rawId, 'id', 64), rawOn)
   })
 
+  handle(CHANNELS.apps.setAskFirst, async (_event, rawId, rawOn) => {
+    if (typeof rawOn !== 'boolean') throw new Error('Invalid ask first')
+    deps.apps?.setAskFirst(requireString(rawId, 'id', 64), rawOn)
+  })
+
   // ---- profiles (profiles.json under userData; see apps/profiles.ts) ----
 
   const profileDraft = async (raw: unknown, partial: boolean): Promise<{

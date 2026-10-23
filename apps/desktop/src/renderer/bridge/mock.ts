@@ -1222,6 +1222,10 @@ export const mockAgent: AgentApi = {
       learnedApps = learnedApps.map((app) => (app.id === id ? { ...app, trusted } : app))
       emitApps()
     },
+    async setAskFirst(id: string, askFirst: boolean) {
+      learnedApps = learnedApps.map((app) => (app.id === id ? { ...app, askFirst } : app))
+      emitApps()
+    },
     onChanged(callback: () => void): Unsubscribe {
       appsListeners.add(callback)
       return () => {

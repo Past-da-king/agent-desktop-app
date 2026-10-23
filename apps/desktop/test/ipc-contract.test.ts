@@ -192,7 +192,7 @@ const METHODS: Record<string, string[]> = {
     'attach',
   ],
   helpers: ['stop', 'stopAll', 'cards'],
-  apps: ['status', 'setKey', 'catalog', 'connect', 'disconnect', 'setRules', 'learned', 'removeLearned', 'setTrusted'],
+  apps: ['status', 'setKey', 'catalog', 'connect', 'disconnect', 'setRules', 'learned', 'removeLearned', 'setTrusted', 'setAskFirst'],
   profiles: ['list', 'create', 'update', 'remove', 'setMember'],
   window: ['minimize', 'toggleMaximize', 'close', 'isMaximized', 'show'],
   files: ['pick', 'pickFolder', 'thumbnail'],

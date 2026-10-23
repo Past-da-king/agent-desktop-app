@@ -1070,8 +1070,11 @@ export interface AccountRules {
   change: AppRule
 }
 
-/** Reading runs, changing asks: what a new account starts with. */
-export const DEFAULT_ACCOUNT_RULES: AccountRules = { read: 'allow', change: 'ask' }
+/**
+ * What a new account starts with: reading and ordinary changes run (the person's rule, 23 Oct 2026). Deleting, paying and the
+ * like still ask (desktop main/ask-rule.ts); 'ask' for every change is the person's opt-in per account.
+ */
+export const DEFAULT_ACCOUNT_RULES: AccountRules = { read: 'allow', change: 'allow' }
 
 /** One signed-in account of a connected app (work Gmail, personal Gmail...). */
 export interface ConnectedAccount {
@@ -1125,8 +1128,10 @@ export interface LearnedAppInfo {
   startUrl: string
   host: string
   about: string
-  /** The person lets its tools that change things run without asking each time. */
+  /** Nothing it does asks first, not even deleting or paying. */
   trusted: boolean
+  /** The person's opt-in: every tool that changes things asks first (default off: only risky ones ask). */
+  askFirst?: boolean
   updatedAt: number
   tools: LearnedToolInfo[]
   /** The site's own icon (a data: URL), saved once it was fetched. */
@@ -1148,6 +1153,8 @@ export interface AppsApi {
   learned(): Promise<LearnedAppInfo[]>
   removeLearned(id: string): Promise<void>
   setTrusted(id: string, trusted: boolean): Promise<void>
+  /** The person's opt-in: every changing tool of this learned app asks first. */
+  setAskFirst(id: string, on: boolean): Promise<void>
   /** Fires when accounts, rules, the key or the learned apps change. */
   onChanged(cb: () => void): Unsubscribe
 }

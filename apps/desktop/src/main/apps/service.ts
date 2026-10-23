@@ -319,6 +319,7 @@ export class AppsService {
       host: hostOf(app.startUrl),
       about: app.about,
       trusted: app.trusted,
+      askFirst: app.askFirst === true,
       updatedAt: app.updatedAt,
       tools: app.tools.map((t) => ({ name: t.name, description: t.description, readOnly: t.readOnly })),
       ...(app.icon === undefined ? {} : { icon: app.icon }),
@@ -355,5 +356,9 @@ export class AppsService {
 
   setTrusted(id: string, trusted: boolean): void {
     this.deps.learned.setTrusted(id, trusted)
+  }
+
+  setAskFirst(id: string, on: boolean): void {
+    this.deps.learned.setAskFirst(id, on)
   }
 }

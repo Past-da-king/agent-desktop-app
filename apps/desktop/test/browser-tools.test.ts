@@ -256,21 +256,22 @@ describe('browser tools', () => {
     expect(await show.run({ caption: 'The receipt' }, testContext())).toContain('The receipt')
   })
 
-  it('asks before uploading a file and reports a declined upload', async () => {
+  it('uploads an ordinary file without asking; asks before a key or secrets file and reports a declined upload', async () => {
     const browser = new FakeBrowser()
     const upload = toolNamed(tools(browser), 'browser_upload')
 
     expect(await upload.run({ index: 1, path: '' }, testContext())).toBe(
       'Pass the full path of the file to upload.',
     )
-    expect(await upload.run({ index: 1, path: '/tmp/report.pdf' }, testContext())).toBe(
+    expect(await upload.run({ index: 1, path: '/tmp/server.pem' }, testContext())).toBe(
       'The user declined the upload.',
     )
     expect(browser.calls).toEqual([])
+    expect(await upload.run({ index: 3, path: '/tmp/report.pdf' }, testContext())).toBe('Uploaded')
 
     let summary = ''
     const result = await upload.run(
-      { index: 2, path: '/tmp/report.pdf' },
+      { index: 2, path: '/tmp/report.pdf.env' },
       testContext({
         approve: async (line) => {
           summary = line
@@ -278,9 +279,9 @@ describe('browser tools', () => {
         },
       }),
     )
-    expect(summary).toBe('Upload report.pdf to the page?')
+    expect(summary).toBe('Upload report.pdf.env to the page?')
     expect(result).toBe('Uploaded')
-    expect(browser.lastUpload).toEqual({ index: 2, path: '/tmp/report.pdf' })
+    expect(browser.lastUpload).toEqual({ index: 2, path: '/tmp/report.pdf.env' })
   })
 
   it('goes back and reads the current page', async () => {

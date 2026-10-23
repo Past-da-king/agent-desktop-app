@@ -175,6 +175,7 @@ const api: AgentApi = {
     learned: () => call<LearnedAppInfo[]>(CHANNELS.apps.learned),
     removeLearned: (id: string) => call<void>(CHANNELS.apps.removeLearned, id),
     setTrusted: (id: string, trusted: boolean) => call<void>(CHANNELS.apps.setTrusted, id, trusted),
+    setAskFirst: (id: string, on: boolean) => call<void>(CHANNELS.apps.setAskFirst, id, on),
     onChanged: (callback) => on<null>(EVENTS.apps, () => callback()),
   },
 

@@ -90,6 +90,7 @@ export const CHANNELS = {
     learned: 'agent:apps.learned',
     removeLearned: 'agent:apps.removeLearned',
     setTrusted: 'agent:apps.setTrusted',
+    setAskFirst: 'agent:apps.setAskFirst',
   },
   profiles: {
     list: 'agent:profiles.list',
