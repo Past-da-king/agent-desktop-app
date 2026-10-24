@@ -105,7 +105,9 @@ describe('prompt rules: added live, in every run from the next one', () => {
     await runner.send('Please update the system prompt: close your tabs when done')
     // The turn that added it shows one line in the chat saying what changed, and asks nothing.
     const items = await store.list('chat_item')
-    expect(items.some((row) => row.kind === 'activity' && row.text.includes('Standing instruction added'))).toBe(true)
+    const line = items.find((row) => row.kind === 'activity' && row.text.includes('Standing instruction added'))
+    // Its own line in the chat (meta.line), not folded into "Used N tools".
+    expect(JSON.parse(line?.meta ?? '{}')).toMatchObject({ line: true, tool: 'prompt_rules' })
     expect(items.some((row) => row.kind === 'approval')).toBe(false)
     const rules = await store.list('prompt_rule')
     expect(rules).toHaveLength(1)
