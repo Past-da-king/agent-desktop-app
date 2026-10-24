@@ -381,6 +381,8 @@ export class Store implements SyncStore {
    */
   async applyRemote(changes: Change[], via = ''): Promise<void> {
     const touched: StoreChange[] = []
+    /** Helper cards (chat_item ids) whose end is kept over an incoming stale "working" write. */
+    const keep: string[] = []
     for (const change of changes) {
       if (!isEntityName(change.entity)) continue
       const remote = decodeStamp(change.stamp)
@@ -393,6 +395,12 @@ export class Store implements SyncStore {
       if (existing !== null) {
         const local = decodeStamp(existing.stamp)
         if (local !== null && compareStamps(local, remote) >= 0) continue
+        // A helper's end beats a stale "working" write of the same run (another device wrote it from the card as it
+        // was before the end reached it): ours is kept and stamped again, so it reaches that device and wins there too.
+        if (!existing.deleted && !change.deleted && endedBeatsWorking(change.entity, existing.payload, change.payload)) {
+          keep.push(change.id)
+          continue
+        }
       }
       const payload = { ...change.payload }
       if (typeof payload.createdAt !== 'number') payload.createdAt = this.now()
@@ -414,6 +422,13 @@ export class Store implements SyncStore {
         .run(change.entity, change.id, change.stamp, change.deleted ? 1 : 0, JSON.stringify(payload))
       this.logChange(change.entity, change.id, via)
       touched.push(change.deleted ? { entity: change.entity, id: change.id, deleted: true } : { entity: change.entity, row: { id: change.id, ...payload } as EntityMap[EntityName] })
+    }
+    for (const id of new Set(keep)) {
+      const kept = this.readRow('chat_item', id)
+      if (kept === null) continue
+      // Stamped after the clock saw the stale write, so it is newer than it everywhere.
+      this.db.prepare('UPDATE rows SET stamp = ?, local = 1 WHERE entity = ? AND cid = ?').run(encodeStamp(this.hlc.now()), 'chat_item', id)
+      this.logChange('chat_item', id, '')
     }
     this.announce(touched)
   }
@@ -603,6 +618,33 @@ function compareStampStrings(a: string, b: string): number {
   const right = decodeStamp(b)
   if (left === null || right === null) return a < b ? -1 : a > b ? 1 : 0
   return compareStamps(left, right)
+}
+
+const HELPER_ENDED: ReadonlySet<unknown> = new Set(['done', 'failed', 'stopped'])
+
+function helperMeta(payload: Record<string, unknown>): Record<string, unknown> | null {
+  if (payload['kind'] !== 'helper' || typeof payload['meta'] !== 'string') return null
+  try {
+    const meta = JSON.parse(payload['meta']) as unknown
+    return typeof meta === 'object' && meta !== null ? (meta as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Is `ours` a helper card that ended, and `incoming` the same run's card still saying working? Then the end wins
+ * whatever the stamps say. A new run (a push, a resume) carries a new runToken, so it is never held back by this.
+ * Exported for tests.
+ */
+export function endedBeatsWorking(entity: string, ours: Record<string, unknown>, incoming: Record<string, unknown>): boolean {
+  if (entity !== 'chat_item') return false
+  const mine = helperMeta(ours)
+  const theirs = helperMeta(incoming)
+  if (mine === null || theirs === null) return false
+  if (!HELPER_ENDED.has(mine['state']) || theirs['state'] !== 'working') return false
+  const token = typeof mine['runToken'] === 'string' ? mine['runToken'] : ''
+  return token !== '' && theirs['runToken'] === token
 }
 
 /** Sensible starting values so a partial input still produces a complete row. */
