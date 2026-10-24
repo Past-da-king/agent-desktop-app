@@ -51,12 +51,12 @@ const MAX_SINGLE_CHANGES = 40
  */
 const CHAT_SQL = "CASE WHEN json_valid(json_extract(payload, '$.meta')) THEN json_extract(json_extract(payload, '$.meta'), '$.chat') END"
 
-const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job']
+const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule']
 
 /** Versions kept per memory page; the oldest go first. */
 const MAX_VERSIONS = 300
 
-const UPDATED_AT_ENTITIES: ReadonlySet<EntityName> = new Set(['memory', 'task'])
+const UPDATED_AT_ENTITIES: ReadonlySet<EntityName> = new Set(['memory', 'task', 'prompt_rule'])
 
 export class Store implements SyncStore {
   readonly deviceId: string
@@ -655,5 +655,7 @@ function defaultsFor(entity: EntityName): Record<string, unknown> {
       return { kind: 'turn', chatId: 'main', messageId: '', brainId: '', status: 'running', attempt: 1, heartbeatAt: 0, startedAt: 0, prompt: '' }
     case 'job':
       return { kind: 'msg', device: '', from: '', helper: '', op: '', text: '', item: '', status: 'sent', info: '', at: 0 }
+    case 'prompt_rule':
+      return { text: '', reason: '', status: 'active', updatedAt: 0, history: [] }
   }
 }

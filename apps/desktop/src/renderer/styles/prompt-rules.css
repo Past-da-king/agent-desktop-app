@@ -1,0 +1,24 @@
+/* Settings > Instructions: the person's standing instructions (views/PromptRules.tsx). */
+.prules-card{padding:14px 18px 16px}
+.prules-lead{margin:0 0 12px}
+.prules-none{margin:0 0 12px;color:var(--on-sv)}
+.prules-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.prules-rule{border:1px solid var(--outline-v);border-radius:var(--r-md);padding:10px 10px 10px 14px;background:var(--s-lowest);min-width:0}
+.prules-body{display:flex;align-items:flex-start;gap:8px;min-width:0}
+.prules-text{flex:1 1 auto;min-width:0;margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
+.prules-tools{display:flex;gap:2px;flex:0 0 auto}
+.prules-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-top:6px;min-width:0}
+.prules-meta>span{min-width:0;overflow-wrap:anywhere}
+.prules-hist-btn{background:none;border:0;padding:4px 0;color:var(--primary);font:500 12px/1.2 var(--font);cursor:pointer}
+.prules-hist-btn:hover{text-decoration:underline}
+.prules-hist{list-style:none;margin:8px 0 0;padding:8px 0 0;border-top:1px solid var(--outline-v);display:flex;flex-direction:column;gap:8px}
+.prules-hist li{display:flex;flex-direction:column;gap:2px;min-width:0}
+.prules-hist-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.4}
+.prules .textarea{width:100%;min-height:84px;resize:vertical;border-radius:var(--r-md);border:1.5px solid var(--outline);background:var(--s-lowest);color:var(--on-bg);padding:12px 14px;font-size:15px;line-height:1.5}
+.prules .textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 25%,transparent)}
+.prules-add{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+.prules-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;flex-wrap:wrap}
+@media (max-width:600px){
+  .prules-card{padding:12px}
+  .prules-rule{padding:8px 6px 10px 10px}
+}

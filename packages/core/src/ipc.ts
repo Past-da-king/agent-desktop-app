@@ -281,6 +281,8 @@ export type EntityName =
   | 'turn_lease'
   // Offload (docs/devices-protocol.md s12): work placed on another brain, its messages and each node's capacity.
   | 'job'
+  // The person's standing instructions, in every agent's prompt from its next run (PromptRuleRow).
+  | 'prompt_rule'
 
 export interface RowBase {
   id: string
@@ -356,6 +358,35 @@ export interface MemoryVersion {
   status: MemoryStatus
   aliases: string
   pinned: boolean
+}
+
+/**
+ * One of the person's standing instructions for his agents (24 Oct 2026): data, not code, so he can say "update the
+ * system prompt: X" and every agent (main, project chats, helpers, routines and desks, on any provider or plan, on
+ * any of his devices) follows it from its next run, with no new build. Synced like every row. A removed rule keeps
+ * its history and is left out of every prompt. They go in their own section of the prompt, below the app's own
+ * rules, which they cannot switch off.
+ */
+export interface PromptRuleRow extends RowBase {
+  text: string
+  /** Why it was added or last changed. */
+  reason: string
+  status: PromptRuleStatus
+  updatedAt: number
+  /** Every version, oldest first (the newest is the rule as it is now). */
+  history: PromptRuleVersion[]
+}
+
+export type PromptRuleStatus = 'active' | 'removed'
+
+export interface PromptRuleVersion {
+  n: number
+  at: number
+  /** Who: "you" (Settings), "agent", "helper <label>", "routine". */
+  by: string
+  reason: string
+  change: 'added' | 'edited' | 'removed' | 'restored'
+  text: string
 }
 
 export interface GoalRow extends RowBase {
@@ -460,6 +491,7 @@ export interface EntityMap {
   device_command: DeviceCommandRow
   turn_lease: TurnLeaseRow
   job: JobRow
+  prompt_rule: PromptRuleRow
 }
 
 // ---------------------------------------------------------------------------------------------------------------

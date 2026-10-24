@@ -25,6 +25,7 @@ import type {
 } from '@agent/core'
 
 import { buildSystemPrompt } from '../runtime/prompt'
+import { promptRulesFor } from '../runtime/prompt-rules'
 import { callVia, senderLine, viaFromMeta, type ChatVia } from '../../shared/sender'
 import type { DataStore } from '../runtime/data'
 import { visualMarkdown, voiceTools } from '../tools/voice'
@@ -328,11 +329,12 @@ export class VoiceService {
   async callPrompt(): Promise<string> {
     const { store } = this.deps
     const settings = this.deps.settings.get()
-    const [memories, goals, tasks, chat] = await Promise.all([
+    const [memories, goals, tasks, chat, promptRules] = await Promise.all([
       store.list('memory'),
       store.list('goal'),
       store.list('task'),
       store.list('chat_item'),
+      promptRulesFor(store),
     ])
     const recent = recentChat(chat)
     const base = buildSystemPrompt({
@@ -344,6 +346,7 @@ export class VoiceService {
       tasks,
       latestUserText: recent.at(-1)?.text ?? '',
       role: 'main',
+      promptRules,
       environment: this.deps.environment?.() ?? null,
       ...(this.deps.timeZone === undefined ? {} : { timeZone: this.deps.timeZone }),
     })

@@ -31,6 +31,7 @@ import {
 
 import type { DataStore } from '../runtime/data'
 import { latestOrigin } from './origin'
+import { MAIN_IDLE_MS, runEnded } from '../browser/run-tabs'
 import type { DeviceTool, DeviceToolGroup, DevicesHost } from './types'
 
 export const TOOL_GROUPS: readonly DeviceToolGroup[] = ['browser', 'notifications', 'files', 'shell', 'approval', 'phone', 'other']
@@ -548,6 +549,8 @@ export class DeviceToolRunner {
         await this.finish(row.id, false, error instanceof Error ? error.message : 'It failed.')
       } finally {
         clearTimeout(timer)
+        // Another brain's browser work here: its tab closes once it has been idle a few minutes (browser/run-tabs.ts).
+        if (groupOf(tool.spec.name) === 'browser') runEnded(`device:${row.brainId}`, MAIN_IDLE_MS)
       }
     } finally {
       this.running.delete(row.id)

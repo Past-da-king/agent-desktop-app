@@ -104,6 +104,7 @@ describe('browser tools', () => {
     const names = tools().map((tool) => tool.spec.name)
     expect(names).toEqual([
       'browser_open',
+      'browser_close',
       'browser_look',
       'browser_read',
       'browser_click',
