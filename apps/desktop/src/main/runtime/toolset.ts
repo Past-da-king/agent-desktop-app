@@ -22,6 +22,7 @@ import { fileTools } from '../tools/files'
 import { memoryTools } from '../tools/memory'
 import { chatTools } from '../tools/chats'
 import { routineTools } from '../tools/routines'
+import { promptRuleTools } from '../tools/prompt-rules'
 import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
 import { workerTools as backgroundWorkerTools, type WorkerToolDeps } from '../tools/workers'
@@ -149,6 +150,7 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
   'routine_list',
   'routine_update',
   'routine_delete',
+  'prompt_rules',
   'profile_create',
   'project_list',
   'project_create',
@@ -203,6 +205,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...(deps.searchChats === undefined ? [] : chatTools({ store: deps.store, search: deps.searchChats })), // chats_search, chat_read
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
     ...routineTools(deps.store, deps.now), // routine_create, routine_list, routine_update, routine_delete
+    ...promptRuleTools(deps.store), // prompt_rules: the person's standing instructions, in every agent's prompt
     ...backgroundWorkerTools(deps.workers === undefined ? undefined : { commands: () => settings.get().shell, ...deps.workers }), // worker_guide, worker_create, worker_update, worker_test, worker_list, worker_logs, worker_events, worker_control, worker_delete, worker_secret_set
     ...fileTools({
       settings,

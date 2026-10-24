@@ -73,6 +73,7 @@ import { attachVaultTo } from './vault-link'
 import { alive, ifAlive, whileAlive } from '../alive'
 import { pickTab } from './tab-pick'
 import { siteTabPlan } from './site-tab'
+import { onRunEnded, RunTabs, SWEEP_MS } from './run-tabs'
 import { checkBrowserUrl } from './url-policy'
 import { EMBED_WAIT_MS, guardWebview, isEmbeddedGuest } from './embed'
 import {
@@ -192,6 +193,14 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private readonly lastGesture = new Map<string, number>()
   private readonly downloads: string[] = []
   private readonly sessionCleanups: Array<() => void> = []
+  /** Which run opened each tab, and which close when their run ends (run-tabs.ts). */
+  private readonly runTabs = new RunTabs()
+  /** Tabs kept open with nobody's run on them, throttled in the background until an agent picks them up. */
+  private readonly idled = new Set<string>()
+  /** The tab that opened each sign-in window, so the window goes when the tab does. */
+  private readonly popupOpener = new Map<BrowserWindow, string>()
+  private readonly offRunEnd: () => void
+  private readonly sweepTimer: ReturnType<typeof setInterval>
 
   private activeId: string | null = null
   private bounds: BrowserBounds = { ...EMPTY_BOUNDS }
@@ -245,7 +254,123 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
     this.engine = { chromeVersion: chromeVersionOf(engineUa), platform: process.platform }
 
+    // A run that ends closes the tabs it opened (helpers and routines at once, the main agent after a few idle minutes).
+    this.offRunEnd = onRunEnded((owner, graceMs) => this.endRun(owner, graceMs))
+    this.sweepTimer = setInterval(() => ifAlive('browser sweep', () => this.sweepTabs()), SWEEP_MS)
+    this.sweepTimer.unref?.()
+
     this.attach(options.window)
+  }
+
+  // ---- runs own their tabs ------------------------------------------------------------------
+
+  /** A run ended: the tabs it opened close after `graceMs`, unless it browses again first (run-tabs.ts). */
+  endRun(owner: string, graceMs = 0): void {
+    if (this.destroyed) return
+    this.runTabs.end(owner, Date.now() + graceMs)
+    if (graceMs === 0) this.sweepTabs()
+  }
+
+  /** Closes the tabs that are due: ended runs' tabs, and shown ones of ended runs once they are no longer shown. */
+  private sweepTabs(): void {
+    if (this.destroyed || !this.runTabs.pending()) return
+    const shown = this.bounds.visible && this.bounds.width > 0 ? (this.shownTab()?.id ?? null) : null
+    const plan = this.runTabs.sweep(Date.now(), {
+      open: [...this.tabs.map((tab) => tab.id), ...this.pending.keys()],
+      personTab: this.personTab,
+      shown,
+      driving: this.ownerTabs,
+    })
+    for (const owner of plan.drop) {
+      this.ownerTabs.delete(owner)
+      this.ownerPartitions.delete(owner)
+    }
+    for (const id of plan.close) this.closeTab(id)
+    for (const id of plan.idle) this.idleTab(id)
+  }
+
+  /** A tab kept with no run on it: throttled in the background, so it costs little until it is needed again. */
+  private idleTab(id: string): void {
+    const tab = this.tabs.find((each) => each.id === id)
+    if (tab === undefined || this.idled.has(id)) return
+    this.idled.add(id)
+    try {
+      if (!tab.wc.isDestroyed()) tab.wc.setBackgroundThrottling(true)
+    } catch {
+      // A tab closing as this runs needs nothing.
+    }
+  }
+
+  /** An agent picked a kept tab up again: an offscreen page runs at full speed again (embedded ones throttle by default). */
+  private wakeTab(tab: Tab): void {
+    if (!this.idled.delete(tab.id) || tab.view === null) return
+    try {
+      if (!tab.wc.isDestroyed()) tab.wc.setBackgroundThrottling(false)
+    } catch {
+      // Closing.
+    }
+  }
+
+  /** The tabs the acting agent owns, one line each, for its own tool answers. */
+  private ownTabLines(owner: string): string[] {
+    const ids = this.runTabs.tabsOf(owner, { open: this.tabs.map((tab) => tab.id), driving: this.ownerTabs })
+    return ids.map((id) => {
+      const tab = this.tabs.find((each) => each.id === id)
+      return `- ${id}${this.ownerTabs.get(owner) === id ? ' (current)' : ''}: ${tab === undefined ? '' : safeUrl(tab.wc)}`
+    })
+  }
+
+  /** browser_open with new_tab: the agent's page opens in a fresh tab of its own; its other tabs stay open and its. */
+  async openNewTab(raw: string): Promise<string> {
+    const owner = currentOwner()
+    if (owner !== undefined) this.ownerTabs.delete(owner)
+    const result = await this.open(raw)
+    const id = owner === undefined ? undefined : this.ownerTabs.get(owner)
+    return id === undefined ? result : `Opened in a new tab (${id}).\n\n${result}`
+  }
+
+  /**
+   * browser_close: the acting agent closes its current tab, one of its tabs by id, or all of them. Never the person's
+   * tab, and never one another agent is driving.
+   */
+  async closeOwnTab(id?: string, all = false): Promise<string> {
+    const owner = currentOwner()
+    if (owner === undefined) return 'Only an agent closes its own tabs this way.'
+    const mine = this.runTabs.tabsOf(owner, { open: this.tabs.map((tab) => tab.id), driving: this.ownerTabs })
+    const wanted = all ? mine : [id === undefined || id.trim() === '' ? (this.ownerTabs.get(owner) ?? '') : id.trim()]
+    if (wanted.length === 0 || wanted[0] === '') return 'You have no tab open.'
+    const closed: string[] = []
+    const refused: string[] = []
+    for (const tabId of wanted) {
+      if (!this.tabs.some((tab) => tab.id === tabId) && !this.pending.has(tabId)) {
+        refused.push(`${tabId}: no such tab`)
+        continue
+      }
+      if (tabId === this.personTab || (this.runTabs.ownerOf(tabId) === undefined && this.ownerTabs.get(owner) !== tabId)) {
+        refused.push(`${tabId}: not yours (the person's, or nobody's to close)`)
+        continue
+      }
+      const other = [...this.ownerTabs].find(([who, tab]) => tab === tabId && who !== owner)
+      if (other !== undefined || this.runTabs.isShared(tabId)) {
+        // A shared site tab or another agent's: this agent lets go of it, the tab stays.
+        if (this.ownerTabs.get(owner) === tabId) this.ownerTabs.delete(owner)
+        refused.push(`${tabId}: shared with another agent, so you let go of it and it stays open`)
+        continue
+      }
+      if (this.runTabs.ownerOf(tabId) !== owner && this.ownerTabs.get(owner) !== tabId) {
+        refused.push(`${tabId}: another agent's`)
+        continue
+      }
+      this.closeTab(tabId)
+      closed.push(tabId)
+    }
+    const left = this.ownTabLines(owner)
+    return [
+      closed.length === 0 ? 'Closed nothing.' : `Closed ${closed.join(', ')}.`,
+      ...(refused.length === 0 ? [] : ['Kept:', ...refused.map((line) => `- ${line}`)]),
+      left.length === 0 ? 'You have no tabs open now.' : 'Your tabs still open:',
+      ...left,
+    ].join('\n')
   }
 
   // ---- the person's side ------------------------------------------------------------------
@@ -377,6 +502,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       // Closed before its page was even attached: the open that made it gives up.
       waiting.resolve('closed')
       for (const [owner, tabId] of this.ownerTabs) if (tabId === id) this.ownerTabs.delete(owner)
+      this.runTabs.forget(id)
       if (this.activeId === id) this.activeId = this.tabs[this.tabs.length - 1]?.id ?? null
       this.emit()
       return
@@ -386,6 +512,18 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const [tab] = this.tabs.splice(index, 1)
     if (tab === undefined) return
     for (const [owner, tabId] of this.ownerTabs) if (tabId === tab.id) this.ownerTabs.delete(owner)
+    this.runTabs.forget(tab.id)
+    this.idled.delete(tab.id)
+    // A sign-in window the tab opened goes with it: nothing is left running for a page that is gone.
+    for (const [popup, opener] of this.popupOpener) {
+      if (opener !== tab.id) continue
+      this.popupOpener.delete(popup)
+      try {
+        if (!popup.isDestroyed()) popup.destroy()
+      } catch {
+        // Already closed.
+      }
+    }
     // Closing the tab the person was using hands control back; one an agent handed them answers its wait.
     if (this.personTab === tab.id) {
       const handedOver = this.handoffReason !== ''
@@ -437,8 +575,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       }
       return
     }
-    // Typing an address in a tab makes it the person's tab.
+    // Typing an address in a tab makes it the person's tab: his from now on, so no agent's run closes it.
     this.personTab = tab.id
+    this.runTabs.givenToPerson(tab.id)
     for (const each of this.tabs) void this.refreshInputGuard(each)
     this.currentView = this.viewForTab(url, tab)
     await this.prepare(tab).catch(() => undefined)
@@ -521,6 +660,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   destroy(): void {
     if (this.destroyed) return
     this.destroyed = true
+    clearInterval(this.sweepTimer)
+    this.offRunEnd()
     for (const cleanup of this.sessionCleanups.splice(0)) {
       try {
         cleanup()
@@ -1490,6 +1631,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     // of them (whatever profile it is in; the person's own profile is only where their NEW tabs open).
     const asking = currentOwner() !== undefined
     this.personTab = on ? null : ((asking ? (this.activeTab() ?? this.shownTab()) : this.shownTab())?.id ?? null)
+    // The person taking a tab over by hand (no agent asked) makes it his; a handoff stays the agent's tab.
+    if (!on && !asking && this.personTab !== null) this.runTabs.givenToPerson(this.personTab)
     this.handoffReason = on ? '' : reason
     // A handoff opens the page full size so the person can sign in or pass a check comfortably;
     // handing back puts it in the panel again.
@@ -1521,7 +1664,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       const tab = id === undefined ? undefined : this.tabs.find((item) => item.id === id)
       // An agent that has not opened a page of its own has none: it never borrows another agent's tab, and a
       // tab from another profile's sign-ins is not reused either (the next open makes one in the right profile).
-      return tab !== undefined && tab.partition === this.partitionNow() ? tab : null
+      const usable = tab !== undefined && tab.partition === this.partitionNow() ? tab : null
+      // Browsing again: its run is live, so its tabs are not due to close (the main agent's next turn).
+      this.runTabs.used(owner)
+      if (usable !== null) this.wakeTab(usable)
+      return usable
     }
     return pickTab(this.tabs, this.activeId, this.current)
   }
@@ -1674,6 +1821,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const moved = [...this.ownerTabs].filter(([, tabId]) => plan.close.includes(tabId)).map(([owner]) => owner)
     for (const id of plan.close) this.closeTab(id)
     for (const owner of moved) this.ownerTabs.set(owner, plan.keep)
+    // The one tab on the site is shared by every run that uses the learned app: no run's end closes it.
+    if (plan.keep !== this.personTab) this.runTabs.shared(plan.keep)
     const owner = currentOwner()
     if (owner !== undefined) this.ownerTabs.set(owner, plan.keep)
     else if (this.activeId !== plan.keep) {
@@ -1708,7 +1857,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
    * when no renderer does so in time (onboarding, the smoke test) the page opens in an offscreen view instead.
    * Null when there are already as many tabs as allowed, or the tab was closed before its page arrived.
    */
-  private async createTab(initialUrl?: string, partition: string = this.partitionNow()): Promise<Tab | null> {
+  private async createTab(initialUrl?: string, partition: string = this.partitionNow(), openedBy?: string): Promise<Tab | null> {
+    // Full: first close what ended runs left behind, so a finished job never blocks a new one.
+    if (this.tabs.length + this.pending.size >= this.maxTabs) this.sweepTabs()
     if (this.tabs.length + this.pending.size >= this.maxTabs || this.destroyed) return null
     const id = `tab-${++this.tabSeq}`
     // A popup opens in the view its site needs, with the emulation in place before the first request.
@@ -1718,6 +1869,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.activeId = id
     const owner = currentOwner()
     if (owner !== undefined) this.ownerTabs.set(owner, id)
+    // The run that opened it owns it (a tab a page opened belongs to whoever owned that page); the person's own are nobody's.
+    const by = owner ?? openedBy
+    if (by !== undefined) this.runTabs.opened(id, by)
 
     const outcome = await this.embedPage(id, partition, spec)
     if (outcome === 'closed' || this.destroyed) return null
@@ -1847,7 +2001,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         return { action: 'deny' }
       }
       // A checked tab in the app; one the person opened is theirs to use.
-      void this.createTab(plan.url, tab.partition).then((made) => {
+      void this.createTab(plan.url, tab.partition, persons ? undefined : this.runTabs.ownerOf(tab.id)).then((made) => {
         if (made === null || !persons) return
         this.personTab = made.id
         for (const each of this.tabs) void this.refreshInputGuard(each)
@@ -1959,7 +2113,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       },
     })
     this.popups.add(child)
-    child.on('closed', () => this.popups.delete(child))
+    this.popupOpener.set(child, opener.id)
+    child.on('closed', () => {
+      this.popups.delete(child)
+      this.popupOpener.delete(child)
+    })
     const wc = child.webContents
     // Still this computer's rules: no local or private address, whatever the page asks for.
     const guard = whileAlive(wc, 'popup navigation guard', (event: Electron.Event, url: string): void => {
@@ -1973,7 +2131,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     wc.on('will-redirect', guard)
     // A window opened from inside a sign-in window becomes a checked tab, never a second window.
     wc.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\//i.test(url)) void this.createTab(url, opener.partition)
+      if (/^https?:\/\//i.test(url)) void this.createTab(url, opener.partition, this.runTabs.ownerOf(opener.id))
       return { action: 'deny' }
     })
     // A sign-in window gets the Vault too, as whoever uses the tab that opened it.

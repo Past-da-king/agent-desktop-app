@@ -44,6 +44,10 @@ export interface BrowserDriver {
    * closed). False when no tab is on the site yet. Optional.
    */
   useSiteTab?(url: string): boolean
+  /** browser_open with new_tab: open in a fresh tab of the agent's own; its other tabs stay its. Optional. */
+  openNewTab?(url: string): Promise<string>
+  /** browser_close: the acting agent closes its current tab, one of its tabs by id, or all of them (run-tabs.ts). */
+  closeOwnTab?(id?: string, all?: boolean): Promise<string>
 }
 
 /** Stands in until the window exists, and in tests that do not care about the browser. */

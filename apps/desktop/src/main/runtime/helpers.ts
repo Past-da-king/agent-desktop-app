@@ -45,6 +45,8 @@ import { redactSecrets } from '../logger'
 import type { LeaseHook } from './turns'
 import { CANNOT_RUN_HERE, type JobOp, type PlaceRequest, type PlaceResult } from './offload'
 import { helperTools } from '../tools/helpers'
+import { runEnded } from '../browser/run-tabs'
+import { promptRulesFor } from './prompt-rules'
 import {
   describeCall,
   friendlyError,
@@ -933,7 +935,11 @@ export class HelperManager implements HelperHost {
       // last state; that must not surface as an unhandled rejection. Its lease resumes it on the next start.
       this.runHelper(run)
         .catch(() => undefined)
-        .finally(() => this.release(run))
+        .finally(() => {
+          // Done, stopped or failed: the tabs it opened close now (browser/run-tabs.ts).
+          runEnded(`helper:${run.id}`)
+          this.release(run)
+        })
     }
   }
 
@@ -1639,11 +1645,12 @@ export class HelperManager implements HelperHost {
   }
 
   private async buildBasePrompt(run: HelperRun): Promise<string> {
-    const [memories, goals, tasks, projects] = await Promise.all([
+    const [memories, goals, tasks, projects, promptRules] = await Promise.all([
       this.store.list('memory'),
       this.store.list('goal'),
       this.store.list('task'),
       run.chat === MAIN_CHAT ? Promise.resolve([]) : this.store.list('project').catch(() => []),
+      promptRulesFor(this.store),
     ])
     // Started from a project chat: it works for that project, reads its memory first and keeps it.
     const project = projects.find((each) => each.chats.includes(run.chat))
@@ -1663,6 +1670,7 @@ export class HelperManager implements HelperHost {
         ? {}
         : { project: { id: project.id, name: project.name, description: project.description, path: project.path, profile: this.profiles?.find(project.profile)?.name ?? 'General' } }),
       learnedNames: this.learnedNames(),
+      promptRules,
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
   }
