@@ -342,7 +342,7 @@ describe('HelperManager', () => {
     )
   })
 
-  it('stops a helper without reporting a result', async () => {
+  it('stops a helper and tells the agent that started it, once (0.2.76: a helper never ends silently)', async () => {
     let started = false
     let release: (() => void) | null = null
     const held = new Promise<void>((resolve) => {
@@ -369,9 +369,11 @@ describe('HelperManager', () => {
       const latest = await db.get('chat_item', row.id)
       return latest !== null && meta(latest)['state'] === 'stopped' ? latest : null
     })
-    expect(meta(stopped)['summary']).toBe('Stopped')
+    expect(meta(stopped)['summary']).toBe('Stopped: it was stopped')
+    await waitFor(() => delivered.length === 1)
     await sleep(20)
-    expect(delivered).toHaveLength(0)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]).toContain('"Slow" stopped: it was stopped')
   })
 
   // Rule of 23 Oct 2026: "who decided I can only run four agents at once?" No ceiling of our own: every brief a
@@ -552,7 +554,8 @@ describe('HelperManager', () => {
     const restored = await db.get('chat_item', row.id)
     expect(meta(restored as ChatItem)).toMatchObject({
       state: 'failed',
-      summary: 'Interrupted when the app closed.',
+      summary: 'Failed: the app restarted',
+      endReason: 'the app restarted',
     })
   })
 

@@ -57,10 +57,12 @@ function delegateTool(host: HelperHost): Tool {
     run: async (input, ctx) => {
       const tasks = parseTasks(input['tasks'], input['profiles'])
       if (tasks.length === 0) return 'No tasks given.'
-      // A helper reports back to the chat that started it.
-      return ctx.chat === undefined
+      // A helper reports back to the chat that started it; one a desk (itself a helper) starts reports to that desk.
+      const parent = parentHelperOf(ctx.owner)
+      const origin = { ...(ctx.chat === undefined ? {} : { chat: ctx.chat }), ...(parent === '' ? {} : { helper: parent }) }
+      return ctx.chat === undefined && parent === ''
         ? host.delegate(tasks, input['together'] === true)
-        : host.delegate(tasks, input['together'] === true, { chat: ctx.chat })
+        : host.delegate(tasks, input['together'] === true, origin)
     },
   }
 }
@@ -117,9 +119,11 @@ function helperStopTool(host: HelperHost): Tool {
         id: str('Helper id'),
       }),
     },
-    run: async (input) => {
+    run: async (input, ctx) => {
       const id = text(input['id'])
-      return (await host.stop(id))
+      const parent = parentHelperOf(ctx.owner)
+      const by = parent === '' ? 'the agent (helper_stop)' : `helper #${parent} (helper_stop)`
+      return (await host.stop(id, by))
         ? `Stopped helper #${id}.`
         : `No running helper #${id}.`
     },
@@ -142,6 +146,11 @@ export function parseTasks(value: unknown, profiles?: unknown): HelperTask[] {
     tasks.push({ label, brief, ...(model === '' ? {} : { model }), ...(profile === '' ? {} : { profile }), ...(device === '' ? {} : { device }) })
   }
   return tasks
+}
+
+/** The helper id of a tool call made by a helper (its owner is `helper:<id>`), '' for any other caller. */
+function parentHelperOf(owner: string | undefined): string {
+  return typeof owner === 'string' && owner.startsWith('helper:') ? owner.slice('helper:'.length) : ''
 }
 
 function text(value: unknown): string {

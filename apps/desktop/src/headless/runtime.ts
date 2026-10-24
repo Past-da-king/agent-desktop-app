@@ -324,7 +324,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       await helpers.push(id, note)
     },
     lost: (lease) => {
-      if (lease.kind === 'job') void helpers.stop(lease.messageId)
+      // Another brain carries it on and tells its creator when it ends: this brain lets go without a notice.
+      if (lease.kind === 'job') void helpers.letGo(lease.messageId)
       else runner?.stop(lease.chatId)
     },
   })
@@ -654,6 +655,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       const working = (): boolean => busy() || helpers.live().length > 0
       while (working() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 200))
       logger.info('Stopping headless node', { stillWorking: working() ? 1 : 0 })
+      // Helpers still working stay marked working: the next start ends them and tells their creators (restore).
+      helpers.shutdown()
       await browser?.close()
       leases.stop()
       wire.stop()

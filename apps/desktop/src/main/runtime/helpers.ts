@@ -96,6 +96,8 @@ export interface ProfileLookup {
 /** Where a helper was started from: the chat its result and cards go back to. */
 export interface HelperOrigin {
   chat?: string
+  /** The helper that started it (a routine's desk): its end notice goes back to that helper, not to a chat. */
+  helper?: string
 }
 
 /** A different job the person sent while a chat was busy: it runs on its own and leaves a summary block. */
@@ -117,14 +119,20 @@ export interface HelperHost {
   steer(id: string, message: string): Promise<string>
   push(id: string, message: string): Promise<string>
   status(): Promise<string>
-  stop(id: string): Promise<boolean>
-  stopAll(): Promise<number>
+  /** `by`: who stopped it, in plain words, for the notice its creator gets ("the person, from its card"). */
+  stop(id: string, by?: string): Promise<boolean>
+  stopAll(by?: string): Promise<number>
   live(): HelperLive[]
   /** A helper's question or approval card, answered by the person. False when it was not ours. */
   answer?(itemId: string, answer: string): Promise<boolean>
   decide?(itemId: string, decision: Decision): Promise<boolean>
-  /** A fresh process has no live helpers: mark the ones left working as failed. */
-  restore?(): Promise<void>
+  /**
+   * A fresh process has no live helpers: the ones left working are ended ("the app restarted") and their creators
+   * told. `defer`: hold the notices until flushNotices (the runner sends them once its own start-up repair is done).
+   */
+  restore?(options?: { defer?: boolean }): Promise<void>
+  /** Sends the end notices restore held back. */
+  flushNotices?(): void
 }
 
 /** One helper as the main prompt and the UI see it. */
@@ -166,6 +174,13 @@ export interface HelperManagerDeps {
   maxConcurrent?: number | (() => number)
   /** How many steps one helper may take. Unset: Settings > Steps per helper, no limit unless the person sets one. */
   maxSteps?: number | (() => number)
+  /**
+   * After how many minutes with no new step a working helper's creator gets one heads-up. Unset: Settings > Heads-up
+   * on a quiet helper (10 by default); 0 = never.
+   */
+  quietMinutes?: number | (() => number)
+  /** How often the quiet watch looks, in ms (tests make it short). Default one minute. */
+  quietCheckMs?: number
   emit?: (event: ChatEvent) => void
   notify?: (title: string, body: string) => void
   /** On the person's own plan, every helper is its own Claude Agent SDK / Codex SDK session. */
@@ -218,6 +233,24 @@ interface HelperRun {
    * (the person chose it there), not this brain's own. Absent: this brain's own setting.
    */
   shell?: ShellPolicy
+  /** This run's key: its creator hears about its end exactly once per run (meta.runToken, meta.noticed). */
+  token: string
+  /** When it last took a step (a tool call, a reply, a thought), for the quiet watch. */
+  lastStepAt: number
+  /** What it was doing last, for its end notice. */
+  lastStep?: string
+  /** The last thing it said, for "what it had" when it is cut off. */
+  lastSaid?: string
+  /** Who stopped it, in plain words. */
+  stopBy?: string
+  /** Stopped only to be handed on (another brain took its lease, or it is sent straight back with a note): no notice. */
+  quiet?: boolean
+  /** The quiet watch already gave its creator a heads-up for this run. */
+  warned?: boolean
+  /** Question or approval cards it is waiting on the person for (it is not stuck while it waits). */
+  waitingOn?: number
+  /** The helper that started it (a desk): its end notice goes there. */
+  parentHelper?: string
 }
 
 type ShellPolicy = 'always' | 'ask' | 'never'
@@ -274,6 +307,36 @@ interface Batch {
   results: Map<string, string>
 }
 
+/** One helper run ending, for whatever reason: what `ended` needs to close its card and tell its creator. */
+interface EndInput {
+  id: string
+  state: HelperState
+  /** Its result text ('' for none). */
+  result: string
+  /** Why it ended, in plain words ('' when it simply finished). */
+  reason: string
+  /** The run it belongs to: one notice per run. */
+  key: string
+  /** The run, when it ran in this process. */
+  run?: HelperRun
+  /** The notice already written (a result another brain sent back). */
+  note?: string
+  /** Another brain already wrote the card's end state: only mark it told. */
+  keepRow?: boolean
+  /** Ended by a restart: a routine's desk is not reported (its routine hands the events to it again). */
+  restart?: boolean
+  /** Cut off by a restart, and its lease sends it back to work by itself: the notice says so. */
+  resuming?: boolean
+}
+
+/** The result a helper hands back when it was stopped, which says nothing about what it had. */
+const STOPPED_TEXT = 'Stopped before it finished.'
+/** What the core loop says when a helper used every step it may take. */
+const OUT_OF_STEPS = /^I stopped after (\d+) steps without finishing/
+const MINUTE_MS = 60_000
+/** Default minutes with no new step before a helper's creator gets a heads-up (Settings can change it; 0 = never). */
+export const QUIET_MINUTES_DEFAULT = 10
+
 /** Words a helper uses when it gives up. Usually it can do it; it needs sending back. */
 export const GAVE_UP =
   /(^\s*(unable|couldn't|could not|can't|cannot|failed)\b)|\b(I|we)\s+(can't|cannot|can not|couldn't|could not|was unable|were unable|am unable|wasn't able|weren't able|am not able|don't have access|do not have access|have no access|wasn't allowed|got blocked|was blocked)\b/i
@@ -323,6 +386,17 @@ export class HelperManager implements HelperHost {
   private readonly deskWaiters = new Map<string, (outcome: DeskOutcome) => void>()
   private deskToolset: Tool[] | null = null
   private activitySeq = 0
+  private readonly quietMinutes: () => number
+  private readonly quietCheckMs: number
+  private quietTimer: ReturnType<typeof setInterval> | null = null
+  /** The app is quitting (shutdown): ends are left for the next start. */
+  private closing = false
+  /** Runs whose end notice went out from this process (`id:key`), so a race can never send a second one. */
+  private readonly noticed = new Set<string>()
+  /** End notices restore held back until the runner's start-up repair is done (flushNotices). */
+  private heldNotices: Array<() => Promise<void>> | null = null
+  /** End notices for helpers another brain placed here, waiting for the link to that brain (restore before Devices). */
+  private readonly awayNotices: Array<{ to: string; id: string; text: string; info: string }> = []
 
   constructor(deps: HelperManagerDeps) {
     this.store = deps.store
@@ -348,11 +422,41 @@ export class HelperManager implements HelperHost {
     this.notifyUser = deps.notify ?? (() => undefined)
     this.leases = deps.leases
     this.offload = deps.offload ?? null
+    const quiet = deps.quietMinutes
+    this.quietMinutes =
+      typeof quiet === 'function'
+        ? quiet
+        : quiet !== undefined
+          ? () => quiet
+          : () => {
+              const value: unknown = this.settings.get().helperQuietMinutes
+              return typeof value === 'number' && Number.isFinite(value) ? value : QUIET_MINUTES_DEFAULT
+            }
+    this.quietCheckMs = deps.quietCheckMs ?? MINUTE_MS
+  }
+
+  /**
+   * The app is quitting: from now on nothing ends here. A helper cut off now stays marked working, so the next start
+   * ends it ("the app restarted") and tells its creator, instead of a notice going to a runner that is gone.
+   */
+  shutdown(): void {
+    this.closing = true
+    if (this.quietTimer !== null) clearInterval(this.quietTimer)
+    this.quietTimer = null
   }
 
   /** Devices came up (or went away): placing helpers on other brains (runtime/offload.ts), or not. */
   setOffload(link: OffloadLink | null): void {
     this.offload = link
+    // End notices for helpers another brain placed here that ended while there was no link to it go out now.
+    const ready = this.link()
+    if (ready === null) return
+    for (const notice of this.awayNotices.splice(0)) void ready.send(notice.to, 'result', notice.id, { text: notice.text, info: notice.info }).catch(() => undefined)
+  }
+
+  /** A fresh key for one run of a helper. */
+  private freshToken(): string {
+    return randomUUID().replace(/-/g, '').slice(0, 10)
   }
 
   /** This brain placed that helper on another brain, and it still works there. */
@@ -433,7 +537,9 @@ export class HelperManager implements HelperHost {
         link === null
           ? {}
           : { placedBy: link.selfId(), runOn: placed?.device ?? link.selfId(), ...(placed?.device ? { runsOnName: placed.name, placerShell: settings.shell } : {}) }
-      const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name, ...where })
+      const token = this.freshToken()
+      const parent = origin.helper === undefined || origin.helper === '' ? {} : { parentHelper: origin.helper }
+      const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name, runToken: token, ...parent, ...where })
       if (link !== null && placed !== null && placed.device !== null) {
         this.remote.set(id, { id, label, brief: task.brief, chat, profile: profile.name, startedAt: this.now(), device: placed.device, sentAt: this.now(), pick: use.pick, profileId: profile.id, model: use.model })
         if (batch !== null) this.batchOf.set(id, batch)
@@ -453,6 +559,9 @@ export class HelperManager implements HelperHost {
         startedAt: this.now(),
         controller: null,
         initialHistory: null,
+        token,
+        lastStepAt: this.now(),
+        ...parent,
       })
       if (batch !== null) this.batchOf.set(id, batch)
       this.queue.push(id)
@@ -485,7 +594,9 @@ export class HelperManager implements HelperHost {
       return this.push(id, message)
     }
     if (brainFor(this.brainDeps(), run.pick).kind === 'plan') {
-      // An SDK session cannot read a note mid-turn: stop it where it is and send it back with the note.
+      // An SDK session cannot read a note mid-turn: stop it where it is and send it back with the note. That stop is
+      // not an end: nobody is told, the push below carries on.
+      run.quiet = true
       await this.stop(id)
       for (let i = 0; i < 50 && this.runs.has(id); i += 1) await new Promise((resolve) => setTimeout(resolve, 100))
       return this.push(id, message)
@@ -537,8 +648,12 @@ export class HelperManager implements HelperHost {
     const desk = meta['desk'] === true ? { desk: true, tools: this.deskTools() } : {}
     const pushes = numberField(meta['pushes']) + 1
     const here = link === null ? {} : { runOn: link.selfId() }
+    // A new run: its own key, so its end is told once, whatever the last run's notice was.
+    const token = this.freshToken()
+    const parentHelper = stringField(meta['parentHelper'])
+    const fresh = { token, lastStepAt: this.now(), ...(parentHelper === '' ? {} : { parentHelper }) }
     if (brain.kind === 'plan') {
-      await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now(), ...here })
+      await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now(), runToken: token, endReason: '', ...here })
       this.runs.set(id, {
         ...this.placerShell(meta, origin),
         origin,
@@ -555,6 +670,7 @@ export class HelperManager implements HelperHost {
         controller: null,
         initialHistory: null,
         pushMessage: message,
+        ...fresh,
         ...desk,
       })
       await this.addActivity(id, label, `Sent back: ${clip(message, 140)}`)
@@ -572,6 +688,8 @@ export class HelperManager implements HelperHost {
       summary: 'Back on it',
       pushes,
       startedAt: this.now(),
+      runToken: token,
+      endReason: '',
       ...here,
     })
     this.runs.set(id, {
@@ -589,6 +707,7 @@ export class HelperManager implements HelperHost {
       startedAt: this.now(),
       controller: null,
       initialHistory: history,
+      ...fresh,
       ...desk,
     })
     await this.addActivity(id, label, `Sent back: ${clip(message, 140)}`)
@@ -629,11 +748,13 @@ export class HelperManager implements HelperHost {
     if (!isBrain(brain)) return { deskId: '', state: 'failed', result: brain.message }
     const label = `Desk: ${spec.name}`.slice(0, 40)
     const brief = `${DESK_PREAMBLE}\n\nYOUR ROUTINE: ${spec.name}\nYOUR STANDING BRIEF:\n${spec.brief}`
+    const token = this.freshToken()
     const id = await this.createHelperRow(label, brief, brain.model, null, profile, MAIN_CHAT, {
       pick,
       modelName: rosterName(this.settings.get(), pick),
       desk: true,
       routine: spec.routineId,
+      runToken: token,
     })
     this.runs.set(id, {
       chat: MAIN_CHAT,
@@ -649,6 +770,8 @@ export class HelperManager implements HelperHost {
       initialHistory: null,
       desk: true,
       tools: this.deskTools(),
+      token,
+      lastStepAt: this.now(),
     })
     const done = this.waitDesk(id)
     this.queue.push(id)
@@ -708,55 +831,67 @@ export class HelperManager implements HelperHost {
       .join('\n\n')
   }
 
-  async stop(id: string): Promise<boolean> {
+  async stop(id: string, by = ''): Promise<boolean> {
     const run = this.runs.get(id)
     if (run === undefined) {
       const elsewhere = await this.runningElsewhere(id)
       if (elsewhere === '') return false
-      await this.link()?.send(elsewhere, 'stop', id)
+      await this.link()?.send(elsewhere, 'stop', id, by === '' ? {} : { text: by })
       return true
     }
+    if (by !== '' && run.stopBy === undefined) run.stopBy = by
     const at = this.queue.indexOf(id)
     if (at >= 0) {
       this.queue.splice(at, 1)
-      this.runs.delete(id)
-      this.dropFromBatch(id)
-      await this.updateMeta(id, {
-        state: 'stopped',
-        summary: 'Stopped before it started.',
-        endedAt: this.now(),
-        queued: false,
-      })
-      this.emit({ type: 'chat_changed' })
+      await this.endNotStarted(run)
       return true
     }
     run.controller?.abort()
     return true
   }
 
-  async stopAll(): Promise<number> {
+  async stopAll(by = ''): Promise<number> {
     const ids = [...this.runs.keys()]
     const away = [...this.remote.values()]
-    for (const run of away) await this.link()?.send(run.device, 'stop', run.id)
+    for (const run of away) await this.link()?.send(run.device, 'stop', run.id, by === '' ? {} : { text: by })
     this.queue.length = 0
     for (const id of ids) {
       const run = this.runs.get(id)
       if (run === undefined) continue
-      if (run.controller === null) {
-        this.runs.delete(id)
-        this.dropFromBatch(id)
-        await this.updateMeta(id, {
-          state: 'stopped',
-          summary: 'Stopped before it started.',
-          endedAt: this.now(),
-          queued: false,
-        })
-      } else {
-        run.controller.abort()
-      }
+      if (by !== '' && run.stopBy === undefined) run.stopBy = by
+      if (run.controller === null) await this.endNotStarted(run)
+      else run.controller.abort()
     }
     if (ids.length > 0) this.emit({ type: 'chat_changed' })
     return ids.length + away.length
+  }
+
+  /**
+   * Another brain took this helper's lease over (this brain was thought gone): stop our run of it without a word.
+   * It goes on there, and that brain tells its creator when it ends.
+   */
+  async letGo(id: string): Promise<boolean> {
+    const run = this.runs.get(id)
+    if (run === undefined) return false
+    run.quiet = true
+    const at = this.queue.indexOf(id)
+    if (at >= 0) {
+      this.queue.splice(at, 1)
+      this.runs.delete(id)
+      this.dropFromBatch(id)
+      return true
+    }
+    run.controller?.abort()
+    return true
+  }
+
+  /** A helper stopped while it still waited its turn: it never started, and its creator is told so. */
+  private async endNotStarted(run: HelperRun): Promise<void> {
+    this.runs.delete(run.id)
+    this.active.delete(run.id)
+    this.inbox.delete(run.id)
+    const reason = run.stopBy === undefined ? 'it was stopped before it started' : `stopped by ${run.stopBy} before it started`
+    await this.ended({ id: run.id, state: 'stopped', result: '', reason, key: run.token, run })
   }
 
   live(): HelperLive[] {
@@ -800,10 +935,12 @@ export class HelperManager implements HelperHost {
     const brief = job.text
     const label = labelFromBrief(job.text.split('\n').filter((line) => !line.startsWith('[')).join(' ') || job.text).slice(0, 40)
     const profile = this.generalProfile()
+    const token = this.freshToken()
     const id = await this.createHelperRow(label, brief, ready.model, null, profile, job.chat, {
       side: true,
       ask: job.userItem,
       goal: clip(job.goal, 200),
+      runToken: token,
     })
     this.runs.set(id, {
       chat: job.chat,
@@ -819,6 +956,8 @@ export class HelperManager implements HelperHost {
       startedAt: this.now(),
       controller: null,
       initialHistory: null,
+      token,
+      lastStepAt: this.now(),
     })
     this.queue.push(id)
     this.pump()
@@ -865,7 +1004,8 @@ export class HelperManager implements HelperHost {
 
   // ---- startup -----------------------------------------------------------------------------
 
-  async restore(): Promise<void> {
+  async restore(options: { defer?: boolean } = {}): Promise<void> {
+    if (options.defer === true && this.heldNotices === null) this.heldNotices = []
     const rows = await this.store.list('chat_item')
     const waiting: string[] = []
     for (const row of rows) {
@@ -896,13 +1036,18 @@ export class HelperManager implements HelperHost {
         waiting.push(row.id)
         continue
       }
-      await this.updateMeta(row.id, {
-        state: 'failed',
-        summary: 'Interrupted when the app closed.',
-        result: 'Interrupted when the app closed.',
-        endedAt: this.now(),
-        queued: false,
-      })
+      // Cut off by the app closing (an update, a crash). Its job lease sends it back to work once recovery runs
+      // (runtime/turns.ts); either way the agent that started it hears what happened. One that nothing will resume
+      // ended: its lease is closed, and that agent decides whether to send it back.
+      const resuming = (await this.leases?.willResume?.(`job-${row.id}`).catch(() => false)) === true
+      if (!resuming) {
+        const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
+        if (lease !== null && (lease.status === 'running' || lease.status === 'interrupted')) {
+          await this.store.upsert('turn_lease', { id: lease.id, status: 'failed', heartbeatAt: this.now() }).catch(() => undefined)
+        }
+      }
+      const key = stringField(meta['runToken']) || String(numberField(meta['startedAt']) || row.createdAt)
+      await this.ended({ id: row.id, state: 'failed', result: 'Interrupted when the app closed.', reason: 'the app restarted', key, restart: true, resuming })
     }
     // Runs taken up on this start stay (clearing them left their cards stuck on "Waiting its turn"); only
     // bookkeeping for runs that are not here any more goes.
@@ -933,30 +1078,37 @@ export class HelperManager implements HelperHost {
       this.leases?.begin({ kind: 'job', chatId: run.chat, messageId: id, prompt: run.brief })
       // A helper still finishing when the store closes (the app quitting, a test ending) has nowhere to write its
       // last state; that must not surface as an unhandled rejection. Its lease resumes it on the next start.
+      let broke: unknown
       this.runHelper(run)
-        .catch(() => undefined)
+        .catch((error: unknown) => {
+          broke = error
+        })
         .finally(() => {
           // Done, stopped or failed: the tabs it opened close now (browser/run-tabs.ts).
           runEnded(`helper:${run.id}`)
-          this.release(run)
+          this.release(run, broke)
         })
     }
+    this.watchQuiet()
   }
 
   /**
    * After a run settles: if it never reached finish (it threw before its first step, or the plan was not there),
    * its slot and card are freed here, so a slot is never held by a helper that is no longer running.
    */
-  private release(run: HelperRun): void {
+  private release(run: HelperRun, error?: unknown): void {
     if (this.runs.get(run.id) !== run) return
     this.runs.delete(run.id)
     this.active.delete(run.id)
     this.inbox.delete(run.id)
     this.leases?.end(`job-${run.id}`, 'failed')
-    const result = 'It stopped before it could start. Send it back to try again.'
-    void this.updateMeta(run.id, { state: 'failed', summary: result, result, endedAt: this.now(), queued: false })
-      .then(() => this.emit({ type: 'chat_changed' }))
-      .catch(() => undefined)
+    if (run.quiet === true) {
+      this.pump()
+      return
+    }
+    const why = error === undefined ? '' : `: ${clip(friendlyError(error).replace(/^Something went wrong: /, ''), 200)}`
+    const result = `It stopped before it could finish${why}. Send it back to try again.`
+    void this.ended({ id: run.id, state: 'failed', result, reason: `it broke off before it could finish${why}`, key: run.token, run }).catch(() => undefined)
     this.pump()
   }
 
@@ -1038,42 +1190,168 @@ export class HelperManager implements HelperHost {
     this.runs.delete(run.id)
     this.active.delete(run.id)
     this.inbox.delete(run.id)
-
-    await this.updateMeta(run.id, {
-      state,
-      summary: summarise(result, state),
-      result: clip(result, MAX_META_RESULT_CHARS),
-      endedAt: this.now(),
-      queued: false,
-    })
-    this.emit({ type: 'chat_changed' })
-    this.pump()
-    const waiter = this.deskWaiters.get(run.id)
-    if (waiter !== undefined) {
-      this.deskWaiters.delete(run.id)
-      waiter({ deskId: run.id, state, result })
-    }
-
-    // A desk with nothing for the main agent says so; its result stays on its card.
-    if (run.desk === true && state === 'done' && /^\s*QUIET\b/i.test(result)) return
-
-    // Run here for another brain: the result goes back to the brain that placed it, which hands it over (s12).
-    if (away !== '' && link !== null) {
-      await link.send(away, 'result', run.id, { text: state === 'stopped' ? '' : this.resultNote(run, state, result), info: JSON.stringify({ state }) })
+    // Stopped only to be handed on (another brain took it, or it goes straight back with a note): not an end.
+    if (run.quiet === true) {
+      this.pump()
       return
     }
-    await this.report(run.id, run.chat, run.side === true, state, result, () => this.resultNote(run, state, result))
+    await this.ended({ id: run.id, state, result, reason: this.reasonFor(run, state, result), key: run.token, run })
+    this.pump()
   }
 
-  /** What a finished helper leaves for the chat that started it: a new turn, a batch's share, or nothing (stopped). */
-  private async report(id: string, chat: string, side: boolean, state: HelperState, _result: string, noteOf: () => string): Promise<void> {
+  /** Why a run that ran here ended, in plain words ('' when it simply finished). */
+  private reasonFor(run: HelperRun, state: HelperState, result: string): string {
+    if (state === 'stopped') return run.stopBy === undefined ? 'it was stopped' : `stopped by ${run.stopBy}`
+    if (state === 'failed') return clip(result.trim(), 300) || 'it failed without saying why'
+    const steps = OUT_OF_STEPS.exec(result.trim())
+    if (steps !== null) return `it used all ${steps[1]} steps a helper may take (Settings > Steps per helper)`
+    return ''
+  }
 
-    // The user stopped it: there is nothing to report back.
-    if (state === 'stopped') {
-      this.dropFromBatch(id)
-      return
+  /**
+   * THE end of a helper run, whatever ended it: it finished, someone stopped it, its AI failed, it ran out of steps,
+   * it could not start, the app restarted under it, or the brain running it went away. Every exit path comes here,
+   * so the card always shows how it ended and the agent that started it always hears, exactly once per run (the
+   * run's key is kept on the card as `noticed`). A routine's desk with nothing to report stays QUIET.
+   */
+  private async ended(input: EndInput): Promise<boolean> {
+    if (this.closing) return false
+    const mark = `${input.id}:${input.key}`
+    if (this.noticed.has(mark)) return false
+    this.noticed.add(mark)
+    const row = await this.store.get('chat_item', input.id).catch(() => null)
+    const meta = row === null ? {} : parseMeta(row.meta)
+    if (input.key !== '' && meta['noticed'] === input.key) return false
+    const run = input.run
+    const state = input.state
+    const label = run?.label ?? (stringField(meta['label']) || 'Helper')
+    const chat = run?.chat ?? (stringField(meta['chat']) || MAIN_CHAT)
+    const side = run?.side ?? meta['side'] === true
+    const desk = run?.desk ?? meta['desk'] === true
+    const pushes = run?.pushes ?? numberField(meta['pushes'])
+    const startedAt = run?.startedAt ?? (numberField(meta['startedAt']) || row?.createdAt || this.now())
+    const lastStep = clip(run?.lastStep ?? stringField(meta['summary']), 200)
+    const parentHelper = run?.parentHelper ?? stringField(meta['parentHelper'])
+    const endedAt = this.now()
+    const link = this.link()
+    // Run here for another brain: that brain tells the creator (its chat is there). At start-up, before Devices is
+    // up, the link is not there yet: the notice waits for it (setOffload).
+    const origin = run !== undefined ? (run.origin ?? '') : this.placerOf(meta)
+    const away = origin !== '' && (link === null || !link.isSelf(origin)) ? origin : ''
+    const summary =
+      input.resuming === true
+        ? clip(`Cut off: ${input.reason}. Going back to work`, 160)
+        : state === 'done' && input.reason === ''
+          ? summarise(input.result, 'done')
+          : clip(`${state === 'done' ? 'Ended' : state === 'stopped' ? 'Stopped' : 'Failed'}: ${input.reason}`, 160)
+    if (input.keepRow === true) {
+      await this.updateMeta(input.id, { noticed: input.key, ...(input.reason === '' ? {} : { endReason: input.reason }) }).catch(() => undefined)
+    } else {
+      await this.updateMeta(input.id, {
+        state,
+        summary,
+        result: clip(input.result, MAX_META_RESULT_CHARS),
+        endedAt,
+        queued: false,
+        endReason: input.reason,
+        // The brain that placed it marks it told, when its creator hears.
+        ...(away === '' ? { noticed: input.key } : {}),
+      }).catch(() => undefined)
+    }
+    this.emit({ type: 'chat_changed', ...chatTag(chat) })
+    const waiter = this.deskWaiters.get(input.id)
+    if (waiter !== undefined) {
+      this.deskWaiters.delete(input.id)
+      waiter({ deskId: input.id, state, result: input.result })
     }
 
+    // A desk with nothing for the main agent says so; its result stays on its card. A desk the app restarted under
+    // is handed its events again by its routine (workers/router.ts), so that is not news either.
+    if (desk && state === 'done' && /^\s*QUIET\b/i.test(input.result)) return true
+    if (desk && input.restart === true) return true
+
+    const note =
+      input.note ??
+      (await this.endNote({ id: input.id, label, state, result: input.result, reason: input.reason, pushes, minutes: Math.max(0, Math.round((endedAt - startedAt) / MINUTE_MS)), lastStep, said: run?.lastSaid ?? '', resuming: input.resuming === true }))
+
+    if (away !== '') {
+      const info = JSON.stringify({ state, reason: input.reason, run: input.key })
+      if (link === null) this.awayNotices.push({ to: away, id: input.id, text: note, info })
+      else await link.send(away, 'result', input.id, { text: note, info }).catch(() => undefined)
+      return true
+    }
+    const send = (): Promise<void> => this.report(input.id, chat, side, note, parentHelper)
+    if (this.heldNotices !== null) this.heldNotices.push(send)
+    else await send()
+    return true
+  }
+
+  /** The brain that placed a helper here, when that is another brain ('' for one of ours). Works before Devices is up. */
+  private placerOf(meta: Record<string, unknown>): string {
+    const placedBy = stringField(meta['placedBy'])
+    if (placedBy === '') return ''
+    const link = this.link()
+    if (link !== null) return link.isSelf(placedBy) ? '' : placedBy
+    // No link yet (start-up): placed by another brain only when it says it runs here and was placed from elsewhere.
+    const offload = this.offload
+    if (offload === null) return ''
+    return offload.isSelf(placedBy) ? '' : offload.isSelf(stringField(meta['runOn'])) ? placedBy : ''
+  }
+
+  /** The notice a helper's creator gets when it ends. */
+  private async endNote(info: { id: string; label: string; state: HelperState; result: string; reason: string; pushes: number; minutes: number; lastStep: string; said: string; resuming: boolean }): Promise<string> {
+    const pushed = info.pushes > 0 ? ` (after ${info.pushes} push${info.pushes > 1 ? 'es' : ''})` : ''
+    const first = info.result.trim().split(/(?<=[.!?])\s+|\n/)[0]?.slice(0, 300) ?? ''
+    const gaveUp = info.state === 'done' && GAVE_UP.test(first)
+    const nudge =
+      (info.state === 'failed' || gaveUp) && info.pushes < 2
+        ? `\n\n(It says it couldn't do all of it${info.pushes > 0 ? `, after ${info.pushes} push${info.pushes > 1 ? 'es' : ''}` : ''}. Helpers usually can. Unless it's truly impossible, send it back with helper_push: name a concrete next thing to try and tell it you believe it can do it. Push at least twice before you accept it or tell the user.)`
+        : ''
+    if (info.state === 'done' && info.reason === '') {
+      const body = clip(info.result.trim(), MAX_RESULT_CHARS) || '(no result text)'
+      return `[Helper #${info.id} "${info.label}" finished${pushed}]\n${body}${nudge}`
+    }
+    const took = info.minutes < 1 ? 'under a minute' : `${info.minutes} min`
+    const lastStep = info.lastStep.trim().replace(/[.]+$/, '')
+    const step = lastStep === '' || /^(Waiting its turn|Thinking|Back on it|Starting)$/i.test(lastStep) ? '' : ` Last step: ${lastStep}.`
+    const verb = info.resuming ? 'was cut off' : info.state === 'done' ? 'ended' : info.state === 'stopped' ? 'stopped' : 'failed'
+    const had = await this.partialOf(info.id, info.result, info.said)
+    const what = had === '' ? 'What it had: nothing yet.' : `What it had:\n${clip(had, MAX_RESULT_CHARS)}`
+    if (info.resuming) {
+      return `[Helper #${info.id} "${info.label}" ${verb}${pushed}: ${info.reason}, after ${took}.${step} It is going back to work by itself and keeps what it found; its result will come as a message. Do not start it again.]\n${what}`
+    }
+    const next =
+      info.state === 'done'
+        ? ''
+        : '\n\nIt is not running now. helper_push sends it back to carry on from where it stopped (it keeps what it found); or tell the user, if the work still matters.'
+    return `[Helper #${info.id} "${info.label}" ${verb}${pushed}: ${info.reason}, after ${took}.${step}]\n${what}${nudge}${next}`
+  }
+
+  /** What a helper had when it ended early: its result, else the last thing it wrote in its own conversation. */
+  private async partialOf(id: string, result: string, said: string): Promise<string> {
+    const text = result.trim()
+    const generic = text === STOPPED_TEXT || /^It stopped before it could/.test(text) || /^Interrupted when the app closed/.test(text)
+    if (text !== '' && !generic && !OUT_OF_STEPS.test(text)) return text
+    if (said.trim() !== '') return said.trim()
+    try {
+      const history = await this.loadHistory(id)
+      for (let i = history.length - 1; i >= 0; i -= 1) {
+        const message = history[i]
+        if (message === undefined || message.role !== 'ASSISTANT') continue
+        const words = message.blocks
+          .map((block) => (block.t === 'text' ? block.text : ''))
+          .join('\n')
+          .trim()
+        if (words !== '') return words
+      }
+    } catch {
+      // No transcript to read: it had nothing written down.
+    }
+    return ''
+  }
+
+  /** Where a helper's notice goes: its batch, the desk that started it, or the chat that started it (main if gone). */
+  private async report(id: string, chat: string, side: boolean, note: string, parentHelper = ''): Promise<void> {
     if (side) {
       try {
         await this.alongsideDone(chat, id)
@@ -1083,17 +1361,16 @@ export class HelperManager implements HelperHost {
       return
     }
 
-    const note = noteOf()
     const batch = this.batchOf.get(id)
     if (batch === undefined) {
-      await this.handOver(note, chat)
+      await this.handOver(note, chat, parentHelper)
       return
     }
 
     this.batchOf.delete(id)
     const group = this.batches.get(batch)
     if (group === undefined) {
-      await this.handOver(note, chat)
+      await this.handOver(note, chat, parentHelper)
       return
     }
     group.results.set(id, note)
@@ -1102,9 +1379,80 @@ export class HelperManager implements HelperHost {
     this.batches.delete(batch)
     const all = [...group.results.values()]
     await this.handOver(
-      `[Helpers finished: all ${all.length} you started together are done. Give the user ONE packed answer.]\n\n${all.join('\n\n')}`,
+      `[Helpers finished: all ${all.length} you started together have ended. Give the user ONE packed answer.]\n\n${all.join('\n\n')}`,
       chat,
+      parentHelper,
     )
+  }
+
+  /** Sends the end notices restore held back (the runner calls this once its own start-up repair is done). */
+  flushNotices(): void {
+    const held = this.heldNotices
+    this.heldNotices = null
+    if (held === null) return
+    for (const send of held) void send().catch(() => undefined)
+  }
+
+  // ---- the quiet watch ---------------------------------------------------------------------------------------------
+
+  /** Starts the quiet watch while helpers run; it stops itself when none do. */
+  private watchQuiet(): void {
+    if (this.quietTimer !== null || (this.runs.size === 0 && this.remote.size === 0)) return
+    this.quietTimer = setInterval(() => void this.checkQuiet().catch(() => 0), this.quietCheckMs)
+    this.quietTimer.unref?.()
+  }
+
+  /**
+   * A helper with no new step for a long while (measured on its steps, not on how long it has run; a helper waiting on
+   * the person's card is not quiet) gets its creator ONE heads-up per run. Returns how many went out.
+   */
+  async checkQuiet(): Promise<number> {
+    if (this.runs.size === 0 && this.remote.size === 0) {
+      if (this.quietTimer !== null) clearInterval(this.quietTimer)
+      this.quietTimer = null
+      return 0
+    }
+    const minutes = this.quietMinutes()
+    if (!(minutes > 0)) return 0
+    const limit = minutes * MINUTE_MS
+    const now = this.now()
+    let sent = 0
+    for (const run of [...this.runs.values()]) {
+      if (run.warned === true || run.quiet === true || run.side === true || !this.active.has(run.id)) continue
+      if ((run.waitingOn ?? 0) > 0) continue
+      if (now - run.lastStepAt < limit) continue
+      run.warned = true
+      const link = this.link()
+      if (link !== null && run.origin !== undefined && run.origin !== '' && !link.isSelf(run.origin)) continue
+      await this.handOver(this.quietNote(run.id, run.label, now - run.lastStepAt, run.lastStep ?? ''), run.chat, run.parentHelper ?? '')
+      sent += 1
+    }
+    // Placed on another brain: its steps arrive here as rows, so the last one says how long it has been quiet.
+    for (const run of [...this.remote.values()]) {
+      const key = `quiet:${run.id}:${run.sentAt}`
+      if (this.noticed.has(key)) continue
+      const steps = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, run.startedAt - 1) }).catch(() => [])
+      let last = run.startedAt
+      let what = ''
+      for (const step of steps) {
+        if (stringField(parseMeta(step.meta)['helper']) !== run.id) continue
+        if (step.createdAt >= last) {
+          last = step.createdAt
+          what = step.text
+        }
+      }
+      if (now - last < limit) continue
+      this.noticed.add(key)
+      await this.handOver(this.quietNote(run.id, run.label, now - last, what), run.chat)
+      sent += 1
+    }
+    return sent
+  }
+
+  private quietNote(id: string, label: string, quietMs: number, lastStep: string): string {
+    const minutes = Math.max(1, Math.round(quietMs / MINUTE_MS))
+    const step = lastStep.trim() === '' ? '' : ` Its last step: ${clip(lastStep.trim().replace(/[.]+$/, ''), 200)}.`
+    return `[Helper #${id} "${label}" has taken no new step for ${minutes} min.${step} It is still marked working, so it may be stuck (a rate limit, a hung tool). Check it with helpers_status, then steer it, stop it, or leave it. You will not get this heads-up again for this run.]`
   }
 
   // ---- other brains (s12) --------------------------------------------------------------------------------------
@@ -1129,7 +1477,7 @@ export class HelperManager implements HelperHost {
         return true
       }
       case 'stop':
-        await this.stop(id)
+        await this.stop(id, msg.text)
         return true
       case 'answer':
         await this.answer(msg.item, msg.text)
@@ -1138,20 +1486,25 @@ export class HelperManager implements HelperHost {
         await this.decide(msg.item, msg.text === 'approve' ? 'approve' : 'decline')
         return true
       case 'result': {
-        const placed = this.remote.get(id)
         this.remote.delete(id)
         const row = await this.store.get('chat_item', id)
         const meta = row === null ? {} : parseMeta(row.meta)
         let state: HelperState = 'done'
+        let reason = ''
+        let key = ''
         try {
-          const info = JSON.parse(msg.info) as { state?: unknown }
+          const info = JSON.parse(msg.info) as { state?: unknown; reason?: unknown; run?: unknown }
           if (info.state === 'failed' || info.state === 'stopped' || info.state === 'done') state = info.state
+          reason = stringField(info.reason)
+          key = stringField(info.run)
         } catch {
           // A result without its state reads as done.
         }
-        this.emit({ type: 'chat_changed' })
-        const chat = placed?.chat ?? (stringField(meta['chat']) || MAIN_CHAT)
-        await this.report(id, chat, meta['side'] === true, state, msg.text, () => msg.text || `[Helper #${id} finished]`)
+        // A brain from before 0.2.76 sends no reason, and nothing at all for a stopped helper: say what is known.
+        if (reason === '' && state === 'stopped') reason = 'it was stopped'
+        if (reason === '' && state === 'failed') reason = clip(msg.text.split('\n').slice(1).join(' ').trim(), 300) || 'it failed without saying why'
+        if (key === '') key = stringField(meta['runToken']) || String(numberField(meta['startedAt']) || row?.createdAt || '')
+        await this.ended({ id, state, result: stringField(meta['result']), reason, key, keepRow: true, ...(msg.text.trim() === '' ? {} : { note: msg.text }) })
         return true
       }
       case 'bounce': {
@@ -1185,10 +1538,13 @@ export class HelperManager implements HelperHost {
         await link.send(from, 'bounce', id, { text: brain.message })
         return true
       }
-      await this.updateMeta(id, { state: 'failed', summary: clip(brain.message, 160), result: brain.message, endedAt: this.now(), queued: false })
+      await this.ended({ id, state: 'failed', result: brain.message, reason: `it could not start: ${clip(brain.message, 200)}`, key: stringField(meta['runToken']) || `adopt-${this.now()}` })
       return true
     }
-    await this.updateMeta(id, { runOn: link?.selfId() ?? '', queued: true, summary: 'Waiting its turn' })
+    // The run keeps the key its card was started with, so the brain that placed it tells its creator once.
+    const token = stringField(meta['runToken']) || this.freshToken()
+    const parentHelper = stringField(meta['parentHelper'])
+    await this.updateMeta(id, { runOn: link?.selfId() ?? '', queued: true, summary: 'Waiting its turn', runToken: token })
     this.runs.set(id, {
       ...this.placerShell(meta, from),
       origin: from,
@@ -1203,6 +1559,9 @@ export class HelperManager implements HelperHost {
       startedAt: this.now(),
       controller: null,
       initialHistory: null,
+      token,
+      lastStepAt: this.now(),
+      ...(parentHelper === '' ? {} : { parentHelper }),
     })
     this.queue.push(id)
     this.pump()
@@ -1252,12 +1611,32 @@ export class HelperManager implements HelperHost {
       }
       if (this.now() - run.sentAt < after) continue
       const holder = await link.leaseHolder(run.id)
-      if (holder.device !== '') continue
+      if (holder.device !== '') {
+        // It was working there and that brain has been gone twice as long (the lease failover had its chance to
+        // carry it on elsewhere): it ended there, and the agent that started it hears so instead of waiting forever.
+        if (holder.device !== run.device || !holder.running || this.now() - run.sentAt < after * 2) continue
+        if (link.up(run.device)) continue
+        await this.wentAway(run, link)
+        continue
+      }
       if (link.up(run.device)) continue
       this.remote.delete(run.id)
       if (await this.adopt(run.id, '')) taken += 1
     }
     return taken
+  }
+
+  /** The brain a placed helper was working on went offline mid-job: the helper ended, and its creator is told. */
+  private async wentAway(run: RemoteRun, link: OffloadLink): Promise<void> {
+    this.remote.delete(run.id)
+    const name = (await link.deviceName(run.device).catch(() => '')) || 'the device it ran on'
+    const lease = await this.store.get('turn_lease', `job-${run.id}`).catch(() => null)
+    // Its lease is closed, so nothing resumes it behind the creator's back; helper_push runs it again here.
+    if (lease !== null && lease.status === 'running') await this.store.upsert('turn_lease', { id: lease.id, status: 'failed', heartbeatAt: this.now() }).catch(() => undefined)
+    const row = await this.store.get('chat_item', run.id).catch(() => null)
+    const meta = row === null ? {} : parseMeta(row.meta)
+    const key = stringField(meta['runToken']) || String(run.startedAt)
+    await this.ended({ id: run.id, state: 'failed', result: '', reason: `${name} went offline while it worked`, key })
   }
 
   private async labelOf(id: string): Promise<string> {
@@ -1285,12 +1664,40 @@ export class HelperManager implements HelperHost {
     return link === null || placedBy === '' || link.isSelf(placedBy) ? '' : placedBy
   }
 
-  /** A delivery failing must not take the manager down with it. */
-  private async handOver(note: string, chat: string = MAIN_CHAT): Promise<void> {
+  /**
+   * A notice for the agent that started a helper, which wakes it for a turn (or joins its run when it is busy; the
+   * runner keeps it until that run reads it). Started by a desk: the desk gets it. Its chat is gone: the main thread.
+   * A delivery failing must not take the manager down with it.
+   */
+  private async handOver(note: string, chat: string = MAIN_CHAT, parentHelper = ''): Promise<void> {
     try {
+      if (parentHelper !== '') {
+        const parent = await this.store.get('chat_item', parentHelper).catch(() => null)
+        if (parent !== null && parent.kind === 'helper') {
+          if (this.runs.has(parentHelper) || this.remote.has(parentHelper)) await this.steer(parentHelper, note)
+          else await this.push(parentHelper, note)
+          return
+        }
+      }
+      if (chat !== MAIN_CHAT && !(await this.chatExists(chat))) {
+        await this.deliver(`${note}\n\n(It was started from a chat that no longer exists, so this comes to you here.)`, MAIN_CHAT)
+        return
+      }
       await this.deliver(note, chat)
     } catch {
       // The result is already saved on the helper's card; the person can read it there.
+    }
+  }
+
+  /** A chat is there while a project holds it, or while it has the person's or its agent's own lines. */
+  private async chatExists(chat: string): Promise<boolean> {
+    if (chat === MAIN_CHAT) return true
+    try {
+      if ((await this.store.list('project')).some((project) => project.chats.includes(chat))) return true
+      const rows = await listWhere(this.store, 'chat_item', { chat })
+      return rows.some((row) => (row.kind === 'user' || row.kind === 'agent') && stringField(parseMeta(row.meta)['chat']) === chat)
+    } catch {
+      return true
     }
   }
 
@@ -1303,32 +1710,25 @@ export class HelperManager implements HelperHost {
     if (![...this.batchOf.values()].includes(batch)) this.batches.delete(batch)
   }
 
-  /** Ported from the note runHelper hands back to the main agent. */
-  private resultNote(run: HelperRun, state: HelperState, result: string): string {
-    const first = result.trim().split(/(?<=[.!?])\s+|\n/)[0]?.slice(0, 300) ?? ''
-    const gaveUp = GAVE_UP.test(first)
-    const pushed = run.pushes > 0 ? ` (after ${run.pushes} push${run.pushes > 1 ? 'es' : ''})` : ''
-    const nudge =
-      (state === 'failed' || gaveUp) && run.pushes < 2
-        ? `\n\n(It says it couldn't do all of it${run.pushes > 0 ? `, after ${run.pushes} push${run.pushes > 1 ? 'es' : ''}` : ''}. Helpers usually can. Unless it's truly impossible, send it back with helper_push: name a concrete next thing to try and tell it you believe it can do it. Push at least twice before you accept it or tell the user.)`
-        : ''
-    const outcome = state === 'done' ? 'finished' : 'failed'
-    const body = clip(result.trim(), MAX_RESULT_CHARS) || '(no result text)'
-    return `[Helper #${run.id} "${run.label}" ${outcome}${pushed}]\n${body}${nudge}`
-  }
-
   private async onEvent(run: HelperRun, event: AgentEvent): Promise<void> {
+    // Every event is a step: the quiet watch measures from the newest one.
+    run.lastStepAt = this.now()
     switch (event.type) {
       case 'thinking':
         await this.updateMeta(run.id, { summary: 'Thinking' })
         return
       case 'said': {
         const line = event.text.trim().split('\n')[0] ?? ''
-        if (line !== '') await this.updateMeta(run.id, { summary: clip(line, 160) })
+        if (event.text.trim() !== '') run.lastSaid = event.text.trim()
+        if (line !== '') {
+          run.lastStep = clip(line, 160)
+          await this.updateMeta(run.id, { summary: clip(line, 160) })
+        }
         return
       }
       case 'tool_started': {
         const summary = describeCall(event.call)
+        run.lastStep = summary
         const started = runStarted(event.call)
         this.runStarts.set(event.call.id, Date.now())
         const row = await this.store.upsert('chat_item', {
@@ -1467,11 +1867,14 @@ export class HelperManager implements HelperHost {
         ...chatTag(run.chat),
       }),
     })
+    run.waitingOn = (run.waitingOn ?? 0) + 1
     return new Promise<string | null>((resolve) => {
       let settled = false
       const finish = (answer: string | null): void => {
         if (settled) return
         settled = true
+        run.waitingOn = Math.max(0, (run.waitingOn ?? 1) - 1)
+        run.lastStepAt = this.now()
         this.askWaiters.delete(row.id)
         signal.removeEventListener('abort', onAbort)
         resolve(answer)
@@ -1508,11 +1911,14 @@ export class HelperManager implements HelperHost {
         ...chatTag(run.chat),
       }),
     })
+    run.waitingOn = (run.waitingOn ?? 0) + 1
     return new Promise<boolean>((resolve) => {
       let settled = false
       const finish = (approved: boolean): void => {
         if (settled) return
         settled = true
+        run.waitingOn = Math.max(0, (run.waitingOn ?? 1) - 1)
+        run.lastStepAt = this.now()
         this.decisionWaiters.delete(row.id)
         signal.removeEventListener('abort', onAbort)
         resolve(approved)
@@ -1698,7 +2104,10 @@ export class HelperManager implements HelperHost {
   /** One helper turn as its own SDK session on the person's plan; a pushed helper resumes its session. */
   private async runOnPlan(run: HelperRun, brain: Brain & { kind: 'plan' }): Promise<void> {
     const cli = this.cli
-    if (cli === null) return
+    if (cli === null) {
+      await this.finish(run, 'failed', 'It runs on a plan, and this computer cannot run plans.')
+      return
+    }
     const controller = new AbortController()
     run.controller = controller
     if (run.pushMessage === undefined) cli.forget(`helper:${run.id}`)

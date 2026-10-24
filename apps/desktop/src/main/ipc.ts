@@ -453,7 +453,8 @@ export function registerIpc(deps: IpcDeps): () => void {
   handle(CHANNELS.helpers.stop, async (_event, rawId) => {
     const id = requireString(rawId, 'helper id', MAX_STRING)
     if (deps.helpers === undefined) return false
-    return deps.helpers.stop(id)
+    // Who stopped it goes into the notice the agent that started it gets.
+    return deps.helpers.stop(id, 'the person (Stop on its card)')
   })
 
   // The helper cards a linked device shows: the same model as the side panel, built here and sent on each change.
@@ -466,7 +467,7 @@ export function registerIpc(deps: IpcDeps): () => void {
 
   handle(CHANNELS.helpers.stopAll, async () => {
     if (deps.helpers === undefined) return 0
-    return deps.helpers.stopAll()
+    return deps.helpers.stopAll('the person (Stop all)')
   })
 
   // ---- the agent's browser ----

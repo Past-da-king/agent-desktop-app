@@ -184,7 +184,7 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     return value < 0 ? -1 : Math.min(NO_LIMIT_CAP, Math.round(value))
   }
   // 0 or blank = no limit; any positive whole number = at most that many. Never a ceiling of our own.
-  if (key === 'helpersAtOnce' || key === 'helperMaxSteps' || key === 'routinesAtOnce') {
+  if (key === 'helpersAtOnce' || key === 'helperMaxSteps' || key === 'routinesAtOnce' || key === 'helperQuietMinutes') {
     if (value === null || value === '') return 0
     const number = typeof value === 'string' ? Number(value.trim()) : value
     if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
