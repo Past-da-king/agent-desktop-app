@@ -31,14 +31,13 @@ export function isHelperActivity(item: ChatItem): boolean {
 
 /**
  * A helper stays in the thread while it works. Once it has finished, its result arrives as a main
- * agent reply, and the card folds away then. A stopped helper has no reply to wait for.
+ * agent reply, and the card folds away then. A stopped one too: its creator is told (0.2.76) and replies.
  */
 export function helperVisible(item: ChatItem, items: ChatItem[]): boolean {
   if (!isHelper(item)) return false
   const meta = metaOf(item)
   const state = helperState(metaText(meta, 'state'))
   if (state === 'working') return true
-  if (state === 'stopped') return false
   const endedAt = metaNumber(meta, 'endedAt') ?? item.createdAt
   return newestAgentAt(items) < endedAt
 }

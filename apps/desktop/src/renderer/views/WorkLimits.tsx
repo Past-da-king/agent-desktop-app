@@ -9,12 +9,21 @@ import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { Icon, type IconName } from '../ui/Icon'
 
-type LimitKey = 'helpersAtOnce' | 'helperMaxSteps' | 'routinesAtOnce'
+type LimitKey = 'helpersAtOnce' | 'helperMaxSteps' | 'routinesAtOnce' | 'helperQuietMinutes'
 
-const ROWS: Array<{ key: LimitKey; icon: IconName; title: string; line: string }> = [
+/** `none`: what blank means for the row (no limit, or never); `unit`: what the number counts. */
+const ROWS: Array<{ key: LimitKey; icon: IconName; title: string; line: string; none?: string; unit?: string }> = [
   { key: 'helpersAtOnce', icon: 'person', title: 'Helpers at once', line: 'How many helpers work at the same time here. The rest wait their turn.' },
   { key: 'helperMaxSteps', icon: 'sliders', title: 'Steps per helper', line: 'A helper stops and says so after this many steps.' },
   { key: 'routinesAtOnce', icon: 'clock', title: 'Routines at once', line: 'How many routine desks work at the same time.' },
+  {
+    key: 'helperQuietMinutes',
+    icon: 'clock',
+    title: 'Heads-up on a quiet helper',
+    line: 'The agent that started a helper hears once when it takes no new step for this many minutes.',
+    none: 'Never',
+    unit: 'minutes',
+  },
 ]
 
 /** The number as the person reads it: blank for no limit. */
@@ -49,7 +58,7 @@ function LimitRow({ row, value }: { row: (typeof ROWS)[number]; value: number | 
   const commit = (): void => {
     const next = limitFromInput(draft)
     if (next === null) {
-      toast('Type a whole number, or leave it blank for no limit.')
+      toast(`Type a whole number, or leave it blank for ${(row.none ?? 'no limit').toLowerCase()}.`)
       setDraft(shown(value))
       return
     }
@@ -68,14 +77,20 @@ function LimitRow({ row, value }: { row: (typeof ROWS)[number]; value: number | 
       </div>
       <div className="rt">
         <b>{row.title}</b>
-        <span>{value !== undefined && value > 0 ? `${row.line} Now at most ${value}.` : `${row.line} No limit.`}</span>
+        <span>
+          {value !== undefined && value > 0
+            ? row.unit === undefined
+              ? `${row.line} Now at most ${value}.`
+              : `${row.line} Now ${value} ${row.unit}.`
+            : `${row.line} ${row.none ?? 'No limit'}.`}
+        </span>
       </div>
       <input
         className="input"
         style={{ width: 104, textAlign: 'right' }}
         inputMode="numeric"
         aria-label={row.title}
-        placeholder="No limit"
+        placeholder={row.none ?? 'No limit'}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}

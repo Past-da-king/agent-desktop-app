@@ -173,6 +173,8 @@ let store: Store | null = null
 let settingsStore: SettingsStore | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+/** The helpers, so quitting can leave the ones still working for the next start to report (HelperManager.restore). */
+let helperManager: HelperManager | null = null
 /** Turn leases: a turn or helper cut off by a crash resumes on the next start (runtime/turns.ts). */
 let leases: TurnLeases | null = null
 /** The app's side of registerDevicesSync (set once the runtime is built). */
@@ -754,7 +756,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
       await helpers.push(id, note)
     },
     lost: (lease) => {
-      if (lease.kind === 'job') void helpers.stop(lease.messageId)
+      // Another brain carries it on and tells its creator when it ends: this brain lets go without a notice.
+      if (lease.kind === 'job') void helpers.letGo(lease.messageId)
       else runner?.stop(lease.chatId)
     },
   })
@@ -814,7 +817,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     // ask_user / request_approval another brain runs here show as cards in that chat on this computer.
     context: (chat, signal) => runner?.deviceContext(chat, signal) ?? {},
   }
-  const helpers = new HelperManager({
+  const helpers = (helperManager = new HelperManager({
     leases,
     store,
     cli: cliHost,
@@ -833,7 +836,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     notify: showNotification,
     profiles: apps.profiles,
     learnedNames,
-  })
+  }))
   const tools = buildToolset({
     appControl: { ...appControl, update: selfUpdater },
     store,
@@ -1344,6 +1347,9 @@ if (!app.requestSingleInstanceLock()) {
     void devices?.stop()
     devices = null
     setDevicesService(null)
+    // Helpers still working stay marked working: the next start ends them and tells their creators.
+    helperManager?.shutdown()
+    helperManager = null
     runner?.dispose()
     leases?.stop()
     disposeDevicesSync?.()

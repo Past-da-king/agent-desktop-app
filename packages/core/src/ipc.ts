@@ -145,6 +145,11 @@ export interface Settings {
   helpersAtOnce: number
   /** How many steps one helper may take before it stops and says so; 0 = no limit (the default). */
   helperMaxSteps: number
+  /**
+   * After how many minutes with no new step a working helper's creator gets one heads-up (it may be stuck on a rate
+   * limit or a hung tool); 0 = never. Default 10.
+   */
+  helperQuietMinutes: number
   /** How many routine desks work at once; 0 = no limit (the default). */
   routinesAtOnce: number
 }
@@ -196,6 +201,7 @@ export const DEFAULT_SETTINGS: Settings = {
   devicesJobLimit: 0,
   helpersAtOnce: 0,
   helperMaxSteps: 0,
+  helperQuietMinutes: 10,
   routinesAtOnce: 0,
 }
 

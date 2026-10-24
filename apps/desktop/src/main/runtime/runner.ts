@@ -671,7 +671,17 @@ export class Runner {
    * are re-armed so answering one still carries the conversation on.
    */
   async restore(): Promise<void> {
-    await this.helpers?.restore?.()
+    // Helpers the app closed under are ended and their creators told, once this repair is done (a notice starts a
+    // turn, whose rows must not be caught by the repair below).
+    await this.helpers?.restore?.({ defer: true })
+    try {
+      await this.repairRows()
+    } finally {
+      this.helpers?.flushNotices?.()
+    }
+  }
+
+  private async repairRows(): Promise<void> {
     const items = await this.store.list('chat_item')
     let changed = false
 
@@ -1616,6 +1626,8 @@ export function friendlyError(error: unknown): string {
     if (error.status === 429) {
       return 'The AI provider says we are sending too much right now (rate limit or out of credit). Try again shortly.'
     }
+    // A provider that took too long says so (a helper's creator reads this as the reason it ended).
+    if (error.status === 0 && /did not answer within/i.test(error.message)) return error.message
     if (error.status === 0) return 'I could not reach the AI provider. Check your connection.'
     if (error.status === 400 && /image/i.test(error.message)) {
       return "This model can't look at images. Pick a vision model in Settings, or send it as text."
