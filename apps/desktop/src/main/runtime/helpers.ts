@@ -181,6 +181,15 @@ export interface HelperManagerDeps {
   quietMinutes?: number | (() => number)
   /** How often the quiet watch looks, in ms (tests make it short). Default one minute. */
   quietCheckMs?: number
+  /**
+   * A stop sent to the brain that runs a helper: if its card still says working after this long, the stop is done
+   * here instead (that brain did not have it, or is too old to answer). Default 30 s.
+   */
+  stopGraceMs?: number
+  /** How often the orphan watch looks for cards left working with no run anywhere, in ms. Default one minute. */
+  reapEveryMs?: number
+  /** How long a card must show no sign of life (no run, no fresh lease) before it is ended as lost. Default 3 min. */
+  reapAfterMs?: number
   emit?: (event: ChatEvent) => void
   notify?: (title: string, body: string) => void
   /** On the person's own plan, every helper is its own Claude Agent SDK / Codex SDK session. */
@@ -336,6 +345,14 @@ const OUT_OF_STEPS = /^I stopped after (\d+) steps without finishing/
 const MINUTE_MS = 60_000
 /** Default minutes with no new step before a helper's creator gets a heads-up (Settings can change it; 0 = never). */
 export const QUIET_MINUTES_DEFAULT = 10
+/** A stop routed to the brain running a helper: after this long with its card still working, it is ended here. */
+export const STOP_GRACE_MS = 30_000
+/** A card working with no run and no live lease for this long is a ghost: it is ended as lost. */
+export const REAP_AFTER_MS = 3 * MINUTE_MS
+/** Another brain's job lease with no heartbeat for this long is dead (it beats every 10 s; failover takes 45 s). */
+const LEASE_DEAD_MS = 3 * MINUTE_MS
+/** What a lost run's card and notice say. */
+const LOST_REASON = 'its run was lost: no device was running it any more'
 
 /** Words a helper uses when it gives up. Usually it can do it; it needs sending back. */
 export const GAVE_UP =
@@ -389,6 +406,12 @@ export class HelperManager implements HelperHost {
   private readonly quietMinutes: () => number
   private readonly quietCheckMs: number
   private quietTimer: ReturnType<typeof setInterval> | null = null
+  private readonly stopGraceMs: number
+  private readonly reapEveryMs: number
+  private readonly reapAfterMs: number
+  private reapTimer: ReturnType<typeof setInterval> | null = null
+  /** Stops sent to the brain running a helper, each ended here if that brain does not end it in time. */
+  private readonly pendingStops = new Map<string, ReturnType<typeof setTimeout>>()
   /** The app is quitting (shutdown): ends are left for the next start. */
   private closing = false
   /** Runs whose end notice went out from this process (`id:key`), so a race can never send a second one. */
@@ -433,6 +456,9 @@ export class HelperManager implements HelperHost {
               return typeof value === 'number' && Number.isFinite(value) ? value : QUIET_MINUTES_DEFAULT
             }
     this.quietCheckMs = deps.quietCheckMs ?? MINUTE_MS
+    this.stopGraceMs = deps.stopGraceMs ?? STOP_GRACE_MS
+    this.reapEveryMs = deps.reapEveryMs ?? MINUTE_MS
+    this.reapAfterMs = deps.reapAfterMs ?? REAP_AFTER_MS
   }
 
   /**
@@ -443,6 +469,10 @@ export class HelperManager implements HelperHost {
     this.closing = true
     if (this.quietTimer !== null) clearInterval(this.quietTimer)
     this.quietTimer = null
+    if (this.reapTimer !== null) clearInterval(this.reapTimer)
+    this.reapTimer = null
+    for (const timer of this.pendingStops.values()) clearTimeout(timer)
+    this.pendingStops.clear()
   }
 
   /** Devices came up (or went away): placing helpers on other brains (runtime/offload.ts), or not. */
@@ -831,13 +861,30 @@ export class HelperManager implements HelperHost {
       .join('\n\n')
   }
 
+  /**
+   * Stops a helper from any device that sees it, whoever runs it. Running here: it is aborted. Running on another
+   * brain that is up: the stop goes there, and if its card still says working after a short grace (that brain did not
+   * have it, or is too old to answer) it is ended here. Running nowhere (a ghost whose run is gone): its card is ended
+   * here at once. Its creator hears exactly once either way. False only when there is nothing working to stop.
+   */
   async stop(id: string, by = ''): Promise<boolean> {
+    return this.stopFrom(id, by, false)
+  }
+
+  /** `routed`: another brain sent this stop here, so it is never sent on again (no stop goes round in circles). */
+  private async stopFrom(id: string, by: string, routed: boolean): Promise<boolean> {
     const run = this.runs.get(id)
     if (run === undefined) {
-      const elsewhere = await this.runningElsewhere(id)
-      if (elsewhere === '') return false
-      await this.link()?.send(elsewhere, 'stop', id, by === '' ? {} : { text: by })
-      return true
+      const link = this.link()
+      if (!routed && link !== null) {
+        const elsewhere = await this.runningElsewhere(id)
+        if (elsewhere !== '' && link.up(elsewhere)) {
+          await link.send(elsewhere, 'stop', id, by === '' ? {} : { text: by })
+          this.stopLater(id, by)
+          return true
+        }
+      }
+      return this.endUnrun(id, 'stopped', by === '' ? 'it was stopped' : `stopped by ${by}`)
     }
     if (by !== '' && run.stopBy === undefined) run.stopBy = by
     const at = this.queue.indexOf(id)
@@ -853,7 +900,10 @@ export class HelperManager implements HelperHost {
   async stopAll(by = ''): Promise<number> {
     const ids = [...this.runs.keys()]
     const away = [...this.remote.values()]
-    for (const run of away) await this.link()?.send(run.device, 'stop', run.id, by === '' ? {} : { text: by })
+    for (const run of away) {
+      await this.link()?.send(run.device, 'stop', run.id, by === '' ? {} : { text: by })
+      if (!this.closing) this.stopLater(run.id, by)
+    }
     this.queue.length = 0
     for (const id of ids) {
       const run = this.runs.get(id)
@@ -892,6 +942,102 @@ export class HelperManager implements HelperHost {
     this.inbox.delete(run.id)
     const reason = run.stopBy === undefined ? 'it was stopped before it started' : `stopped by ${run.stopBy} before it started`
     await this.ended({ id: run.id, state: 'stopped', result: '', reason, key: run.token, run })
+  }
+
+  /** A stop sent to the brain running it: ended here if its card still says working after the grace. */
+  private stopLater(id: string, by: string): void {
+    const before = this.pendingStops.get(id)
+    if (before !== undefined) clearTimeout(before)
+    const timer = setTimeout(() => {
+      this.pendingStops.delete(id)
+      if (this.closing || this.runs.has(id)) return
+      void this.endUnrun(id, 'stopped', by === '' ? 'it was stopped' : `stopped by ${by}`).catch(() => false)
+    }, this.stopGraceMs)
+    timer.unref?.()
+    this.pendingStops.set(id, timer)
+  }
+
+  /**
+   * Ends a helper whose run is not in this process (a ghost: its run is gone, or the brain that has it did not end it):
+   * its card gets its end state, its job lease is closed so nothing resumes it, and its creator hears once (the brain
+   * that placed it is sent the result when that is another brain). False when its card is not working.
+   */
+  private async endUnrun(id: string, state: HelperState, reason: string): Promise<boolean> {
+    if (this.closing || this.runs.has(id)) return false
+    const row = await this.store.get('chat_item', id).catch(() => null)
+    if (row === null || row.kind !== 'helper') return false
+    const meta = parseMeta(row.meta)
+    if (meta['state'] !== 'working') return false
+    if (typeof meta['projectChat'] === 'string' && meta['projectChat'] !== '') return false
+    const pending = this.pendingStops.get(id)
+    if (pending !== undefined) clearTimeout(pending)
+    this.pendingStops.delete(id)
+    this.remote.delete(id)
+    this.dropFromBatch(id)
+    const lease = await this.store.get('turn_lease', `job-${id}`).catch(() => null)
+    if (lease !== null && (lease.status === 'running' || lease.status === 'interrupted')) {
+      await this.store.upsert('turn_lease', { id: lease.id, status: 'failed', heartbeatAt: this.now() }).catch(() => undefined)
+    }
+    const key = stringField(meta['runToken']) || String(numberField(meta['startedAt']) || row.createdAt)
+    const told = await this.ended({ id, state, result: '', reason, key })
+    // Told before (this process, or the card says so) yet the card says working again (a stale write from another
+    // brain): only its end state is written again, without a second notice.
+    if (!told && !this.closing) {
+      await this.updateMeta(id, { state, summary: clip(`${state === 'stopped' ? 'Stopped' : 'Failed'}: ${reason}`, 160), endedAt: this.now(), queued: false, endReason: reason }).catch(() => undefined)
+      this.emit({ type: 'chat_changed', ...chatTag(stringField(meta['chat']) || MAIN_CHAT) })
+    }
+    return true
+  }
+
+  /**
+   * The orphan watch: a card still marked working with no run anywhere is ended as lost, so nothing shows as working
+   * forever. Its run is gone when it does not run in this process and no brain holds a live lease on it (a lease
+   * beats every 10 s while its run lives). This brain judges the cards it runs (with no live lease of another brain)
+   * and the ones it placed elsewhere (whose brain's lease is finished or dead); cards another pair of brains own are
+   * theirs. Each card is given `reapAfterMs` from its last sign of life. Returns how many it ended.
+   */
+  async reap(): Promise<number> {
+    if (this.closing) return 0
+    const now = this.now()
+    const rows = await listWhere(this.store, 'chat_item', { kind: 'helper' }).catch(() => [])
+    const link = this.link()
+    let ended = 0
+    for (const row of rows) {
+      if (row.kind !== 'helper' || this.runs.has(row.id) || this.queue.includes(row.id)) continue
+      const meta = parseMeta(row.meta)
+      if (meta['state'] !== 'working') continue
+      if (typeof meta['projectChat'] === 'string' && meta['projectChat'] !== '') continue
+      if (this.pendingStops.has(row.id)) continue
+      const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
+      const life = Math.max(numberField(meta['startedAt']) || row.createdAt, lease?.heartbeatAt ?? 0)
+      if (now - life < this.reapAfterMs) continue
+      const live = lease !== null && (lease.status === 'running' || lease.status === 'interrupted')
+      const own = (brain: string): boolean => brain === '' || (this.offload === null ? true : this.offload.isSelf(brain))
+      const runOn = stringField(meta['runOn'])
+      // A card that names no brain is judged by its lease: one this brain began. With neither, whose it is is not
+      // known (another app's helper, a phone's): it is left alone.
+      if (runOn === '' && (lease === null || lease.brainId === '' || !own(lease.brainId))) continue
+      const here = runOn === '' || own(runOn)
+      if (here) {
+        // Taken over by another brain (the lease failover) that still beats it: it is working there.
+        if (lease !== null && live && !own(lease.brainId) && now - lease.heartbeatAt < LEASE_DEAD_MS) continue
+      } else {
+        // Placed on another brain: only the brain that placed it judges it, and only with the link up.
+        if (link === null || !link.isSelf(stringField(meta['placedBy']))) continue
+        if (lease !== null && live && now - lease.heartbeatAt < LEASE_DEAD_MS) continue
+        // No lease yet: still waiting its turn there, or the start was never taken (takeBack runs it here).
+        if (lease === null && (meta['queued'] === true || this.remote.has(row.id))) continue
+      }
+      if (await this.endUnrun(row.id, 'stopped', LOST_REASON)) ended += 1
+    }
+    return ended
+  }
+
+  /** Starts the orphan watch (restore does, once the start-up repair is done). */
+  private watchOrphans(): void {
+    if (this.reapTimer !== null || this.closing || !(this.reapEveryMs > 0)) return
+    this.reapTimer = setInterval(() => void this.reap().catch(() => 0), this.reapEveryMs)
+    this.reapTimer.unref?.()
   }
 
   live(): HelperLive[] {
@@ -1056,6 +1202,8 @@ export class HelperManager implements HelperHost {
       const row = await this.store.get('chat_item', id)
       await this.adopt(id, row === null ? '' : this.originOf(parseMeta(row.meta)))
     }
+    // From now on, a card left working with no run anywhere (a ghost) is found and ended.
+    this.watchOrphans()
   }
 
   // ---- running a helper --------------------------------------------------------------------
@@ -1219,6 +1367,11 @@ export class HelperManager implements HelperHost {
     const mark = `${input.id}:${input.key}`
     if (this.noticed.has(mark)) return false
     this.noticed.add(mark)
+    // Ended: it is no longer followed as working elsewhere, and a stop waiting on it is done.
+    this.remote.delete(input.id)
+    const pending = this.pendingStops.get(input.id)
+    if (pending !== undefined) clearTimeout(pending)
+    this.pendingStops.delete(input.id)
     const row = await this.store.get('chat_item', input.id).catch(() => null)
     const meta = row === null ? {} : parseMeta(row.meta)
     if (input.key !== '' && meta['noticed'] === input.key) return false
@@ -1424,14 +1577,32 @@ export class HelperManager implements HelperHost {
       if (now - run.lastStepAt < limit) continue
       run.warned = true
       const link = this.link()
+      // Placed here by another brain: that brain watches it and sends the heads-up (it holds the creator's chat).
       if (link !== null && run.origin !== undefined && run.origin !== '' && !link.isSelf(run.origin)) continue
+      // Once per run, kept on its card: a restart, or another of the person's brains, never sends it again; an ended
+      // card (a ghost included) never gets one.
+      const row = await this.store.get('chat_item', run.id).catch(() => null)
+      const meta = row === null ? {} : parseMeta(row.meta)
+      if (row === null || meta['state'] !== 'working' || meta['quietWarned'] === run.token) continue
+      await this.updateMeta(run.id, { quietWarned: run.token }).catch(() => undefined)
       await this.handOver(this.quietNote(run.id, run.label, now - run.lastStepAt, run.lastStep ?? ''), run.chat, run.parentHelper ?? '')
       sent += 1
     }
     // Placed on another brain: its steps arrive here as rows, so the last one says how long it has been quiet.
     for (const run of [...this.remote.values()]) {
-      const key = `quiet:${run.id}:${run.sentAt}`
-      if (this.noticed.has(key)) continue
+      const row = await this.store.get('chat_item', run.id).catch(() => null)
+      const meta = row === null ? {} : parseMeta(row.meta)
+      // Ended there (its end arrived by replication) or gone: never a heads-up, and no longer followed once it has
+      // had time to start again (a push sent just now finds its card still ended until that brain takes it up).
+      if (row === null || meta['state'] !== 'working') {
+        if (row === null || now - run.startedAt > this.reapAfterMs) this.remote.delete(run.id)
+        continue
+      }
+      // One per run: keyed on the run's own token (its send time moves every time the link is seen up, which sent
+      // the "you will not get this again" heads-up every minute), and kept on its card.
+      const token = stringField(meta['runToken']) || String(run.startedAt)
+      const key = `quiet:${run.id}:${token}`
+      if (this.noticed.has(key) || meta['quietWarned'] === token) continue
       const steps = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, run.startedAt - 1) }).catch(() => [])
       let last = run.startedAt
       let what = ''
@@ -1444,6 +1615,7 @@ export class HelperManager implements HelperHost {
       }
       if (now - last < limit) continue
       this.noticed.add(key)
+      await this.updateMeta(run.id, { quietWarned: token }).catch(() => undefined)
       await this.handOver(this.quietNote(run.id, run.label, now - last, what), run.chat)
       sent += 1
     }
@@ -1478,7 +1650,8 @@ export class HelperManager implements HelperHost {
         return true
       }
       case 'stop':
-        await this.stop(id, msg.text)
+        // Not running here either: it is ended here (its creator's brain hears by the result), never sent on.
+        await this.stopFrom(id, msg.text, true)
         return true
       case 'answer':
         await this.answer(msg.item, msg.text)
