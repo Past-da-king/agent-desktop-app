@@ -49,7 +49,7 @@ export function promptRuleTools(store: DataStore, now: () => number = Date.now):
           const same = activeRules(rows).find((row) => row.text.trim().toLowerCase() === text.toLowerCase())
           if (same !== undefined) return `That rule is already there as #${shortId(same.id)}.`
           const saved = await store.upsert('prompt_rule', newRule(text, reason, by, now()))
-          await ctx.activity(`Standing instruction added: ${clip(text, 120)}`, { tool: 'prompt_rules' })
+          await ctx.activity(`Standing instruction added: ${clip(text, 120)}`, { tool: 'prompt_rules', line: true })
           return `Rule #${shortId(saved.id)} added. Every agent follows it from its next run.`
         }
 
@@ -66,14 +66,14 @@ export function promptRuleTools(store: DataStore, now: () => number = Date.now):
           const change = editedRule(row, text, reason, by, now())
           if (change === null) return `Rule #${shortId(row.id)} already says that.`
           await store.upsert('prompt_rule', change)
-          await ctx.activity(`Standing instruction ${row.status === 'removed' ? 'restored' : 'changed'}: ${clip(text, 120)}`, { tool: 'prompt_rules' })
+          await ctx.activity(`Standing instruction ${row.status === 'removed' ? 'restored' : 'changed'}: ${clip(text, 120)}`, { tool: 'prompt_rules', line: true })
           return `Rule #${shortId(row.id)} now says: ${text}`
         }
 
         const change = removedRule(row, reason, by, now())
         if (change === null) return `Rule #${shortId(row.id)} was already removed.`
         await store.upsert('prompt_rule', change)
-        await ctx.activity(`Standing instruction removed: ${clip(row.text, 120)}`, { tool: 'prompt_rules' })
+        await ctx.activity(`Standing instruction removed: ${clip(row.text, 120)}`, { tool: 'prompt_rules', line: true })
         return `Rule #${shortId(row.id)} removed. Its history is kept; edit brings it back.`
       },
     },

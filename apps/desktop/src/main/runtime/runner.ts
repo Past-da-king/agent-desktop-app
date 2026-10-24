@@ -1678,6 +1678,15 @@ export function describeCall(call: ToolCallBlock): string {
       return 'Changed a routine'
     case 'routine_delete':
       return 'Deleted a routine'
+    case 'prompt_rules': {
+      const action = stringField(input['action'])
+      if (action === 'add') return 'Added a standing instruction'
+      if (action === 'edit') return 'Changed a standing instruction'
+      if (action === 'remove') return 'Removed a standing instruction'
+      return 'Checked standing instructions'
+    }
+    case 'browser_close':
+      return input['all'] === true ? 'Closed my browser tabs' : 'Closed a browser tab'
     case 'run_script':
       return input['background'] === true ? 'Started a script in the background' : 'Ran a script'
     case 'run_script_result':

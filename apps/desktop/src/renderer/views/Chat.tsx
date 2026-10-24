@@ -145,7 +145,12 @@ function decidedApproval(item: ChatItem): boolean {
 
 /** A step for the folded row: a tool step, or an answered approval. */
 function isStep(item: ChatItem): boolean {
-  return item.kind === 'activity' || decidedApproval(item)
+  return (item.kind === 'activity' && !isChangeLine(item)) || decidedApproval(item)
+}
+
+/** An activity a tool marked `line` (prompt_rules: what changed in his standing instructions): shown on its own. */
+export function isChangeLine(item: ChatItem): boolean {
+  return item.kind === 'activity' && parseMeta(item.meta)['line'] === true
 }
 
 /** Back-to-back tool steps (and answered approvals) become ONE row: the live step while it runs, then a summary. */
@@ -734,6 +739,15 @@ const Row = memo(function Row({
     case 'voice_note':
       return <VoiceNote item={item} agentName={agentName} />
     case 'activity':
+      // A change the person should see at a glance (his standing instructions): its own small line, never folded.
+      if (isChangeLine(item)) {
+        return (
+          <div className="from change-line">
+            <Icon name="sliders" size={14} />
+            {item.text}
+          </div>
+        )
+      }
       return <ActivityRow item={item} />
     case 'question':
       return <Waiting item={item} full={<QuestionRow item={item} />} />
