@@ -303,13 +303,16 @@ describe('helpers on another brain', () => {
     await waitFor(() => pc.delivered.length === 1, 8000)
     expect(pc.delivered[0]).toContain('Booked the 7pm show.')
 
-    // Stop: the server's run is aborted; nothing is reported back.
+    // Stop: the server's run is aborted, and this computer's agent hears it stopped (0.2.76), once.
     const second = idOf(await pc.helpers.delegate([{ label: 'Second', brief: 'Second job: watch prices all night' }]))
     await waitFor(() => step.started() === 2, 8000)
     expect(await pc.helpers.stop(second)).toBe(true)
     await waitFor(async () => JSON.parse((await pc.db.get('chat_item', second))?.meta ?? '{}').state === 'stopped', 8000)
     await waitFor(() => pc.helpers.live().length === 0, 3000)
-    expect(pc.delivered).toHaveLength(1)
+    await waitFor(() => pc.delivered.length === 2, 8000)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(pc.delivered).toHaveLength(2)
+    expect(pc.delivered[1]).toContain('"Second" stopped: it was stopped')
   })
 
   it('a question from the helper on the server is answered on this computer', async () => {

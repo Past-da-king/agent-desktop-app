@@ -79,13 +79,16 @@ describe('helper cards', () => {
     expect(workingHelpers(after)).toHaveLength(0)
   })
 
-  it('hides a stopped helper and counts a queued one as working', () => {
+  it('keeps a stopped helper until its creator has replied, and counts a queued one as working', () => {
     const items = [
       helper('h1', 10, 'stopped', { endedAt: 20 }),
       helper('h2', 30, 'working', { queued: true, summary: 'Waiting its turn' }),
     ]
 
-    expect(visibleHelpers(items).map((item) => item.id)).toEqual(['h2'])
+    // Its creator is told it stopped (0.2.76): the card shows how it ended until that agent has answered.
+    expect(visibleHelpers(items).map((item) => item.id)).toEqual(['h1', 'h2'])
+    const replied = [...items, { id: 'a1', kind: 'agent', text: 'It stopped; carrying on.', meta: '{}', createdAt: 40 } as ChatItem]
+    expect(visibleHelpers(replied).map((item) => item.id)).toEqual(['h2'])
     expect(workingHelpers(items).map((item) => item.id)).toEqual(['h2'])
     expect(helperView(items[1] as ChatItem, items).queued).toBe(true)
   })

@@ -34,6 +34,8 @@ export interface LeaseHook {
   end(id: string, status: 'done' | 'failed'): void
   /** Resolves once the lease writes queued so far are stored (so other brains can see a turn the moment it starts). */
   settled?(): Promise<void>
+  /** Will crash recovery send this lease's run back to work (it is this brain's, still running, attempts left)? */
+  willResume?(id: string): Promise<boolean>
 }
 
 export interface TurnLeasesDeps {
@@ -145,6 +147,12 @@ export class TurnLeases implements LeaseHook {
       if (row === null || !this.isOwn(row.brainId)) return
       await this.deps.store.upsert('turn_lease', { id, status, heartbeatAt: this.now() })
     })
+  }
+
+  async willResume(id: string): Promise<boolean> {
+    await this.settled()
+    const row = await this.deps.store.get('turn_lease', id)
+    return row !== null && row.status === 'running' && this.isOwn(row.brainId) && row.attempt < (this.deps.maxAttempts ?? MAX_ATTEMPTS)
   }
 
   /** Writes in order, so an end never lands before its begin. */
