@@ -1315,7 +1315,8 @@ export class HelperManager implements HelperHost {
     const lastStep = info.lastStep.trim().replace(/[.]+$/, '')
     const step = lastStep === '' || /^(Waiting its turn|Thinking|Back on it|Starting)$/i.test(lastStep) ? '' : ` Last step: ${lastStep}.`
     const verb = info.resuming ? 'was cut off' : info.state === 'done' ? 'ended' : info.state === 'stopped' ? 'stopped' : 'failed'
-    const had = await this.partialOf(info.id, info.result, info.said)
+    // A failure's result is its error, which the reason already says: what it had is what it wrote before that.
+    const had = await this.partialOf(info.id, info.state === 'failed' ? '' : info.result, info.said)
     const what = had === '' ? 'What it had: nothing yet.' : `What it had:\n${clip(had, MAX_RESULT_CHARS)}`
     if (info.resuming) {
       return `[Helper #${info.id} "${info.label}" ${verb}${pushed}: ${info.reason}, after ${took}.${step} It is going back to work by itself and keeps what it found; its result will come as a message. Do not start it again.]\n${what}`

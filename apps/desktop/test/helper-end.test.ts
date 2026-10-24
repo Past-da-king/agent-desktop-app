@@ -293,6 +293,26 @@ describe('a helper never ends silently', () => {
     expect(next.delivered[0]?.note).toContain('"Cut by quit" failed: the app restarted')
   })
 
+  it('crash recovery never takes a turn this process started (a notice sent at start-up) for a crash leftover', async () => {
+    const db = new Store(':memory:')
+    cleanups.push(() => db.close())
+    const leases = new TurnLeases({ store: db, selfId: () => 'brain-x', resumeTurn: () => undefined, resumeJob: () => undefined })
+    cleanups.push(() => leases.stop())
+    const fresh = leases.begin({ kind: 'turn', chatId: MAIN_CHAT, messageId: '', prompt: '[Helper #x "Job" failed: the app restarted]' })
+    await db.upsert('turn_lease', { id: 'lease-left-over', kind: 'turn', chatId: MAIN_CHAT, messageId: '', brainId: 'brain-x', status: 'running', attempt: 1, startedAt: 1, heartbeatAt: 1, prompt: 'Older request' })
+    expect(await leases.recover()).toBe(1)
+    expect((await db.get('turn_lease', fresh))?.status).toBe('running')
+    expect((await db.get('turn_lease', 'lease-left-over'))?.status).toBe('interrupted')
+  })
+
+  it('a failed helper: what it had is what it wrote, not the error a second time', async () => {
+    const { manager, delivered } = await harness({ script: () => ({ status: 400, text: 'model refused the request' }) })
+    await manager.delegate([{ label: 'Broken twice', brief: 'Try the thing.' }])
+    const notes = await settledNotices(delivered)
+    expect(notes[0]?.note).toContain('What it had: nothing yet.')
+    expect(notes[0]?.note.split('model refused the request')).toHaveLength(2)
+  })
+
   it('held notices from a restart go out only when flushed (after the runner repaired its rows)', async () => {
     const db = new Store(':memory:')
     cleanups.push(() => db.close())
