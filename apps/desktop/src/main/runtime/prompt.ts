@@ -5,11 +5,12 @@
  * desktop changes PLAN.md 5.2 asks for: it lives on the person's computer rather than a handheld, and
  * the parts about connected apps, machines, cards and voice are gone. Branches are not in v1.
  */
-import { SCRIPT_PROMPT_LINE, type AgentProfileInfo, type EnvironmentReport, type Found, type GoalRow, type MemoryRow, type Settings, type TaskRow } from '@agent/core'
+import { SCRIPT_PROMPT_LINE, type AgentProfileInfo, type EnvironmentReport, type Found, type GoalRow, type MemoryRow, type PromptRuleRow, type Settings, type TaskRow } from '@agent/core'
 
 import { existsSync } from 'node:fs'
 
 import { appName } from '../apps/catalog'
+import { promptRuleLines } from '../../shared/prompt-rules'
 
 import { OPENUI_PROMPT } from './openui-prompt'
 import { VOICE_NOTE_GUIDE } from '../tools/voice-note'
@@ -55,6 +56,12 @@ export interface PromptInput {
   projectNames?: string[]
   /** Devices: one line on which of the person's devices the newest message came from (devices/origin.ts). */
   deviceLine?: string
+  /**
+   * The person's standing instructions (shared/prompt-rules.ts), read from the store at the start of THIS run
+   * (runtime/prompt-rules.ts promptRulesFor). Required, so no place that builds a prompt can leave them out; null only
+   * where there is no store at all.
+   */
+  promptRules: PromptRuleRow[] | null
 }
 
 /** What the agent is told about the project a chat belongs to. */
@@ -186,6 +193,10 @@ export const MEMORY_CARE = [
   '- The user dictates, and dictation mis-hears names. When a word they used is a mis-hearing or another spelling of a known person, organisation or project (e.g. "Londercorp" for Initech), add that spelling to the page with memory_update add_alias, so it is recognised straight away next time.',
 ]
 
+/** How the main agent hears a change to the standing instructions (24 Oct 2026). */
+export const RULES_LINE =
+  '- "Update the system prompt: X", "add a rule", "from now on always (or never) X": that is a standing instruction for every agent. Do it yourself with prompt_rules add (a short instruction, in their meaning, with the reason), or edit or remove the one it changes. No approval needed. Every agent follows it from its next run.'
+
 export const NO_NAME = 'Your agent'
 export const MEMORY_LIMIT = 8
 export const TASK_LIMIT = 25
@@ -241,6 +252,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push("- Memory is your wiki about the user's life: one page per person, company, place, project or preference, in markdown, linking other pages as [[Name]], always tagged. Whenever you learn something durable, save or update the page right away (memory_get first to merge). This is the most important thing you do.")
     lines.push('- The user uses you as their to-do list. Things THEY must do go on their list (task_add with owner user). Bigger work lives under goals (goal_create) with a task per step; tick them off as you go.')
     lines.push('- Routines: suggest them (a morning brief, watching a price, chasing a reply); when the user agrees, create them with routine_create.')
+    lines.push(RULES_LINE)
     lines.push("- Before anything goes out in the user's name, costs money, or deletes something: request_approval with the exact content. Never skip this.")
     lines.push('- Anything long (research, a comparison, a plan): put it in a REPORT with the report tool and say only the one-line takeaway in the chat.')
     if (input.role !== 'routine') lines.push(FOCUS_LINE)
@@ -299,6 +311,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push(
       '- Routines: you come up with the ideas (a morning brief, watching a price, chasing a reply) and suggest them. When the user agrees, a helper creates it with routine_create. routine_list shows what exists.',
     )
+    lines.push(RULES_LINE)
     lines.push(
       '- Before anything goes out in the user\'s name, costs money, or deletes something: request_approval with the exact content. Never skip this. If they decline, stop that line of work and say what you did not do.',
     )
@@ -439,6 +452,13 @@ export function buildSystemPrompt(input: PromptInput): string {
 
   lines.push('')
   lines.push(...MEMORY_CARE)
+
+  // His own rules: their own section, after the app's, and never able to switch the app's safety off (24 Oct 2026).
+  const rules = promptRuleLines(input.promptRules)
+  if (rules.length > 0) {
+    lines.push('')
+    lines.push(...rules)
+  }
 
   if (goals.length > 0 || tasks.length > 0) {
     lines.push('')

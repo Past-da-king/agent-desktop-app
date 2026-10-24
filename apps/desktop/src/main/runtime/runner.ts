@@ -66,6 +66,13 @@ import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
 import type { MessageOrigin } from '../devices/types'
 import type { LeaseHook } from './turns'
+import { MAIN_IDLE_MS, runEnded } from '../browser/run-tabs'
+import { promptRulesFor } from './prompt-rules'
+
+/** The browser owner of a main-agent run: the main thread, a chat of its own, or the routine run. */
+export function browserOwnerOf(role: 'main' | 'routine', chat: string): string {
+  return role === 'routine' ? 'routine' : chat === MAIN_CHAT ? 'main' : `chat:${chat}`
+}
 
 export interface SettingsView {
   get(): Settings
@@ -724,6 +731,8 @@ export class Runner {
       this.routineRunning = false
       this.routineWaiting = false
       this.routineController = null
+      // The routine's run is over: the tabs it opened close now (browser/run-tabs.ts).
+      runEnded('routine')
     }
   }
 
@@ -749,6 +758,7 @@ export class Runner {
         latestUserText: trigger.prompt,
         role: 'routine',
         routineName: trigger.name,
+        promptRules: await promptRulesFor(this.store),
         environment: this.environment(),
         ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
       })
@@ -804,6 +814,8 @@ export class Runner {
       line.turn = null
       line.paused = false
       line.running = false
+      // The turn is over: its tabs close after a few idle minutes, unless the next turn browses again first.
+      runEnded(browserOwnerOf('main', line.chat), MAIN_IDLE_MS)
       this.emitFor(line.chat, error === undefined ? { type: 'run_finished' } : { type: 'run_finished', error })
       // Messages that landed in the last instant of the run, or while it was being stopped, still get an answer.
       const leftover = line.steer.splice(0)
@@ -1040,6 +1052,7 @@ export class Runner {
       ...this.profilePrompt(),
       ...(await this.projectPrompt(chat)),
       ...(await this.deviceLine(chat)),
+      promptRules: await promptRulesFor(this.store),
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
@@ -1124,6 +1137,7 @@ export class Runner {
       ...(role === 'main' ? await this.projectPrompt(chat) : {}),
       ...(role === 'main' ? await this.deviceLine(chat) : {}),
       canDelegate: this.helpers !== undefined,
+      promptRules: await promptRulesFor(this.store),
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
@@ -1418,7 +1432,7 @@ export class Runner {
     return {
       agentLabel: role === 'routine' ? 'routine' : 'main',
       // Each chat drives its own browser tab, as each helper does.
-      owner: role === 'routine' ? 'routine' : chat === MAIN_CHAT ? 'main' : `chat:${chat}`,
+      owner: browserOwnerOf(role, chat),
       ...(role === 'main' && chat !== MAIN_CHAT ? { chat } : {}),
       activity: async (text, meta) => {
         if (role === 'routine') return ++this.activitySeq

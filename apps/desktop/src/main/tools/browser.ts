@@ -24,6 +24,7 @@ const HANDOFF_SKIP = 'Skip'
 export function browserTools(deps: BrowserToolDeps): Tool[] {
   return [
     openTool(deps),
+    closeTool(deps),
     lookTool(deps),
     readTool(deps),
     clickTool(deps),
@@ -46,6 +47,7 @@ function openTool(deps: BrowserToolDeps): Tool {
         "Open a web address in your own browser, shown in the panel beside the chat. Returns the page outline with numbered elements. The agent may only open normal web pages, never local files or this computer's network.",
       schema: schema(['url'], {
         url: str('URL or domain, for example example.com'),
+        new_tab: bool('Open it in a new tab of your own and keep your current one open too'),
       }),
     },
     run: async (input) => {
@@ -53,7 +55,33 @@ function openTool(deps: BrowserToolDeps): Tool {
       if (raw === '') return 'Pass the web address to open.'
       const policy = checkBrowserUrl(raw)
       if (!policy.ok) return policy.reason
-      return call(() => deps.browser.open(policy.url))
+      const browser = deps.browser
+      if (input['new_tab'] === true && browser.openNewTab !== undefined) return call(() => browser.openNewTab!(policy.url))
+      return call(() => browser.open(policy.url))
+    },
+  }
+}
+
+/**
+ * Closing what you opened (24 Oct 2026). The app also closes a run's tabs when it ends; this is for closing as soon as
+ * a page is done with, or a tab opened with new_tab.
+ */
+function closeTool(deps: BrowserToolDeps): Tool {
+  return {
+    spec: {
+      name: 'browser_close',
+      description:
+        "Close your browser tab when you are done with it, so it stops using the computer's memory. No tab: the tab you are on; tab: one of your tabs by id; all: every tab you opened. The person's own tabs and tabs another agent is using are never closed. The app also closes your tabs when your run ends.",
+      schema: schema([], {
+        tab: str('Tab id, for example tab-3. Leave out for the tab you are on'),
+        all: bool('Close every tab you opened'),
+      }),
+    },
+    run: async (input) => {
+      const browser = deps.browser
+      if (browser.closeOwnTab === undefined) return 'This browser closes your tab by itself when your run ends.'
+      const tab = text(input['tab']).trim()
+      return call(() => browser.closeOwnTab!(tab === '' ? undefined : tab, input['all'] === true))
     },
   }
 }

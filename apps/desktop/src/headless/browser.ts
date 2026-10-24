@@ -13,6 +13,7 @@ import { Script } from 'node:vm'
 
 import { Cdp, type DebuggerLike } from '../main/browser/cdp'
 import { currentOwner } from '../main/browser/owner'
+import { onRunEnded } from '../main/browser/run-tabs'
 import {
   clickScript,
   formatOutline,
@@ -192,8 +193,49 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
     this.vault = vault
   }
 
+  /** Runs that ended, waiting out their grace before their tab closes (run-tabs.ts). */
+  private readonly ending = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly offRunEnd: () => void
+
   constructor(private readonly options: HeadlessBrowserOptions) {
     this.idleMs = options.idleMs ?? 10 * 60_000
+    // A run that ends closes its tab: a helper's or a routine's at once, the main agent's after a few idle minutes.
+    this.offRunEnd = onRunEnded((owner, graceMs) => this.endRun(owner, graceMs))
+  }
+
+  /** A run ended: its tab closes after `graceMs`, unless it browses again first. */
+  endRun(owner: string, graceMs = 0): void {
+    const waiting = this.ending.get(owner)
+    if (waiting !== undefined) clearTimeout(waiting)
+    this.ending.delete(owner)
+    if (!this.tabs.has(owner)) return
+    if (graceMs === 0) {
+      void this.closeTab(owner)
+      return
+    }
+    const timer = setTimeout(() => {
+      this.ending.delete(owner)
+      void this.closeTab(owner)
+    }, graceMs)
+    timer.unref?.()
+    this.ending.set(owner, timer)
+  }
+
+  /** Stop listening for runs (the node is shutting down). */
+  dispose(): void {
+    this.offRunEnd()
+    for (const timer of this.ending.values()) clearTimeout(timer)
+    this.ending.clear()
+  }
+
+  /** browser_close: the acting agent closes its tab (here every agent has one). */
+  async closeOwnTab(id?: string): Promise<string> {
+    const owner = currentOwner() ?? 'main'
+    const tab = this.tabs.get(owner)
+    if (tab === undefined) return 'You have no tab open.'
+    if (id !== undefined && id.trim() !== '' && id.trim() !== tab.id) return `${id.trim()} is not your tab. Yours is ${tab.id}.`
+    await this.closeTab(owner)
+    return `Closed ${tab.id}. You have no tabs open now.`
   }
 
   // ---- the process and its tabs ----
@@ -280,6 +322,12 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
   /** The calling agent's own tab, made on first use. */
   private async tab(create: boolean): Promise<Tab | null> {
     const owner = currentOwner() ?? 'main'
+    // Browsing again: the run is live, so its tab is not due to close.
+    const ending = this.ending.get(owner)
+    if (ending !== undefined) {
+      clearTimeout(ending)
+      this.ending.delete(owner)
+    }
     const existing = this.tabs.get(owner)
     if (existing !== undefined && existing.socket.isAttached()) return existing
     if (!create) return null

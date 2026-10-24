@@ -609,6 +609,7 @@ export function demoRows(): SeedResult['rows'] {
     device_command: [],
     turn_lease: [],
     job: [],
+    prompt_rule: [],
     memory: [...memories, ...projectMemoriesDemo(now)],
     goal: goals,
     task: tasks,
@@ -695,13 +696,13 @@ export function seedFor(mode: DemoMode): SeedResult {
   if (mode === 'fresh') {
     return {
       settings: freshSettings(),
-      rows: { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [], project: [], device: [], device_command: [], turn_lease: [], job: [] },
+      rows: { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [], project: [], device: [], device_command: [], turn_lease: [], job: [], prompt_rule: [] },
     }
   }
   if (mode === 'empty') {
     return {
       settings: demoSettings(),
-      rows: { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [], project: [], device: [], device_command: [], turn_lease: [], job: [] },
+      rows: { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [], project: [], device: [], device_command: [], turn_lease: [], job: [], prompt_rule: [] },
     }
   }
   const rows = demoRows()
