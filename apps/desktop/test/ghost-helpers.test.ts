@@ -407,6 +407,42 @@ describe('the quiet heads-up', () => {
     expect(again.delivered).toHaveLength(0)
   })
 
+  it('after a restart, the brain that placed it watches it again by itself (the watch starts at restore)', async () => {
+    const db = new Store(':memory:')
+    cleanups.push(() => db.close())
+    const delivered: Delivery[] = []
+    const link: OffloadLink = {
+      selfId: () => 'node-a',
+      isSelf: (id) => id === 'node-a',
+      up: (id) => id === 'node-b',
+      place: async () => ({ device: 'node-b', name: 'Desktop', why: 'it needs a computer' }),
+      send: async () => undefined,
+      leaseHolder: async () => ({ device: 'node-b', running: true }),
+      deviceName: async () => 'Desktop',
+    }
+    const manager = new HelperManager({
+      store: db,
+      settings: settingsView(READY),
+      secrets: secretsView('test-key'),
+      providerFactory: () => providerFor({ provider: 'openai', key: 'k', baseUrl: 'http://127.0.0.1:9', allowHttp: true }),
+      workerTools: [],
+      deliver: (note, chat) => {
+        delivered.push({ note, chat: chat ?? MAIN_CHAT })
+      },
+      offload: link,
+      quietMinutes: 1,
+      quietCheckMs: 30,
+      reapEveryMs: 0,
+    })
+    cleanups.push(() => manager.shutdown())
+    await db.upsert('chat_item', { kind: 'helper', text: 'Long job.', meta: JSON.stringify({ label: 'Placed long', state: 'working', runToken: 'r-restart', startedAt: Date.now() - 5 * 60_000, placedBy: 'node-a', runOn: 'node-b' }) })
+    await manager.restore()
+    await waitFor(() => delivered.length > 0, 4_000)
+    await sleep(200)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]?.note).toContain('"Placed long" has taken no new step')
+  })
+
   it('never for a helper that has ended (its end arrived by replication, no result message)', async () => {
     let clock = 60_000_000
     const { a, b, flush, sync } = pair({ now: () => clock, quietMinutes: 10 })
