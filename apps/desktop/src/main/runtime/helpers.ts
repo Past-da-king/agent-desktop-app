@@ -1204,6 +1204,9 @@ export class HelperManager implements HelperHost {
     }
     // From now on, a card left working with no run anywhere (a ghost) is found and ended.
     this.watchOrphans()
+    // Helpers this brain placed elsewhere are followed again (restored above): the quiet watch looks after them too.
+    // It only started when a helper ran here, so after a restart a placed helper never got its heads-up.
+    this.watchQuiet()
   }
 
   // ---- running a helper --------------------------------------------------------------------
