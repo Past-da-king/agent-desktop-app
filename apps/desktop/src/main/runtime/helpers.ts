@@ -647,6 +647,29 @@ export class HelperManager implements HelperHost {
     return `Helper #${id} gets your message before its next step and keeps going.`
   }
 
+  /**
+   * A device result (or device note) that came after this helper stopped waiting for it: it goes to this helper only.
+   * Still working, here or on another brain: it reads it before its next step, like a steer. Ended: it is dropped,
+   * with a short line on its card, and the helper is never started again for it. Returns where it went.
+   */
+  async lateResult(id: string, text: string): Promise<'delivered' | 'dropped' | 'unknown'> {
+    const row = await this.store.get('chat_item', id)
+    if (row === null || row.kind !== 'helper') return 'unknown'
+    const label = stringField(parseMeta(row.meta)['label']) || 'Helper'
+    if (this.runs.has(id)) {
+      await this.steer(id, text)
+      return 'delivered'
+    }
+    const elsewhere = await this.runningElsewhere(id)
+    if (elsewhere !== '') {
+      await this.link()?.send(elsewhere, 'steer', id, { text })
+      await this.addActivity(id, label, `Late device result: ${clip(text, 140)}`)
+      return 'delivered'
+    }
+    await this.addActivity(id, label, `A device result came after it ended, so it was dropped: ${clip(text, 140)}`)
+    return 'dropped'
+  }
+
   async push(id: string, message: string): Promise<string> {
     if (this.runs.has(id)) return `Helper #${id} is still working. Wait for its result.`
     const row = await this.store.get('chat_item', id)

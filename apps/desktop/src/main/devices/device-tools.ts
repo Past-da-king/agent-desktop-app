@@ -155,8 +155,12 @@ export interface DeviceToolHubDeps {
   preferred?: () => Partial<Record<string, string>>
   /** Is a node (not on RPC) reachable now? Default: only RPC connections count. */
   reachable?: (deviceId: string) => boolean
-  /** A result that came after the agent stopped waiting, posted to the chat. */
-  noteBack: (chat: string, text: string) => void | Promise<void>
+  /**
+   * A result that came after the agent stopped waiting. It goes to the run that asked (`owner`, e.g. "helper:<id>"),
+   * never to another one: the app delivers it to that run, or drops it with a note on the run when it has ended.
+   * No owner (a row from an older version): the chat.
+   */
+  noteBack: (chat: string, text: string, owner?: string) => void | Promise<void>
   /** Where pictures from devices are saved, so the model can see them ([[image:path]]). */
   imageDir?: string
   /** Tests shorten how long the agent waits; the device still gets the real deadline. */
@@ -171,6 +175,11 @@ interface Waiter {
 export class DeviceToolHub {
   private host: DevicesHost | null = null
   private readonly waiters = new Map<string, Waiter>()
+  /**
+   * Late results already handed on, by command id. Marked before the first await: two change events for the same
+   * finished row (its own write and the copy replication brings back) used to post the same result twice.
+   */
+  private readonly told = new Set<string>()
   private offChange: (() => void) | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private readonly now: () => number
@@ -334,6 +343,7 @@ export class DeviceToolHub {
       note: '',
       chat,
       brainId: this.deps.selfId(),
+      owner: ctx?.owner ?? '',
       expiresAt: at + QUEUE_TTL_MS + deadlineMs,
       updatedAt: at,
     } as Partial<DeviceCommandRow> & { target: string })
@@ -347,8 +357,8 @@ export class DeviceToolHub {
         state: 'waiting',
         device: row.name,
         text: online
-          ? `${row.name} is still working on ${tool}. Its result will be posted to this chat when it comes.`
-          : `${row.name} is offline. ${tool} will run when it connects (within 10 minutes) and the result will be posted to this chat.`,
+          ? `${row.name} is still working on ${tool}. Its result will come to you as a message when it arrives.`
+          : `${row.name} is offline. ${tool} will run when it connects (within 10 minutes) and its result will come to you as a message.`,
       }
     }
     return this.outcome(done, row.name)
@@ -394,19 +404,26 @@ export class DeviceToolHub {
     })
   }
 
-  /** A finished command: hand it to whoever waits, else (ours, late) post it to the chat once. */
+  /**
+   * A finished command: hand it to whoever waits, else (ours, late) to the run that asked for it, exactly once.
+   * The id is marked in memory before any await, and in the row ('told') for after a restart.
+   */
   private async settle(row: DeviceCommandRow): Promise<void> {
     if (row.kind !== 'tool') return
     const waiter = this.waiters.get(row.id)
     if (waiter !== undefined) {
+      this.told.add(row.id)
       waiter.resolve(row)
       return
     }
-    if (row.brainId !== this.deps.selfId() || row.note === 'told') return
+    if (row.brainId !== this.deps.selfId() || row.note === 'told' || this.told.has(row.id)) return
+    this.told.add(row.id)
+    const fresh = await this.deps.store.get('device_command', row.id)
+    if (fresh !== null && fresh.note === 'told') return
     await this.deps.store.upsert('device_command', { id: row.id, note: 'told' })
     const device = (await this.deps.store.get('device', row.target))?.name ?? 'the device'
     const outcome = this.outcome(row, device)
-    await this.deps.noteBack(row.chat, `[Device result: ${row.tool ?? 'tool'} on ${device} ${outcome.ok ? 'finished' : 'failed'}: ${outcome.text}]`)
+    await this.deps.noteBack(row.chat, `[Device result: ${row.tool ?? 'tool'} on ${device} ${outcome.ok ? 'finished' : 'failed'}: ${outcome.text}]`, row.owner ?? '')
   }
 
   private outcome(row: DeviceCommandRow, device: string): ToolOutcome {
@@ -669,4 +686,28 @@ function phrase(name: string, outcome: ToolOutcome): string {
     return yes ? `The user approved on ${outcome.device}.` : `The user declined on ${outcome.device}.`
   }
   return `On ${outcome.device}: ${outcome.text}`
+}
+
+// ---- late results: back to the run that asked ----------------------------------------------------------------------
+
+export interface LateRoute {
+  /** Hand a note to a chat's agent (runner.deliver). */
+  deliver: (text: string, chat: string) => void | Promise<void>
+  /** Hand a note to one helper (HelperManager.lateResult): delivered while it works, else dropped with a card line. */
+  helper: (id: string, text: string) => Promise<'delivered' | 'dropped' | 'unknown'>
+}
+
+/**
+ * Where a device result or note that came after its run stopped waiting goes: only to the run that made the command.
+ * A helper's goes to that helper (never to the main chat); a routine's run is over, so it is dropped; the main agent's
+ * and a chat's go to that chat. A row with no owner (an older version made it) goes to its chat, as before.
+ */
+export async function routeLate(route: LateRoute, chat: string, text: string, owner = ''): Promise<'chat' | 'helper' | 'dropped'> {
+  if (owner.startsWith('helper:')) {
+    const where = await route.helper(owner.slice('helper:'.length), text)
+    return where === 'delivered' ? 'helper' : 'dropped'
+  }
+  if (owner === 'routine') return 'dropped'
+  await route.deliver(text, chat)
+  return 'chat'
 }

@@ -41,8 +41,8 @@ export interface DeviceCommandsDeps {
   store: DataStore
   /** This node's id: the brain that made a command is the one that tells the chat when it expires. */
   selfId: () => string
-  /** Tell the agent in a chat (a note it reads as its next message). */
-  noteBack: (chat: string, text: string) => void | Promise<void>
+  /** Tell the run that made the command (`owner`; the chat when there is none) in a note it reads as its next message. */
+  noteBack: (chat: string, text: string, owner?: string) => void | Promise<void>
   now?: () => number
   ackWaitMs?: number
   tickMs?: number
@@ -83,7 +83,7 @@ export class DeviceCommands {
   }
 
   /** Send a command to a device and wait a little for its answer. */
-  async send(target: string, input: CommandInput, chat: string = MAIN_CHAT, targetName = 'the device'): Promise<CommandOutcome> {
+  async send(target: string, input: CommandInput, chat: string = MAIN_CHAT, targetName = 'the device', owner = ''): Promise<CommandOutcome> {
     const at = this.now()
     const row = await this.deps.store.upsert('device_command', {
       id: `cmd_${randomUUID()}`,
@@ -93,6 +93,7 @@ export class DeviceCommands {
       note: '',
       chat,
       brainId: this.deps.selfId(),
+      owner,
       expiresAt: at + (this.deps.ttlMs ?? COMMAND_TTL_MS),
       updatedAt: at,
     })
@@ -117,13 +118,26 @@ export class DeviceCommands {
     this.waiters.delete(id)
     waiter?.({ ok, note })
     if (waiter === undefined && !ok && row.brainId === this.deps.selfId()) {
-      await this.deps.noteBack(row.chat, `[Device note: ${what(row)} did not work on the device${note === '' ? '' : `: ${note}`}.]`)
+      await this.deps.noteBack(row.chat, `[Device note: ${what(row)} did not work on the device${note === '' ? '' : `: ${note}`}.]`, row.owner ?? '')
     }
     return true
   }
 
   /** Deliver what waits for devices that are online now, and expire what waited too long. */
   async tick(): Promise<void> {
+    // One pass at a time: two overlapping passes both saw a row still queued and told its run twice.
+    if (this.ticking) return
+    this.ticking = true
+    try {
+      await this.tickOnce()
+    } finally {
+      this.ticking = false
+    }
+  }
+
+  private ticking = false
+
+  private async tickOnce(): Promise<void> {
     const host = this.host
     const now = this.now()
     const rows = await this.deps.store.list('device_command')
@@ -134,7 +148,7 @@ export class DeviceCommands {
         if (row.brainId !== this.deps.selfId()) continue
         await this.deps.store.upsert('device_command', { id: row.id, status: 'expired', updatedAt: now })
         const why = row.status === 'queued' ? 'the device did not come online within 10 minutes' : 'the device never confirmed it'
-        await this.deps.noteBack(row.chat, `[Device note: ${what(row)} was not delivered: ${why}. Tell the user another way if it still matters.]`)
+        await this.deps.noteBack(row.chat, `[Device note: ${what(row)} was not delivered: ${why}. Tell the user another way if it still matters.]`, row.owner ?? '')
         continue
       }
       if (row.status === 'queued' && row.kind !== 'tool' && host !== null && host.isConnected(row.target)) await this.deliver(host, row)
