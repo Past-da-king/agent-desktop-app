@@ -23,6 +23,7 @@ import { MemorySettings } from './MemorySettings'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
 import { DevicesSettings } from './Devices'
+import { useDevicesSummary } from '../state/useDevices'
 import { WorkLimits } from './WorkLimits'
 import { VaultSettings } from './Vault'
 import { PromptRulesSettings } from './PromptRules'
@@ -160,6 +161,7 @@ export function Settings(): JSX.Element {
   const userName = settings?.userName.trim() || 'You'
   const email = settings?.syncEmail ?? ''
   const device = settings?.deviceName || 'This computer'
+  const devices = useDevicesSummary()
 
   const syncLine = status.syncing
     ? 'Syncing now'
@@ -224,8 +226,8 @@ export function Settings(): JSX.Element {
               <div className="rowc">
                 <Avatar name={userName} size={48} />
                 <div className="rt">
-                  <b>{signedIn ? userName : 'This computer only'}</b>
-                  <span>{signedIn ? email : 'No account. Everything stays here.'}</span>
+                  <b>{signedIn ? userName : devices.count > 0 ? userName : 'This computer only'}</b>
+                  <span>{signedIn ? email : devices.count > 0 ? `No account. ${devices.line}, kept in step in Devices below.` : 'No account. Everything stays here.'}</span>
                 </div>
                 {signedIn ? (
                   <Button

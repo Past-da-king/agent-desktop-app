@@ -13,6 +13,7 @@ import { Segmented } from '../ui/Segmented'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
 import { ConnectedAppsSection, LearnedAppsSection } from './ConnectedApps'
+import { Machines, useOpenDevices } from './Machines'
 
 function Row({
   icon,
@@ -76,6 +77,7 @@ export function Connections(): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   const navigate = useUi((state) => state.navigate)
+  const openDevices = useOpenDevices()
   const [system, setSystem] = useState<SystemInfo | null>(null)
   const [environment, setEnvironment] = useState<EnvironmentReport | null>(null)
   const [scanning, setScanning] = useState(true)
@@ -307,25 +309,14 @@ export function Connections(): JSX.Element {
               eyebrow="MACHINES"
               line="Hand heavy work to your servers and computers"
               right={
-                <Button size="sm" comingSoon>
+                <Button size="sm" onClick={openDevices}>
                   <Icon name="plus" size={16} />
                   Add machine
                 </Button>
               }
             />
             <div className="list" style={{ padding: 6 }}>
-              <Row
-                icon="monitor"
-                title="This computer"
-                line={`${machine}, ${folderLine}. Runs jobs while the app is open.`}
-                right={<span className="pill ok">Online</span>}
-              />
-              <Row
-                icon="server"
-                title="Another machine"
-                line="Signed in with its own key"
-                right={<span className="pill mute">Coming soon</span>}
-              />
+              <Machines look="rows" thisName="This computer" thisLine={`${machine}, ${folderLine}. Runs jobs while the app is open.`} />
             </div>
             <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
               Your agent only sees the names. Addresses, passwords and keys stay encrypted on this computer.

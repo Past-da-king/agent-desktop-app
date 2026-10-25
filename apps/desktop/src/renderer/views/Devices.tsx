@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
 import { timeAgo } from '../lib/format'
+import { refreshDevicesSummary } from '../state/useDevices'
 import { toast } from '../state/useToast'
 import { IconButton, Pill } from '../ui/bits'
 import { Button } from '../ui/Button'
@@ -375,6 +376,7 @@ export function DevicesSettings(): JSX.Element {
   const refresh = useCallback(() => {
     void agent.devices.status().then(setStatus).catch(() => undefined)
     void agent.devices.list().then(setDevices).catch(() => undefined)
+    refreshDevicesSummary()
   }, [])
 
   useEffect(() => {
@@ -391,7 +393,8 @@ export function DevicesSettings(): JSX.Element {
 
   const live = devices.filter((device) => !device.revoked)
   const brains = live.filter((device) => device.roles.includes('brain')).sort((a, b) => a.priority - b.priority)
-  const connected = new Set(status?.connected ?? [])
+  // Connected to us, or reached by our own replication link (a server this computer dials).
+  const connected = new Set([...(status?.connected ?? []), ...(status?.linked ?? [])])
   const enabled = status?.enabled ?? false
 
   const setEnabled = (on: boolean): void => {
@@ -400,6 +403,7 @@ export function DevicesSettings(): JSX.Element {
       .setEnabled(on)
       .then((next) => {
         setStatus(next)
+        refreshDevicesSummary()
         if (next.error !== '') toast(next.error)
       })
       .catch((cause: unknown) => toast(message(cause, 'Could not change that.')))
@@ -434,7 +438,7 @@ export function DevicesSettings(): JSX.Element {
         : 'Off. No other device can reach this computer.'
 
   return (
-    <section className="dv">
+    <section className="dv" id="settings-devices">
       <SectionHeader eyebrow="DEVICES" line="Your phone and other computers, one agent" />
       <div className="card" style={{ padding: 10 }}>
         {readOnly ? (

@@ -21,6 +21,7 @@ import { Ring } from '../ui/Ring'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Skeleton } from '../ui/Skeleton'
 import { Wave } from '../ui/Wave'
+import { Machines } from './Machines'
 import { TaskDialog } from './TaskDialog'
 import { FailingWorkers, useFailingCount } from './Workers'
 import { withNo } from '../../shared/ask-options'
@@ -570,32 +571,7 @@ export function Home(): JSX.Element {
 
           <section>
             <SectionHeader eyebrow="ON YOUR MACHINES" line="Where heavy work can run" />
-            <ul className="list mach">
-              <li>
-                <span className="mi">
-                  <Icon name="monitor" size={20} />
-                </span>
-                <div style={{ flex: 1 }}>
-                  <div className="t1" style={{ font: "500 14px/1.3 'Roboto',sans-serif" }}>
-                    This computer
-                  </div>
-                  <div className="small muted">{settings?.deviceName || 'Ready for work'}</div>
-                </div>
-                <span className="pill ok">Online</span>
-              </li>
-              <li title="Coming soon">
-                <span className="mi">
-                  <Icon name="server" size={20} />
-                </span>
-                <div style={{ flex: 1 }}>
-                  <div className="t1" style={{ font: "500 14px/1.3 'Roboto',sans-serif" }}>
-                    Another machine
-                  </div>
-                  <div className="small muted">Hand heavy work to your own servers later.</div>
-                </div>
-                <span className="pill mute">Coming soon</span>
-              </li>
-            </ul>
+            <Machines look="list" thisName="This computer" thisLine={settings?.deviceName || 'Ready for work'} />
           </section>
         </div>
       </div>
