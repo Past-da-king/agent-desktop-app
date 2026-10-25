@@ -25,6 +25,8 @@ export interface DevicesSyncDeps {
   store: ReplicaStore & DataStore & { onChange(listener: (change: DataChange) => void): () => void }
   /** This node's own pass (from pairing, valid at every brain), or null before it has one. */
   pass: () => string | null
+  /** A replication link went up or down. */
+  onLinkState?: () => void
   /** Where the bundle's parts live (settings, secrets, profiles, learned apps, rules, pass table). */
   bundle: Omit<BundleSources, 'local'>
   /** The app's turn leases (runtime/turns.ts), so another brain can take over a turn here, and the other way. */
@@ -110,6 +112,7 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
           peers: async () => mergePeers(await store.list('device'), deps.extraPeers?.() ?? [], host.self().id),
         }),
     pass: deps.pass,
+    ...(deps.onLinkState === undefined ? {} : { onLinkState: deps.onLinkState }),
     onBundleVersion: (peer, _version, url) => {
       const pass = deps.pass()
       if (pass === null) return

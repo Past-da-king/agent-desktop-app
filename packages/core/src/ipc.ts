@@ -572,6 +572,8 @@ export interface DevicesStatus {
   fpWords: string
   /** Device ids with a live connection now. */
   connected: string[]
+  /** Device ids this node's own replication link reaches now (it dials them). Absent from older nodes. */
+  linked?: string[]
   /** A plain sentence when the server could not start (port in use...), else ''. */
   error: string
   /** Which groups of this computer's tools other devices may use. */
