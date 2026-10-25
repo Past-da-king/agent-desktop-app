@@ -2178,13 +2178,20 @@ export class HelperManager implements HelperHost {
   }
 
   private async addActivity(helperId: string, label: string, text: string): Promise<void> {
-    const chat = this.runs.get(helperId)?.chat ?? MAIN_CHAT
+    // A helper that is not running here still belongs to its own chat (a project chat's helper never writes to main).
+    const chat = this.runs.get(helperId)?.chat ?? (await this.chatOfCard(helperId))
     await this.store.upsert('chat_item', {
       kind: 'activity',
       text,
       meta: JSON.stringify({ tool: 'agent', by: label, helper: helperId, status: 'done', summary: text, ...chatTag(chat) }),
     })
     this.emit({ type: 'chat_changed' })
+  }
+
+  /** The chat a helper's card belongs to (MAIN_CHAT when it has none or is gone). */
+  private async chatOfCard(helperId: string): Promise<string> {
+    const row = await this.store.get('chat_item', helperId).catch(() => null)
+    return row === null ? MAIN_CHAT : stringField(parseMeta(row.meta)['chat']) || MAIN_CHAT
   }
 
   // ---- rows and prompts --------------------------------------------------------------------
