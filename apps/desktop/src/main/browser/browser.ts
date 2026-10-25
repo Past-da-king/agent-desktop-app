@@ -75,6 +75,7 @@ import { pickTab } from './tab-pick'
 import { siteTabPlan } from './site-tab'
 import { onRunEnded, RunTabs, SWEEP_MS } from './run-tabs'
 import { checkBrowserUrl } from './url-policy'
+import { PAGE_SCRIPT_MS, PageTimeout, WAIT_MAX_S, orFallback, waitAnswer, withDeadline } from './deadline'
 import { EMBED_WAIT_MS, guardWebview, isEmbeddedGuest } from './embed'
 import {
   PAGE_WORLD_ID,
@@ -301,9 +302,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
   }
 
-  /** An agent picked a kept tab up again: an offscreen page runs at full speed again (embedded ones throttle by default). */
+  /**
+   * An agent picked a kept tab up again: it runs at full speed again, embedded or offscreen. (An embedded tab that
+   * stayed throttled after being picked up kept its timers slowed while hidden, so waits on it crawled.)
+   */
   private wakeTab(tab: Tab): void {
-    if (!this.idled.delete(tab.id) || tab.view === null) return
+    if (!this.idled.delete(tab.id)) return
     try {
       if (!tab.wc.isDestroyed()) tab.wc.setBackgroundThrottling(false)
     } catch {
@@ -809,14 +813,23 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     return this.snapshotText(tab, options)
   }
 
-  private async snapshotText(tab: Tab, options: { filter?: string; deep?: boolean; notes?: string }): Promise<string> {
+  private async snapshotText(tab: Tab, options: { filter?: string; deep?: boolean; notes?: string }, limitMs: number = PAGE_SCRIPT_MS): Promise<string> {
     let raw: unknown
+    const script = snapshotScript({ ...(options.filter === undefined ? {} : { filter: options.filter }), ...(options.deep === undefined ? {} : { deep: options.deep }) })
+    const silent = (error: PageTimeout): string => `URL: ${safeUrl(tab.wc)}\nTitle: ${safeTitle(tab.wc)}\n\n${error.message} Try again in a moment.`
     try {
-      raw = await this.run(tab, snapshotScript({ ...(options.filter === undefined ? {} : { filter: options.filter }), ...(options.deep === undefined ? {} : { deep: options.deep }) }))
-    } catch {
+      raw = await this.run(tab, script, limitMs)
+    } catch (error) {
+      // A page that does not answer at all is said so, with what is known about it, instead of waiting on.
+      if (error instanceof PageTimeout) return silent(error)
       // A page mid-navigation has no document to read yet; give it a moment once.
       await this.settle(400)
-      raw = await this.run(tab, snapshotScript({ ...(options.filter === undefined ? {} : { filter: options.filter }), ...(options.deep === undefined ? {} : { deep: options.deep }) }))
+      try {
+        raw = await this.run(tab, script, limitMs)
+      } catch (again) {
+        if (again instanceof PageTimeout) return silent(again)
+        throw again
+      }
     }
     const result = parseSnapshot(raw)
     if (this.blockedReason !== '') {
@@ -836,7 +849,14 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
-    const result = parseRead(await this.run(tab, readScript(target)))
+    let raw: unknown
+    try {
+      raw = await this.run(tab, readScript(target))
+    } catch (error) {
+      if (error instanceof PageTimeout) return `URL: ${safeUrl(tab.wc)}\nTitle: ${safeTitle(tab.wc)}\n\n${error.message}`
+      throw error
+    }
+    const result = parseRead(raw)
     if (!result.ok) return result.reason
     const head = `URL: ${safeUrl(tab.wc)}\nTitle: ${safeTitle(tab.wc)}\n\n`
     return `${head}${result.text === '' ? '(no text)' : result.text}`
@@ -874,14 +894,42 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     if (signal?.aborted === true) return 'Stopped.'
-    const wait = this.run(tab, waitForScript(query.text, query.selector, seconds * 1000))
-    const value = await raceAbort(wait, signal)
-    if (value === null) return 'Stopped.'
-    const result = parseAction(value)
-    if (!result.ok && result.reason !== '') return result.reason
-    const line = result.ok ? "It's there." : "Didn't appear in time."
+    const limit = Math.max(1, Math.min(WAIT_MAX_S, Math.floor(seconds)))
+    // The page loops on its own timer; the main process holds its own deadline too, so a hidden, starved or frozen
+    // page can never keep the wait (and the helper in it) going past its limit.
+    const wait = this.run(tab, waitForScript(query.text, query.selector, limit * 1000), limit * 1000 + 2_000).then(
+      (value) => ({ value, timedOut: false }),
+      (error: unknown) => {
+        if (error instanceof PageTimeout) return { value: null as unknown, timedOut: true }
+        throw error
+      },
+    )
+    const outcome = await raceAbort(wait, signal)
+    if (outcome === null) return 'Stopped.'
+    const result = outcome.timedOut ? { ok: false, reason: '' } : parseAction(outcome.value)
+    const reason = result.ok ? '' : ((result as { reason?: string }).reason ?? '')
+    const seen = await this.seen(tab)
     this.emit()
-    return `${line}\n\n${await this.snapshot()}`
+    const answer = waitAnswer({ found: result.ok, reason, timedOut: outcome.timedOut }, query, limit, seen)
+    if (reason !== '') return answer
+    // The outline helps the next step, but only if the page answers quickly; the wait has already had its time.
+    const outline = await orFallback(this.snapshotText(tab, {}, 5_000), 8_000, '')
+    return outline === '' ? answer : `${answer}\n\n${outline}`
+  }
+
+  /** What the page shows right now (address, title, start of its text), or null when it does not answer in 3 s. */
+  private async seen(tab: Tab): Promise<{ url: string; title: string; text: string } | null> {
+    try {
+      const raw = objectOf(await this.run(tab, pageTextScript(), 3_000))
+      return {
+        url: safeUrl(tab.wc),
+        title: typeof raw['title'] === 'string' && raw['title'] !== '' ? raw['title'] : safeTitle(tab.wc),
+        text: typeof raw['text'] === 'string' ? raw['text'] : '',
+      }
+    } catch {
+      const url = safeUrl(tab.wc)
+      return url === '' ? null : { url, title: safeTitle(tab.wc), text: '(the page did not answer when read; it may be busy, frozen or hidden)' }
+    }
   }
 
   /** The page as it is drawn in the panel, as a small JPEG, for the still picture shown while it steps aside. */
@@ -889,7 +937,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     const tab = this.shownTab()
     if (tab === null || !isRealPage(tab.wc) || !this.bounds.visible) return null
     try {
-      const image = await Promise.race([tab.wc.capturePage(), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000))])
+      const image = await Promise.race([tab.wc.capturePage(undefined, { stayHidden: true }), new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000))])
       if (image === null || image.isEmpty()) return null
       return `data:image/jpeg;base64,${image.toJPEG(72).toString('base64')}`
     } catch {
@@ -897,36 +945,55 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
   }
 
-  /** A PNG of the page at the size it is laid out at (1440x900 for desktop), not the small panel copy. */
+  /** Why the last screenshot failed, in plain words for the tool's answer ('' after one that worked). */
+  private shotProblem = ''
+
+  screenshotProblem(): string {
+    return this.shotProblem
+  }
+
+  /**
+   * A PNG of the page at the size it is laid out at (1440x900 for desktop), not the small panel copy. Works with
+   * the panel hidden: the capture paints a page that is out of sight without showing it; the debugger's own capture
+   * is the fallback. Every step has a deadline, and a failure says truthfully what was tried.
+   */
   async screenshot(): Promise<string | null> {
     const tab = this.activeTab()
-    if (tab === null || !isRealPage(tab.wc)) return null
+    if (tab === null || !isRealPage(tab.wc)) {
+      this.shotProblem = 'No page is open yet. Use browser_open with a web address.'
+      return null
+    }
     let png: Buffer | null = null
+    const tried: string[] = []
     try {
-      const image = await Promise.race([
-        tab.wc.capturePage(),
-        // A page out of sight paints nothing to capture; the debugger below gets its own picture.
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4_000)),
-      ])
-      if (image !== null && !image.isEmpty()) png = image.toPNG()
-    } catch {
-      png = null
+      // stayHidden: a page out of sight is painted for the capture without being shown; stayAwake keeps it running.
+      const image = await withDeadline(tab.wc.capturePage(undefined, { stayHidden: true, stayAwake: true }), 6_000, 'The page capture')
+      if (!image.isEmpty()) png = image.toPNG()
+      else tried.push('the page capture came back empty')
+    } catch (error) {
+      tried.push(error instanceof PageTimeout ? 'the page capture did not answer in 6 s' : 'the page capture failed')
     }
     if (png === null && tab.ready) {
-      // A hidden view may not paint; the debugger can still render the page.
+      // The debugger renders the page itself.
       try {
-        const shot = objectOf(await tab.cdp.send('Page.captureScreenshot', { format: 'png' }))
-        if (typeof shot['data'] === 'string') png = Buffer.from(shot['data'], 'base64')
+        const shot = objectOf(await withDeadline(tab.cdp.send('Page.captureScreenshot', { format: 'png' }), 8_000, 'The debugger capture'))
+        if (typeof shot['data'] === 'string' && shot['data'] !== '') png = Buffer.from(shot['data'], 'base64')
+        else tried.push('the debugger capture came back empty')
       } catch {
-        png = null
+        tried.push('the debugger capture did not answer')
       }
     }
-    if (png === null) return null
+    if (png === null) {
+      this.shotProblem = `The page ${safeUrl(tab.wc)} is open but could not be drawn (${tried.join('; ')}). It may be busy or frozen; try again in a moment, or read it with browser_read.`
+      return null
+    }
+    this.shotProblem = ''
     try {
       const path = join(this.screenshotsDir, `shot-${Date.now()}-${++this.shotSeq}.png`)
       writeFileSync(path, png)
       return path
-    } catch {
+    } catch (error) {
+      this.shotProblem = `The screenshot was taken but could not be saved: ${error instanceof Error ? error.message : String(error)}`
       return null
     }
   }
@@ -1005,8 +1072,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (request.reset !== true && request.remember !== false && site !== null) lines.push(`Remembered for ${site}.`)
     if (tab !== null && isRealPage(tab.wc)) {
       try {
-        const seen = await tab.wc.executeJavaScript(
-          'JSON.stringify({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio, ua: navigator.userAgent, touch: navigator.maxTouchPoints })',
+        const seen = await withDeadline(
+          tab.wc.executeJavaScript(
+            'JSON.stringify({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio, ua: navigator.userAgent, touch: navigator.maxTouchPoints })',
+          ) as Promise<unknown>,
+          5_000,
         )
         lines.push(`The page sees: ${String(seen)}`)
       } catch {
@@ -1398,7 +1468,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (wc.isDestroyed()) return
     if (safeUrl(tab.wc) === '') {
       // Attaching the debugger to a view that never loaded a document crashes Electron 44.
-      await wc.loadURL('about:blank').catch(() => undefined)
+      await withDeadline(wc.loadURL('about:blank'), 10_000).catch(() => undefined)
     }
     tab.ready = tab.cdp.ensure()
     // The tab's developer tools record its network and console from here, before its first real page.
@@ -1520,10 +1590,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     tab.status = null
     tab.loadError = null
     try {
-      await wc.loadURL(url)
+      // A load that never finishes (a hidden page that stalled, a site that streams for ever) is read as it stands.
+      await withDeadline(wc.loadURL(url), 45_000, 'The page load')
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (tab.loadError === null && !/ERR_ABORTED/.test(message)) tab.loadError = message
+      if (tab.loadError === null && !/ERR_ABORTED/.test(message) && !(error instanceof PageTimeout)) tab.loadError = message
     }
     await this.settle(300)
     let page = await this.readText(tab)
@@ -1538,7 +1609,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   private async readText(tab: Tab): Promise<{ title: string; text: string }> {
     try {
-      const raw = objectOf(await this.run(tab, pageTextScript()))
+      const raw = objectOf(await this.run(tab, pageTextScript(), 8_000))
       return { title: typeof raw['title'] === 'string' ? raw['title'] : '', text: typeof raw['text'] === 'string' ? raw['text'] : '' }
     } catch {
       return { title: safeTitle(tab.wc), text: '' }
@@ -1559,7 +1630,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       }
     }
     for (const js of profile.js ?? []) {
-      await wc.executeJavaScript(`(async () => { try { ${js}\n } catch (e) { console.warn('site fix failed', e); } })()`, true).catch(() => undefined)
+      await withDeadline(wc.executeJavaScript(`(async () => { try { ${js}\n } catch (e) { console.warn('site fix failed', e); } })()`, true) as Promise<unknown>, 10_000).catch(() => undefined)
     }
   }
 
@@ -2246,8 +2317,13 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
 
   // ---- page helpers -----------------------------------------------------------------------
 
-  private async run(tab: Tab, code: string): Promise<unknown> {
-    return tab.wc.executeJavaScriptInIsolatedWorld(PAGE_WORLD_ID, [{ code }])
+  /**
+   * Runs the browser's own script in the page's isolated world, with a hard deadline: a hidden, starved or frozen
+   * page can leave the promise unanswered for ever (measured 25 Oct 2026: 336 s for one open), and the tool waiting
+   * on it must end. Rejects with PageTimeout.
+   */
+  private async run(tab: Tab, code: string, limitMs: number = PAGE_SCRIPT_MS): Promise<unknown> {
+    return withDeadline(tab.wc.executeJavaScriptInIsolatedWorld(PAGE_WORLD_ID, [{ code }]) as Promise<unknown>, limitMs)
   }
 
   private pressKey(tab: Tab, key: string): void {

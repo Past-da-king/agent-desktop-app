@@ -41,6 +41,13 @@ export interface CliTurnRequest {
   delegates?: boolean
   system: string
   prompt: string
+  /**
+   * The prompt to use instead when there is no session to continue (none was saved, or the engine lost it): a
+   * pushed helper's full brief, earlier steps and messages, so it never comes back knowing only its label.
+   */
+  freshPrompt?: string
+  /** A message for the model that arrived mid-turn: handed over at its next tool call (one of the engine's own too). */
+  pendingNote?: () => string | null
   images?: string[]
   model?: string
   /** The project folder the work is in (a project chat and the helpers it starts); absent for everything else. */
@@ -237,14 +244,32 @@ export class CliHost {
       const key = `${request.cli}:${request.thread}`
       const stored = continues ? (this.sessions()[key] ?? null) : null
       const stale = stored !== null && this.sessions()[`${key}#rev`] !== String(PROMPT_REVISION)
+      const permission = sdkPermission({
+        settings,
+        approve: (summary, details) => request.context.approve(summary, details, 'computer'),
+        alsoAllowed: [dir],
+      })
+      const pendingNote = request.pendingNote
       const run = (sessionId: string | null) =>
         runCliTurn({
           cli: request.cli,
           program: this.engine(request.cli),
           system: request.system,
-          prompt: sessionId !== null && stale ? `${UPDATE_NOTE}\n\n${request.prompt}` : request.prompt,
+          prompt:
+            sessionId === null
+              ? (request.freshPrompt ?? request.prompt)
+              : stale
+                ? `${UPDATE_NOTE}\n\n${request.prompt}`
+                : request.prompt,
           images: request.images ?? [],
           sessionId,
+          // Kept the moment the engine names it, not only when the turn ends: a restart mid-turn resumes this
+          // conversation instead of starting one that knows nothing (25 Oct 2026).
+          onSession: (id: string) => {
+            if (continues && id !== '' && (this.forgotten.get(request.thread) ?? 0) === generation && this.sessions()[key] !== id) {
+              this.saveSessions({ ...this.sessions(), [key]: id, [`${key}#rev`]: String(PROMPT_REVISION) })
+            }
+          },
           ...(request.model === undefined ? {} : { model: request.model }),
           mcp: { url: server.url, token },
           workDir: dir,
@@ -253,11 +278,14 @@ export class CliHost {
           access: settings().shell === 'always' ? 'free' : 'asked',
           signal: request.signal,
           onEvent: request.onEvent,
-          permission: sdkPermission({
-            settings,
-            approve: (summary, details) => request.context.approve(summary, details, 'computer'),
-            alsoAllowed: [dir],
-          }),
+          permission: async (name, input) => {
+            // A message that arrived mid-turn is handed over before the next step runs (the step waits for it).
+            const note = pendingNote?.() ?? null
+            if (note !== null && note.trim() !== '') {
+              return { allow: false as const, message: `Not run yet: a new message from the agent that started you arrived first. Read it and follow it, then run this step again if it still makes sense. The message: ${note}` }
+            }
+            return permission(name, input)
+          },
         })
       mkdirSync(dir, { recursive: true })
       let result = await run(stored)
