@@ -15,6 +15,12 @@
 .pj-hidden-link{font:500 12px/1 var(--font);color:var(--on-sv);padding:4px 6px;border-radius:8px;letter-spacing:0;text-transform:none}
 .pj-hidden-link:hover{color:var(--on-bg);background:var(--s-mid)}
 .shell.col .pj-rail{grid-template-columns:minmax(0,1fr)}
+/* The navigation, Settings and the account never shrink; the projects take only the room left (Rail.tsx fits them in it). */
+.rail > *{flex-shrink:0}
+.rail > .pj-rail{flex:1 1 0;overflow:hidden;align-content:start;grid-auto-rows:max-content}
+.pj-rail.small .pj-app{padding:4px 2px 2px}
+.pj-rail.small .pj-add{width:32px;height:32px;border-radius:9px}
+.pj-rail.small .pj-more{position:static;border:0;background:none;color:inherit;padding:0;min-width:0;font-size:12px}
 .shell.col .pj-app-name{display:none}
 @media (max-width:1180px){
   .shell .pj-rail{grid-template-columns:minmax(0,1fr)}

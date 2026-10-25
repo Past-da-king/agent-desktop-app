@@ -1,11 +1,12 @@
 import { MAIN_CHAT } from '@agent/core'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { isOpenCard } from '../lib/cards'
 import { openChat, startNewChat } from '../lib/chat-actions'
 import { chatOf } from '../lib/chats'
 import { short } from '../lib/format'
-import { railProjects } from '../lib/projects'
+import { fitRail, RAIL_PAD_SMALL, RAIL_TILE, RAIL_TILE_SMALL, railProjects, type RailRoom } from '../lib/projects'
+import { useDevicesSummary } from '../state/useDevices'
 import { startChatTracking, useAnyRunning, useChats } from '../state/useChats'
 import { ProjectDialog } from '../views/ProjectDialog'
 import { AllProjects } from './AllProjects'
@@ -44,7 +45,44 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
     for (const item of items) if (isOpenCard(item)) counts.set(chatOf(item), (counts.get(chatOf(item)) ?? 0) + 1)
     return counts
   }, [items])
-  const shown = railProjects(projects)
+  const pinned = railProjects(projects)
+  // The navigation never gives up room: the projects area is measured and shows what fits in what is left.
+  const pjRef = useRef<HTMLDivElement>(null)
+  const headRef = useRef<HTMLDivElement>(null)
+  const [room, setRoom] = useState<RailRoom | null>(null)
+  // The expanded rail has an All link in its header, so its projects area may shrink to nothing; collapsed keeps one tile.
+  const [header, setHeader] = useState(false)
+  useLayoutEffect(() => {
+    const box = pjRef.current
+    if (box === null) return undefined
+    const measure = (): void => {
+      const style = getComputedStyle(box)
+      const pad = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+      const cols = style.gridTemplateColumns.split(' ').filter(Boolean).length || 1
+      const gap = parseFloat(style.rowGap) || 0
+      const app = box.querySelector<HTMLElement>('.pj-app')
+      const tile = app?.querySelector<HTMLElement>('.pj-tile')
+      setHeader(headRef.current !== null && headRef.current.offsetParent !== null)
+      setRoom((prev) => {
+        let extra = prev?.extra ?? 0
+        if (app && tile) {
+          const own = getComputedStyle(app)
+          extra = Math.max(0, app.offsetHeight - tile.offsetHeight - parseFloat(own.paddingTop) - parseFloat(own.paddingBottom))
+        }
+        const next = { room: Math.max(0, box.clientHeight - pad), cols, gap, extra }
+        return prev !== null && prev.room === next.room && prev.cols === next.cols && prev.gap === next.gap && prev.extra === next.extra ? prev : next
+      })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [railCollapsed])
+  const fit = room === null ? { small: false, show: pinned.length, none: false } : fitRail(room, pinned.length)
+  const shown = pinned.slice(0, fit.show)
+  const tileSize = fit.small ? RAIL_TILE_SMALL : RAIL_TILE
+  const more = projects.length - shown.length
+  const linked = useDevicesSummary()
   const [allOpen, setAllOpen] = useState(false)
   // A project needs you when one of its chats waits on a card; it is working when one of its chats runs.
   const statusOf = (chats: string[]): 'waiting' | 'working' | null =>
@@ -130,7 +168,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
         )
       })}
 
-      <div className="eyebrow mute grp chats-h">
+      <div className="eyebrow mute grp chats-h" ref={headRef}>
         <span>PROJECTS</span>
         {projects.length > 0 ? (
           <button type="button" className="pj-hidden-link" onClick={() => setAllOpen(true)}>
@@ -138,7 +176,12 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
           </button>
         ) : null}
       </div>
-      <div className="pj-rail" aria-label="Projects">
+      <div
+        ref={pjRef}
+        className={`pj-rail${fit.small ? ' small' : ''}`}
+        aria-label="Projects"
+        style={{ minHeight: header ? 0 : RAIL_PAD_SMALL + RAIL_TILE_SMALL + 4 }}
+      >
         {shown.map((project) => {
           const on = (route.page === 'project' && route.id === project.id) || (route.page === 'chat' && project.chats.includes(open))
           const status = statusOf(project.chats)
@@ -146,31 +189,34 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
             <button
               key={project.id}
               type="button"
-             
               className={`pj-app${on ? ' on' : ''}`}
               title={status === 'waiting' ? `${project.name}. Needs you` : status === 'working' ? `${project.name}. Working` : project.name}
               aria-current={on ? 'true' : undefined}
               onClick={() => navigate({ page: 'project', id: project.id })}
             >
-              <ProjectTile icon={project.icon} size={44} status={status} />
+              <ProjectTile icon={project.icon} size={tileSize} status={status} />
               <span className="pj-app-name">{project.name}</span>
             </button>
           )
         })}
-        {/* With no projects yet the + makes one; after that it opens all of them (with New project inside). */}
-        <button
-          type="button"
-          className="pj-app add"
-          title={projects.length === 0 ? 'New project' : 'All projects'}
-          aria-label={projects.length === 0 ? 'New project' : `All projects, ${projects.length}`}
-          onClick={() => (projects.length === 0 ? setCreating(true) : setAllOpen(true))}
-        >
-          <span className="pj-tile pj-add" aria-hidden="true">
-            <Icon name="plus" size={22} />
-            {projects.length > shown.length ? <span className="pj-more">+{projects.length - shown.length}</span> : null}
-          </span>
-          <span className="pj-app-name">{projects.length === 0 ? 'New' : 'All'}</span>
-        </button>
+        {/* With no projects yet the + makes one; after that it opens all of them (with New project inside).
+            With no room at all the expanded rail drops it: the header's All link does the same. */}
+        {fit.none && header ? null : (
+          <button
+            type="button"
+            className="pj-app add"
+            title={projects.length === 0 ? 'New project' : 'All projects'}
+            aria-label={projects.length === 0 ? 'New project' : `All projects, ${projects.length}`}
+            onClick={() => (projects.length === 0 ? setCreating(true) : setAllOpen(true))}
+          >
+            <span className="pj-tile pj-add" aria-hidden="true">
+              {/* A small tile has room for the count or the +, not both. */}
+              {fit.small && more > 0 ? null : <Icon name="plus" size={22} />}
+              {more > 0 ? <span className="pj-more">+{more}</span> : null}
+            </span>
+            <span className="pj-app-name">{projects.length === 0 ? 'New' : 'All'}</span>
+          </button>
+        )}
       </div>
       {allOpen ? (
         <AllProjects
@@ -188,8 +234,6 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
           }}
         />
       ) : null}
-
-      <div className="spacer" />
 
       <button
         type="button"
@@ -212,7 +256,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
             {userName}
           </div>
           <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {email || 'This computer only'}
+            {linked.count > 0 ? linked.line : email || linked.line}
           </div>
         </div>
       </button>
