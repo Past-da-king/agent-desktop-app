@@ -29,8 +29,11 @@ export interface DevicesSyncDeps {
   bundle: Omit<BundleSources, 'local'>
   /** The app's turn leases (runtime/turns.ts), so another brain can take over a turn here, and the other way. */
   leases?: TurnLeases
-  /** Tell the agent in a chat (an expired device command). Usually runner.deliver. */
-  noteBack: (chat: string, text: string) => void | Promise<void>
+  /**
+   * Tell the run that made a device command (`owner`: main, chat:<id>, routine, helper:<id>) what came of it, late.
+   * Only that run hears it; one that has ended gets a note on its card instead. No owner: the chat.
+   */
+  noteBack: (chat: string, text: string, owner?: string) => void | Promise<void>
   /** This node's own tools other devices may use (s11): the helpers' toolset. Filtered by `shareGroups`. */
   localTools?: () => Tool[]
   /** Settings devicesShareGroups and devicesPreferred. */

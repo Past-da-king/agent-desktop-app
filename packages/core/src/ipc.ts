@@ -692,6 +692,11 @@ export interface DeviceCommandRow extends RowBase {
   chat: string
   /** The brain that made it (the one that tells the chat). */
   brainId: string
+  /**
+   * The run that made it ("main", "chat:<id>", "routine", "helper:<id>"): a result that comes after it stopped waiting
+   * goes back to that run only. Absent on rows from older versions: those go to the chat.
+   */
+  owner?: string
   expiresAt: number
   updatedAt: number
 }

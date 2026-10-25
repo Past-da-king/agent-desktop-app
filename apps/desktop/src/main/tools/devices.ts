@@ -48,7 +48,7 @@ function openUrlTool(deps: DeviceToolDeps): Tool {
         return `Opened ${url} in the user's browser on this computer.`
       }
       if (!origin.canOpenLinks) return `The user's ${origin.name} cannot open links. Give them the link in your reply instead.`
-      const outcome = await commands.send(origin.deviceId, { kind: 'open_url', url }, chat, `The user's ${origin.name}`)
+      const outcome = await commands.send(origin.deviceId, { kind: 'open_url', url }, chat, `The user's ${origin.name}`, ctx.owner ?? '')
       if (outcome.status === 'done') return `Opened ${url} on the user's ${origin.name}.`
       if (outcome.status === 'failed') return `The user's ${origin.name} could not open it${outcome.note === '' ? '' : `: ${outcome.note}`}. Give them the link in your reply.`
       return outcome.note
@@ -76,7 +76,7 @@ function sendFileTool(deps: DeviceToolDeps): Tool {
         return `The user is on this computer, so the file is already here: ${path}`
       }
       if (!origin.canReceiveFiles) return `The user's ${origin.name} cannot take files. Tell them where it is instead: ${path}`
-      const outcome = await commands.send(origin.deviceId, { kind: 'send_file', url: fileUrl(path), path, name }, chat, `The user's ${origin.name}`)
+      const outcome = await commands.send(origin.deviceId, { kind: 'send_file', url: fileUrl(path), path, name }, chat, `The user's ${origin.name}`, ctx.owner ?? '')
       if (outcome.status === 'done') return `Sent ${name} to the user's ${origin.name}.`
       if (outcome.status === 'failed') return `The user's ${origin.name} could not take ${name}${outcome.note === '' ? '' : `: ${outcome.note}`}.`
       return outcome.note

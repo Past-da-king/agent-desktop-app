@@ -96,6 +96,7 @@ import { registryInvoker } from './tools/app-actions'
 import { findSidecar } from './devices/net'
 import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tool-host'
 import { WindowsFirewall } from './devices/firewall'
+import { routeLate } from './devices/device-tools'
 
 // Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
 const ipcMain = recordHandlers(electronIpcMain)
@@ -814,8 +815,19 @@ async function startServices(win: BrowserWindow): Promise<void> {
     localTools: () => helperToolset,
     shareGroups: () => settings.get().devicesShareGroups,
     preferred: () => settings.get().devicesPreferred,
-    noteBack: async (chat, text) => {
-      if (runner !== null) await runner.deliver(text, chat)
+    // A late device result goes only to the run that asked for it (devices/device-tools.ts routeLate).
+    noteBack: async (chat, text, owner) => {
+      await routeLate(
+        {
+          deliver: async (note, where) => {
+            if (runner !== null) await runner.deliver(note, where)
+          },
+          helper: async (id, note) => (helperManager === null ? 'unknown' : helperManager.lateResult(id, note)),
+        },
+        chat,
+        text,
+        owner,
+      )
     },
     // ask_user / request_approval another brain runs here show as cards in that chat on this computer.
     context: (chat, signal) => runner?.deviceContext(chat, signal) ?? {},
