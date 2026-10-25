@@ -1,6 +1,7 @@
 import { agent } from '../bridge'
 import { isDarkNow } from '../state/theme'
 import { useAccountStatus } from '../state/useAccount'
+import { useDevicesSummary } from '../state/useDevices'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { usePanel } from '../state/usePanel'
@@ -9,8 +10,8 @@ import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 import { BackButton, WorkButton } from './WorkMenu'
 
-function syncCopy(signedIn: boolean, syncing: boolean, error: string | null, lastSyncedAt: number | null): string {
-  if (!signedIn) return 'This computer only'
+function syncCopy(signedIn: boolean, syncing: boolean, error: string | null, lastSyncedAt: number | null, linked: string): string {
+  if (!signedIn) return linked
   if (syncing) return 'Syncing'
   if (error) return 'Offline, will sync later'
   if (lastSyncedAt === null) return 'Not synced yet'
@@ -22,6 +23,7 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   const status = useAccountStatus()
+  const devices = useDevicesSummary()
   const openPalette = useUi((state) => state.openPalette)
   const panelCollapsed = usePanel((state) => state.collapsed)
   const togglePanel = usePanel((state) => state.toggle)
@@ -31,8 +33,8 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
   const modKey = agent.platform === 'darwin' ? 'Cmd K' : 'Ctrl K'
   // On another device the window shows the computer it is linked to; that computer's sync is its own business.
   const remote = agent.remote
-  const label = remote !== undefined ? `On ${remote.nodeName}` : syncCopy(status.signedIn, status.syncing, status.error, status.lastSyncedAt)
-  const dotClass = remote !== undefined ? 'dot' : !status.signedIn || status.error ? 'dot off' : status.syncing ? 'dot busy' : 'dot'
+  const label = remote !== undefined ? `On ${remote.nodeName}` : syncCopy(status.signedIn, status.syncing, status.error, status.lastSyncedAt, devices.line)
+  const dotClass = remote !== undefined ? 'dot' : !status.signedIn ? (devices.count > 0 ? 'dot' : 'dot off') : status.error ? 'dot off' : status.syncing ? 'dot busy' : 'dot'
 
   const switchTheme = (): void => {
     void save({ theme: dark ? 'light' : 'dark' })
