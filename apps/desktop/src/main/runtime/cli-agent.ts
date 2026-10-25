@@ -136,6 +136,18 @@ export interface CliTurn {
   onEvent: (event: AgentEvent) => Promise<void>
   /** Claude: asked before each of Claude Code's own tools runs (see sdk-permissions.ts). */
   permission?: (name: string, input: Record<string, unknown>) => Promise<{ allow: true } | { allow: false; message: string }>
+  /** The engine named its conversation: told at once, so it is kept even if the app stops mid-turn. */
+  onSession?: (sessionId: string) => void
+}
+
+/** Tells the turn its session id when it is new (never throws: keeping it is best effort). */
+function sessionNamed(turn: CliTurn, before: string | null, id: string): void {
+  if (id === '' || id === before) return
+  try {
+    turn.onSession?.(id)
+  } catch {
+    // Not kept: the turn still saves it when it ends.
+  }
 }
 
 export interface CliResult {
@@ -309,7 +321,10 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
 
     for await (const raw of messages) {
       const m = raw as unknown as Record<string, unknown>
-      if (typeof m['session_id'] === 'string' && m['session_id'] !== '') sessionId = m['session_id']
+      if (typeof m['session_id'] === 'string' && m['session_id'] !== '') {
+        sessionNamed(turn, sessionId, m['session_id'])
+        sessionId = m['session_id']
+      }
       if (m['type'] === 'assistant' || m['type'] === 'user') {
         const message = m['message'] as { content?: unknown } | undefined
         const blocks = Array.isArray(message?.content) ? (message?.content as Array<Record<string, unknown>>) : []
@@ -390,7 +405,10 @@ async function runCodex(turn: CliTurn): Promise<CliResult> {
     for await (const event of events) {
       const e = event as unknown as Record<string, unknown>
       const item = (e['item'] ?? {}) as Record<string, unknown>
-      if (e['type'] === 'thread.started' && typeof e['thread_id'] === 'string') sessionId = e['thread_id']
+      if (e['type'] === 'thread.started' && typeof e['thread_id'] === 'string') {
+        sessionNamed(turn, sessionId, e['thread_id'])
+        sessionId = e['thread_id']
+      }
       else if (e['type'] === 'item.completed' && item['type'] === 'agent_message') {
         const said = String(item['text'] ?? '').trim()
         if (said !== '') {

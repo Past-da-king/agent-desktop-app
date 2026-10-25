@@ -35,6 +35,7 @@ import {
   type AiPick,
 } from '@agent/core'
 
+import { siteFromCall, siteOf, stuckPhrase, urlFromResult, type ToolInFlight } from './stuck-tool'
 import { listWhere, type DataStore } from './data'
 import type { CliHost } from './cli-host'
 import { projectFolderOf } from './work-folder'
@@ -260,6 +261,10 @@ interface HelperRun {
   waitingOn?: number
   /** The helper that started it (a desk): its end notice goes there. */
   parentHelper?: string
+  /** The tool it is in right now and since when, for the quiet heads-up (stuck-tool.ts). */
+  inTool?: ToolInFlight
+  /** The site its browser was last on, for the quiet heads-up. */
+  site?: string
 }
 
 type ShellPolicy = 'always' | 'ask' | 'never'
@@ -566,7 +571,14 @@ export class HelperManager implements HelperHost {
       const where =
         link === null
           ? {}
-          : { placedBy: link.selfId(), runOn: placed?.device ?? link.selfId(), ...(placed?.device ? { runsOnName: placed.name, placerShell: settings.shell } : {}) }
+          : {
+              placedBy: link.selfId(),
+              runOn: placed?.device ?? link.selfId(),
+              ...(placed?.device ? { runsOnName: placed.name, placerShell: settings.shell } : {}),
+              // A device named on purpose, or a project folder on this computer: it stays there for good, through
+              // restarts and lease failover (runtime/turns.ts), and waits for that device rather than run elsewhere.
+              ...(pinnedDevice(task.device) || projectFolder !== '' ? { pinned: true } : {}),
+            }
       const token = this.freshToken()
       const parent = origin.helper === undefined || origin.helper === '' ? {} : { parentHelper: origin.helper }
       const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name, runToken: token, ...parent, ...where })
@@ -623,17 +635,14 @@ export class HelperManager implements HelperHost {
       }
       return this.push(id, message)
     }
-    if (brainFor(this.brainDeps(), run.pick).kind === 'plan') {
-      // An SDK session cannot read a note mid-turn: stop it where it is and send it back with the note. That stop is
-      // not an end: nobody is told, the push below carries on.
-      run.quiet = true
-      await this.stop(id)
-      for (let i = 0; i < 50 && this.runs.has(id); i += 1) await new Promise((resolve) => setTimeout(resolve, 100))
-      return this.push(id, message)
-    }
+    // A plan session gets the note with its next tool call (planNotes): it is never stopped for it. Stopping it used
+    // to make the engine tell the model "the user doesn't want to take this action, STOP", and when the stop took
+    // more than 5 s the note was dropped, the run ended with its card still working, and the orphan watch then
+    // ended a live helper as lost (25 Oct 2026). A note still unread when its turn ends carries on in a new turn.
     const notes = this.inbox.get(id) ?? []
     notes.push(message)
     this.inbox.set(id, notes)
+    await this.recordMessage(id, message)
     await this.addActivity(id, run.label, `Told it: ${clip(message, 140)}`)
     return `Helper #${id} gets your message before its next step and keeps going.`
   }
@@ -649,7 +658,13 @@ export class HelperManager implements HelperHost {
     const link = this.link()
     if (link !== null) {
       const holder = await link.leaseHolder(id)
-      const there = holder.device !== '' ? holder.device : stringField(meta['runOn'])
+      // Pinned to a device (delegated with a device named, or a project folder on that computer): it only ever runs
+      // there, so it never comes back to work on a brain without its files. While that device is away it waits.
+      const pinnedTo = meta['pinned'] === true ? stringField(meta['runOn']) : ''
+      if (pinnedTo !== '' && !link.isSelf(pinnedTo) && !link.up(pinnedTo)) {
+        return `Helper #${id} works only on ${(await link.deviceName(pinnedTo)) || 'the device it was given'}, which is not reachable now. It carries on there when that device is back; send it again then.`
+      }
+      const there = pinnedTo !== '' ? pinnedTo : holder.device !== '' ? holder.device : stringField(meta['runOn'])
       if (there !== '' && !link.isSelf(there)) {
         if (holder.running && link.up(there)) return `Helper #${id} is still working. Wait for its result.`
         if (link.up(there) && meta['side'] !== true && meta['desk'] !== true) {
@@ -683,6 +698,8 @@ export class HelperManager implements HelperHost {
     const parentHelper = stringField(meta['parentHelper'])
     const fresh = { token, lastStepAt: this.now(), ...(parentHelper === '' ? {} : { parentHelper }) }
     if (brain.kind === 'plan') {
+      // Kept, so a session that cannot be continued is rebuilt with every message it was sent (rebuiltBrief).
+      await this.recordMessage(id, message)
       await this.updateMeta(id, { state: 'working', summary: 'Back on it', pushes, startedAt: this.now(), runToken: token, endReason: '', ...here })
       this.runs.set(id, {
         ...this.placerShell(meta, origin),
@@ -1019,8 +1036,9 @@ export class HelperManager implements HelperHost {
       if (runOn === '' && (lease === null || lease.brainId === '' || !own(lease.brainId))) continue
       const here = runOn === '' || own(runOn)
       if (here) {
-        // Taken over by another brain (the lease failover) that still beats it: it is working there.
-        if (lease !== null && live && !own(lease.brainId) && now - lease.heartbeatAt < LEASE_DEAD_MS) continue
+        // A lease that still beats is a run that lives: taken over by another brain (the lease failover), or one
+        // this process still runs under a run map that lost track of it. Only a lease gone quiet is a lost run.
+        if (lease !== null && live && now - lease.heartbeatAt < LEASE_DEAD_MS) continue
       } else {
         // Placed on another brain: only the brain that placed it judges it, and only with the link up.
         if (link === null || !link.isSelf(stringField(meta['placedBy']))) continue
@@ -1338,9 +1356,17 @@ export class HelperManager implements HelperHost {
       return
     }
     this.leases?.end(`job-${run.id}`, state === 'failed' ? 'failed' : 'done')
+    // What this run handed back is kept, so a session rebuilt later knows it (its card's result is overwritten).
+    if (state === 'done' && !this.closing) await this.recordMessage(run.id, result, 'result')
+    const unread = this.inbox.get(run.id)?.splice(0) ?? []
     this.runs.delete(run.id)
     this.active.delete(run.id)
     this.inbox.delete(run.id)
+    // A message sent to it that it never got to read (its turn ended first): it carries on with it, never dropped.
+    if (state === 'done' && run.quiet !== true && unread.length > 0 && !this.closing) {
+      const said = await this.push(run.id, unread.join('\n\n'))
+      if (said.includes('is back on it')) return
+    }
     // Stopped only to be handed on (another brain took it, or it goes straight back with a note): not an end.
     if (run.quiet === true) {
       this.pump()
@@ -1588,7 +1614,7 @@ export class HelperManager implements HelperHost {
       const meta = row === null ? {} : parseMeta(row.meta)
       if (row === null || meta['state'] !== 'working' || meta['quietWarned'] === run.token) continue
       await this.updateMeta(run.id, { quietWarned: run.token }).catch(() => undefined)
-      await this.handOver(this.quietNote(run.id, run.label, now - run.lastStepAt, run.lastStep ?? ''), run.chat, run.parentHelper ?? '')
+      await this.handOver(this.quietNote(run.id, run.label, now - run.lastStepAt, run.lastStep ?? '', stuckPhrase(run.inTool, now, run.site ?? '')), run.chat, run.parentHelper ?? '')
       sent += 1
     }
     // Placed on another brain: its steps arrive here as rows, so the last one says how long it has been quiet.
@@ -1609,26 +1635,31 @@ export class HelperManager implements HelperHost {
       const steps = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, run.startedAt - 1) }).catch(() => [])
       let last = run.startedAt
       let what = ''
+      let running: { name: string; since: number } | null = null
       for (const step of steps) {
-        if (stringField(parseMeta(step.meta)['helper']) !== run.id) continue
+        const stepMeta = parseMeta(step.meta)
+        if (stringField(stepMeta['helper']) !== run.id) continue
         if (step.createdAt >= last) {
           last = step.createdAt
           what = step.text
+          // Its newest step still running there is the tool it is in now.
+          running = stepMeta['status'] === 'running' ? { name: stringField(stepMeta['tool']), since: step.createdAt } : null
         }
       }
       if (now - last < limit) continue
       this.noticed.add(key)
       await this.updateMeta(run.id, { quietWarned: token }).catch(() => undefined)
-      await this.handOver(this.quietNote(run.id, run.label, now - last, what), run.chat)
+      await this.handOver(this.quietNote(run.id, run.label, now - last, what, stuckPhrase(running, now)), run.chat)
       sent += 1
     }
     return sent
   }
 
-  private quietNote(id: string, label: string, quietMs: number, lastStep: string): string {
+  private quietNote(id: string, label: string, quietMs: number, lastStep: string, stuck = ''): string {
     const minutes = Math.max(1, Math.round(quietMs / MINUTE_MS))
     const step = lastStep.trim() === '' ? '' : ` Its last step: ${clip(lastStep.trim().replace(/[.]+$/, ''), 200)}.`
-    return `[Helper #${id} "${label}" has taken no new step for ${minutes} min.${step} It is still marked working, so it may be stuck (a rate limit, a hung tool). Check it with helpers_status, then steer it, stop it, or leave it. You will not get this heads-up again for this run.]`
+    // Names the tool it is in right now and for how long (stuck-tool.ts), e.g. ", stuck in browser_wait_for on youtube.com for 9 min".
+    return `[Helper #${id} "${label}" has taken no new step for ${minutes} min${stuck}.${step} It is still marked working, so it may be stuck (a rate limit, a hung tool). Check it with helpers_status, then steer it, stop it, or leave it. You will not get this heads-up again for this run.]`
   }
 
   // ---- other brains (s12) --------------------------------------------------------------------------------------
@@ -1797,6 +1828,9 @@ export class HelperManager implements HelperHost {
         continue
       }
       if (link.up(run.device)) continue
+      // Pinned to that device: it waits for it there instead of running here without its files.
+      const card = await this.store.get('chat_item', run.id).catch(() => null)
+      if (card !== null && parseMeta(card.meta)['pinned'] === true) continue
       this.remote.delete(run.id)
       if (await this.adopt(run.id, '')) taken += 1
     }
@@ -1906,6 +1940,9 @@ export class HelperManager implements HelperHost {
       case 'tool_started': {
         const summary = describeCall(event.call)
         run.lastStep = summary
+        run.inTool = { id: event.call.id, name: event.call.name, since: this.now() }
+        const named = siteFromCall(event.call.name, event.call.input as Record<string, unknown>)
+        if (named !== '') run.site = named
         const started = runStarted(event.call)
         this.runStarts.set(event.call.id, Date.now())
         const row = await this.store.upsert('chat_item', {
@@ -1926,6 +1963,11 @@ export class HelperManager implements HelperHost {
         return
       }
       case 'tool_finished': {
+        if (run.inTool?.id === event.call.id) delete run.inTool
+        if (event.call.name.startsWith('browser_')) {
+          const site = siteOf(urlFromResult(event.result))
+          if (site !== '') run.site = site
+        }
         const isError = event.isError
         const summary = isError
           ? clip(redactSecrets(event.result.split('\n')[0] ?? event.result), 160)
@@ -2198,6 +2240,63 @@ export class HelperManager implements HelperHost {
     await this.store.upsert('turn', { thread, json: JSON.stringify(msgToJson(message)) })
   }
 
+  /** Keeps a message sent to a helper (a push, a steer), once, so a rebuilt session has every one of them. */
+  private async recordMessage(id: string, message: string, kind: 'message' | 'result' = 'message'): Promise<void> {
+    if (message.trim() === '') return
+    const thread = `${NOTES_THREAD}${id}`
+    const json = JSON.stringify({ kind, text: message })
+    const kept = await listWhere(this.store, 'turn', { thread }).catch(() => [])
+    const last = kept.filter((row) => row.thread === thread).at(-1)
+    if (last !== undefined && last.json === json) return
+    await this.store.upsert('turn', { thread, json }).catch(() => undefined)
+  }
+
+  /** What was kept for a helper: the messages it was sent and what its runs handed back, oldest first. */
+  private async keptNotes(id: string): Promise<Array<{ kind: string; text: string }>> {
+    const thread = `${NOTES_THREAD}${id}`
+    return (await listWhere(this.store, 'turn', { thread }).catch(() => []))
+      .filter((each) => each.thread === thread)
+      .map((each) => {
+        try {
+          const parsed = JSON.parse(each.json) as { kind?: unknown; text?: unknown }
+          return { kind: String(parsed.kind ?? 'message'), text: String(parsed.text ?? '') }
+        } catch {
+          return { kind: 'message', text: '' }
+        }
+      })
+      .filter((each) => each.text.trim() !== '')
+  }
+
+  /**
+   * Everything a helper had, for a session that cannot be continued: its full brief, the steps it took, what its
+   * last run handed back, and every message it was sent, then the message it is sent back with now. Read from the
+   * rows every brain has (the card, its activity steps, its kept messages), so it works on any computer.
+   */
+  private async rebuiltBrief(id: string, brief: string, now: string): Promise<string> {
+    const steps = (await listWhere(this.store, 'chat_item', { kind: 'activity' }).catch(() => []))
+      .filter((step) => stringField(parseMeta(step.meta)['helper']) === id)
+      // Messages it was sent are listed in full below.
+      .filter((step) => !/^(Sent back|Told it): /.test(step.text))
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((step) => `- ${clip(step.text.replace(/\s+/g, ' ').trim(), 200)}`)
+    const kept = await this.keptNotes(id)
+    const messages = kept.filter((each) => each.kind === 'message' && each.text !== now).map((each) => each.text)
+    const results = kept.filter((each) => each.kind === 'result').map((each) => each.text)
+    const shown = steps.length > 120 ? [`- (${steps.length - 120} earlier steps left out)`, ...steps.slice(-120)] : steps
+    return [
+      '[You are being sent back to a job you already started. Your earlier conversation could not be continued, so here is all of it: your brief, what you already did, and the messages you were sent. Carry on from where you were; do not start over or redo finished steps.]',
+      '',
+      'YOUR BRIEF (in full, as you were first given it):',
+      brief,
+      ...(shown.length === 0 ? [] : ['', 'WHAT YOU ALREADY DID (your steps, oldest first):', ...shown]),
+      ...(results.length === 0 ? [] : ['', 'WHAT YOUR EARLIER RUNS HANDED BACK (oldest first):', ...results.map((text) => `- ${clip(text, 3000)}`)]),
+      ...(messages.length === 0 ? [] : ['', 'MESSAGES YOU WERE SENT SINCE (oldest first):', ...messages.map((text) => `- ${text}`)]),
+      '',
+      'NOW:',
+      now,
+    ].join('\n')
+  }
+
   private async loadHistory(thread: string): Promise<Msg[]> {
     const rows = await listWhere(this.store, 'turn', { thread })
     const messages: Msg[] = []
@@ -2295,14 +2394,23 @@ export class HelperManager implements HelperHost {
     try {
       // Started from a project chat: it works in that project's folder, as the chat's own agent does.
       const folder = run.chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), run.chat)
+      const takeNotes = (): string[] => this.inbox.get(run.id)?.splice(0) ?? []
       const outcome = await cli.turn({
         cli: brain.cli,
         thread: `helper:${run.id}`,
-        tools: run.tools ?? this.workerTools,
+        tools: withNotes(run.tools ?? this.workerTools, takeNotes),
         // A desk hands work out itself; every other helper's session keeps the no-delegate guard.
         ...(run.desk === true ? { delegates: true } : {}),
         system: await this.buildHelperPrompt(run),
         prompt: run.pushMessage ?? run.brief,
+        // Sent back but its session cannot be continued (cut off by a restart before it was saved, lost, on another
+        // computer): it starts again from its full brief, its earlier steps and every message it was sent.
+        ...(run.pushMessage === undefined ? {} : { freshPrompt: await this.rebuiltBrief(run.id, run.brief, run.pushMessage) }),
+        // A message sent to it mid-turn arrives with its next tool call, of the engine's own tools too.
+        pendingNote: () => {
+          const notes = takeNotes()
+          return notes.length === 0 ? null : notes.join('\n\n')
+        },
         ...(run.pushMessage === undefined && (run.images ?? []).length > 0 ? { images: run.images } : {}),
         ...(brain.model === '' ? {} : { model: brain.model }),
         ...(folder === '' ? {} : { folder }),
@@ -2367,6 +2475,32 @@ export class HelperManager implements HelperHost {
 /** The chat field a row carries: nothing for the first chat, so its rows look as they always did. */
 function chatTag(chat: string): { chat?: string } {
   return chat === MAIN_CHAT ? {} : { chat }
+}
+
+/** The turn thread that keeps the messages a helper was sent (pushes, steers), for a rebuilt session. */
+const NOTES_THREAD = 'helper-notes:'
+
+/** How a message sent mid-turn reaches a plan helper: after a tool's own answer, or as the reason a tool waited. */
+export function noteText(notes: string): string {
+  return `[New message from the agent that started you. Read it now and follow it: ${notes}]`
+}
+
+/** The tools of a plan run: each answer carries any message sent to the helper since its last step. */
+function withNotes(tools: Tool[], take: () => string[]): Tool[] {
+  return tools.map((tool) => ({
+    ...tool,
+    run: async (input, ctx) => {
+      const answer = await tool.run(input, ctx)
+      const notes = take()
+      return notes.length === 0 ? answer : `${answer}\n\n${noteText(notes.join('\n\n'))}`
+    },
+  }))
+}
+
+/** A device named on purpose ('here', or a brain by name), not left to the app ('' or 'best'). */
+export function pinnedDevice(device: string | undefined): boolean {
+  const wanted = (device ?? '').trim().toLowerCase()
+  return !['', 'best', 'auto', 'any', 'anywhere'].includes(wanted)
 }
 
 function labelFromBrief(brief: string): string {
