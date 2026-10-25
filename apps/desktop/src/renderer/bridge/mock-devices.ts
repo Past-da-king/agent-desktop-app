@@ -91,6 +91,7 @@ function status(): DevicesStatus {
     fp: 'preview',
     fpWords: 'Prev iewF inge rpri',
     connected: enabled ? ['dev_preview_phone'] : [],
+    linked: enabled ? ['dev_preview_server'] : [],
     error: '',
     network: net,
     shareGroups: { ...shareGroups },

@@ -136,6 +136,7 @@ export class DevicesService {
   private ident: NodeIdentity | null = null
   private srv: DevicesServer | null = null
   private readonly switchListeners = new Set<(on: boolean) => void>()
+  private linksOf: (() => Array<{ peer: string; ok: boolean }>) | null = null
   private readonly config: DevicesConfigFile
   private readonly passes: SecretPassTable
   private readonly offers: PairingOffers
@@ -258,6 +259,16 @@ export class DevicesService {
   /** This node's own pass (its hash is in the mesh's pass table), for its links to other nodes. */
   ownPass(): string {
     return this.selfPass()
+  }
+
+  /** Where status() reads this node's replication links (devices/attach.ts). */
+  setLinks(read: () => Array<{ peer: string; ok: boolean }>): void {
+    this.linksOf = read
+  }
+
+  /** A replication link went up or down: windows and linked devices read the status again. */
+  linksChanged(): void {
+    this.changed()
   }
 
   /** Hears Devices being switched on or off (devices/attach.ts starts and stops replication with it). */
@@ -428,6 +439,7 @@ export class DevicesService {
       fp: id?.fp ?? '',
       fpWords: id === null ? '' : fingerprintWords(id.fp),
       connected: this.srv?.connectedIds() ?? [],
+      linked: config.enabled ? (this.linksOf?.() ?? []).filter((link) => link.ok).map((link) => link.peer) : [],
       error: this.error,
       network: this.net.status(),
       shareGroups: this.shareGroups(),

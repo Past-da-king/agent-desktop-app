@@ -131,6 +131,8 @@ export interface ReplicatorDeps {
   peers?: () => Promise<PeerTarget[]>
   /** A peer's bundle version changed (or it was seen for the first time): read its bundle. */
   onBundleVersion?: (peer: PeerTarget, version: string, url: string) => void
+  /** A peer link went from working to failing or back (Settings, Home and the rail show it). */
+  onLinkState?: () => void
   /**
    * After every good pull, with the peer's bundle version (may be ''). Lets this node push its own bundle to a peer
    * that cannot reach it to read it (a joining node behind a userspace VPN or a firewall that only hears from us).
@@ -313,9 +315,22 @@ class PeerLink {
     return { peer: this.peer.id, ok: this.lastError === null && this.lastOkAt !== null, error: this.lastError, lastAt: this.lastOkAt }
   }
 
+  /** Whether the link last worked, to tell when that changes. */
+  private wasUp = false
+
   passNow(): Promise<boolean> {
     this.pullController?.abort()
-    return this.serial(() => this.pass(0))
+    return this.serial(() => this.pass(0)).then((ok) => {
+      this.noteState()
+      return ok
+    })
+  }
+
+  private noteState(): void {
+    const up = this.status().ok
+    if (up === this.wasUp) return
+    this.wasUp = up
+    this.deps.onLinkState?.()
   }
 
   private async loop(): Promise<void> {
@@ -325,6 +340,7 @@ class PeerLink {
     while (!this.stopped) {
       const ok = await this.serial(() => this.pass(this.deps.waitSeconds ?? 25))
       if (this.stopped) break
+      this.noteState()
       if (ok) {
         backoff = initial
         continue

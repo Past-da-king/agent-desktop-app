@@ -59,8 +59,9 @@ function target(peer: Node): PeerTarget {
 }
 
 /** `self` replicates with exactly the peers listed (who it can reach). */
-function link(self: Node, reach: Node[], waitSeconds = 1): Replicator {
+function link(self: Node, reach: Node[], waitSeconds = 1, onLinkState?: () => void): Replicator {
   const replicator = new Replicator({
+    ...(onLinkState === undefined ? {} : { onLinkState }),
     store: self.store,
     selfId: () => self.id,
     pass: () => self.pass,
@@ -190,6 +191,24 @@ describe('replication between nodes', () => {
     await ra.syncOnce()
     expect(await titles(b.store)).toEqual(['While B was away'])
     expect(ra.status()[0]?.ok).toBe(true)
+  })
+
+  it('says when a link goes up or down, once each time, so the window can show it', async () => {
+    const a = await node('dev_a')
+    const b = await node('dev_b')
+    mesh([a, b])
+    let heard = 0
+    const ra = link(a, [b], 1, () => (heard += 1))
+    b.host.down = true
+    await ra.syncOnce()
+    expect(heard).toBe(0)
+    b.host.down = false
+    await ra.syncOnce()
+    await ra.syncOnce()
+    expect(heard).toBe(1)
+    b.host.down = true
+    await ra.syncOnce()
+    expect(heard).toBe(2)
   })
 
   it('peers come from device rows: brains and hands with addresses, never revoked, never itself', async () => {
