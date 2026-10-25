@@ -110,7 +110,7 @@ describe('a queued device result goes only to the run that asked, once', () => {
       timeZone: 'UTC',
     })
     cleanups.push(() => manager?.shutdown())
-    const id = /#([0-9a-f-]{36})/.exec(await manager.delegate([{ label: 'Hidden browser fix', brief: 'Fix it.' }]))?.[1] ?? ''
+    const id = /#([0-9a-f-]{36})/.exec(await manager.delegate([{ label: 'Hidden browser fix', brief: 'Fix it.' }], false, { chat: 'pc-proj' }))?.[1] ?? ''
     await waitFor(() => turns.length === 1, 5_000)
 
     // It asks the offline PC for a folder listing and moves on.
@@ -130,7 +130,10 @@ describe('a queued device result goes only to the run that asked, once', () => {
     await waitFor(async () => JSON.parse((await store.get('chat_item', id))?.meta ?? '{}')['state'] === 'done', 5_000)
     host.connected.add('dev_pc')
     await hub.deliverQueued()
-    await waitFor(async () => (await store.list('chat_item')).some((row) => row.kind === 'activity' && row.text.includes('dropped') && row.text.includes('C:\\temp\\later')), 3_000)
+    const droppedLine = async () => (await store.list('chat_item')).find((row) => row.kind === 'activity' && row.text.includes('dropped') && row.text.includes('C:\\temp\\later'))
+    await waitFor(async () => (await droppedLine()) !== undefined, 3_000)
+    // The line is on the helper's card, in its own (project) chat, not in the main chat.
+    expect(JSON.parse((await droppedLine())!.meta)['chat']).toBe('pc-proj')
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(chatNotes).toEqual([])
     expect(turns).toHaveLength(1)
