@@ -34,6 +34,52 @@ export function railProjects(projects: ProjectRow[]): ProjectRow[] {
     .slice(0, RAIL_PROJECTS)
 }
 
+/** A project tile on the rail at full size, and the smaller size it drops to when the window is short. */
+export const RAIL_TILE = 44
+export const RAIL_TILE_SMALL = 32
+/** A tile's padding above and below its icon at each size (projects.css .pj-app and .pj-rail.small .pj-app). */
+export const RAIL_PAD = 14
+export const RAIL_PAD_SMALL = 6
+
+export interface RailRoom {
+  /** Height the projects area has once the navigation, Settings and the account have taken theirs (px). */
+  room: number
+  /** Tiles per row. */
+  cols: number
+  /** Gap between rows (px). */
+  gap: number
+  /** One tile's height minus its icon and padding: the name under it and its gap when names show, else 0 (px). */
+  extra: number
+}
+
+/** How the rail draws its projects: whether the tiles are small, and how many projects show before the All tile. */
+export interface RailFit {
+  small: boolean
+  show: number
+  /** Not even the All tile fits (the expanded rail still has its All link in the header). */
+  none: boolean
+}
+
+function capacity(room: RailRoom, tile: number, pad: number): number {
+  const row = room.extra + pad + tile + room.gap
+  if (row <= 0) return 0
+  return Math.max(0, Math.floor((room.room + room.gap) / row)) * Math.max(1, room.cols)
+}
+
+/**
+ * The navigation always comes first; the projects take only the room that is left. Every project and the All tile
+ * at full size if they fit; else the same at the smaller size; else fewer projects at the smaller size, the All tile
+ * counting the rest. 
+one when not even the All tile fits.
+ */
+export function fitRail(room: RailRoom, count: number): RailFit {
+  const need = count + 1
+  if (capacity(room, RAIL_TILE, RAIL_PAD) >= need) return { small: false, show: count, none: false }
+  const small = capacity(room, RAIL_TILE_SMALL, RAIL_PAD_SMALL)
+  if (small >= need) return { small: true, show: count, none: false }
+  return { small: true, show: Math.max(0, Math.min(count, small - 1)), none: small === 0 }
+}
+
 /** Whether one more project can go on the rail. */
 export function railHasRoom(projects: ProjectRow[]): boolean {
   return projects.filter(onRail).length < RAIL_PROJECTS

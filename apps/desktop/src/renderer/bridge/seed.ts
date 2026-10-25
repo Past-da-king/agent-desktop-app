@@ -6,6 +6,7 @@ import {
   type EntityMap,
   type GoalRow,
   type MemoryRow,
+  type ProjectRow,
   type Settings,
   type TaskRow,
   type TriggerRow,
@@ -689,7 +690,26 @@ export function bigRows(base: SeedResult['rows']): SeedResult['rows'] {
     })
   }
 
-  return { ...base, task: tasks, memory: memories, trigger: triggers, chat_item: chat }
+  // Enough projects that the rail has to choose: five pinned, the rest behind All.
+  const projects: ProjectRow[] = [...base.project]
+  const colors = ['ocean', 'ember', 'violet'] as const
+  const glyphs = ['globe', 'building', '\u{1F680}', '\u{1F33F}', '\u{1F4D8}'] as const
+  for (let i = 0; i < 20; i += 1) {
+    projects.push({
+      id: `big-pj${i}`,
+      createdAt: now - (40 - i) * HOUR,
+      name: `Project number ${i + 1}`,
+      description: 'A project for the long-list state.',
+      icon: { glyph: glyphs[i % glyphs.length] ?? 'globe', color: colors[i % colors.length] ?? 'ocean' },
+      path: '',
+      profile: '',
+      hidden: false,
+      chats: [],
+      ...(i < 5 ? { railAt: i } : {}),
+    })
+  }
+
+  return { ...base, task: tasks, memory: memories, trigger: triggers, chat_item: chat, project: projects }
 }
 
 export function seedFor(mode: DemoMode): SeedResult {
