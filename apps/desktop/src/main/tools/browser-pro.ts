@@ -7,6 +7,7 @@
  */
 import { bool, enumOf, int, schema, str, type JsonObject, type Tool } from '@agent/core'
 
+import { guardBrowserTool } from '../browser/deadline'
 import { viewModeOf } from '../browser/emulation'
 import {
   isBrowserPro,
@@ -41,7 +42,7 @@ const FIXES: FixAction[] = ['css', 'js', 'clear_data', 'headers', 'user_agent', 
 
 export function browserProTools(deps: BrowserProToolDeps): Tool[] {
   const browser: BrowserProDriver = isBrowserPro(deps.browser) ? deps.browser : unavailableBrowserPro
-  return [viewTool(browser), fixTool(browser), snapshotTool(browser), actTool(browser), evalTool(browser)]
+  return [viewTool(browser), fixTool(browser), snapshotTool(browser), actTool(browser), evalTool(browser)].map(guardBrowserTool)
 }
 
 function num(description: string): JsonObject {

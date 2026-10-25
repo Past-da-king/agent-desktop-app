@@ -12,6 +12,7 @@ import { basename, join } from 'node:path'
 import { Script } from 'node:vm'
 
 import { Cdp, type DebuggerLike } from '../main/browser/cdp'
+import { PageTimeout, WAIT_MAX_S, waitAnswer, withDeadline } from '../main/browser/deadline'
 import { currentOwner } from '../main/browser/owner'
 import { onRunEnded } from '../main/browser/run-tabs'
 import {
@@ -31,6 +32,7 @@ import {
   evalWrapper,
   formatSnapshot,
   looksLikeExpression,
+  pageTextScript,
   parseResolved,
   parseSnapshot,
   resolveScript,
@@ -392,10 +394,10 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
   // ---- running page scripts ----
 
   private async run(tab: Tab, expression: string, timeoutMs = 20_000): Promise<unknown> {
-    const reply = (await Promise.race([
+    const reply = (await withDeadline(
       tab.cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs)),
-    ])) as { result?: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } }
+      timeoutMs,
+    )) as { result?: { value?: unknown }; exceptionDetails?: { text?: string; exception?: { description?: string } } }
     if (reply.exceptionDetails !== undefined) {
       throw new Error(reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text ?? 'The page script failed.')
     }
@@ -507,9 +509,30 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
 
   waitFor(query: { text: string; selector: string }, seconds: number): Promise<string> {
     return this.withTab(false, async (tab) => {
-      const ms = Math.max(1, Math.min(30, seconds)) * 1000
-      const result = parseAction(await this.run(tab, waitForScript(query.text, query.selector, ms), ms + 5000))
-      return result.ok ? `Found it.\n\n${await this.outline(tab)}` : result.reason
+      const limit = Math.max(1, Math.min(WAIT_MAX_S, Math.floor(seconds)))
+      let found = false
+      let reason = ''
+      let timedOut = false
+      try {
+        const result = parseAction(await this.run(tab, waitForScript(query.text, query.selector, limit * 1000), limit * 1000 + 2_000))
+        found = result.ok
+        reason = result.ok ? '' : result.reason
+      } catch (error) {
+        if (!(error instanceof PageTimeout)) throw error
+        timedOut = true
+      }
+      // Always ends at its limit and says what the page showed (it used to answer an empty line on a miss).
+      const seen = await this.run(tab, pageTextScript(), 3_000).then(
+        (raw) => {
+          const page = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+          return { url: tab.url, title: typeof page['title'] === 'string' ? page['title'] : '', text: typeof page['text'] === 'string' ? page['text'] : '' }
+        },
+        () => null,
+      )
+      const answer = waitAnswer({ found, reason, timedOut }, query, limit, seen)
+      if (reason !== '') return answer
+      const outline = await this.outline(tab).catch(() => '')
+      return outline === '' ? answer : `${answer}\n\n${outline}`
     })
   }
 
@@ -522,12 +545,29 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
     })
   }
 
+  private shotProblem = ''
+
+  screenshotProblem(): string {
+    return this.shotProblem
+  }
+
   async screenshot(): Promise<string | null> {
     this.touch()
     const tab = await this.tab(false).catch(() => null)
-    if (tab === null) return null
-    const shot = (await tab.cdp.send('Page.captureScreenshot', { format: 'png' })) as { data?: string }
-    if (typeof shot.data !== 'string') return null
+    if (tab === null) {
+      this.shotProblem = NO_PAGE
+      return null
+    }
+    this.shotProblem = ''
+    const shot = (await withDeadline(tab.cdp.send('Page.captureScreenshot', { format: 'png' }), 15_000, 'The page capture').catch((error: unknown) => {
+      this.shotProblem = error instanceof Error ? error.message : String(error)
+      return {}
+    })) as { data?: string }
+    if (typeof shot.data !== 'string') {
+      if (this.shotProblem === '') this.shotProblem = 'the page could not be drawn'
+      return null
+    }
+    this.shotProblem = ''
     const dir = join(this.options.dir, '..', 'screenshots')
     mkdirSync(dir, { recursive: true })
     const file = join(dir, `shot-${Date.now()}.png`)

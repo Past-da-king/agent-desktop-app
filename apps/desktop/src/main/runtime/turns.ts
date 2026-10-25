@@ -224,6 +224,9 @@ export class TurnLeases implements LeaseHook {
 
     let claimed = 0
     for (const lease of stale) {
+      // A helper pinned to its device (named on purpose, or a project folder there) waits for that device: taken over
+      // here it came back on a brain without its files (25 Oct 2026, a PC helper resumed on a server).
+      if (lease.kind === 'job' && (await this.pinnedElsewhere(lease.messageId))) continue
       const owner = brains.find((row) => row.id === lease.brainId)
       if (owner !== undefined && (await check(owner)).up) continue
       let better = false
@@ -245,6 +248,21 @@ export class TurnLeases implements LeaseHook {
       claimed++
     }
     return claimed
+  }
+
+  /** Is that helper's card pinned to a device other than this brain? */
+  private async pinnedElsewhere(helperId: string): Promise<boolean> {
+    const row = await this.deps.store.get('chat_item', helperId).catch(() => null)
+    if (row === null) return false
+    let meta: Record<string, unknown> = {}
+    try {
+      const parsed: unknown = JSON.parse(row.meta)
+      if (typeof parsed === 'object' && parsed !== null) meta = parsed as Record<string, unknown>
+    } catch {
+      return false
+    }
+    const runOn = typeof meta['runOn'] === 'string' ? meta['runOn'] : ''
+    return meta['pinned'] === true && runOn !== '' && !this.isOwn(runOn)
   }
 
   private async giveUpIfSpent(lease: TurnLeaseRow): Promise<boolean> {

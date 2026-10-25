@@ -18,6 +18,8 @@ export interface BrowserDriver {
   back(): Promise<string>
   /** Saves a PNG and returns its absolute path, or null. */
   screenshot(): Promise<string | null>
+  /** Why the last screenshot returned null, in plain words ('' when unknown). Optional. */
+  screenshotProblem?(): string
   upload(index: number, path: string): Promise<string>
   /** While the agent drives, the page ignores the person's mouse and keyboard. */
   setAgentDriving(on: boolean, reason?: string): void

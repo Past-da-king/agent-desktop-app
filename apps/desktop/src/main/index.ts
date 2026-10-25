@@ -29,6 +29,7 @@ import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
 import { APP_ID, APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
 import { AgentBrowser } from './browser/browser'
+import { HOST_WINDOW_PREFS, keepPagesAwake } from './browser/keep-awake'
 import { runDevtoolsProbe } from './browser/devtools-probe'
 import { Store } from './db'
 import { Logger } from './logger'
@@ -374,6 +375,8 @@ function createWindow(stateFile: string): BrowserWindow {
       // The agent's browser pages are <webview>s inside the browser card, so they move with it. Only this window
       // may host them, and browser/embed.ts locks every one down before it attaches.
       webviewTag: true,
+      // It hosts those pages: minimised or covered, it still creates and attaches them (browser/keep-awake.ts).
+      ...HOST_WINDOW_PREFS,
     },
   })
 
@@ -1282,6 +1285,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
     logger.error('Devices could not start', { message: error instanceof Error ? error.message : String(error) })
   }
 }
+
+// Agents browse with the panel hidden and the window minimised: their pages must keep running (browser/keep-awake.ts).
+keepPagesAwake(app.commandLine)
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()

@@ -25,6 +25,7 @@ import {
 } from '../browser/devtools-log'
 import { checkBrowserUrl } from '../browser/url-policy'
 import { parseHeaders } from './browser-pro'
+import { guardBrowserTool } from '../browser/deadline'
 
 export interface BrowserDevtoolsDeps {
   /** The developer tools of the agent's current tab, or null when it has no page yet. */
@@ -52,7 +53,7 @@ const DEFAULT_STYLES = [
 const NOT_REPLAYED = /^(:|sec-|proxy-)|^(cookie|cookie2|host|origin|referer|content-length|connection|keep-alive|accept-encoding|accept-charset|user-agent|transfer-encoding|te|trailer|upgrade|expect|date|dnt|via|access-control-request-headers|access-control-request-method|permissions-policy)$/i
 
 export function browserDevtoolsTools(deps: BrowserDevtoolsDeps): Tool[] {
-  return [networkTool(deps), networkGetTool(deps), fetchTool(deps), consoleTool(deps), inspectTool(deps), storageTool(deps)]
+  return [networkTool(deps), networkGetTool(deps), fetchTool(deps), consoleTool(deps), inspectTool(deps), storageTool(deps)].map(guardBrowserTool)
 }
 
 function networkTool(deps: BrowserDevtoolsDeps): Tool {

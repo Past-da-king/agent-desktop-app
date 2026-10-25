@@ -4,6 +4,7 @@
  */
 import { bool, enumOf, int, schema, str, type Tool } from '@agent/core'
 
+import { guardBrowserTool, WAIT_DEFAULT_S, WAIT_MAX_S } from '../browser/deadline'
 import { checkBrowserUrl } from '../browser/url-policy'
 import { NO, TURNED_DOWN } from '../../shared/ask-options'
 import type { BrowserDriver } from '../browser/types'
@@ -36,7 +37,15 @@ export function browserTools(deps: BrowserToolDeps): Tool[] {
     uploadTool(deps),
     handoffTool(deps),
     showUserTool(deps),
-  ]
+  ].map(guardBrowserTool)
+}
+
+
+/** What a failed screenshot says: the driver's own reason when it has one, never a guess. */
+function shotFailed(browser: BrowserDriver): string {
+  const reason = browser.screenshotProblem?.().trim() ?? ''
+  if (reason !== '') return `Screenshot failed: ${reason}`
+  return browser.hasPage() ? 'Screenshot failed: the page is open but could not be drawn. Try again in a moment, or read it with browser_read.' : 'Screenshot failed: no page is open yet. Use browser_open with a web address.'
 }
 
 function openTool(deps: BrowserToolDeps): Tool {
@@ -96,7 +105,7 @@ function lookTool(deps: BrowserToolDeps): Tool {
     },
     run: async () => {
       const path = await deps.browser.screenshot()
-      if (path === null) return 'Screenshot failed. Is a page open?'
+      if (path === null) return shotFailed(deps.browser)
       return `Here is the page:\n[[image:${path}]]`
     },
   }
@@ -207,7 +216,7 @@ function waitTool(deps: BrowserToolDeps): Tool {
     spec: {
       name: 'browser_wait_for',
       description:
-        'Wait until the page shows some text or a selector, up to 30 seconds. Use it for slow pages and sign-in steps.',
+        'Wait until the page shows some text or a selector, up to 30 seconds. Use it for slow pages and sign-in steps. It always ends by its limit and says what the page showed.',
       schema: schema([], {
         text: str('Text to wait for'),
         selector: str('CSS selector to wait for'),
@@ -218,7 +227,7 @@ function waitTool(deps: BrowserToolDeps): Tool {
       const wanted = text(input['text']).trim()
       const selector = text(input['selector']).trim()
       if (wanted === '' && selector === '') return 'Pass the text or selector to wait for.'
-      const seconds = clamp(secondsArg(input['seconds']), 1, 30)
+      const seconds = clamp(secondsArg(input['seconds']), 1, WAIT_MAX_S)
       return call(() => deps.browser.waitFor({ text: wanted, selector }, seconds, ctx.signal))
     },
   }
@@ -315,7 +324,7 @@ function showUserTool(deps: BrowserToolDeps): Tool {
     },
     run: async (input) => {
       const path = await deps.browser.screenshot()
-      if (path === null) return 'Screenshot failed. Is a page open?'
+      if (path === null) return shotFailed(deps.browser)
       const caption = text(input['caption']).trim()
       const first = caption === '' ? 'Screenshot' : caption
       return `${first}\nShown to the user. You can see it too:\n[[image:${path}]]`
@@ -351,7 +360,7 @@ function optionalIndex(value: unknown): number | null | 'bad' {
 function secondsArg(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value)
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) return Number(value.trim())
-  return 15
+  return WAIT_DEFAULT_S
 }
 
 function clamp(value: number, min: number, max: number): number {
