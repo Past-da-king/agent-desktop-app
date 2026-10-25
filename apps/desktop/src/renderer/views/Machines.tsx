@@ -30,7 +30,7 @@ function iconOf(device: LinkedDevice): IconName {
 }
 
 function lineOf(device: LinkedDevice): string {
-  if (device.online) return 'Linked. Takes work when it is placed there.'
+  if (device.online) return 'Linked. Heavy work can run here.'
   if (device.lastSeen > 0) return `Not connected. Last seen ${timeAgo(device.lastSeen) === 'now' ? 'just now' : timeAgo(device.lastSeen)}.`
   return 'Not connected right now.'
 }
