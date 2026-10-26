@@ -548,6 +548,7 @@ describe('recordings that pass through the voice service', () => {
     const dir = await onlyRecordingDir()
     await until(() => existsSync(join(dir, 'manifest.json')) && json<RecordingManifest>(join(dir, 'manifest.json')).ended === 'abandoned')
     expect(existsSync(join(dir, 'audio.wav'))).toBe(true)
+    await until(() => recordings.activeIds().length === 0)
     expect(recordings.activeIds()).toEqual([])
   })
 })
