@@ -435,6 +435,10 @@ export interface TriggerRow extends RowBase {
   builtin?: string
   /** Devices (s12): which linked brain runs it, by name or id; '' or absent = the best one (a server first). */
   device?: string
+  /** at only: the calendar event a meeting follow-up job belongs to, so an early end finds it (presence/meeting-jobs.ts). */
+  eventId?: string
+  /** Set once when the meeting ended early and this job was brought forward: never moved twice. */
+  movedEarly?: { from: string; at: number; why: string; eventId?: string }
 }
 
 /** A project's icon, like an app icon: a glyph from the app's icon set or an emoji, on a coloured rounded tile. */

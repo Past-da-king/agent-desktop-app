@@ -97,6 +97,7 @@ import { findSidecar } from './devices/net'
 import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tool-host'
 import { WindowsFirewall } from './devices/firewall'
 import { routeLate } from './devices/device-tools'
+import { startPresence, type PresenceHandle } from './presence/start'
 
 // Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
 const ipcMain = recordHandlers(electronIpcMain)
@@ -191,6 +192,8 @@ let workerStore: WorkerStore | null = null
 let vaultStore: VaultStore | null = null
 let supervisor: Supervisor | null = null
 let eventRouter: EventRouter | null = null
+/** Where the person is (presence/): the note on his messages, his calendars cached, meetings that end early. */
+let presenceHandle: PresenceHandle | null = null
 let workersChangedTimer: NodeJS.Timeout | null = null
 
 /** The Workers page reads again; a burst of events tells it once. */
@@ -852,8 +855,33 @@ async function startServices(win: BrowserWindow): Promise<void> {
     profiles: apps.profiles,
     learnedNames,
   }))
+  // Where he is, on every message he sends (presence/presence.ts): his calendars are read from Connections and cached.
+  const presenceStore = store
+  presenceHandle = startPresence({
+    store: presenceStore,
+    dataDir: dir,
+    apps: { activeAccounts: (list) => apps.activeAccounts(list), backend: () => apps.backend(), rulesFor: (id) => connectedApps.rulesFor(id) },
+    selfId: () => devicesState.sync?.selfId() ?? '',
+    isFocused: () => (mainWindow === null || mainWindow.isDestroyed() ? null : mainWindow.isFocused()),
+    idleSeconds: () => {
+      try {
+        return powerMonitor.getSystemIdleTime()
+      } catch {
+        return null
+      }
+    },
+    // A meeting that ended early is an event like a worker's, so a routine can listen for it too.
+    emitEvent: (input) => {
+      const stored = workers.addEvent(input.source, input)
+      if (stored !== null) void eventRouter?.offer(stored)
+      workersChanged()
+    },
+    log: (message, detail) => logger.info(message, detail),
+  })
+  const presence = presenceHandle.presence
   const tools = buildToolset({
     appControl: { ...appControl, update: selfUpdater },
+    presence,
     store,
     settings,
     filePicks,
@@ -927,6 +955,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },
+    presence,
     store,
     settings,
     secrets,
@@ -1338,6 +1367,8 @@ if (!app.requestSingleInstanceLock()) {
     disposeStore = null
     scheduler?.stop()
     scheduler = null
+    presenceHandle?.stop()
+    presenceHandle = null
     eventRouter?.stop()
     eventRouter = null
     // Every worker is told to stop and its process tree ended; its stop time is saved so it catches up next start.

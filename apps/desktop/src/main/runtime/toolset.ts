@@ -48,6 +48,7 @@ import { vaultTools } from '../tools/vault'
 import { guardTools } from '../vault/guard'
 import type { VaultStore } from '../vault/store'
 import type { BrowserVault } from '../vault/browser-vault'
+import { presenceTools, type MeetingEndedHost } from '../tools/presence'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -93,6 +94,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   vault?: VaultStore
   /** The Vault in the browser: vault_passkey arms a passkey for an agent after the person's yes. */
   browserVault?: BrowserVault
+  /** Main agent only: meeting_ended, when he says a meeting is over (presence/). */
+  presence?: MeetingEndedHost
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -253,6 +256,8 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
   if (deps.appControl !== undefined) tools.push(...asOwner(appUpdateTools(deps.appControl))) // app_update
   // Voice notes are for the person only, so helpers never get this.
   if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
+  // He tells the agent he talks to that a meeting is over; helpers never hear that from him.
+  if (deps.presence !== undefined) tools.push(...asOwner(presenceTools(deps.presence))) // meeting_ended
   // No step counter any more (21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.
   // The ones added here are guarded too (the worker ones already are; guardTools skips a tool it has wrapped).
   return guardTools(tools, deps.vault)

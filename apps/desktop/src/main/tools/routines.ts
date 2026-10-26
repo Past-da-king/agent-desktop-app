@@ -52,6 +52,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
           gather_seconds: int('event only: gather matching events for this many seconds into one run (default 20)'),
           profile: str('event only: the profile its desk works in, by name. Leave out for General'),
           device: str('Optional, not for event routines: which linked device runs it, by name. Leave out for the best one (a linked server when it can run it).'),
+          event_id: str("Optional, 'at' only: the calendar event id of the meeting a follow-up job belongs to, so the job is brought forward when the meeting ends early"),
         },
       ),
     },
@@ -69,6 +70,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
       const gather = gatherOf(input['gather_seconds'])
       const profile = kind === 'event' ? text(input['profile']).trim() : ''
       const device = kind === 'event' ? '' : text(input['device']).trim()
+      const eventId = kind === 'at' ? text(input['event_id']).trim() : ''
 
       const row = await store.upsert('trigger', {
         name,
@@ -80,6 +82,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
         lastResult: '',
         ...(kind === 'event' ? { gatherSeconds: gather, profile, deskId: '' } : {}),
         ...(device === '' ? {} : { device }),
+        ...(eventId === '' ? {} : { eventId }),
       })
       await ctx.activity(`New routine: ${name}`, { tool: 'routine_create' })
       return `Routine #${row.id} created: runs ${plainSchedule(kind, spec)}.${
