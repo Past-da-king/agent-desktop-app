@@ -163,6 +163,16 @@ export function mockVoice(deps: MockVoiceDeps): VoiceApi {
         listeners.delete(callback)
       }
     },
+    // The preview keeps nothing on disk.
+    async recordStart() {
+      return null
+    },
+    async recordChunk() {
+      return undefined
+    },
+    async recordEnd() {
+      return undefined
+    },
   }
 }
 

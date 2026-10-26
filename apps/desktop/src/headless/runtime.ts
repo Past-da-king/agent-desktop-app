@@ -11,7 +11,10 @@ import { mkdirSync } from 'node:fs'
 import { hostname as osHostname } from 'node:os'
 import { join } from 'node:path'
 
-import { EARLIER_CHATS_PROJECT, MEMORY_DAILY_ROUTINE, providerFor, type Tool } from '@agent/core'
+import { EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, providerFor, type Tool } from '@agent/core'
+import { Recordings } from '../main/recordings/store'
+import { recoveredNoticeText, startRecordingsUpkeep } from '../main/recordings/upkeep'
+import { chatTag } from '../main/runtime/chat-lines'
 
 import { AccountService } from '../main/account'
 import { AccountStore, migrateLegacyAccount } from '../main/accounts'
@@ -334,7 +337,9 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const deviceHub = (): NonNullable<typeof devicesState.sync>['tools'] | null => devicesState.sync?.tools ?? null
   // The node's own controls as tools (tools/app-control.ts): Devices (once started) and Settings. No self update here.
   const appControl: AppControlDeps = { devices: () => getDevicesService(), links: () => devicesState.sync?.replicator.status() ?? [], settings, invoker: () => registryInvoker(registry) }
-  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault })), ...nodeTools], vault)
+  // Recordings a linked device's mic makes here are written to disk as they happen (recordings/store.ts).
+  const recordings = new Recordings({ root: join(dir, 'voice-notes', 'recordings'), log: (message, fields) => logger.info(message, fields) })
+  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault, recordings })), ...nodeTools], vault)
   const helpers = new HelperManager({
     leases,
     store,
@@ -388,6 +393,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       workers: workerDeps,
       vault,
       browserVault,
+      recordings,
       devices: {
         selfId: () => devicesState.sync?.selfId() ?? '',
         commands: () => devicesState.sync?.commands ?? null,
@@ -571,7 +577,22 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     emit: (event) => broadcast(EVENTS.voiceCall, event),
     platform: process.platform,
     notesDir: join(dir, 'voice-notes'),
+    recordings,
   })
+  // A recording a linked device was making when this node stopped is finished from disk, and old audio goes.
+  if (options.quiet !== true) {
+    const noticeStore = store
+    startRecordingsUpkeep({
+      recordings,
+      keep: () => settings.get().recordingAudioKeep,
+      transcribe: () => (voice.hasKey() ? (pcm, signal) => voice.transcribe(pcm, { signal }) : null),
+      notify: async (notice) => {
+        await noticeStore.upsert('chat_item', { kind: 'notice', text: recoveredNoticeText(notice), meta: JSON.stringify({ ...chatTag(notice.chat ?? MAIN_CHAT), recording: notice.id }) })
+        broadcast(EVENTS.chat, { type: 'chat_changed', ...chatTag(notice.chat ?? MAIN_CHAT) })
+      },
+      log: (message, fields) => logger.info(message, fields),
+    })
+  }
   // A linked phone's call hands its work to the main agent, a project chat or a helper here (main/voice/handoff.ts).
   const callStore = store
   const callRunner = theRunner

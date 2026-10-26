@@ -243,6 +243,7 @@ export const Composer = memo(
           />
           <DictateButton
             hasKey={hasVoiceKey}
+            chat={chatId}
             focusBox={() => composer.current?.focus()}
             onText={(words) => {
               setText((current) => (current.trim() === '' ? words : `${current.replace(/\s+$/, '')} ${words}`))

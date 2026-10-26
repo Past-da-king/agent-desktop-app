@@ -18,7 +18,7 @@ export interface DictationIpcDeps {
   stop: () => void
   pillReady: () => void
   /** The message box's microphone in the window `sender` belongs to. */
-  toggle: (sender: unknown, mode: 'plain' | 'clean') => void
+  toggle: (sender: unknown, mode: 'plain' | 'clean', chat: string | null) => void
   cancel: () => void
   retry: () => void
 }
@@ -38,8 +38,9 @@ export function registerDictationIpc(deps: DictationIpcDeps, ipcMain: IpcMainLik
   ipcMain.handle(CHANNELS.dictation.ready, async () => {
     deps.pillReady()
   })
-  ipcMain.handle(CHANNELS.dictation.toggle, async (event, mode) => {
-    deps.toggle((event as { sender?: unknown } | null)?.sender ?? null, mode === 'clean' ? 'clean' : 'plain')
+  ipcMain.handle(CHANNELS.dictation.toggle, async (event, mode, chat) => {
+    const chatId = typeof chat === 'string' && /^[\w:-]{1,100}$/.test(chat) ? chat : null
+    deps.toggle((event as { sender?: unknown } | null)?.sender ?? null, mode === 'clean' ? 'clean' : 'plain', chatId)
   })
   ipcMain.handle(CHANNELS.dictation.cancel, async () => {
     deps.cancel()

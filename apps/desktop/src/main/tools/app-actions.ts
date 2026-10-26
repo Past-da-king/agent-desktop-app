@@ -188,6 +188,9 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'voice.callAudio': no('Stream call audio', MICROPHONE),
   'voice.callMute': free('Mute or unmute the call', 'muted'),
   'voice.callEnd': free('End the call'),
+  'voice.recordStart': no('Start keeping a recording on disk', MICROPHONE),
+  'voice.recordChunk': no('Write recorded audio to disk', MICROPHONE),
+  'voice.recordEnd': no('Finish a kept recording', MICROPHONE),
   // Hotkeys and dictation
   'hotkeys.status': free('Hotkeys and whether each works (Settings > Hotkeys)'),
   'hotkeys.pause': free('Pause or resume the hotkeys', 'paused'),

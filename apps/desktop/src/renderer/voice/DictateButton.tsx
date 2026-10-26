@@ -29,18 +29,25 @@ export function DictateButton(props: {
   onProblem: (message: string, action?: { label: string; run: () => void }) => void
   /** Puts the cursor back in the message box, so the words land there. */
   focusBox?: () => void
+  /** The chat this box belongs to: the recording kept on disk says which chat it was for. */
+  chat?: string
 }): JSX.Element {
   return dictationHere() ? <LiveDictateButton {...props} /> : <RecordDictateButton {...props} />
 }
+
+/** How often a recording made here is sent to the computer's disk while it records. */
+const KEEP_EVERY_MS = 1000
 
 function LiveDictateButton({
   hasKey,
   onProblem,
   focusBox,
+  chat,
 }: {
   hasKey: boolean
   onProblem: (message: string, action?: { label: string; run: () => void }) => void
   focusBox?: () => void
+  chat?: string
 }): JSX.Element {
   const draft = useDictationDraft()
   const inCall = useCall((state) => state.open)
@@ -117,7 +124,7 @@ function LiveDictateButton({
           return
         }
         focusBox?.()
-        agent.dictation.toggle('plain').catch(() => onProblem('Could not start dictation. Try again.'))
+        agent.dictation.toggle('plain', chat).catch(() => onProblem('Could not start dictation. Try again.'))
       }}
     >
       <Icon name="mic" size={22} />
@@ -129,10 +136,12 @@ function RecordDictateButton({
   hasKey,
   onText,
   onProblem,
+  chat,
 }: {
   hasKey: boolean
   onText: (text: string) => void
   onProblem: (message: string, action?: { label: string; run: () => void }) => void
+  chat?: string
 }): JSX.Element {
   const [phase, setPhase] = useState<Phase>('idle')
   const [since, setSince] = useState(0)
@@ -141,14 +150,43 @@ function RecordDictateButton({
   const kept = useRef<Uint8Array | null>(null)
   const attempt = useRef(0)
   const bars = useRef<HTMLSpanElement>(null)
+  // The same recording on the computer's disk: its id, and the audio not sent there yet.
+  const keptId = useRef<Promise<string | null> | null>(null)
+  const unsent = useRef<Uint8Array[]>([])
+  const keepTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const inCall = useCall((state) => state.open)
   const navigate = useUi((state) => state.navigate)
   const now = useTicker(phase === 'working')
+
+  /** Sends what was recorded since the last time to the computer's disk. */
+  const sendKept = (): void => {
+    const id = keptId.current
+    if (id === null || unsent.current.length === 0) return
+    const pcm = concatBytes(unsent.current)
+    unsent.current = []
+    void id.then((value) => (value === null ? undefined : agent.voice.recordChunk(value, pcm))).catch(() => undefined)
+  }
+
+  const stopKeeping = (): void => {
+    if (keepTimer.current !== null) clearInterval(keepTimer.current)
+    keepTimer.current = null
+    sendKept()
+  }
+
+  /** The recording on disk gets its words (or why there are none). */
+  const endKept = (outcome: { text?: string; error?: string; cancelled?: boolean }): void => {
+    const id = keptId.current
+    keptId.current = null
+    if (id === null) return
+    void id.then((value) => (value === null ? undefined : agent.voice.recordEnd(value, outcome))).catch(() => undefined)
+  }
 
   const cancel = (): void => {
     capture.current?.stop()
     capture.current = null
     chunks.current = []
+    stopKeeping()
+    if (phase === 'recording') endKept({ cancelled: true })
     if (phase === 'working') attempt.current += 1
     setPhase(kept.current !== null && phase === 'working' ? 'failed' : 'idle')
   }
@@ -174,12 +212,14 @@ function RecordDictateButton({
     if (mine !== attempt.current) return
     if (result.ok && result.text.trim() !== '') {
       kept.current = null
+      endKept({ text: result.text.trim() })
       setPhase('idle')
       onText(result.text.trim())
       return
     }
     if (result.ok) {
       kept.current = null
+      endKept({ text: '' })
       setPhase('idle')
       onProblem('Nothing was heard. Try again a little closer to the microphone.')
       return
@@ -198,6 +238,7 @@ function RecordDictateButton({
     if (active === null) return
     active.stop()
     capture.current = null
+    stopKeeping()
     const pcm = concatBytes(chunks.current)
     chunks.current = []
     await transcribe(pcm)
@@ -210,8 +251,17 @@ function RecordDictateButton({
     }
     chunks.current = []
     kept.current = null
+    // A recording still waiting for its words from an earlier try ends here; its audio is on the computer.
+    endKept({ error: 'A new recording started before its words came.' })
+    unsent.current = []
     try {
-      capture.current = await startCapture((pcm) => chunks.current.push(pcm))
+      capture.current = await startCapture((pcm) => {
+        chunks.current.push(pcm)
+        unsent.current.push(pcm)
+      })
+      // Written to the computer's disk about every second while it records (never only in this page's memory).
+      keptId.current = agent.voice.recordStart({ chat: chat ?? null }).catch(() => null)
+      keepTimer.current = setInterval(sendKept, KEEP_EVERY_MS)
       setPhase('recording')
     } catch (error) {
       if (agent.platform === 'web' && agent.remote === undefined) {
@@ -252,7 +302,13 @@ function RecordDictateButton({
     }
   })
 
-  useEffect(() => () => capture.current?.stop(), [])
+  useEffect(
+    () => () => {
+      capture.current?.stop()
+      stopKeeping()
+    },
+    [],
+  )
 
   if (phase === 'recording') {
     return (
@@ -299,6 +355,8 @@ function RecordDictateButton({
           title="Discard"
           onClick={() => {
             kept.current = null
+            // Discarded here, kept on the computer: its words are finished from the audio there later.
+            endKept({ error: 'Discarded before the words came.' })
             setPhase('idle')
           }}
         >

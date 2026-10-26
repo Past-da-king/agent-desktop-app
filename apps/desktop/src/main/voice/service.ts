@@ -44,6 +44,7 @@ import {
   type ModelChoice,
 } from './gemini'
 import { LiveSession, type SocketFactory, type SocketLike } from './live'
+import type { RecordingHandle, Recordings } from '../recordings/store'
 
 export interface VoiceSecrets {
   get(name: string): string | null
@@ -76,6 +77,16 @@ export interface VoiceDeps {
   timeZone?: string
   /** Where voice notes are saved on this computer. */
   notesDir?: string
+  /** His recordings, written to disk as they happen (recordings/store.ts): calls and a linked device's mic. */
+  recordings?: Pick<Recordings, 'begin' | 'open'>
+}
+
+/** A call's words as one transcript: who said what, in order. */
+export function callTranscript(lines: ReadonlyArray<{ who: string; text: string }>): string {
+  return lines
+    .filter((line) => line.who !== 'note' && line.text.trim() !== '')
+    .map((line) => `${line.who === 'you' ? 'You' : 'Agent'}: ${line.text.trim()}`)
+    .join('\n')
 }
 
 const KEY = 'geminiKey'
@@ -98,6 +109,8 @@ export class VoiceService {
   private choice: ModelChoice = DEFAULT_CHOICE
   private checked = false
   private call: LiveSession | null = null
+  /** The call's microphone on disk, with its words as they come. */
+  private callRec: RecordingHandle | null = null
   private visuals: CallVisual[] = []
   private handoffs = 0
 
@@ -253,7 +266,10 @@ export class VoiceService {
       systemPrompt: await this.callPrompt(),
       tools: tools.map((tool) => tool.spec),
       socket: this.deps.socket ?? nodeSocket,
-      emit: (event) => this.deps.emit(event),
+      emit: (event) => {
+        if (event.type === 'caption' && this.call === session) this.callRec?.words(callTranscript(session.lines))
+        this.deps.emit(event)
+      },
       runTool: async (name, args) => {
         const tool = tools.find((item) => item.spec.name === name)
         if (tool === undefined) return `There is no tool called ${name} on this call.`
@@ -264,6 +280,11 @@ export class VoiceService {
     this.call = session
     try {
       await session.start()
+      try {
+        this.callRec = this.deps.recordings?.begin({ source: 'call', chat: null, target: 'a voice call' }) ?? null
+      } catch {
+        this.callRec = null
+      }
       return { ok: true, message: 'Connected.' }
     } catch (error) {
       this.call = null
@@ -274,6 +295,34 @@ export class VoiceService {
   callAudio(pcm: Buffer): void {
     if (pcm.length > MAX_CHUNK_BYTES) return
     this.call?.audio(pcm)
+    if (this.call !== null) this.callRec?.audio(pcm)
+  }
+
+  // ---- a linked device's microphone, kept here as it records -----------------------------------
+
+  recordStart(info: { chat?: string | null }): string | null {
+    try {
+      return this.deps.recordings?.begin({ source: 'linked', chat: info.chat ?? null, target: 'this app' }).id ?? null
+    } catch {
+      return null
+    }
+  }
+
+  recordChunk(id: string, pcm: Buffer): void {
+    this.deps.recordings?.open(id)?.audio(pcm)
+  }
+
+  async recordEnd(id: string, outcome: { text?: string; error?: string; cancelled?: boolean }): Promise<void> {
+    const rec = this.deps.recordings?.open(id)
+    if (rec === null || rec === undefined) return
+    if (outcome.cancelled === true) {
+      await rec.stop('cancelled')
+      await rec.failed('Cancelled before the words were final.')
+    } else if (typeof outcome.text === 'string') {
+      await rec.final(outcome.text)
+    } else {
+      await rec.failed(outcome.error ?? 'Could not transcribe that.')
+    }
   }
 
   callMute(muted: boolean): void {
@@ -286,6 +335,9 @@ export class VoiceService {
     this.call = null
     session.end()
     const lines = session.lines
+    const rec = this.callRec
+    this.callRec = null
+    if (rec !== null) void rec.final(callTranscript(lines))
     const durationMs = Math.max(0, this.now() - session.startedAt)
     const said = lines.filter((line) => line.who !== 'note')
     const row = await this.deps.store.upsert('chat_item', {
