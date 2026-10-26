@@ -72,6 +72,10 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'voice.callSave',
   'voice.callTargets',
   'voice.callHandoff',
+  // A linked device's message box mic writes its recording here as it happens (never lost).
+  'voice.recordStart',
+  'voice.recordChunk',
+  'voice.recordEnd',
   'app.info',
   'memory.newChat',
   'memory.retrySave',

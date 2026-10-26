@@ -121,6 +121,11 @@ export interface Settings {
   voiceName: string
   /** Speak each finished agent reply aloud with Gemini TTS. */
   speakReplies: boolean
+  /**
+   * How long the audio of his recordings and dictations is kept: 'today' (until the end of the day it was made, the
+   * default), 'week' or 'always'. Transcripts are always kept.
+   */
+  recordingAudioKeep: 'today' | 'week' | 'always'
   /** When the end-of-day memory pass runs, "HH:mm" local time; '' turns it off. */
   dailyMemoryAt: string
   /** Every AI account the person set up. Empty on an install that only ever used the old single choice. */
@@ -192,6 +197,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hasVoiceKey: false,
   voiceName: 'Kore',
   speakReplies: false,
+  recordingAudioKeep: 'today',
   dailyMemoryAt: '23:30',
   accounts: [],
   ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
@@ -1408,6 +1414,16 @@ export interface VoiceApi {
   /** Ends the call and writes its transcript to the chat. Null when no call was live. */
   callEnd(): Promise<CallSummary | null>
   onCall(cb: (event: CallEvent) => void): Unsubscribe
+  /**
+   * A recording made in a window that records by itself (a linked device's message box mic) is written on the
+   * computer as it happens, so it is never lost: start one, send its audio about every second, end it with its words.
+   * Null when this computer cannot keep it.
+   */
+  recordStart(info: { chat?: string | null }): Promise<string | null>
+  /** About a second of 16 kHz mono PCM16 for the recording `id`. */
+  recordChunk(id: string, pcm: Uint8Array): Promise<void>
+  /** The recording ended: its words, or why there are none (the audio stays either way). */
+  recordEnd(id: string, outcome: { text?: string; error?: string; cancelled?: boolean }): Promise<void>
 }
 
 export type Unsubscribe = () => void
@@ -1637,7 +1653,7 @@ export interface AgentApi {
      * The message box's microphone: start a dictation into this window, or stop the one that is running. The
      * words show in the box while they are said and are typed at its cursor at the end.
      */
-    toggle(mode: 'plain' | 'clean'): Promise<void>
+    toggle(mode: 'plain' | 'clean', chat?: string): Promise<void>
     /** Esc: stop listening or stop waiting for the words, and type nothing. */
     cancel(): Promise<void>
     /** Transcribe the kept recording of a dictation that failed or was cancelled, again. */

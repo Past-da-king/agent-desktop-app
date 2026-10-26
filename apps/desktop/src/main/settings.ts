@@ -31,6 +31,7 @@ const STRING_ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
   mascot: ['scout', 'ghost', 'clover', 'bloom', 'puff', 'gem', 'pebble', 'heart', 'bun'],
   shell: ['always', 'ask', 'never'],
   voiceName: VOICES.map((voice) => voice.id),
+  recordingAudioKeep: ['today', 'week', 'always'],
 }
 
 export class SettingsStore {

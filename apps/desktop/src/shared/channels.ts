@@ -138,6 +138,9 @@ export const CHANNELS = {
     callAudio: 'agent:voice.callAudio',
     callMute: 'agent:voice.callMute',
     callEnd: 'agent:voice.callEnd',
+    recordStart: 'agent:voice.recordStart',
+    recordChunk: 'agent:voice.recordChunk',
+    recordEnd: 'agent:voice.recordEnd',
   },
   hotkeys: {
     status: 'agent:hotkeys.status',

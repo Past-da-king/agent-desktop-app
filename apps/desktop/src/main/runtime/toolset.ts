@@ -49,6 +49,7 @@ import { guardTools } from '../vault/guard'
 import type { VaultStore } from '../vault/store'
 import type { BrowserVault } from '../vault/browser-vault'
 import { presenceTools, type MeetingEndedHost } from '../tools/presence'
+import { recordingsTools, type RecordingsReader } from '../tools/recordings'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -96,6 +97,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   browserVault?: BrowserVault
   /** Main agent only: meeting_ended, when he says a meeting is over (presence/). */
   presence?: MeetingEndedHost
+  /** His recordings and dictations, kept on disk as they happen (recordings/store.ts): recordings_list, recordings_get. */
+  recordings?: RecordingsReader
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -237,6 +240,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
     ...(deps.appControl?.invoker === undefined ? [] : appActionTools({ invoker: deps.appControl.invoker })), // app_actions, app_action: every button in the window
     ...(deps.vault === undefined ? [] : vaultTools({ vault: deps.vault, ...(deps.browser === undefined ? {} : { browser: deps.browser }), ...(deps.browserVault === undefined ? {} : { browserVault: deps.browserVault }) })), // vault_list, vault_fill, vault_login, vault_save, vault_reveal
+    ...(deps.recordings === undefined ? [] : recordingsTools(deps.recordings)), // recordings_list, recordings_get
     ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
   ]
 }

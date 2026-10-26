@@ -206,6 +206,10 @@ export const MEMORY_CARE = [
 export const RULES_LINE =
   '- "Update the system prompt: X", "add a rule", "from now on always (or never) X": that is a standing instruction for every agent. Do it yourself with prompt_rules add (a short instruction, in their meaning, with the reason), or edit or remove the one it changes. No approval needed. Every agent follows it from its next run.'
 
+/** His recordings and dictations are kept as they happen (26 Oct 2026), and every agent knows where to find them. */
+export const RECORDINGS_LINE =
+  'RECORDINGS: every recording and dictation the user makes (message box mic, dictation shortcut, calls) is written to disk as it happens and kept, and one that a crash or a restart stopped half way is recovered with its transcript. To find one ("the recording I was making", "what I dictated earlier"), call recordings_list, then recordings_get for the full transcript.'
+
 export const NO_NAME = 'Your agent'
 export const MEMORY_LIMIT = 8
 export const TASK_LIMIT = 25
@@ -428,6 +432,10 @@ export function buildSystemPrompt(input: PromptInput): string {
       )
     }
   }
+
+  // His recordings are never lost (26 Oct 2026): written as they happen, recovered after a crash (recordings/store.ts).
+  lines.push('')
+  lines.push(RECORDINGS_LINE)
 
   const computerLines = [...thisComputerLines(input.environment ?? null), accessLine(settings)]
   if (computerLines.length > 0) {

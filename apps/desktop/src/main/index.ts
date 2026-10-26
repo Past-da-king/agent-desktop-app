@@ -23,7 +23,7 @@ import { HANDOFF_CLOSED } from './tools/browser'
 
 import type { AppPlatform } from '@agent/core'
 
-import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
@@ -39,6 +39,9 @@ import { QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
 import { HotkeyManager } from './hotkeys'
 import { cachedLister, likelyHolder, listProcesses } from './hotkey-holders'
 import { createDictation, type DictationSetup } from './dictation/setup'
+import { Recordings } from './recordings/store'
+import { recoveredNoticeText, startRecordingsUpkeep, type Upkeep } from './recordings/upkeep'
+import { chatTag } from './runtime/chat-lines'
 import { registerDictationIpc } from './dictation/ipc'
 import { StepBudget } from './runtime/budget'
 import { hostEnvironment } from './runtime/environment-host'
@@ -194,6 +197,9 @@ let supervisor: Supervisor | null = null
 let eventRouter: EventRouter | null = null
 /** Where the person is (presence/): the note on his messages, his calendars cached, meetings that end early. */
 let presenceHandle: PresenceHandle | null = null
+/** His recordings on disk (recordings/), and the pass that recovers, tells him and deletes old audio. */
+let recordingsStore: Recordings | null = null
+let recordingsUpkeep: Upkeep | null = null
 let workersChangedTimer: NodeJS.Timeout | null = null
 
 /** The Workers page reads again; a burst of events tells it once. */
@@ -797,6 +803,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
     settings,
     invoker: () => registryInvoker(handlerRegistry),
   }
+  // His recordings and dictations, written to disk as they happen and recovered after a crash (recordings/store.ts).
+  const recordings = new Recordings({ root: join(dir, 'voice-notes', 'recordings'), log: (message, fields) => logger.info(message, fields) })
+  recordingsStore = recordings
   const helperToolset = buildWorkerToolset({
     appControl,
     deviceHub: () => devicesState.sync?.tools ?? null,
@@ -810,6 +819,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     workers: workerTools,
     vault,
     browserVault,
+    recordings,
   })
   // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
   // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
@@ -897,6 +907,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     workers: workerTools,
     vault,
     browserVault,
+    recordings,
     searchChats: async (query, limit) => (memory === null ? [] : memory.searchChats(query, limit)),
     deviceHub: () => devicesState.sync?.tools ?? null,
     devices: {
@@ -1205,6 +1216,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     platform: process.platform,
     environment: () => environment.current(),
     notesDir: join(app.getPath('userData'), 'voice-notes'),
+    ...(recordingsStore === null ? {} : { recordings: recordingsStore }),
   })
   // A linked phone's call hands its work to the main agent, a project chat or a helper here (main/voice/handoff.ts).
   const callStore = store
@@ -1236,7 +1248,27 @@ async function startServices(win: BrowserWindow): Promise<void> {
       if (store === null) return own
       return [...own, ...dictationWordsFromProjects(await store.list('project')).slice(0, 30)]
     },
+    ...(recordingsStore === null ? {} : { recordings: recordingsStore }),
   })
+  // A recording the last run left unfinished (a crash, an update's restart) is finished from what is on disk, he is
+  // told once in its chat, and audio the keep setting no longer keeps is deleted; then again every night.
+  if (recordingsStore !== null) {
+    const noticeStore = store
+    recordingsUpkeep = startRecordingsUpkeep({
+      recordings: recordingsStore,
+      keep: () => settings.get().recordingAudioKeep,
+      transcribe: () => (voiceService.hasKey() && dictation !== null ? dictation.transcribe : null),
+      notify: async (notice) => {
+        await noticeStore.upsert('chat_item', {
+          kind: 'notice',
+          text: recoveredNoticeText(notice),
+          meta: JSON.stringify({ ...chatTag(notice.chat ?? MAIN_CHAT), recording: notice.id }),
+        })
+        broadcast(EVENTS.chat, { type: 'chat_changed', ...chatTag(notice.chat ?? MAIN_CHAT) })
+      },
+      log: (message, fields) => logger.info(message, fields),
+    })
+  }
   registerDictationIpc(
     {
       hotkeyStatus: () => hotkeys?.status() ?? [],
@@ -1245,9 +1277,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
       micState: (session, ok, message) => dictation?.controller.micState(session, ok, message),
       stop: () => dictation?.controller.stop(),
       pillReady: () => dictation?.pill.rendererReady(),
-      toggle: (sender, mode) => {
+      toggle: (sender, mode, chat) => {
         if (dictation === null) return
-        if (sender !== null && typeof sender === 'object' && 'id' in sender) dictation.toggleFrom(sender as Electron.WebContents, mode)
+        if (sender !== null && typeof sender === 'object' && 'id' in sender) dictation.toggleFrom(sender as Electron.WebContents, mode, chat)
         else dictation.controller.toggle(mode)
       },
       cancel: () => dictation?.controller.cancel(),
@@ -1369,6 +1401,8 @@ if (!app.requestSingleInstanceLock()) {
     scheduler = null
     presenceHandle?.stop()
     presenceHandle = null
+    recordingsUpkeep?.stop()
+    recordingsUpkeep = null
     eventRouter?.stop()
     eventRouter = null
     // Every worker is told to stop and its process tree ended; its stop time is saved so it catches up next start.

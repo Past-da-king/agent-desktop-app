@@ -87,6 +87,20 @@ export interface DictationDeps {
    * its own strip, so the pill never shows; 'pill' (the default) for any other app.
    */
   surface?: () => DictationSurface
+  /**
+   * Writes this dictation to disk as it happens (recordings/store.ts), so a crash or a restart never loses it.
+   * Asked once per dictation, right after `surface`. Null (or left out): nothing is written.
+   */
+  record?: (surface: DictationSurface) => RecordingSink | null
+}
+
+/** Where a dictation's audio and words go while it happens (a recordings/store.ts handle). */
+export interface RecordingSink {
+  audio(pcm: Buffer): void
+  words(text: string, interim?: string): void
+  stop(ended?: 'done' | 'cancelled' | 'failed'): Promise<void>
+  final(text: string): Promise<void>
+  failed(error: string): Promise<void>
 }
 
 type State = 'idle' | 'starting' | 'listening' | 'finishing' | 'cleaning' | 'typing'
@@ -123,6 +137,8 @@ interface Session {
   escape: (() => void) | null
   abort: AbortController | null
   timer: ReturnType<typeof setInterval> | null
+  /** The same dictation on disk; null when nothing is written. */
+  rec: RecordingSink | null
 }
 
 interface Kept {
@@ -130,6 +146,7 @@ interface Kept {
   bytes: number
   clean: boolean
   surface: DictationSurface
+  rec: RecordingSink | null
 }
 
 /** The recording a retried dictation reads from: no live session behind it. */
@@ -225,6 +242,9 @@ export class DictationController {
     const session = this.session
     if (session !== null && (this.state === 'starting' || this.state === 'listening')) {
       this.log('Dictation cancelled')
+      // Nothing is typed, but what was said is kept on disk (its words are finished from the audio later).
+      const rec = session.rec
+      if (rec !== null) void rec.stop('cancelled').then(() => rec.failed('Cancelled before the words were final.'))
       this.end(session)
       this.deps.pill.hide()
       this.view({ ...this.lastView, phase: 'hidden', canRetry: false })
@@ -233,6 +253,7 @@ export class DictationController {
     if (session !== null && (this.state === 'finishing' || this.state === 'cleaning')) {
       this.log('Dictation cancelled while finishing', { ms: this.now() - session.phaseSince })
       this.keep(session)
+      void session.rec?.failed('Cancelled while the words were coming.')
       session.abort?.abort(new Error('Cancelled.'))
       session.transcriber.close()
       this.finishSession(session)
@@ -282,6 +303,7 @@ export class DictationController {
       escape: null,
       abort: null,
       timer: null,
+      rec: kept.rec,
     }
     this.session = session
     this.state = 'finishing'
@@ -316,6 +338,7 @@ export class DictationController {
     if (session.bytes + pcm.length > MAX_RECORDING_BYTES) return
     session.chunks.push(pcm)
     session.bytes += pcm.length
+    session.rec?.audio(pcm)
     if (!session.liveFailed) session.transcriber.audio(pcm)
     if (loudness(pcm) > LOUD) {
       session.loud = true
@@ -360,6 +383,7 @@ export class DictationController {
         if (current === null || current.id !== id) return
         current.text = text
         current.interim = interim
+        current.rec?.words(text, interim)
         current.heard = true
         current.lastActivity = this.now()
         if (this.state === 'listening' || this.state === 'starting' || this.state === 'finishing') this.show(this.state === 'finishing' ? 'finishing' : 'listening')
@@ -393,6 +417,13 @@ export class DictationController {
       escape: null,
       abort: null,
       timer: null,
+      rec: null,
+    }
+    try {
+      session.rec = this.deps.record?.(this.surface) ?? null
+    } catch {
+      // A recording that cannot be written never stops the dictation itself.
+      session.rec = null
     }
     this.session = session
     this.state = 'starting'
@@ -503,6 +534,7 @@ export class DictationController {
         if (this.session !== session || this.state !== 'finishing') return
         session.text = said
         session.interim = guess
+        session.rec?.words(said, guess)
         this.show('finishing')
       }
       const whole = await bounded(
@@ -523,6 +555,7 @@ export class DictationController {
         this.fail(session, problem)
         return
       }
+      void session.rec?.final('')
       this.end(session)
       this.flash('notice', 'Nothing was heard. Try again a little closer to the microphone.', 3000)
       return
@@ -547,6 +580,8 @@ export class DictationController {
     }
 
     this.state = 'typing'
+    // The words are kept with the recording before they are typed.
+    void session.rec?.final(text)
     // Typing is not cancelled half way; Esc after this point is too late.
     let outcome: TypeOutcome | 'inserted' = 'copied'
     try {
@@ -568,6 +603,7 @@ export class DictationController {
   private fail(session: Session, problem: string): void {
     this.log('Dictation failed, recording kept', { bytes: session.bytes })
     this.keep(session)
+    void session.rec?.failed(problem)
     session.abort?.abort(new Error('failed'))
     this.end(session)
     const reason = problem.trim().replace(/\s*Nothing was typed\.?$/, '')
@@ -576,7 +612,7 @@ export class DictationController {
 
   private keep(session: Session): void {
     if (session.bytes === 0) return
-    this.kept = { chunks: session.chunks, bytes: session.bytes, clean: session.clean, surface: this.surface }
+    this.kept = { chunks: session.chunks, bytes: session.bytes, clean: session.clean, surface: this.surface, rec: session.rec }
   }
 
   private dismiss(): void {
@@ -596,6 +632,8 @@ export class DictationController {
     for (const release of session.releases) release()
     session.releases = []
     this.deps.pill.command({ type: 'stop', session: session.id })
+    // The rest of the audio goes to disk and is stitched into one file (the first stop wins).
+    void session.rec?.stop()
   }
 
   private end(session: Session): void {

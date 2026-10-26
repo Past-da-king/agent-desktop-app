@@ -18,6 +18,8 @@ const MAX_KEY = 8192
 const MAX_SPEAK = 20_000
 const MAX_DICTATION = 16_000 * 2 * 60 * 5
 const MAX_CHUNK = 64 * 1024
+/** A linked device sends its recording about a second at a time; allow a few seconds of slack. */
+const MAX_RECORD_CHUNK = 16_000 * 2 * 10
 
 export function registerVoiceIpc(
   voice: VoiceService,
@@ -53,6 +55,25 @@ export function registerVoiceIpc(
     voice.callMute(muted === true)
   })
   ipcMain.handle(CHANNELS.voice.callEnd, async () => voice.callEnd())
+
+  // A window that records by itself (a linked device's message box mic) keeps its recording here as it happens.
+  ipcMain.handle(CHANNELS.voice.recordStart, async (_event, info) => {
+    const chat = typeof info === 'object' && info !== null ? (info as { chat?: unknown }).chat : null
+    return voice.recordStart({ chat: typeof chat === 'string' && /^[\w:-]{1,100}$/.test(chat) ? chat : null })
+  })
+  ipcMain.handle(CHANNELS.voice.recordChunk, async (_event, id, pcm) => {
+    if (typeof id !== 'string' || id.length > 64) throw new Error('id must be a recording id')
+    voice.recordChunk(id, bytes(pcm, MAX_RECORD_CHUNK))
+  })
+  ipcMain.handle(CHANNELS.voice.recordEnd, async (_event, id, outcome) => {
+    if (typeof id !== 'string' || id.length > 64) throw new Error('id must be a recording id')
+    const raw = typeof outcome === 'object' && outcome !== null ? (outcome as Record<string, unknown>) : {}
+    await voice.recordEnd(id, {
+      ...(typeof raw['text'] === 'string' ? { text: raw['text'].slice(0, 200_000) } : {}),
+      ...(typeof raw['error'] === 'string' ? { error: raw['error'].slice(0, 300) } : {}),
+      ...(raw['cancelled'] === true ? { cancelled: true } : {}),
+    })
+  })
 
   // Audio chunks are fire and forget (ipcRenderer.send), about ten a second.
   const onAudio = (_event: unknown, pcm: unknown): void => {

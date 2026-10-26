@@ -444,6 +444,10 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       callMute: async () => undefined,
       callEnd: async () => null,
       onCall: noop,
+      // The message box mic here writes its recording on the computer as it happens (never lost).
+      recordStart: rpc('voice.recordStart'),
+      recordChunk: rpc('voice.recordChunk'),
+      recordEnd: rpc('voice.recordEnd'),
     },
 
     hotkeys: { status: async () => [], pause: async () => undefined },

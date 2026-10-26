@@ -250,6 +250,9 @@ const api: AgentApi = {
     callMute: (muted) => call<void>(CHANNELS.voice.callMute, muted),
     callEnd: () => call<CallSummary | null>(CHANNELS.voice.callEnd),
     onCall: (callback) => on<CallEvent>(EVENTS.voiceCall, callback),
+    recordStart: (info) => call<string | null>(CHANNELS.voice.recordStart, info),
+    recordChunk: (id, pcm) => call<void>(CHANNELS.voice.recordChunk, id, pcm),
+    recordEnd: (id, outcome) => call<void>(CHANNELS.voice.recordEnd, id, outcome),
   },
 
   hotkeys: {
@@ -266,7 +269,7 @@ const api: AgentApi = {
     ready: () => call<void>(CHANNELS.dictation.ready),
     onCommand: (callback) => on<DictationCommand>(EVENTS.dictationCommand, callback),
     onView: (callback) => on<DictationView>(EVENTS.dictationView, callback),
-    toggle: (mode) => call<void>(CHANNELS.dictation.toggle, mode),
+    toggle: (mode, chat) => call<void>(CHANNELS.dictation.toggle, mode, chat ?? null),
     cancel: () => call<void>(CHANNELS.dictation.cancel),
     retry: () => call<void>(CHANNELS.dictation.retry),
     onDraft: (callback) => on<DictationView>(EVENTS.dictationDraft, callback),
