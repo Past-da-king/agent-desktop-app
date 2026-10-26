@@ -71,10 +71,11 @@ import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, GuideRequ
 import { planWindowOpen, popupSize } from './popup'
 import type { BrowserVault } from '../vault/browser-vault'
 import { attachVaultTo, debuggerLink } from './vault-link'
+import type { BrandLook } from '../../shared/brand'
 import { formatGuide, GuideRuns, guideShowsFullSize, runGuide, type GuideHost } from './guide'
 import { evaluateIn, FrameSessions } from './guide-host'
 import { GuideLog, TAIL_MS } from './guide-log'
-import { dialogsScript, guideClearScript, pickMarkScript } from './guide-page'
+import { dialogsScript, guideClearScript, guideRestyleScript, pickMarkScript } from './guide-page'
 import { alive, ifAlive, whileAlive } from '../alive'
 import { pickTab } from './tab-pick'
 import { siteTabPlan } from './site-tab'
@@ -146,6 +147,8 @@ export interface AgentBrowserOptions {
   tempRoot?: string
   /** Where what the browser learns about sites is kept (a JSON file under userData). Null keeps it in memory. */
   sitesFile?: string | null
+  /** The app's brand look now (his theme and accent setting): the guide's ring and label are drawn in it. */
+  look?: () => BrandLook
 }
 
 export class AgentBrowser implements BrowserDriver, BrowserProDriver {
@@ -207,6 +210,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private readonly popupOpener = new Map<BrowserWindow, string>()
   private readonly offRunEnd: () => void
   private readonly sweepTimer: ReturnType<typeof setInterval>
+  /** Guides showing now: each restyles its rings when his theme or accent changes (restyleGuides). */
+  private readonly liveGuides = new Set<() => Promise<void>>()
+  private readonly look: (() => BrandLook) | undefined
   /** Each tab's frames, cross-site ones included, for the guide (guide-host.ts). */
   private readonly frameSessions = new Map<string, FrameSessions>()
   /** The guided session running on each tab, and who started it. */
@@ -247,6 +253,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.onState = options.onState ?? (() => undefined)
     this.onHandoffClosed = options.onHandoffClosed ?? (() => undefined)
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
+    this.look = options.look
 
     const root = options.tempRoot ?? tmpdir()
     this.runDir = mkdtempSync(join(root, 'agent-browser-'))
@@ -1499,9 +1506,18 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       loading: () => alive(wc) && wc.isLoading(),
       ready: (ms) => this.waitForDom(tab, ms),
     }
+    const lookNow = this.look
+    const restyle = async (): Promise<void> => {
+      if (lookNow === undefined || !alive(wc)) return
+      const look = lookNow()
+      const all = await withDeadline(sessions.frames(), 2_000).catch(() => [])
+      await Promise.all(all.map((frame) => withDeadline(evaluateIn(sessions, frame.key, guideRestyleScript(look)), 2_000).catch(() => undefined)))
+    }
+    this.liveGuides.add(restyle)
     try {
       const timeoutMs = request.timeoutMs
       const result = await runGuide(host, request.steps, {
+        ...(lookNow === undefined ? {} : { look: lookNow }),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         signal: entry.abort.signal,
         token: session.id,
@@ -1534,6 +1550,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       this.emit()
       return formatGuide(result, session.id)
     } finally {
+      this.liveGuides.delete(restyle)
       signal?.removeEventListener('abort', onOuter)
       this.guiding.finish(entry)
       if (alive(wc)) {
@@ -1543,6 +1560,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       }
       restore()
     }
+  }
+
+  /** His theme or accent changed: a ring showing now takes the new look at once (the next one is drawn in it anyway). */
+  async restyleGuides(): Promise<void> {
+    await Promise.all([...this.liveGuides].map((restyle) => restyle().catch(() => undefined)))
   }
 
   /** Hands the tab to the person for the guide and shows it to them; the returned function hands it back. */

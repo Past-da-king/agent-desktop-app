@@ -11,6 +11,7 @@ import {
   globalShortcut,
   ipcMain as electronIpcMain,
   nativeImage,
+  nativeTheme,
   powerMonitor,
   safeStorage,
   screen,
@@ -27,6 +28,7 @@ import {
   workAreasPrimaryFirst,
   type FrameDelta,
 } from './window-fit'
+import { brandLook } from '../shared/brand'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
 import { FileBrainLocks } from './brain-locks'
@@ -804,8 +806,15 @@ async function startServices(win: BrowserWindow): Promise<void> {
     sitesFile: join(app.getPath('userData'), 'browser-sites.json'),
     // The person's own tabs keep their own sign-ins, apart from every agent's (apps/profiles.ts MINE_PARTITION).
     personPartition: MINE_PARTITION,
+    // The guide's ring and label wear the app's own look: his theme and accent, read live (shared/brand.ts).
+    look: () => brandLook({ theme: settings.get().theme, accent: settings.get().accent, systemDark: nativeTheme.shouldUseDarkColors }),
   })
   agentBrowser.setVault(browserVault)
+  // The computer switched light/dark while the theme follows it: a ring showing now changes with it.
+  const onSystemTheme = (): void => {
+    if (settings.get().theme === 'system') void agentBrowser?.restyleGuides()
+  }
+  nativeTheme.on('updated', onSystemTheme)
   // The real-Electron browser proof opens a local test page here; never set in normal use.
   const probeUrl = process.env['AGENT_BROWSER_PROBE_URL']?.trim() ?? ''
   if (probeUrl !== '') {
@@ -1280,6 +1289,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     lastSettings = next
     if (changed.length > 0) logger.info('Settings changed', { keys: changed.join(',') })
     if (changed.includes('shell') && next.shell === 'always') void runner?.approveComputerCards()
+    if (changed.includes('theme') || changed.includes('accent')) void agentBrowser?.restyleGuides()
     applyLoginItem(next)
     applyHotkey(next)
     tray?.refresh()

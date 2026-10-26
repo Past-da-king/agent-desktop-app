@@ -1,76 +1,9 @@
 import type { ThemePref } from '@agent/core'
 
-export type AccentId =
-  | 'iris'
-  | 'ocean'
-  | 'teal'
-  | 'forest'
-  | 'ember'
-  | 'rose'
-  | 'violet'
-  | 'magenta'
+import { ACCENTS, type AccentId } from '../../shared/brand'
 
-interface Accent {
-  id: AccentId
-  label: string
-  swatch: string
-  light?: [string, string, string, string]
-  dark?: [string, string, string, string]
-}
-
-/** Hand-tuned in the phone app, copied from the mockup's `ACC`. Iris is the token default. */
-export const ACCENTS: Accent[] = [
-  { id: 'iris', label: 'Iris', swatch: '#4A3FD1' },
-  {
-    id: 'ocean',
-    label: 'Ocean',
-    swatch: '#0B5FC9',
-    light: ['#0B5FC9', '#F7FAFF', '#D6E4FF', '#001B3F'],
-    dark: ['#A9C7FF', '#003064', '#004A99', '#D6E4FF'],
-  },
-  {
-    id: 'teal',
-    label: 'Teal',
-    swatch: '#00696B',
-    light: ['#00696B', '#F2FFFE', '#B9F0EE', '#002020'],
-    dark: ['#7FD6D4', '#003737', '#004F50', '#B9F0EE'],
-  },
-  {
-    id: 'forest',
-    label: 'Forest',
-    swatch: '#2E6A2F',
-    light: ['#2E6A2F', '#F5FFF0', '#C6EFBC', '#032105'],
-    dark: ['#9CD89A', '#0A390D', '#1B5220', '#C6EFBC'],
-  },
-  {
-    id: 'ember',
-    label: 'Ember',
-    swatch: '#B0410C',
-    light: ['#B0410C', '#FFF8F5', '#FFDBCB', '#390C00'],
-    dark: ['#FFB591', '#5A1C00', '#853000', '#FFDBCB'],
-  },
-  {
-    id: 'rose',
-    label: 'Rose',
-    swatch: '#B0255E',
-    light: ['#B0255E', '#FFF7F8', '#FFD9E2', '#3E001D'],
-    dark: ['#FFB1C8', '#650033', '#8E0D48', '#FFD9E2'],
-  },
-  {
-    id: 'violet',
-    label: 'Violet',
-    swatch: '#7A2BF0',
-    light: ['#7A2BF0', '#FCF8FF', '#EADDFF', '#25005A'],
-    dark: ['#B98AFF', '#25005A', '#5A00C6', '#EADDFF'],
-  },
-  {
-    id: 'magenta',
-    label: 'Magenta',
-    swatch: '#D6008A',
-    light: ['#D6008A', '#FFF7F9', '#FFD8EA', '#3D0026'],
-    dark: ['#FF6BC1', '#3D0026', '#8F005B', '#FFD8EA'],
-  },
-]
+/** The accents live in shared/brand.ts, the one source the renderer and the guide's overlay both read. */
+export { ACCENTS, type AccentId }
 
 export function isDarkNow(): boolean {
   const set = document.documentElement.dataset['theme']
