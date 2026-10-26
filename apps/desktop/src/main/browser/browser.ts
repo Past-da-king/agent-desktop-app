@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { Script } from 'node:vm'
 
-import { BrowserWindow, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
+import { BrowserWindow, clipboard as systemClipboard, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
 import type { DownloadItem, Session, WebContents, WebPreferences } from 'electron'
 
 import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
@@ -27,6 +27,7 @@ import { Cdp, KEY_NAMES } from './cdp'
 import { emailsIn } from './people'
 import { PRESENCE_SCRIPT } from './presence'
 import { watchDevtools } from './devtools'
+import type { NetEntry } from './devtools-log'
 import {
   chromeVersionOf,
   emulationCommands,
@@ -66,10 +67,14 @@ import {
   snapshotScript,
   type Resolved,
 } from './snapshot'
-import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, ViewRequest } from './types'
+import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, GuideRequest, ViewRequest } from './types'
 import { planWindowOpen, popupSize } from './popup'
 import type { BrowserVault } from '../vault/browser-vault'
-import { attachVaultTo } from './vault-link'
+import { attachVaultTo, debuggerLink } from './vault-link'
+import { formatGuide, GuideRuns, guideShowsFullSize, runGuide, type GuideHost } from './guide'
+import { evaluateIn, FrameSessions } from './guide-host'
+import { GuideLog, TAIL_MS } from './guide-log'
+import { dialogsScript, guideClearScript, pickMarkScript } from './guide-page'
 import { alive, ifAlive, whileAlive } from '../alive'
 import { pickTab } from './tab-pick'
 import { siteTabPlan } from './site-tab'
@@ -202,6 +207,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private readonly popupOpener = new Map<BrowserWindow, string>()
   private readonly offRunEnd: () => void
   private readonly sweepTimer: ReturnType<typeof setInterval>
+  /** Each tab's frames, cross-site ones included, for the guide (guide-host.ts). */
+  private readonly frameSessions = new Map<string, FrameSessions>()
+  /** The guided session running on each tab, and who started it. */
+  private readonly guiding = new GuideRuns()
+  /** Every guided session's step log (browser_guide_log). */
+  private readonly guides = new GuideLog()
 
   private activeId: string | null = null
   private bounds: BrowserBounds = { ...EMPTY_BOUNDS }
@@ -268,6 +279,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** A run ended: the tabs it opened close after `graceMs`, unless it browses again first (run-tabs.ts). */
   endRun(owner: string, graceMs = 0): void {
     if (this.destroyed) return
+    // A guide never outlives the run that started it: its ring and listeners go with it.
+    this.guiding.endOwner(owner)
     this.runTabs.end(owner, Date.now() + graceMs)
     if (graceMs === 0) this.sweepTabs()
   }
@@ -515,6 +528,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (index === -1) return
     const [tab] = this.tabs.splice(index, 1)
     if (tab === undefined) return
+    this.guiding.endTab(tab.id, 'closed')
+    this.frameSessions.get(tab.id)?.stop()
+    this.frameSessions.delete(tab.id)
     for (const [owner, tabId] of this.ownerTabs) if (tabId === tab.id) this.ownerTabs.delete(owner)
     this.runTabs.forget(tab.id)
     this.idled.delete(tab.id)
@@ -1410,6 +1426,169 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     return `Clicked ${target.label}.${moved}${covered}\n\n${await this.snapshotText(tab, {})}`
   }
 
+  // ---- guided click-through: his click is the feedback ---------------------------------------
+
+  guideLog(): GuideLog {
+    return this.guides
+  }
+
+  /**
+   * browser_guide (guide.ts): the agent's tab becomes his for the guide (his mouse and keys reach it), shown to him (the
+   * panel when it shows this tab, else full size over the window), each step's element is highlighted in turn and his
+   * own action ends the step. Nothing is clicked for him. Ends at once with what happened; the tab goes back to the
+   * agent after, the rings are gone, and the step log keeps what each step sent (browser_guide_log).
+   */
+  async guide(request: GuideRequest, signal?: AbortSignal): Promise<string> {
+    const tab = this.activeTab()
+    if (tab === null || !isRealPage(tab.wc)) return 'No page is open yet. Use browser_open with a web address first, then guide.'
+    if (request.steps.length === 0) return 'Pass the step to highlight (target and label), or steps.'
+    await this.prepare(tab)
+    let frames = this.frameSessions.get(tab.id)
+    if (!tab.ready || tab.wc.isDestroyed()) return 'The page debugger is not available, so I cannot draw on this page right now.'
+    if (frames === undefined) {
+      frames = new FrameSessions(debuggerLink(tab.wc))
+      this.frameSessions.set(tab.id, frames)
+    }
+    await frames.start()
+    const owner = currentOwner() ?? 'person'
+    const devtools = watchDevtools(tab.wc)
+    if (devtools !== null) await devtools.start().catch(() => false)
+    const session = this.guides.start({
+      owner,
+      tabId: tab.id,
+      url: safeUrl(tab.wc),
+      steps: request.steps,
+      // A sensitive value (clipboard fill, a Vault item) is masked in every request the log shows or an app is made from.
+      masks: request.steps.filter((step) => step.sensitive === true && typeof step.value === 'string').map((step) => step.value as string),
+      ...(devtools === null ? {} : { network: (): NetEntry[] => devtools.network.all() }),
+    })
+    // One guide per tab: a new one takes over from the last.
+    const entry = this.guiding.start(tab.id, owner)
+    const onOuter = (): void => entry.abort.abort()
+    signal?.addEventListener('abort', onOuter, { once: true })
+    if (signal?.aborted === true) entry.abort.abort()
+    const restore = this.enterGuide(tab, guideLine(1, request.steps.length, request.steps[0]?.label ?? ''))
+    const wc = tab.wc
+    const link = debuggerLink(wc)
+    const sessions = frames
+    const host: GuideHost = {
+      frames: () => sessions.frames(),
+      evaluate: (key, code) => evaluateIn(sessions, key, code),
+      markIndex: async (index, token) => (await this.run(tab, pickMarkScript(index, token), 3_000).catch(() => false)) === true,
+      page: async () => {
+        const raw = objectOf(await this.run(tab, dialogsScript(), 3_000).catch(() => ({})))
+        return {
+          url: safeUrl(wc),
+          title: safeTitle(wc),
+          dialogs: Array.isArray(raw['dialogs']) ? raw['dialogs'].filter((d): d is string => typeof d === 'string') : [],
+          text: typeof raw['text'] === 'string' ? raw['text'] : '',
+        }
+      },
+      onNavigate: (listener) => {
+        if (!alive(wc)) return () => undefined
+        const handler = whileAlive(wc, 'guide navigation', (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>) => {
+          if (details.isMainFrame && !details.isSameDocument) listener()
+        })
+        wc.on('did-start-navigation', handler)
+        return () => ifAlive('guide navigation off', () => wc.removeListener('did-start-navigation', handler))
+      },
+      onJsDialog: (listener) =>
+        link.onEvent((method, params) => {
+          if (method === 'Page.javascriptDialogOpening') listener(String(params['message'] ?? ''))
+        }),
+      loading: () => alive(wc) && wc.isLoading(),
+      ready: (ms) => this.waitForDom(tab, ms),
+    }
+    try {
+      const timeoutMs = request.timeoutMs
+      const result = await runGuide(host, request.steps, {
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        signal: entry.abort.signal,
+        token: session.id,
+        clipboard: { read: () => systemClipboard.readText(), write: (text) => systemClipboard.writeText(text), clear: () => systemClipboard.clear() },
+        pasteKey: process.platform === 'darwin' ? 'Cmd+V' : 'Ctrl+V',
+        onStep: (event) => {
+          if (event.kind === 'start') {
+            this.guides.stepStarted(session.id, event.n)
+          } else if (event.kind === 'shown') {
+            if (this.personTab === tab.id) {
+              this.handoffReason = guideLine(event.n, request.steps.length, event.step.label)
+              this.emit()
+            }
+          } else if (event.kind === 'end' && event.log !== undefined) {
+            this.guides.stepEnded(session.id, event.log)
+          }
+        },
+      })
+      if (entry.endedBy === 'person' && result.outcome === 'cancelled') {
+        result.outcome = 'done'
+        result.note = 'He pressed Done in the browser, so the guide ended there.'
+      } else if (entry.endedBy === 'closed') {
+        result.note = 'He closed the tab, so the guide ended.'
+      } else if (entry.endedBy === 'run') {
+        result.note = 'The run that started the guide ended.'
+      }
+      this.guides.end(session.id, result)
+      const freeze = setTimeout(() => this.guides.freeze(session.id), TAIL_MS + 500)
+      freeze.unref?.()
+      this.emit()
+      return formatGuide(result, session.id)
+    } finally {
+      signal?.removeEventListener('abort', onOuter)
+      this.guiding.finish(entry)
+      if (alive(wc)) {
+        // No ring is left behind in any frame, whatever ended the guide.
+        const all = await withDeadline(sessions.frames(), 2_000).catch(() => [])
+        await Promise.all(all.map((frame) => withDeadline(evaluateIn(sessions, frame.key, guideClearScript()), 2_000).catch(() => undefined)))
+      }
+      restore()
+    }
+  }
+
+  /** Hands the tab to the person for the guide and shows it to them; the returned function hands it back. */
+  private enterGuide(tab: Tab, line: string): () => void {
+    const before = { personTab: this.personTab, reason: this.handoffReason, expanded: this.expanded }
+    const expandedHere = guideShowsFullSize({ panelVisible: this.bounds.visible, panelWidth: this.bounds.width, shownTab: this.shownTab()?.id ?? null, expanded: this.expanded }, tab.id)
+    this.personTab = tab.id
+    this.handoffReason = line
+    this.activeId = tab.id
+    this.wakeTab(tab)
+    // The panel is hidden, folded, or on another tab: the page opens full size over the window for him.
+    if (expandedHere) this.expanded = true
+    for (const each of this.tabs) void this.refreshInputGuard(each)
+    this.layout()
+    this.emit()
+    return () => {
+      if (this.personTab === tab.id) this.personTab = before.personTab
+      this.handoffReason = before.reason
+      if (expandedHere) this.expanded = before.expanded
+      for (const each of this.tabs) void this.refreshInputGuard(each)
+      this.emit()
+    }
+  }
+
+  /** Waits for the page's next document to be ready (dom-ready) or the load to stop, at most ms. */
+  private async waitForDom(tab: Tab, ms: number): Promise<void> {
+    const wc = tab.wc
+    if (!alive(wc)) return
+    await new Promise<void>((resolve) => {
+      let done = false
+      const finish = (): void => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        ifAlive('guide ready off', () => {
+          wc.removeListener('dom-ready', finish)
+          wc.removeListener('did-stop-loading', finish)
+        })
+        resolve()
+      }
+      const timer = setTimeout(finish, ms)
+      wc.once('dom-ready', finish)
+      wc.once('did-stop-loading', finish)
+    })
+  }
+
   // ---- running the agent's own script in the page --------------------------------------------
 
   async evaluate(code: string, seconds: number, signal?: AbortSignal): Promise<string> {
@@ -1478,6 +1657,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (tab.ready) {
       await tab.cdp.send('Page.enable').catch(() => undefined)
       await tab.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PRESENCE_SCRIPT }).catch(() => undefined)
+      // The guide keeps every cross-site frame's session from the start, so none is missed when the Vault turns
+      // auto-attach on just below.
+      if (!this.frameSessions.has(tab.id)) this.frameSessions.set(tab.id, new FrameSessions(debuggerLink(wc)))
       await this.attachVault(wc, () => this.personTab === tab.id)
     }
     await this.applyEmulation(tab)
@@ -1698,6 +1880,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   }
 
   setAgentDriving(on: boolean, reason = ''): void {
+    // Done, carry on (or Give back) while a guide runs: he says he is finished, so the guide ends as done.
+    if (on) this.guiding.endAll('person')
     // Off: the person takes the tab in question: the asking agent's own when it hands over, else the one in front
     // of them (whatever profile it is in; the person's own profile is only where their NEW tabs open).
     const asking = currentOwner() !== undefined
@@ -2385,6 +2569,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return false
     }
   }
+}
+
+/** What the browser bar says while he is guided. */
+function guideLine(n: number, total: number, label: string): string {
+  return `Follow the highlight${total > 1 ? ` (step ${n} of ${total})` : ''}: ${label}`
 }
 
 function sameView(a: ViewSpec, b: ViewSpec): boolean {

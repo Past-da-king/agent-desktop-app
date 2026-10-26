@@ -62,7 +62,7 @@ export interface Resolved {
   candidates: string[]
 }
 
-const PRELUDE = `
+export const PAGE_PRELUDE = `
 const KEY = '__agentBrowserPage';
 const store = globalThis[KEY] || (globalThis[KEY] = { refs: [] });
 const clean = (v) => String(v == null ? '' : v).replace(/\\s+/g, ' ').trim();
@@ -188,7 +188,7 @@ export function snapshotScript(options: SnapshotOptions = {}): string {
   const deep = options.deep === true ? 'true' : 'false'
   const limit = Math.max(10, Math.min(400, Math.floor(options.limit ?? 150)))
   return `(() => {
-${PRELUDE}
+${PAGE_PRELUDE}
 const filter = ${filter};
 const deep = ${deep};
 const { out, frames } = collect(deep);
@@ -245,7 +245,7 @@ export function resolveScript(query: TargetQuery, timeoutMs = 4000): string {
     nth: query.nth ?? 0,
   })
   return `(async () => {
-${PRELUDE}
+${PAGE_PRELUDE}
 const q = ${q};
 const fail = (reason, candidates) => ({ ok: false, reason, x: 0, y: 0, label: '', role: '', tag: '', editable: false, checked: null, covered: '', candidates: candidates || [] });
 const norm = (s) => clean(s).toLowerCase();
