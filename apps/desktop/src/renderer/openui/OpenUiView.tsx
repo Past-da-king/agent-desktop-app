@@ -133,7 +133,7 @@ function Comp({ n, cx }: { n: UiNode; cx: Cx }): JSX.Element | null {
     case 'MarkDownRenderer': {
       const text = str(n, 'textMarkdown')
       return text === null ? null : (
-        <div className={`oui-text md v-${str(n, 'variant') ?? 'clear'}`}>
+        <div className={`oui-text oui-md v-${str(n, 'variant') ?? 'clear'}`}>
           <Markdown text={text} />
         </div>
       )
@@ -180,7 +180,7 @@ function Comp({ n, cx }: { n: UiNode; cx: Cx }): JSX.Element | null {
       const items = nodes(n, 'items')
       const numbered = str(n, 'variant') !== 'image'
       return (
-        <div className={`oui-list${str(n, 'size') === 'small' ? ' small' : ''}`}>
+        <div className={`oui-list${str(n, 'size') === 'small' ? ' oui-list-small' : ''}`}>
           {items.map((item, i) => (
             <ListRow key={i} index={i + 1} item={item} numbered={numbered} cx={cx} />
           ))}
@@ -190,7 +190,7 @@ function Comp({ n, cx }: { n: UiNode; cx: Cx }): JSX.Element | null {
     case 'Steps': {
       const items = nodes(n, 'items')
       return (
-        <div className="oui-list steps">
+        <div className="oui-list oui-steps">
           {items.map((s, i) => (
             <ListRow
               key={i}

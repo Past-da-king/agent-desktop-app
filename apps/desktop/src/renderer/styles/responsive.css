@@ -10,7 +10,7 @@
   .shell .me,.shell .acct{justify-content:center}
   .shell .badge.pos{display:block;position:absolute;top:2px;right:6px;min-width:18px;height:18px;line-height:18px;font-size:12px;padding:0 5px}
   .home{grid-template-columns:minmax(0,1fr)}
-  .md{grid-template-columns:minmax(0,1fr)}
+  .list-detail{grid-template-columns:minmax(0,1fr)}
   .detail{position:static}
   .two{grid-template-columns:minmax(0,1fr)}
   .tb-brand,.tb-right{min-width:0}

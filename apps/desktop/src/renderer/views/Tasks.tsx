@@ -151,7 +151,7 @@ export function Tasks(): JSX.Element {
             }
           />
         ) : (
-          <div className="md">
+          <div className="list-detail">
             <div>
               <div className="list">
                 {tasks.map((task) => (

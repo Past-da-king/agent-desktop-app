@@ -405,7 +405,7 @@ export function Memory(): JSX.Element {
           }
         />
       ) : (
-        <div className="md">
+        <div className="list-detail">
           <div>
             <MemoryUpkeep />
             {only !== null ? (

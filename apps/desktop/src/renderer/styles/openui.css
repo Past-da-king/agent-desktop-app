@@ -43,6 +43,11 @@
 .oui-letter,.oui-li-n{font:700 14px/1 var(--font)}
 
 /* ---- Text, sections, callouts ---- */
+/* Markdown boxes (TextContent, MarkDownRenderer, prose beside a card) are plain block flow, said here on purpose: a
+   page or card rule aimed at something else (a grid layout, a `> *`) must never turn paragraphs into columns.
+   Their blocks stack at full width; only a list lays out its items, and only as a column. test/markdown-stack.test.ts */
+.oui .oui-text,.a-msg .a-prose{display:block;width:100%;min-width:0;max-width:100%}
+.oui-text>p,.oui-text>.md-h,.oui-text>.md-code,.oui-text>.md-hr,.a-prose>p,.a-prose>.md-h,.a-prose>.md-code,.a-prose>.md-hr{display:block;width:auto;max-width:100%;float:none}
 .oui-text{font-size:15px;line-height:1.55;overflow-wrap:anywhere}
 .oui-text p+p{margin-top:8px}
 .oui-text.s-small{font-size:14px;color:var(--on-sv)}
