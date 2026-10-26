@@ -174,19 +174,19 @@ export function VoiceSettings(): JSX.Element {
             <VoiceIcon name="wave" size={22} />
           </div>
           <div className="rt">
-            <b>Keep the audio of your recordings</b>
-            <span>Every dictation and recording is saved as you speak, so a crash or restart never loses it. Its words are always kept.</span>
+            <b>Keep recordings&apos; audio</b>
+            <span>Saved as you speak, so a crash never loses it. The words are always kept.</span>
           </div>
           <select
             className="rule-sel"
-            aria-label="Keep the audio of your recordings"
+            aria-label="Keep recordings' audio"
             value={settings?.recordingAudioKeep ?? 'today'}
             onChange={(event) => {
               void save({ recordingAudioKeep: event.target.value as 'today' | 'week' | 'always' })
             }}
           >
-            <option value="today">Until the end of the day</option>
-            <option value="week">For a week</option>
+            <option value="today">Today</option>
+            <option value="week">A week</option>
             <option value="always">Always</option>
           </select>
         </div>
