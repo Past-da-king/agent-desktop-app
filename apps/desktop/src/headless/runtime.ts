@@ -73,6 +73,7 @@ import { headlessFacts } from './devices'
 import { readConfig } from './node-config'
 import { relayTool, type RelayTarget } from './relay-tool'
 import { FileKeyCipher } from './file-cipher'
+import { startPresence } from '../main/presence/start'
 
 /** What a headless node can do on its own device. Device commands (protocol s5.2) plug in through these. */
 export interface DeviceActions {
@@ -354,9 +355,24 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     profiles: apps.profiles,
     learnedNames,
   })
+  // Where he is, on every message he sends (presence/presence.ts). No window and no keyboard here: no focus or idle.
+  const presenceHandle = startPresence({
+    store,
+    dataDir: dir,
+    apps: options.quiet === true ? null : { activeAccounts: (list) => apps.activeAccounts(list), backend: () => apps.backend(), rulesFor: (id) => connectedApps.rulesFor(id) },
+    selfId: () => devicesState.sync?.selfId() ?? '',
+    server: true,
+    emitEvent: (input) => {
+      const stored = workers.addEvent(input.source, input)
+      if (stored !== null) void eventRouter?.offer(stored)
+    },
+    log: (message, detail) => logger.info(message, detail),
+  })
+  const presence = presenceHandle.presence
   const tools = guardTools(browserTools([
     ...buildToolset({
       appControl,
+      presence,
       store,
       settings,
       ...browserDep,
@@ -424,6 +440,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       selfOrigin: () => devicesState.sync?.selfOrigin() ?? null,
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },
+    presence,
     store,
     settings,
     secrets,
@@ -649,6 +666,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       stopped = true
       for (const fn of stopHooks.splice(0)) await Promise.resolve(fn()).catch(() => undefined)
       scheduler.stop()
+      presenceHandle.stop()
       theMemory.stop()
       router.stop()
       supervisor.stopAll()

@@ -151,6 +151,11 @@ export interface RunnerDeps {
   /** How long a joined message may wait to be read before it is started alongside instead. */
   joinPickupMs?: number
   devices?: RunnerDevices
+  /**
+   * Where the person is right now (presence/presence.ts): one note in front of each of his own messages in the main
+   * thread and project chats, never in the system prompt. Left out: no note.
+   */
+  presence?: { note(chat: string, meta: string): Promise<string> }
 }
 
 interface ActivityRow {
@@ -220,6 +225,7 @@ export class Runner {
   private readonly joinPickupMs: number
   private readonly locks: BrainLocks | undefined
   private readonly devices: RunnerDevices | undefined
+  private readonly presence: RunnerDeps['presence']
   /** The app is quitting: a turn cut off now keeps its lease running, so the next start resumes it. */
   private disposing = false
 
@@ -262,6 +268,7 @@ export class Runner {
     this.joinPickupMs = deps.joinPickupMs ?? JOIN_PICKUP_MS
     this.locks = deps.locks
     this.devices = deps.devices
+    this.presence = deps.presence
     // Every card row is a card the person can answer, whoever wrote it: this runner, a helper (runtime/helpers.ts),
     // a project agent, or a row synced from another device. Before 22 Oct 2026 only the runner's own cards were
     // tracked, so a helper's question or approval was counted on the rail ("Waiting for you", 2) but never drawn
@@ -380,7 +387,20 @@ export class Runner {
     }
 
     const row = await this.addUserItem(line.chat, clean, JSON.stringify({ ...meta, route: 'pending' }))
-    await this.routeBusy(line, row.id, clean, prepared, attachments.length > 0)
+    // His own message joining running work carries where he is too (it is read at the run's next step).
+    const presence = via === undefined ? await this.presenceNote(line.chat, row.meta) : ''
+    await this.routeBusy(line, row.id, clean, prepared, attachments.length > 0, presence)
+  }
+
+  /** The presence note for one of his messages (already stored), or '' when there is none. */
+  private async presenceNote(chat: string, meta: string): Promise<string> {
+    const presence = this.presence
+    if (presence === undefined) return ''
+    try {
+      return await presence.note(chat, meta)
+    } catch {
+      return ''
+    }
   }
 
   /**
@@ -404,7 +424,7 @@ export class Runner {
   }
 
   /** Same task joins, different work goes alongside; see chat-route.ts. */
-  private async routeBusy(line: ChatLine, itemId: string, clean: string, prepared: PreparedMessage, hasFiles: boolean): Promise<void> {
+  private async routeBusy(line: ChatLine, itemId: string, clean: string, prepared: PreparedMessage, hasFiles: boolean, presence = ''): Promise<void> {
     const canAlongside = this.helpers?.alongside !== undefined
     const decision = canAlongside
       ? await decideRoute({ goal: line.goal, text: clean, recent: await this.recentLines(line.chat), hasFiles }, this.classifier())
@@ -413,7 +433,7 @@ export class Runner {
     if (decision !== null && decision.route === 'alongside' && line.running) {
       if (await this.startAlongside(line, itemId, prepared, '')) return
     }
-    await this.join(line, itemId, prepared)
+    await this.join(line, itemId, prepared, presence)
   }
 
   private async startAlongside(line: ChatLine, itemId: string, prepared: PreparedMessage, why: string): Promise<boolean> {
@@ -438,14 +458,15 @@ export class Runner {
   }
 
   /** The message joins the running work at its next step, or starts the next turn if the run just ended. */
-  private async join(line: ChatLine, itemId: string, prepared: PreparedMessage): Promise<void> {
+  private async join(line: ChatLine, itemId: string, prepared: PreparedMessage, presence = ''): Promise<void> {
+    const lead = presence === '' ? '' : `${presence}\n`
     if (!line.running) {
       await this.patchMeta(itemId, { route: '' })
-      await this.begin(line, prepared.text, prepared.images, null)
+      await this.begin(line, lead + prepared.text, prepared.images, null)
       return
     }
     const pictures = prepared.images.length > 0 ? `\n(Pictures attached: ${prepared.images.join(', ')}. Look at them with your file tools.)` : ''
-    line.steer.push({ text: joinNote(prepared.text) + pictures, images: prepared.images, itemId, at: this.now() })
+    line.steer.push({ text: lead + joinNote(prepared.text) + pictures, images: prepared.images, itemId, at: this.now() })
     await this.patchMeta(itemId, { route: 'join' })
     this.emitFor(line.chat, { type: 'chat_changed' })
     // On a plan the SDK cannot read a note mid-turn: pause the turn now and resume the same session with it,
@@ -816,7 +837,9 @@ export class Runner {
       // The lease is stored before anyone hears the turn started, so a brain that dies right after can be taken over.
       await this.devices?.leases?.settled?.()
       this.emitFor(line.chat, { type: 'run_started' })
-      const prompt = await this.withContextNotes(line, text)
+      // His own message (not another agent's, not a card answer) carries where he is right now.
+      const presence = userRow !== null && parseMeta(userRow.meta)['via'] === undefined ? await this.presenceNote(line.chat, userRow.meta) : ''
+      const prompt = await this.withContextNotes(line, text, presence)
       error = await this.drive(line, prompt, images, controller.signal)
     } finally {
       if (lease !== null && !this.disposing) this.devices?.leases?.end(lease, error === undefined ? 'done' : 'failed')
@@ -917,7 +940,7 @@ export class Runner {
    * What the chat's agent should know before this turn: separate runs that finished alongside since its last
    * turn, and for a branched chat with no transcript of its own, the conversation it was branched from.
    */
-  private async withContextNotes(line: ChatLine, text: string): Promise<string> {
+  private async withContextNotes(line: ChatLine, text: string, presence = ''): Promise<string> {
     const rows = await listWhere(this.store, 'chat_item', { chat: line.chat })
     const notes: string[] = []
 
@@ -943,6 +966,8 @@ export class Runner {
       )
       await this.patchMeta(row.id, { told: true })
     }
+    // Last, right before his words: where he is as he sends them.
+    if (presence !== '') notes.push(presence)
     return notes.length === 0 ? text : `${notes.join('\n\n')}\n\n${text}`
   }
 

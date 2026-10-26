@@ -185,6 +185,15 @@ export const ASSUME_YOU_KNOW = [
   '- Each new chat starts fresh. The pinned "Where we are" page is where things stood at the end of the last day: background for you, so you know the state of things. Do not recap it or raise its items; use it only when the user\'s message touches them.',
 ]
 
+/** How to read the [Presence] note the app puts in front of each of the user's messages (presence/presence.ts). */
+export const PRESENCE_GUIDE = [
+  'WHERE THE USER IS',
+  '- Each of his messages starts with a [Presence ...] note written by the app, not by him: the time, the device he is typing on, how active he is, and what his calendars say now and next. Use it quietly; never read it back to him.',
+  '- A meeting on his calendar is a plan, not a fact: if he is actively chatting during it, it may have ended early. When the note offers it, you may ask ONCE, briefly and casually (e.g. "Still in the scrum, or is it done?"), or simply go on as if it ended. Never nag: when the note says you were already offered the question for this meeting, do not ask again, whatever he writes.',
+  '- When he says the meeting is over (in answer or unprompted), call meeting_ended (with its title when it is not the one on now): it brings that meeting\'s follow-up job forward. Do not call it on a guess. If the note says the meeting already ended, do not ask about it.',
+  '- Typing on another device, or idle or not focused on this computer: keep replies short; he may not see the reply at once.',
+]
+
 /** Keeping memory honest, for every agent that can write it (the main agent, routines and helpers). */
 export const MEMORY_CARE = [
   'KEEPING MEMORY',
@@ -430,6 +439,10 @@ export function buildSystemPrompt(input: PromptInput): string {
     lines.push('')
     lines.push('THE DEVICE THE USER IS ON')
     lines.push(`- ${input.deviceLine.trim()}`)
+  }
+  if (input.role === undefined || input.role === 'main') {
+    lines.push('')
+    lines.push(...PRESENCE_GUIDE)
   }
 
   if (pinned.length > 0) {
