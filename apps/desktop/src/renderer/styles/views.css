@@ -206,7 +206,7 @@
 .br-reason{font-size:12px;line-height:1.5;color:var(--on-sv);margin:10px 2px 0}
 
 /* ---------- tasks / memory / routines / connections / prefs ---------- */
-.md{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:24px;align-items:start}
+.list-detail{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:24px;align-items:start}
 .detail{background:var(--s-low);border-radius:var(--r-xl);padding:30px 32px;display:flex;flex-direction:column;gap:20px;position:sticky;top:0;min-width:0;overflow-wrap:anywhere}
 .detail .h2{font-size:28px}
 .kv{display:flex;flex-direction:column;gap:4px}
