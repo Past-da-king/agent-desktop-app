@@ -532,7 +532,7 @@ export function formatUpload(outcome: UploadOutcome): string {
   const names = outcome.files.map((file) => `${file.name} (${kb(file.size)})`).join(', ')
   const via =
     outcome.route === 'input'
-      ? `set in ${outcome.how} of ${outcome.target}`
+      ? `set in ${outcome.how}, for ${outcome.target}`
       : outcome.route === 'chooser'
         ? `answered the file chooser ${outcome.target} opened`
         : `dropped onto ${outcome.target}`
