@@ -131,7 +131,7 @@ describe('looksSnapped', () => {
 
 describe('a restart does not grow the window', () => {
   it('saves the size it was opened at, not the frame-padded size Windows reports at 125%', () => {
-    // Measured on the built app: created at 1200x700, getBounds() says 1202x702.
+    // Measured on the built app at 125%: set to 1200x700, getBounds() says 1202x702 (and 1536x635 says 1538x637).
     const delta = frameDelta({ width: 1200, height: 700 }, { width: 1202, height: 702 })
     let saved = { width: 1200, height: 700, x: 100, y: 50, maximized: false }
     for (let restart = 0; restart < 20; restart++) {
