@@ -18,10 +18,10 @@ export const QUICK_ASK_ROUTE = '#/quick-window'
 
 /** Where the quick chat box opens: centred across the screen the mouse is on, a little above the middle. */
 export function quickAskPosition(workArea: { x: number; y: number; width: number; height: number }): { x: number; y: number } {
-  return {
-    x: Math.round(workArea.x + (workArea.width - QUICK_ASK_WIDTH) / 2),
-    y: Math.round(workArea.y + Math.max(0, workArea.height * 0.3 - QUICK_ASK_HEIGHT / 2)),
-  }
+  // Never left of or above the screen, even one narrower or shorter than the box.
+  const x = workArea.x + Math.max(0, (workArea.width - QUICK_ASK_WIDTH) / 2)
+  const y = workArea.y + Math.max(0, Math.min(workArea.height * 0.3 - QUICK_ASK_HEIGHT / 2, workArea.height - QUICK_ASK_HEIGHT))
+  return { x: Math.round(x), y: Math.round(y) }
 }
 
 /** The slice of Electron's `globalShortcut` the binder needs. */
@@ -209,6 +209,13 @@ export class QuickAskWindow {
     } catch {
       window.center()
     }
+  }
+
+  /** A screen was unplugged or changed size: an open box moves back onto a screen that exists. */
+  refit(): void {
+    const window = this.window
+    if (window === null || window.isDestroyed() || !window.isVisible()) return
+    this.place(window)
   }
 
   hide(): void {

@@ -25,10 +25,12 @@ export interface PillOptions {
 
 /** Where the pill goes: centred along the bottom of the work area (above the taskbar). */
 export function pillBounds(workArea: { x: number; y: number; width: number; height: number }): { x: number; y: number; width: number; height: number } {
+  // A screen narrower than the pill gets a narrower pill (its page centres itself), never one hanging off the side.
+  const width = Math.min(PILL_WIDTH, Math.max(0, Math.floor(workArea.width)))
   return {
-    x: Math.round(workArea.x + (workArea.width - PILL_WIDTH) / 2),
-    y: Math.round(workArea.y + workArea.height - PILL_HEIGHT - BOTTOM_GAP),
-    width: PILL_WIDTH,
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + Math.max(0, workArea.height - PILL_HEIGHT - BOTTOM_GAP)),
+    width,
     height: PILL_HEIGHT,
   }
 }
@@ -60,6 +62,18 @@ export class PillWindow implements PillLike {
     if (this.loaded) {
       window.showInactive()
       window.setAlwaysOnTop(true, 'screen-saver')
+    }
+  }
+
+  /** A screen was unplugged or changed size: a showing pill moves back onto a screen that exists. */
+  refit(): void {
+    const window = this.window
+    if (!this.wantVisible || window === null || window.isDestroyed()) return
+    try {
+      const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+      window.setBounds(pillBounds(display.workArea))
+    } catch {
+      // Screen information can be missing for a moment while displays change; the next show places it.
     }
   }
 

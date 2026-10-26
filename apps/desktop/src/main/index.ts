@@ -13,9 +13,12 @@ import {
   nativeImage,
   powerMonitor,
   safeStorage,
+  screen,
   shell,
   type OpenDialogOptions,
+  type Rectangle,
 } from 'electron'
+import { fitWindowToDisplay, looksSnapped, sameRect, workAreasPrimaryFirst } from './window-fit'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
 import { FileBrainLocks } from './brain-locks'
@@ -271,9 +274,99 @@ function readWindowState(file: string): WindowState {
   }
 }
 
+const WINDOW_MIN_WIDTH = 360
+const WINDOW_MIN_HEIGHT = 600
+const WINDOW_FIT = { minWidth: WINDOW_MIN_WIDTH, minHeight: WINDOW_MIN_HEIGHT, defaultWidth: 1280, defaultHeight: 820 }
+
+/** The last rectangle he gave the window himself (moved or resized, not snapped, maximised or minimised). */
+let lastFreeBounds: Rectangle | null = null
+
+function currentWorkAreas(): Rectangle[] {
+  try {
+    return workAreasPrimaryFirst(screen.getPrimaryDisplay(), screen.getAllDisplays())
+  } catch {
+    return []
+  }
+}
+
+function workAreaOf(bounds: Rectangle): Rectangle | null {
+  try {
+    return screen.getDisplayMatching(bounds).workArea
+  } catch {
+    return null
+  }
+}
+
+/** Where the window opens: the saved rectangle made to fit the screens there are now (window-fit.ts). */
+function fittedWindowState(saved: WindowState): WindowState {
+  const fit = fitWindowToDisplay(saved, currentWorkAreas(), WINDOW_FIT)
+  return { width: fit.width, height: fit.height, x: fit.x, y: fit.y, maximized: fit.maximized }
+}
+
+/** Remember the size he chose, not a snapped half of the screen (a snapped window's normal bounds are the snap). */
+function trackFreeBounds(win: BrowserWindow): void {
+  let timer: NodeJS.Timeout | null = null
+  const note = (): void => {
+    if (timer !== null) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      if (win.isDestroyed() || win.isMaximized() || win.isMinimized() || win.isFullScreen()) return
+      const bounds = win.getBounds()
+      const area = workAreaOf(bounds)
+      if (area !== null && looksSnapped(bounds, area)) return
+      lastFreeBounds = bounds
+    }, 400)
+  }
+  win.on('move', note)
+  win.on('resize', note)
+  win.on('closed', () => {
+    if (timer !== null) clearTimeout(timer)
+  })
+}
+
+/** A screen was unplugged, added or changed size or scale: every window of ours moves fully back onto one. */
+function refitWindowsToScreens(): void {
+  const win = mainWindow
+  if (win !== null && !win.isDestroyed() && !win.isMaximized() && !win.isMinimized() && !win.isFullScreen()) {
+    const bounds = win.getBounds()
+    const fit = fitWindowToDisplay({ ...bounds, maximized: false }, currentWorkAreas(), { ...WINDOW_FIT, allowMaximize: false })
+    if (fit.x !== null && fit.y !== null) {
+      const next = { x: fit.x, y: fit.y, width: fit.width, height: fit.height }
+      if (!sameRect(next, bounds)) {
+        win.setBounds(next)
+        logger.info('Window moved back onto a screen', { from: JSON.stringify(bounds), to: JSON.stringify(next) })
+      }
+    }
+  }
+  quickAsk?.refit()
+  dictation?.pill.refit()
+}
+
+let watchingScreens = false
+function watchScreens(): void {
+  if (watchingScreens) return
+  watchingScreens = true
+  let timer: NodeJS.Timeout | null = null
+  // Windows sends a burst of these while it rearranges; act once it settles.
+  const later = (): void => {
+    if (timer !== null) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      refitWindowsToScreens()
+    }, 500)
+  }
+  screen.on('display-removed', later)
+  screen.on('display-added', later)
+  screen.on('display-metrics-changed', later)
+}
+
 function writeWindowState(file: string, win: BrowserWindow): void {
   try {
-    const bounds = win.getNormalBounds()
+    let bounds = win.getNormalBounds()
+    if (!win.isMaximized() && lastFreeBounds !== null) {
+      const area = workAreaOf(bounds)
+      if (area !== null && looksSnapped(bounds, area)) bounds = lastFreeBounds
+    }
     const state: WindowState = {
       width: bounds.width,
       height: bounds.height,
@@ -361,14 +454,19 @@ function startSmokeCheck(win: BrowserWindow): void {
 }
 
 function createWindow(stateFile: string): BrowserWindow {
-  const saved = readWindowState(stateFile)
+  const stored = readWindowState(stateFile)
+  // Never restored blindly: the screen it was saved on may be gone, smaller, or the rectangle a snap (window-fit.ts).
+  const saved = fittedWindowState(stored)
+  if (saved.x !== stored.x || saved.y !== stored.y || saved.width !== stored.width || saved.height !== stored.height) {
+    logger.info('Window fitted to the screen', { saved: JSON.stringify(stored), opens: JSON.stringify(saved) })
+  }
   const win = new BrowserWindow({
     title: windowTitle(),
     width: saved.width,
     height: saved.height,
     ...(saved.x !== null && saved.y !== null ? { x: saved.x, y: saved.y } : {}),
-    minWidth: 360,
-    minHeight: 600,
+    minWidth: Math.min(WINDOW_MIN_WIDTH, saved.width),
+    minHeight: Math.min(WINDOW_MIN_HEIGHT, saved.height),
     frame: false,
     titleBarStyle: 'hidden',
     // Windows 11 snap layouts and Aero snap keep working on a frameless window with a thick frame.
@@ -391,8 +489,18 @@ function createWindow(stateFile: string): BrowserWindow {
   })
 
   mainWindow = win
+  if (saved.x !== null && saved.y !== null) {
+    lastFreeBounds = { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
+  }
+  trackFreeBounds(win)
+  watchScreens()
 
   win.once('ready-to-show', () => {
+    // A screen scale other than the one it was saved at can make Windows resize it on creation: put it back.
+    if (saved.x !== null && saved.y !== null) {
+      const want = { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
+      if (!sameRect(win.getBounds(), want)) win.setBounds(want)
+    }
     if (saved.maximized) win.maximize()
     win.show()
     logger.info('Window shown', { ms: Math.round(process.uptime() * 1000) })
@@ -480,6 +588,8 @@ function showMainWindow(): void {
   }
   if (!mainWindow.isVisible()) mainWindow.show()
   if (mainWindow.isMinimized()) mainWindow.restore()
+  // Hidden in the tray while a screen went away: it comes back onto one that exists.
+  refitWindowsToScreens()
   mainWindow.focus()
 }
 
