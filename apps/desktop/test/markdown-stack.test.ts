@@ -153,10 +153,10 @@ function reaches(rule: CssRule, el: El): boolean {
  * a project chat in the side panel, the report beside the chat and the report reader dialog.
  */
 const WHERE: Record<string, string[]> = {
-  'the main chat': ['html', 'body', 'div', 'div.win', 'div.shell.panel', 'main.sheet.own-scroll', 'div.chat', 'div.thread', 'div.thread-in', 'div.a-msg-wrap'],
-  'a chat in the side panel': ['html', 'body', 'div', 'div.win', 'div.shell.panel', 'aside.panel-w.panel-helper', 'div.chat', 'div.thread', 'div.thread-in', 'div.a-msg-wrap'],
-  'the report beside the chat': ['html', 'body', 'div', 'div.win', 'div.shell.panel', 'aside.panel-w.panel-helper', 'div.hp-stage.rp-stage', 'div.hp-stage-body', 'div.rp-col'],
-  'the report reader': ['html', 'body', 'div', 'div.scrim', 'div.dialog', 'div.reader'],
+  'the main chat': ['html.native', 'body', 'div', 'div.win', 'div.stage', 'div.shell.panel', 'main.sheet.own-scroll', 'div.chat', 'div.thread', 'div.thread-in', 'div.a-msg-wrap'],
+  'a chat in the side panel': ['html.native', 'body', 'div', 'div.win', 'div.stage', 'div.shell.panel', 'aside.panel-w.panel-helper', 'div.chat', 'div.thread', 'div.thread-in', 'div.a-msg-wrap'],
+  'the report beside the chat': ['html.native', 'body', 'div', 'div.win', 'div.stage', 'div.shell.panel', 'aside.panel-w.panel-helper', 'div.hp-stage.rp-stage', 'div.hp-stage-body', 'div.rp-col'],
+  'the report reader': ['html.native', 'body', 'div', 'div.scrim', 'div.dialog', 'div.reader'],
 }
 
 /** Puts rendered markup inside one of the chains above. */
