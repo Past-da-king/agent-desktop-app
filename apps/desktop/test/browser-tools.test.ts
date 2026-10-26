@@ -16,7 +16,9 @@ class FakeBrowser implements BrowserDriver {
   lastDy = 0
   lastQuery = { text: '', selector: '' }
   lastSeconds = 0
-  lastUpload = { index: -1, path: '' }
+  lastUpload: { index: number | undefined; path: string | undefined } = { index: -1, path: '' }
+  lastTarget: Record<string, unknown> = {}
+  lastPaths: string[] = []
 
   async open(url: string): Promise<string> {
     this.calls.push(`open:${url}`)
@@ -80,9 +82,11 @@ class FakeBrowser implements BrowserDriver {
     return '/tmp/agent-browser/shot.png'
   }
 
-  async upload(index: number, path: string): Promise<string> {
-    this.calls.push(`upload:${index}:${path}`)
-    this.lastUpload = { index, path }
+  async upload(target: { index?: number; name?: string; role?: string; nth?: number }, paths: string[]): Promise<string> {
+    this.calls.push(`upload:${target.index ?? target.name}:${paths.join(',')}`)
+    this.lastUpload = { index: target.index, path: paths[0] }
+    this.lastTarget = target
+    this.lastPaths = paths
     return 'Uploaded'
   }
 
@@ -283,6 +287,12 @@ describe('browser tools', () => {
     expect(summary).toBe('Upload report.pdf.env to the page?')
     expect(result).toBe('Uploaded')
     expect(browser.lastUpload).toEqual({ index: 2, path: '/tmp/report.pdf.env' })
+
+    // By name, as browser_act takes it, with several files; no target at all is a clear answer.
+    expect(await upload.run({ name: 'Upload resume', role: 'button', nth: 2, paths: ['/tmp/a.pdf', '/tmp/b.pdf'] }, testContext())).toBe('Uploaded')
+    expect(browser.lastTarget).toEqual({ name: 'Upload resume', role: 'button', nth: 2 })
+    expect(browser.lastPaths).toEqual(['/tmp/a.pdf', '/tmp/b.pdf'])
+    expect(await upload.run({ path: '/tmp/a.pdf' }, testContext())).toMatch(/^Say which element/)
   })
 
   it('goes back and reads the current page', async () => {

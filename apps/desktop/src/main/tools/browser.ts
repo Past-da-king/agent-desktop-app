@@ -255,25 +255,44 @@ function uploadTool(deps: BrowserToolDeps): Tool {
     spec: {
       name: 'browser_upload',
       description:
-        "Upload a file from this computer into the page. Give the file's path and the upload button or file field by its [number] from the outline.",
-      schema: schema(['index', 'path'], {
+        "Upload a file from this computer into the page. Target the upload button, label, drop area or file field the way browser_act does: by name (with role and nth), or by [number]. It finds the real file field (hidden, in a label, in shadow DOM or a frame), or answers the file chooser the page opens when the button is clicked, or drops the file on a drop area, then checks the page really holds it. It answers ERROR when the file did not land.",
+      schema: schema([], {
         index: int('Element number of the upload button or file field'),
+        name: str('The element name as the snapshot shows it (best: found again live)'),
+        role: str('button, link, textbox... to tell elements with the same name apart'),
+        nth: int('Which one when several match, 1 is the first'),
         path: str('Full path of the file on this computer'),
+        paths: { type: 'array', items: { type: 'string' }, description: 'Several files at once, for a field that takes more than one' },
       }),
     },
     run: async (input, ctx) => {
-      const index = requiredIndex(input['index'])
-      if (index === null) return 'Pass the number of the upload button or file field.'
-      const path = text(input['path']).trim()
-      if (path === '') return 'Pass the full path of the file to upload.'
-      if (path.length > MAX_PATH) return 'That path is too long.'
+      const index = optionalIndex(input['index'])
+      if (index === 'bad') return 'Pass the number of the upload button or file field, or its name.'
+      const name = text(input['name']).trim()
+      if (index === null && name === '') return 'Say which element: the upload button, drop area or file field by its name or its [number].'
+      const many = Array.isArray(input['paths']) ? input['paths'].map((entry) => text(entry).trim()) : []
+      const paths = [text(input['path']).trim(), ...many].filter((entry, at, all) => entry !== '' && all.indexOf(entry) === at)
+      if (paths.length === 0) return 'Pass the full path of the file to upload.'
+      if (paths.some((entry) => entry.length > MAX_PATH)) return 'That path is too long.'
       // Uploading the file it was asked to is ordinary work (main/ask-rule.ts); a key, password store or secrets
       // file leaving this computer still asks.
-      if (secretFile(path)) {
+      for (const path of paths.filter(secretFile)) {
         const approved = await ctx.approve(`Upload ${fileLabel(path)} to the page?`, path)
         if (!approved) return 'The user declined the upload.'
       }
-      return call(() => deps.browser.upload(index, path))
+      const role = text(input['role']).trim()
+      const nth = optionalIndex(input['nth'])
+      return call(() =>
+        deps.browser.upload(
+          {
+            ...(index === null ? {} : { index }),
+            ...(name === '' ? {} : { name }),
+            ...(role === '' ? {} : { role }),
+            ...(typeof nth === 'number' ? { nth } : {}),
+          },
+          paths,
+        ),
+      )
     },
   }
 }
