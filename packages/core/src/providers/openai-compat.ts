@@ -61,6 +61,7 @@ export class OpenAiCompatProvider implements LlmProvider {
     tools: ToolSpec[],
     model: string,
     maxTokens = 4096,
+    signal?: AbortSignal,
   ): Promise<Completion> {
     const wire: JsonObject[] = [{ role: 'system', content: system }]
     const echoReasoning = wantsReasoningBack(this.name, messages)
@@ -87,6 +88,7 @@ export class OpenAiCompatProvider implements LlmProvider {
     check(this.baseUrl, this.allowHttp)
     const res = await postJson(`${trimSlash(this.baseUrl)}/chat/completions`, headers, body, {
       fetchImpl: this.fetchImpl,
+      ...(signal === undefined ? {} : { signal }),
     })
     const choices = Array.isArray(res.choices) ? res.choices : []
     const choice = asObject(choices[0])

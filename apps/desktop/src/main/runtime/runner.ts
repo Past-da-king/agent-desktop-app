@@ -8,6 +8,7 @@
 import {
   AgentLoop,
   MAIN_CHAT,
+  NoteBell,
   PROVIDERS,
   ProviderException,
   msgFromJson,
@@ -68,6 +69,8 @@ import type { MessageOrigin } from '../devices/types'
 import type { LeaseHook } from './turns'
 import { MAIN_IDLE_MS, runEnded } from '../browser/run-tabs'
 import { promptRulesFor } from './prompt-rules'
+import { isInterruptible } from './read-only'
+import { withNoteTools } from './note-tools'
 
 /** The browser owner of a main-agent run: the main thread, a chat of its own, or the routine run. */
 export function browserOwnerOf(role: 'main' | 'routine', chat: string): string {
@@ -175,6 +178,11 @@ interface Steer {
   /** The person's chat row, for a typed message (helper results and card answers have none). */
   itemId?: string
   at: number
+  /**
+   * His own words (a typed message, a tap, an answer): read NOW, never after the step in flight (26 Oct 2026). A step
+   * that only reads is cut off for it; one that changes something finishes and the message rides with its result.
+   */
+  urgent?: boolean
 }
 
 /**
@@ -194,6 +202,20 @@ interface ChatLine {
   goal: string
   /** Cards this chat's run is waiting on right now. */
   waitingOn: Set<string>
+  /** The approval cards among them: a run waiting on an approval is never paused (the card decides an action). */
+  approving: Set<string>
+  /** Rung when a message of his arrives, so the step in flight is cut off (API loop) or the plan turn paused. */
+  bell: NoteBell
+  /** When he last sent this chat a message: a second one soon after is about the same task by default. */
+  lastUserAt: number
+  /** A plan turn's tool calls in flight: an app tool's (mcp) or the engine's own. */
+  inflight: Map<string, { name: string; input: Record<string, unknown>; mcp: boolean }>
+  /** A message of his is waiting for a changing step of the plan turn to finish, then the turn is paused for it. */
+  pauseWhenSafe: boolean
+  /** Entries handed to the run whose rows are not yet marked delivered. */
+  taken: Steer[]
+  /** The last transcript row written, so a note riding with it can be stored with it. */
+  lastTurnId: string
 }
 
 /** A joined message the run has not read after this long is started alongside instead, so it is never stuck. */
@@ -347,7 +369,23 @@ export class Runner {
   private line(chat: string = MAIN_CHAT): ChatLine {
     let line = this.lines.get(chat)
     if (line === undefined) {
-      line = { chat, running: false, controller: null, turn: null, paused: false, steer: [], goal: '', waitingOn: new Set() }
+      line = {
+        chat,
+        running: false,
+        controller: null,
+        turn: null,
+        paused: false,
+        steer: [],
+        goal: '',
+        waitingOn: new Set(),
+        approving: new Set(),
+        bell: new NoteBell(),
+        lastUserAt: 0,
+        inflight: new Map(),
+        pauseWhenSafe: false,
+        taken: [],
+        lastTurnId: '',
+      }
       this.lines.set(chat, line)
     }
     return line
@@ -386,10 +424,12 @@ export class Runner {
       return
     }
 
+    const sinceLastMs = this.now() - line.lastUserAt
+    if (via === undefined) line.lastUserAt = this.now()
     const row = await this.addUserItem(line.chat, clean, JSON.stringify({ ...meta, route: 'pending' }))
-    // His own message joining running work carries where he is too (it is read at the run's next step).
+    // His own message joining running work carries where he is too (it is read at once, mid-step).
     const presence = via === undefined ? await this.presenceNote(line.chat, row.meta) : ''
-    await this.routeBusy(line, row.id, clean, prepared, attachments.length > 0, presence)
+    await this.routeBusy(line, row.id, clean, prepared, attachments.length > 0, presence, sinceLastMs)
   }
 
   /** The presence note for one of his messages (already stored), or '' when there is none. */
@@ -419,15 +459,16 @@ export class Runner {
       return
     }
     const row = await this.addUserItem(chat, clean, meta)
-    line.steer.push({ text: said, images: [], itemId: row.id, at: this.now() })
+    this.pushSteer(line, { text: said, images: [], itemId: row.id, at: this.now() })
     this.emitFor(chat, { type: 'chat_changed' })
   }
 
   /** Same task joins, different work goes alongside; see chat-route.ts. */
-  private async routeBusy(line: ChatLine, itemId: string, clean: string, prepared: PreparedMessage, hasFiles: boolean, presence = ''): Promise<void> {
+  private async routeBusy(line: ChatLine, itemId: string, clean: string, prepared: PreparedMessage, hasFiles: boolean, presence = '', sinceLastMs = 0): Promise<void> {
     const canAlongside = this.helpers?.alongside !== undefined
+    // Decided locally and at once; a model is asked only when nothing else settles it, and for a few seconds at most.
     const decision = canAlongside
-      ? await decideRoute({ goal: line.goal, text: clean, recent: await this.recentLines(line.chat), hasFiles }, this.classifier())
+      ? await decideRoute({ goal: line.goal, text: clean, recent: await this.recentLines(line.chat), hasFiles, sinceLastMs }, this.classifier())
       : null
 
     if (decision !== null && decision.route === 'alongside' && line.running) {
@@ -452,7 +493,8 @@ export class Runner {
       id = null
     }
     if (id === null) return false
-    await this.patchMeta(itemId, { route: 'alongside', helper: id, ...(why === '' ? {} : { routeWhy: why }) })
+    // Gone its own way: never redelivered to the run after a restart.
+    await this.patchMeta(itemId, { route: 'alongside', helper: id, delivered: '', ...(why === '' ? {} : { routeWhy: why }) })
     this.emitFor(line.chat, { type: 'chat_changed' })
     return true
   }
@@ -466,16 +508,63 @@ export class Runner {
       return
     }
     const pictures = prepared.images.length > 0 ? `\n(Pictures attached: ${prepared.images.join(', ')}. Look at them with your file tools.)` : ''
-    line.steer.push({ text: lead + joinNote(prepared.text) + pictures, images: prepared.images, itemId, at: this.now() })
-    await this.patchMeta(itemId, { route: 'join' })
+    // Stored as joined and not yet delivered first, so a restart before the run reads it delivers it then (restore).
+    await this.patchMeta(itemId, { route: 'join', delivered: false })
+    this.pushSteer(line, { text: lead + joinNote(prepared.text) + pictures, images: prepared.images, itemId, at: this.now(), urgent: true })
     this.emitFor(line.chat, { type: 'chat_changed' })
-    // On a plan the SDK cannot read a note mid-turn: pause the turn now and resume the same session with it,
-    // unless the run is waiting on the person (that card belongs to the work and must stay answerable).
-    if (line.turn !== null && line.waitingOn.size === 0) {
-      line.paused = true
-      line.turn.abort()
-    }
     this.watch(line, itemId, prepared)
+  }
+
+  /**
+   * A note for the running work. Never twice: a message already waiting or already handed over is not added again.
+   * His own words ring the bell: the API loop cuts off a step that only reads (and never one that changes something),
+   * a plan turn is paused now or as soon as its changing step is done (interruptPlan).
+   */
+  private pushSteer(line: ChatLine, entry: Steer): void {
+    if (entry.itemId !== undefined && (line.steer.some((each) => each.itemId === entry.itemId) || line.taken.some((each) => each.itemId === entry.itemId))) return
+    line.steer.push(entry)
+    if (entry.urgent !== true) return
+    line.bell.ring()
+    this.interruptPlan(line)
+  }
+
+  /** Is a message of his waiting for the run? */
+  private urgentWaiting(line: ChatLine): boolean {
+    return line.steer.some((entry) => entry.urgent === true)
+  }
+
+  /**
+   * A plan engine runs its own loop, so a message of his reaches it one of two ways, whichever is sooner and safe:
+   *  - an app tool that only reads is in flight: the bell cuts it off and the message rides with its result;
+   *  - otherwise (the model is thinking, or the engine's own read is running) the turn is paused now and the same
+   *    session resumed with the message (drive);
+   *  - a step that changes something (a write, a send, a push, a command that is not read-only) is never cut: an app
+   *    tool hands the message over with its result, an engine tool's end pauses the turn right after it.
+   * Never while an approval card waits: that card decides an action and must stay answerable.
+   */
+  private interruptPlan(line: ChatLine): void {
+    const turn = line.turn
+    if (turn === null || turn.signal.aborted || line.approving.size > 0 || !this.urgentWaiting(line)) {
+      if (!this.urgentWaiting(line)) line.pauseWhenSafe = false
+      return
+    }
+    const calls = [...line.inflight.values()]
+    if (calls.some((call) => !isInterruptible(call.name, call.input))) {
+      line.pauseWhenSafe = true
+      return
+    }
+    line.pauseWhenSafe = false
+    // An app tool that only reads is cut off by the bell, and the message goes in with its result.
+    if (calls.some((call) => call.mcp)) return
+    line.paused = true
+    turn.abort()
+  }
+
+  /** A plan turn's tool started or finished: track it, and pause for a waiting message once nothing changing runs. */
+  private planTool(line: ChatLine, id: string, name: string, input: Record<string, unknown>, running: boolean, mcp: boolean): void {
+    if (running) line.inflight.set(id, { name, input, mcp })
+    else line.inflight.delete(id)
+    if (!running && line.pauseWhenSafe) this.interruptPlan(line)
   }
 
   /** A joined message nobody has read after a long while goes alongside, so it is never left unanswered. */
@@ -492,8 +581,11 @@ export class Runner {
       const [entry] = line.steer.splice(index, 1)
       void this.startAlongside(line, itemId, prepared, 'slow').then((started) => {
         if (!started && entry !== undefined) {
-          if (line.running) line.steer.push(entry)
-          else void this.begin(line, entry.text, entry.images, null)
+          if (line.running) this.pushSteer(line, entry)
+          else {
+            void this.markDelivered([entry])
+            void this.begin(line, entry.text, entry.images, null)
+          }
         }
       })
     }, this.joinPickupMs)
@@ -501,8 +593,30 @@ export class Runner {
     this.timers.add(timer)
   }
 
+  /** Hand every waiting note to the run (once). Their rows are marked delivered by `delivered`. */
   private takeSteer(line: ChatLine): string[] {
-    return line.steer.splice(0).map((entry) => entry.text)
+    const entries = line.steer.splice(0)
+    line.taken.push(...entries)
+    if (entries.some((entry) => entry.urgent === true)) line.pauseWhenSafe = false
+    return entries.map((entry) => entry.text)
+  }
+
+  /** The notes handed over are in the run's transcript now: their rows say delivered, so a restart never resends them. */
+  private async delivered(line: ChatLine): Promise<void> {
+    const entries = line.taken.splice(0)
+    await this.markDelivered(entries)
+  }
+
+  private async markDelivered(entries: Steer[]): Promise<void> {
+    for (const entry of entries) {
+      if (entry.itemId === undefined) continue
+      try {
+        const row = await this.store.get('chat_item', entry.itemId)
+        if (row !== null && parseMeta(row.meta)['delivered'] === false) await this.patchMeta(entry.itemId, { delivered: true })
+      } catch {
+        // The row is gone: nothing to mark.
+      }
+    }
   }
 
   /** Stop a chat's turn in flight. Messages already sent to it are not lost: they start the next turn. */
@@ -559,7 +673,7 @@ export class Runner {
     if (clean === '') return
     const line = this.line(chat)
     if (line.running) {
-      line.steer.push({ text: clean, images: [], at: this.now() })
+      this.pushSteer(line, { text: clean, images: [], at: this.now() })
       this.emitFor(chat, { type: 'chat_changed' })
       return
     }
@@ -572,6 +686,18 @@ export class Runner {
     const row = await this.store.get('chat_item', helperId)
     if (row === null) return
     const meta = parseMeta(row.meta)
+    // Merged back into the conversation: a run still going reads it at its next step (an idle chat's next turn does).
+    const line = this.line(chat)
+    if (line.running && meta['told'] !== true) {
+      const asked = typeof meta['ask'] === 'string' ? ((await this.store.get('chat_item', meta['ask']))?.text ?? '') : ''
+      const result = typeof meta['result'] === 'string' ? meta['result'] : ''
+      await this.patchMeta(helperId, { told: true })
+      this.pushSteer(line, {
+        text: `[Done alongside while you were busy (the user already saw its summary; do not redo it): they asked "${clip(asked, 300)}". ${meta['state'] === 'done' ? 'Result' : 'It failed'}: ${clip(result, 1500)}]`,
+        images: [],
+        at: this.now(),
+      })
+    }
     const label = typeof meta['label'] === 'string' ? meta['label'] : 'A separate job'
     const state = meta['state'] === 'done' ? 'is done' : 'stopped short'
     this.sendNotification(`${label} ${state}`, clip(typeof meta['result'] === 'string' ? meta['result'] : '', MAX_NOTIFICATION_CHARS), true)
@@ -679,7 +805,7 @@ export class Runner {
     const note = quietTapNote(label, clean)
     const line = this.line(chat)
     if (line.running) {
-      line.steer.push({ text: note, images: [], at: this.now() })
+      this.pushSteer(line, { text: note, images: [], at: this.now(), urgent: true })
       return
     }
     // A tap is the person acting, so it starts a fresh action budget like a typed message.
@@ -704,6 +830,7 @@ export class Runner {
 
   private async repairRows(): Promise<void> {
     const items = await this.store.list('chat_item')
+    const undelivered = new Map<string, ChatItem[]>()
     let changed = false
 
     for (const item of items) {
@@ -721,19 +848,52 @@ export class Runner {
 
       if (isOpenCardRow(item)) this.waiting.set(item.id, chatOf(item))
 
-      // A message routed while the app closed: it is in the chat, so say it was not answered rather than "deciding".
-      if (item.kind === 'user' && meta['route'] === 'pending') {
-        await this.store.upsert('chat_item', {
-          id: item.id,
-          kind: item.kind,
-          text: item.text,
-          meta: JSON.stringify({ ...meta, route: '' }),
-        })
+      // A message of his that the run never read (it joined running work, or was still being routed) when the app
+      // closed: it is delivered now, once. One already in the transcript is only marked.
+      if (item.kind === 'user' && (meta['route'] === 'pending' || (meta['route'] === 'join' && meta['delivered'] === false))) {
+        const chat = chatOf(item)
+        if (await this.inTranscript(chat, item)) {
+          await this.patchMeta(item.id, { route: 'join', delivered: true })
+        } else {
+          await this.patchMeta(item.id, { route: 'join', delivered: false })
+          const list = undelivered.get(chat) ?? []
+          list.push(item)
+          undelivered.set(chat, list)
+        }
         changed = true
       }
     }
 
     if (changed) this.emit({ type: 'chat_changed' })
+    for (const [chat, rows] of undelivered) this.redeliver(chat, rows)
+  }
+
+  /** Is this message of his already in its chat's transcript (handed over before the app closed)? */
+  private async inTranscript(chat: string, item: ChatItem): Promise<boolean> {
+    const words = item.text.trim()
+    if (words === '') return false
+    const needle = JSON.stringify(words).slice(1, -1)
+    const turns = await listWhere(this.store, 'turn', { thread: threadFor(chat), since: Math.max(0, item.createdAt - 1) })
+    return turns.some((turn) => turn.thread === threadFor(chat) && turn.createdAt >= item.createdAt - 1 && (turn.json.includes(needle) || turn.json.includes(words)))
+  }
+
+  /** Messages of his the run never read before a restart: into the running work, or a turn of their own. */
+  private redeliver(chat: string, rows: ChatItem[]): void {
+    const line = this.line(chat)
+    const sorted = [...rows].sort((a, b) => a.createdAt - b.createdAt)
+    const entries: Steer[] = sorted.map((row) => ({
+      text: joinNote(row.text),
+      images: [],
+      itemId: row.id,
+      at: this.now(),
+      urgent: true,
+    }))
+    if (line.running) {
+      for (const entry of entries) this.pushSteer(line, entry)
+      return
+    }
+    void this.markDelivered(entries)
+    void this.begin(line, entries.map((entry) => entry.text).join('\n\n'), [], null)
   }
 
   dispose(): void {
@@ -820,11 +980,14 @@ export class Runner {
     user: { text: string; meta: string } | null,
     leaseId?: string,
   ): Promise<void> {
+    // Quitting: no new turn starts (his messages wait in their rows, undelivered, for the next start).
+    if (this.disposing) return
     line.running = true
     // A message the person sent starts a fresh action budget. A helper's result does not.
     if (user !== null) {
       this.budget?.reset()
       line.goal = user.text
+      if (parseMeta(user.meta)['via'] === undefined) line.lastUserAt = this.now()
     }
     const controller = new AbortController()
     line.controller = controller
@@ -846,13 +1009,19 @@ export class Runner {
       if (line.controller === controller) line.controller = null
       line.turn = null
       line.paused = false
+      line.pauseWhenSafe = false
+      line.inflight.clear()
       line.running = false
       // The turn is over: its tabs close after a few idle minutes, unless the next turn browses again first.
       runEnded(browserOwnerOf('main', line.chat), MAIN_IDLE_MS)
       this.emitFor(line.chat, error === undefined ? { type: 'run_finished' } : { type: 'run_finished', error })
       // Messages that landed in the last instant of the run, or while it was being stopped, still get an answer.
-      const leftover = line.steer.splice(0)
+      // The app is quitting: what is still waiting stays undelivered in its rows, and the next start delivers it.
+      const leftover = this.disposing ? [] : line.steer.splice(0)
+      // Anything handed over but not yet marked (the run ended mid-step) is marked now: it is in the transcript.
+      void this.delivered(line)
       if (leftover.length > 0) {
+        void this.markDelivered(leftover)
         void this.begin(
           line,
           leftover.map((entry) => entry.text).join('\n\n'),
@@ -867,7 +1036,7 @@ export class Runner {
   async resumeTurn(chat: string, leaseId: string, note: string): Promise<void> {
     const line = this.line(chat)
     if (line.running) {
-      line.steer.push({ text: note, images: [], at: this.now() })
+      this.pushSteer(line, { text: note, images: [], at: this.now() })
       this.emitFor(chat, { type: 'chat_changed' })
       return
     }
@@ -904,7 +1073,8 @@ export class Runner {
   private async continueAfterCard(prompt: string, chat: string): Promise<void> {
     const line = this.line(chat)
     if (line.running) {
-      line.steer.push({ text: prompt, images: [], at: this.now() })
+      // His answer to a card the run is no longer waiting on: read now, like a message.
+      this.pushSteer(line, { text: prompt, images: [], at: this.now(), urgent: true })
       this.emitFor(chat, { type: 'chat_changed' })
       return
     }
@@ -926,6 +1096,7 @@ export class Runner {
       if (signal.aborted) break
       const queued = line.steer.splice(0)
       if (queued.length === 0) break
+      await this.markDelivered(queued)
       const paused = line.paused
       line.paused = false
       // The task is named again: if the paused session could not be resumed, the new one still knows what it was.
@@ -1011,31 +1182,12 @@ export class Runner {
   private classifier(): Classifier | null {
     if (this.classifierOverride !== undefined) return this.classifierOverride
     const brain = mainBrain(this.brainDeps())
-    if (isBrain(brain) && brain.kind === 'plan') {
-      const cli = this.cli
-      if (cli === undefined) return null
-      return async (question, signal) => {
-        const result = await cli.turn({
-          cli: brain.cli,
-          thread: 'routine',
-          tools: [],
-          system: CLASSIFIER_SYSTEM,
-          prompt: classifierPrompt(question),
-          // The quickest model on a Claude plan; Codex uses the plan's default.
-          ...(brain.cli === 'codex' ? {} : { model: 'haiku' }),
-          context: this.toolContext(signal, 'routine'),
-          signal,
-          onEvent: async () => undefined,
-          onCall: async () => undefined,
-          onResult: async () => undefined,
-        })
-        return result.error === undefined ? parseVerdict(result.text) : 'unsure'
-      }
-    }
+    // On a plan, starting the engine for a one-word answer takes longer than his message may wait: decided locally.
+    if (isBrain(brain) && brain.kind === 'plan') return null
     const resolved = this.resolveModel()
     if (!resolved.ok) return null
-    return async (question) => {
-      const completion = await resolved.provider.complete(CLASSIFIER_SYSTEM, [userMsg(classifierPrompt(question))], [], resolved.model, 400)
+    return async (question, signal) => {
+      const completion = await resolved.provider.complete(CLASSIFIER_SYSTEM, [userMsg(classifierPrompt(question))], [], resolved.model, 400, signal)
       return parseVerdict(msgText(completion.message))
     }
   }
@@ -1092,13 +1244,17 @@ export class Runner {
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
     const context = this.toolContext(signal, 'main', chat)
-    const loop = new AgentLoop({ provider, model, tools: this.tools })
+    const loop = new AgentLoop({ provider, model, tools: this.tools, interruptible: (call) => isInterruptible(call.name, call.input) })
 
     try {
       await loop.run(system, history, context, {
         onEvent: (event) => this.render(event, chat),
         onAppend: (message) => this.appendTurn(message, chat, signal),
+        onAmend: (message) => this.amendTurn(line, message, signal),
         incoming: () => this.takeSteer(line),
+        delivered: () => this.delivered(line),
+        hasIncoming: () => this.urgentWaiting(line),
+        bell: line.bell,
         notePrefix: '',
         signal,
       })
@@ -1190,7 +1346,11 @@ export class Runner {
     if (signal.aborted) turn.abort()
     else signal.addEventListener('abort', onStop, { once: true })
     line.turn = turn
+    line.inflight.clear()
+    line.pauseWhenSafe = false
     this.emitFor(chat, { type: 'thinking', step: 1 })
+    // A message of his that arrived while this turn was being set up: handled now that there is a turn to reach.
+    queueMicrotask(() => this.interruptPlan(line))
     let result: { text: string; error?: string }
     // A project chat works in its project's folder (the engine's working folder, with the access the person chose).
     const folder = chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), chat)
@@ -1198,7 +1358,13 @@ export class Runner {
       result = await this.cli.turn({
         cli: brain.cli,
         thread: threadFor(chat),
-        tools: this.tools,
+        // His message rides with the result of the app tool in flight (a read is cut off for it; a change finishes).
+        tools: withNoteTools(this.tools, {
+          take: () => (turn.signal.aborted ? [] : this.takeForPlan(line)),
+          bell: line.bell,
+          interruptible: (name, input) => isInterruptible(name, input),
+          onCut: () => void this.render({ type: 'interrupted', what: 'tool' }, chat),
+        }),
         system: await this.cliSystem(text, 'main', undefined, chat, brain.cli),
         prompt: text,
         images,
@@ -1206,14 +1372,26 @@ export class Runner {
         ...(folder === '' ? {} : { folder }),
         context: this.toolContext(turn.signal, 'main', chat),
         signal: turn.signal,
-        onEvent: (event) => this.render(event, chat),
-        onCall: (call) => this.startActivity({ t: 'call', id: call.id, name: call.name, input: call.input }, chat),
-        onResult: (call, output, isError) =>
-          this.finishActivity({ t: 'call', id: call.id, name: call.name, input: call.input }, output, isError, chat),
+        onEvent: async (event) => {
+          // The engine's own tools (its shell, file reads and edits): tracked so a changing one is never cut halfway.
+          if (event.type === 'tool_started') this.planTool(line, event.call.id, event.call.name, event.call.input, true, false)
+          await this.render(event, chat)
+          if (event.type === 'tool_finished') this.planTool(line, event.call.id, event.call.name, event.call.input, false, false)
+        },
+        onCall: async (call) => {
+          this.planTool(line, call.id, call.name, call.input, true, true)
+          await this.startActivity({ t: 'call', id: call.id, name: call.name, input: call.input }, chat)
+        },
+        onResult: async (call, output, isError) => {
+          await this.finishActivity({ t: 'call', id: call.id, name: call.name, input: call.input }, output, isError, chat)
+          this.planTool(line, call.id, call.name, call.input, false, true)
+        },
       })
     } finally {
       signal.removeEventListener('abort', onStop)
       if (line.turn === turn) line.turn = null
+      line.inflight.clear()
+      line.pauseWhenSafe = false
     }
     if (signal.aborted) {
       await this.notice('Stopped', chat)
@@ -1359,6 +1537,15 @@ export class Runner {
       case 'tool_finished':
         await this.finishActivity(event.call, event.result, event.isError, chat)
         return
+      case 'interrupted':
+        // A small line of its own, so he sees his message was read at once.
+        await this.store.upsert('chat_item', {
+          kind: 'activity',
+          text: event.what === 'model' ? 'Stopped thinking to read your new message' : 'Cut a read short to read your new message',
+          meta: JSON.stringify({ tool: 'interrupted', status: 'done', line: true, summary: 'Read your new message at once', ...chatTag(chat) }),
+        })
+        this.emitFor(chat, { type: 'chat_changed' })
+        return
     }
   }
 
@@ -1399,6 +1586,8 @@ export class Runner {
   }
 
   private async notice(text: string, chat: string = MAIN_CHAT): Promise<void> {
+    // Quitting: a turn cut off now is resumed at the next start; no "Stopped" or error line for it.
+    if (this.disposing) return
     await this.store.upsert('chat_item', { kind: 'notice', text, meta: JSON.stringify(chatTag(chat)) })
     this.emitFor(chat, { type: 'chat_changed' })
   }
@@ -1423,7 +1612,27 @@ export class Runner {
 
   private async appendTurn(message: Msg, chat: string = MAIN_CHAT, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted === true) return
-    await this.store.upsert('turn', { thread: threadFor(chat), json: JSON.stringify(msgToJson(message)) })
+    const row = await this.store.upsert('turn', { thread: threadFor(chat), json: JSON.stringify(msgToJson(message)) })
+    this.line(chat).lastTurnId = row.id
+  }
+
+  /** The last transcript message gained a note (it rode with the tool results): store it with them. */
+  private async amendTurn(line: ChatLine, message: Msg, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted === true) return
+    if (line.lastTurnId === '') {
+      await this.appendTurn(message, line.chat, signal)
+      return
+    }
+    await this.store.upsert('turn', { id: line.lastTurnId, thread: threadFor(line.chat), json: JSON.stringify(msgToJson(message)) })
+  }
+
+  /** A plan turn takes every waiting note with an app tool's result; they are marked delivered at once. */
+  private takeForPlan(line: ChatLine): string[] {
+    const entries = line.steer.splice(0)
+    if (entries.length === 0) return []
+    line.pauseWhenSafe = false
+    void this.markDelivered(entries)
+    return entries.map((entry) => entry.text)
   }
 
   private async loadHistory(chat: string = MAIN_CHAT): Promise<Msg[]> {
@@ -1582,6 +1791,7 @@ export class Runner {
         settled = true
         this.decisionWaiters.delete(row.id)
         line.waitingOn.delete(row.id)
+        line.approving.delete(row.id)
         signal.removeEventListener('abort', onAbort)
         resolve(approved)
       }
@@ -1592,6 +1802,7 @@ export class Runner {
       }
       this.decisionWaiters.set(row.id, finish)
       line.waitingOn.add(row.id)
+      line.approving.add(row.id)
       signal.addEventListener('abort', onAbort, { once: true })
     })
 

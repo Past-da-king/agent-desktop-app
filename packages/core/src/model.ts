@@ -258,6 +258,8 @@ export interface LlmProvider {
     tools: ToolSpec[],
     model: string,
     maxTokens?: number,
+    /** Ends the request at once (Stop, or a message from the person that must be read now). */
+    signal?: AbortSignal,
   ): Promise<Completion>
 }
 

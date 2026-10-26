@@ -265,3 +265,7 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
 
 /** Re-exported so a caller only needs this module to build a toolset. */
 export type { DataStore }
+
+// Which tool calls may be cut off for a new message from the person (read-only ones) and which always finish (the
+// rest, unknown tools included): the list lives in read-only.ts, kept free of imports so the loop's callers can use it.
+export { READ_ONLY_TOOLS, isInterruptible, readOnlyCommand } from './read-only'

@@ -301,10 +301,13 @@ describe('a message sent while the chat is busy', () => {
 
     for (const release of gates.splice(0)) release()
     await running
-    expect(requestsWith('Done alongside while you were busy')).toBe(0)
+    // Merged back into the conversation while it was still running (26 Oct 2026), once: not again on the next turn.
+    expect(requestsWith('Done alongside while you were busy')).toBeGreaterThan(0)
+    const merged = requestsWith('Done alongside while you were busy')
 
     await runner.send('thanks, what next?')
-    expect(requestsWith('Done alongside while you were busy')).toBe(1)
+    expect(requestsWith('Done alongside while you were busy')).toBe(merged + 1)
+    expect(JSON.stringify(fake.requests.at(-1)?.body).split('Done alongside while you were busy').length - 1).toBe(1)
     expect(meta((await rows(db)).find((row) => row.id === side.id))['told']).toBe(true)
   })
 
@@ -356,7 +359,10 @@ describe('a message sent while the chat is busy', () => {
     await running
     // The run never got it as well: it went one way only.
     const mainCalls = (fake?.requests ?? []).filter(
-      (request) => !JSON.stringify(request.body).includes('were already busy') && JSON.stringify(request.body).includes('also add the totals'),
+      (request) =>
+        !JSON.stringify(request.body).includes('were already busy') &&
+        !JSON.stringify(request.body).includes('Done alongside while you were busy') &&
+        JSON.stringify(request.body).includes('also add the totals'),
     )
     expect(mainCalls).toHaveLength(0)
   })

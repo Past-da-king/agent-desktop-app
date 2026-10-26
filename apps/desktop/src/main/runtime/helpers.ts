@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 
 import {
   AgentLoop,
+  NoteBell,
   type JobRow,
   MAIN_CHAT,
   PROVIDERS,
@@ -48,6 +49,8 @@ import { CANNOT_RUN_HERE, type JobOp, type PlaceRequest, type PlaceResult } from
 import { helperTools } from '../tools/helpers'
 import { runEnded } from '../browser/run-tabs'
 import { promptRulesFor } from './prompt-rules'
+import { isInterruptible } from './read-only'
+import { withNoteTools } from './note-tools'
 import {
   describeCall,
   friendlyError,
@@ -397,6 +400,8 @@ export class HelperManager implements HelperHost {
   private readonly queue: string[] = []
   private readonly active = new Set<string>()
   private readonly inbox = new Map<string, string[]>()
+  /** Rung when a message for a running helper arrives: a read in flight is cut off so it reads the message now. */
+  private readonly bells = new Map<string, NoteBell>()
   private readonly batches = new Map<string, Batch>()
   private readonly batchOf = new Map<string, string>()
   private readonly askWaiters = new Map<string, (answer: string | null) => void>()
@@ -624,6 +629,15 @@ export class HelperManager implements HelperHost {
     )
   }
 
+  private bellOf(id: string): NoteBell {
+    let bell = this.bells.get(id)
+    if (bell === undefined) {
+      bell = new NoteBell()
+      this.bells.set(id, bell)
+    }
+    return bell
+  }
+
   async steer(id: string, message: string): Promise<string> {
     const run = this.runs.get(id)
     if (run === undefined) {
@@ -642,6 +656,8 @@ export class HelperManager implements HelperHost {
     const notes = this.inbox.get(id) ?? []
     notes.push(message)
     this.inbox.set(id, notes)
+    // Not after the step in flight: a read is cut off for it, a change finishes and the note rides with its result.
+    this.bellOf(id).ring()
     await this.recordMessage(id, message)
     await this.addActivity(id, run.label, `Told it: ${clip(message, 140)}`)
     return `Helper #${id} gets your message before its next step and keeps going.`
@@ -800,6 +816,7 @@ export class HelperManager implements HelperHost {
         const notes = this.inbox.get(id) ?? []
         notes.push(message)
         this.inbox.set(id, notes)
+        this.bellOf(id).ring()
       } else {
         const said = await this.push(id, message)
         if (!this.runs.has(id)) {
@@ -1332,6 +1349,7 @@ export class HelperManager implements HelperHost {
         model: run.model === '' ? ready.model : run.model,
         tools: run.tools ?? this.workerTools,
         maxSteps: this.maxSteps(),
+        interruptible: (call) => isInterruptible(call.name, call.input),
       })
       const out = await loop.run(system, history, this.context(run, controller.signal), {
         onEvent: (event) => this.onEvent(run, event),
@@ -1340,6 +1358,8 @@ export class HelperManager implements HelperHost {
           const notes = this.inbox.get(run.id)
           return notes === undefined ? [] : notes.splice(0)
         },
+        hasIncoming: () => (this.inbox.get(run.id)?.length ?? 0) > 0,
+        bell: this.bellOf(run.id),
         signal: controller.signal,
       })
       if (controller.signal.aborted) {
@@ -2428,7 +2448,12 @@ export class HelperManager implements HelperHost {
       const outcome = await cli.turn({
         cli: brain.cli,
         thread: `helper:${run.id}`,
-        tools: withNotes(run.tools ?? this.workerTools, takeNotes),
+        tools: withNoteTools(run.tools ?? this.workerTools, {
+          take: takeNotes,
+          frame: noteText,
+          bell: this.bellOf(run.id),
+          interruptible: (name, input) => isInterruptible(name, input),
+        }),
         // A desk hands work out itself; every other helper's session keeps the no-delegate guard.
         ...(run.desk === true ? { delegates: true } : {}),
         system: await this.buildHelperPrompt(run),
@@ -2513,18 +2538,6 @@ const NOTES_THREAD = 'helper-notes:'
 /** How a message sent mid-turn reaches a plan helper: after a tool's own answer, or as the reason a tool waited. */
 export function noteText(notes: string): string {
   return `[New message from the agent that started you. Read it now and follow it: ${notes}]`
-}
-
-/** The tools of a plan run: each answer carries any message sent to the helper since its last step. */
-function withNotes(tools: Tool[], take: () => string[]): Tool[] {
-  return tools.map((tool) => ({
-    ...tool,
-    run: async (input, ctx) => {
-      const answer = await tool.run(input, ctx)
-      const notes = take()
-      return notes.length === 0 ? answer : `${answer}\n\n${noteText(notes.join('\n\n'))}`
-    },
-  }))
 }
 
 /** A device named on purpose ('here', or a brain by name), not left to the app ('' or 'best'). */
