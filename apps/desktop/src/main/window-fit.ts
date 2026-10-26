@@ -177,6 +177,33 @@ export function workAreasPrimaryFirst(primary: { workArea: Rect }, all: readonly
   return [primary.workArea, ...rest]
 }
 
+export interface FrameDelta {
+  width: number
+  height: number
+}
+
+/** Bigger than this and the difference is not the frame (a scale change resized it): not corrected. */
+const MAX_FRAME_DELTA = 16
+
+/**
+ * How much bigger the system reports a window than it was asked to be. A frameless window with a resizable frame
+ * on a scaled Windows screen reports its bounds a pixel or two larger than it was created at (1200x700 reads back
+ * as 1202x702 at 125%), so saving what it reports and restoring it grows the window on every restart.
+ */
+export function frameDelta(requested: { width: number; height: number }, reported: { width: number; height: number }): FrameDelta {
+  const width = reported.width - requested.width
+  const height = reported.height - requested.height
+  return {
+    width: Math.abs(width) <= MAX_FRAME_DELTA ? width : 0,
+    height: Math.abs(height) <= MAX_FRAME_DELTA ? height : 0,
+  }
+}
+
+/** The size to save or compare: what the window reports, less the frame difference, so a restore round-trips. */
+export function withoutFrame<T extends { width: number; height: number }>(rect: T, delta: FrameDelta): T {
+  return { ...rect, width: rect.width - delta.width, height: rect.height - delta.height }
+}
+
 /** Two rectangles the same, to the pixel. */
 export function sameRect(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
