@@ -504,9 +504,13 @@ function createWindow(stateFile: string): BrowserWindow {
   })
 
   mainWindow = win
-  mainFrameDelta = frameDelta(saved, win.getBounds())
   if (saved.x !== null && saved.y !== null) {
-    lastFreeBounds = { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
+    // Created frameless on a scaled screen, Windows makes it a few pixels bigger than asked (1200x700 opens as
+    // 1206x707 at 125%); one setBounds puts it right. What it then reports, a pixel or two over, is the frame.
+    const want = { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
+    win.setBounds(want)
+    mainFrameDelta = frameDelta(want, win.getBounds())
+    lastFreeBounds = want
   }
   trackFreeBounds(win)
   watchScreens()
