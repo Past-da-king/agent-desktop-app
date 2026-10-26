@@ -13,9 +13,9 @@
  *
  * Page helpers live in ./outline.ts as plain JavaScript so they can be tested in a real Chromium.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import { Script } from 'node:vm'
 
 import { BrowserWindow, clipboard as systemClipboard, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
@@ -71,6 +71,7 @@ import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, GuideRequ
 import { planWindowOpen, popupSize } from './popup'
 import type { BrowserVault } from '../vault/browser-vault'
 import { attachVaultTo, debuggerLink } from './vault-link'
+import { formatUpload, uploadFiles, type UploadHost, type UploadTarget } from './upload'
 import type { BrandLook } from '../../shared/brand'
 import { formatGuide, GuideRuns, guideShowsFullSize, runGuide, type GuideHost } from './guide'
 import { evaluateIn, FrameSessions } from './guide-host'
@@ -94,14 +95,12 @@ import {
   readScript,
   scrollScript,
   typeScript,
-  uploadScript,
   waitForScript,
   type ReadTarget,
 } from './outline'
 
 const PARTITION = 'persist:agent-browser'
 const MAX_TABS = 5
-const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 const EMPTY_BOUNDS: BrowserBounds = { x: 0, y: 0, width: 0, height: 0, visible: false }
 
 /** A tab whose <webview> the renderer is creating; it becomes a Tab once the guest is handed over. */
@@ -1021,31 +1020,42 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
   }
 
-  async upload(index: number, path: string): Promise<string> {
+  async upload(target: UploadTarget, paths: string[]): Promise<string> {
+    if (this.heldByPerson()) return this.pausedLine()
     const tab = this.activeTab()
     if (tab === null || !isRealPage(tab.wc)) {
       return 'No page is open yet. Use browser_open with a web address.'
     }
-    let info: { name: string; type: string; base64: string; size: number }
-    try {
-      const stat = statSync(path)
-      if (!stat.isFile()) return 'That path is not a file.'
-      if (stat.size > MAX_UPLOAD_BYTES) return 'That file is too large for an automated upload (4 MB at most).'
-      info = {
-        name: basename(path),
-        type: guessType(path),
-        base64: readFileSync(path).toString('base64'),
-        size: stat.size,
-      }
-    } catch {
-      return `No such file: ${path}`
+    await this.prepare(tab)
+    if (!tab.cdp.ensure()) return 'ERROR: The page debugger is busy, so a file cannot be put into the page right now. Nothing was uploaded.'
+    const wc = tab.wc
+    const devtools = watchDevtools(wc)
+    const host: UploadHost = {
+      link: debuggerLink(wc),
+      runPage: (code) => this.run(tab, code),
+      click: async (at) => {
+        const point = { x: at.x * this.zoomOf(tab), y: at.y * this.zoomOf(tab) }
+        const scale = this.drawScale(tab)
+        return (await this.trusted(tab, async () => {
+          await tab.cdp.click(point, scale)
+          return true
+        })) === true
+      },
+      ...(devtools === null
+        ? {}
+        : {
+            requestsSince: (since: number) =>
+              devtools.network.all().filter((entry) => entry.wallTime >= since).map((entry) => ({ method: entry.method, url: entry.url, type: entry.type, status: entry.status })),
+          }),
     }
-
-    const result = parseAction(await this.run(tab, uploadScript(index, info)))
-    if (!result.ok) return result.reason
-    await this.settle(600)
+    const outcome = await this.liftGuard(tab, async () => uploadFiles(host, target, paths))
+    if (outcome === null || outcome === undefined) return 'ERROR: The page went away during the upload. Nothing was uploaded.'
     this.emit()
-    return `Uploaded ${info.name} (${Math.max(1, Math.round(info.size / 1024))} KB). Read the page to confirm it was accepted.\n\n${await this.snapshot()}`
+    if (!outcome.ok) return formatUpload(outcome)
+    await this.settle(300)
+    return `${formatUpload(outcome)}
+
+${await this.snapshot()}`
   }
 
   // ---- the view: device, size, zoom ---------------------------------------------------------
@@ -2665,22 +2675,6 @@ function hostOf(url: string): string {
 function safeFilename(name: string): string {
   const clean = name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^_+/, '')
   return clean === '' ? 'download' : clean.slice(0, 120)
-}
-
-function guessType(path: string): string {
-  const lower = path.toLowerCase()
-  if (lower.endsWith('.pdf')) return 'application/pdf'
-  if (lower.endsWith('.png')) return 'image/png'
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
-  if (lower.endsWith('.webp')) return 'image/webp'
-  if (lower.endsWith('.txt')) return 'text/plain'
-  if (lower.endsWith('.csv')) return 'text/csv'
-  if (lower.endsWith('.json')) return 'application/json'
-  if (lower.endsWith('.doc')) return 'application/msword'
-  if (lower.endsWith('.docx')) {
-    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-  }
-  return 'application/octet-stream'
 }
 
 function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | null> {

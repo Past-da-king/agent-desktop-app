@@ -286,52 +286,6 @@ for (;;) {
 })()`
 }
 
-export function uploadScript(
-  index: number,
-  file: { name: string; type: string; base64: string },
-): string {
-  const payload = JSON.stringify(file)
-  return `(() => {
-${PRELUDE}
-const file = ${payload};
-let el = store.refs[${Math.floor(index)}] || null;
-if (!el) return { ok: false, label: '', reason: 'That number is not on the current outline. Look at the page again first.' };
-let input = null;
-if (el.tagName === 'INPUT' && el.type === 'file') input = el;
-if (!input && el.closest) {
-  const form = el.closest('form');
-  input = form ? form.querySelector('input[type=file]') : null;
-}
-if (!input) {
-  const label = el.closest ? el.closest('label') : null;
-  input = label ? label.querySelector('input[type=file]') : null;
-}
-if (!input) input = document.querySelector('input[type=file]');
-if (!input) return { ok: false, label: '', reason: 'I could not find a file field on this page.' };
-let transfer;
-try {
-  const bytes = Uint8Array.from(atob(file.base64), (ch) => ch.charCodeAt(0));
-  const blob = new File([bytes], file.name, { type: file.type || 'application/octet-stream' });
-  transfer = new DataTransfer();
-  transfer.items.add(blob);
-} catch (error) {
-  return { ok: false, label: '', reason: 'I could not read that file.' };
-}
-try {
-  Object.defineProperty(input, 'files', { value: transfer.files, configurable: true });
-} catch (error) {
-  try {
-    input.files = transfer.files;
-  } catch (second) {
-    return { ok: false, label: '', reason: 'This file field will not accept an automated upload.' };
-  }
-}
-input.dispatchEvent(new Event('input', { bubbles: true }));
-input.dispatchEvent(new Event('change', { bubbles: true }));
-return { ok: true, label: file.name, reason: '' };
-})()`
-}
-
 export function parseOutline(value: unknown): OutlineResult {
   const raw = objectOf(value)
   const elements: OutlineElement[] = []

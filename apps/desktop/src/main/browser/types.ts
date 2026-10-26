@@ -1,5 +1,6 @@
 import type { GuideStep } from './guide'
 import type { GuideLog } from './guide-log'
+import type { UploadTarget } from './upload'
 
 /**
  * The slice of the browser the tools use. `AgentBrowser` implements it for real; tests pass a small
@@ -23,7 +24,11 @@ export interface BrowserDriver {
   screenshot(): Promise<string | null>
   /** Why the last screenshot returned null, in plain words ('' when unknown). Optional. */
   screenshotProblem?(): string
-  upload(index: number, path: string): Promise<string>
+  /**
+   * Puts files into the page through its real file field, the chooser it opens, or a drop (upload.ts), and checks
+   * they landed. Answers 'ERROR: ...' when they did not.
+   */
+  upload(target: UploadTarget, paths: string[]): Promise<string>
   /** While the agent drives, the page ignores the person's mouse and keyboard. */
   setAgentDriving(on: boolean, reason?: string): void
   hasPage(): boolean

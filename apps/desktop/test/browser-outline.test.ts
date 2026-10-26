@@ -16,7 +16,6 @@ import {
   readScript,
   scrollScript,
   typeScript,
-  uploadScript,
   waitForScript,
 } from '../src/main/browser/outline'
 
@@ -208,24 +207,6 @@ suite('browser page helpers', () => {
     )
     const outline = parseOutline(await page.evaluate(outlineScript()))
     expect(outline.note).toMatch(/captcha/i)
-    await page.close()
-  })
-
-  it('uploads a file into a file field without the debugger', async () => {
-    page = await freshPage()
-    const outline = parseOutline(await page.evaluate(outlineScript()))
-    const index = outline.elements.find((element) => element.kind === 'input[file]')?.index ?? -1
-    expect(index).toBeGreaterThanOrEqual(0)
-
-    const dir = mkdtempSync(join(tmpdir(), 'agent-upload-'))
-    const path = join(dir, 'note.txt')
-    writeFileSync(path, 'hello')
-    const result = await page.evaluate(
-      uploadScript(index, { name: 'note.txt', type: 'text/plain', base64: 'aGVsbG8=' }),
-    )
-    expect(result).toMatchObject({ ok: true })
-    expect(await page.evaluate('document.getElementById("file").files.length')).toBe(1)
-    expect(await page.evaluate('document.getElementById("file").files[0].name')).toBe('note.txt')
     await page.close()
   })
 

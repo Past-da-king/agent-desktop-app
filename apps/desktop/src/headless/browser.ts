@@ -25,7 +25,6 @@ import {
   readScript,
   scrollScript,
   typeScript,
-  uploadScript,
   waitForScript,
 } from '../main/browser/outline'
 import {
@@ -38,6 +37,7 @@ import {
   resolveScript,
   snapshotScript,
 } from '../main/browser/snapshot'
+import { formatUpload, uploadFiles, type UploadHost, type UploadTarget } from '../main/browser/upload'
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, ViewRequest } from '../main/browser/types'
 import type { BrowserVault } from '../main/vault/browser-vault'
 
@@ -575,12 +575,25 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
     return file
   }
 
-  upload(index: number, path: string): Promise<string> {
+  upload(target: UploadTarget, paths: string[]): Promise<string> {
     return this.withTab(false, async (tab) => {
-      if (!existsSync(path)) return `There is no file at ${path}.`
-      const base64 = readFileSync(path).toString('base64')
-      const result = parseAction(await this.run(tab, uploadScript(index, { name: basename(path), type: '', base64 })))
-      return result.ok ? `Attached ${result.label}.` : result.reason
+      const host: UploadHost = {
+        link: {
+          send: (method, params = {}) => tab.cdp.send(method, params),
+          onEvent: (listener) => {
+            const each = (method: string, params: Record<string, unknown>): void => listener(method, params)
+            tab.socket.anyListeners.add(each)
+            return () => tab.socket.anyListeners.delete(each)
+          },
+        },
+        runPage: (code) => this.run(tab, code),
+        click: async (at) => {
+          await tab.cdp.click(at, 1)
+          return true
+        },
+      }
+      const outcome = await uploadFiles(host, target, paths)
+      return formatUpload(outcome)
     })
   }
 
