@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { DEFAULT_SETTINGS, type DictationCommand } from '@agent/core'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DictationController, type DictationDeps, type TranscriberLike } from '../src/main/dictation/controller'
 import { Recordings, dayKey, type RecordingManifest, type RecoveredNotice, type TranscriptFile } from '../src/main/recordings/store'
@@ -19,6 +19,9 @@ import { SettingsStore } from '../src/main/settings'
 import { parseSince, recordingsTools } from '../src/main/tools/recordings'
 import { VoiceService } from '../src/main/voice/service'
 
+// Real disk writes with fsync: under a full parallel run they can take seconds, so the waits are generous.
+vi.setConfig({ testTimeout: 30_000 })
+
 const SECOND = 32_000
 
 /** A second of loud 16 kHz PCM16, so the dictation hears speech. */
@@ -28,7 +31,7 @@ function speech(seconds = 1, value = 8000): Buffer {
   return pcm
 }
 
-async function until(check: () => boolean, ms = 3000): Promise<void> {
+async function until(check: () => boolean, ms = 10_000): Promise<void> {
   const started = Date.now()
   while (!check()) {
     if (Date.now() - started > ms) throw new Error('timed out waiting')
