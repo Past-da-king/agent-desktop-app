@@ -120,7 +120,7 @@ function seconds(ms: number): number {
 }
 
 /** Tools that wait on the person, not the page: they keep no time limit of their own. */
-const WAITS_ON_PERSON = new Set(['browser_handoff', 'browser_upload'])
+const WAITS_ON_PERSON = new Set(['browser_handoff', 'browser_upload', 'browser_guide', 'browser_guide_log'])
 
 /**
  * Every browser tool ends: each gets its hard limit (toolLimitMs) on top of the driver's own deadlines, and on the
