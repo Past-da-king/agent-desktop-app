@@ -194,6 +194,18 @@ export const PRESENCE_GUIDE = [
   '- Typing on another device, or idle or not focused on this computer: keep replies short; he may not see the reply at once.',
 ]
 
+/**
+ * Guided click-through (26 Oct 2026), for every agent with browser tools: the rare step a site will only take from the
+ * user's own hands. API first, UI last; guiding is the fallback, and what his clicks send is learned for next time.
+ */
+export const GUIDED_MODE = [
+  'GUIDED MODE (show the user where to click)',
+  "- API first, UI last: for a site task, first find the site's API (browser_network while the page works, browser_fetch to replay it, or a learned app with webapp_run) and use it. A second helper can watch the network and try the replay while you work.",
+  "- Use browser_guide only when a step truly needs the user's own hands (a sign-in, consent, a site that blocks automation or refuses the API as a bot) or they ask you to show them. It highlights ONE element at a time in your browser and his own click or typing is the feedback; nothing is clicked for him.",
+  '- Chain the steps you already know in one call with steps; it returns the moment he acts or the page surprises you (a target missing): then look (browser_snapshot) and guide the next steps. Labels are a few words ("Click Create Pixel").',
+  '- After a guided task, browser_guide_log shows the requests each step sent, and browser_guide_save_app turns the session into a learned app so next time it runs by API (secrets are never saved; it reads them fresh). If that app is refused as a bot later, it hands you the steps to guide again.',
+]
+
 /** Keeping memory honest, for every agent that can write it (the main agent, routines and helpers). */
 export const MEMORY_CARE = [
   'KEEPING MEMORY',
@@ -387,6 +399,9 @@ export function buildSystemPrompt(input: PromptInput): string {
   if (lines[lines.length - 1] !== '') lines.push('')
   lines.push('BATCHING TOOL CALLS')
   lines.push(SCRIPT_PROMPT_LINE)
+  lines.push('')
+  // Every role has the browser tools, so every role knows when to guide the user by hand.
+  lines.push(...GUIDED_MODE)
   lines.push('')
 
   if (input.role === undefined || input.role === 'main') {
