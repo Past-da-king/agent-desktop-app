@@ -13,6 +13,7 @@
  *     closed shadow root, in the top layer, at the highest z-index;
  *   - guideClearScript: takes every overlay and listener of the guide out of this frame.
  */
+import { brandLook, withAlpha, type BrandLook } from '../../shared/brand'
 import { PAGE_PRELUDE } from './snapshot'
 
 /** The guide's own isolated world (Page.createIsolatedWorld worldName). */
@@ -49,6 +50,8 @@ export interface GuideShowSpec {
   expect?: string
   /** A sensitive value goes in this field: what it holds is never read back out of the page. */
   secret?: boolean
+  /** The app's brand look (theme and accent) the ring and label are drawn in. Default: the light theme, iris. */
+  look?: BrandLook
 }
 
 export interface FrameMatches {
@@ -140,12 +143,38 @@ return { exact: m.exact.length, partial: m.partial.length, items: m.exact.concat
 })()`
 }
 
+/**
+ * The ring and label in the app's own brand (26 Oct 2026; was a hard-coded orange): every colour comes from the
+ * app's tokens (shared/brand.ts) for his theme and accent. The ring is the accent with a soft glow of the same hue and
+ * a thin contrasting edge on both sides, so it reads on a light page, a dark page and a page that is itself the accent's
+ * colour. The label is the app's tooltip card (surface, outline, --r-sm, the app font), the step count a primary
+ * container chip, I did it the app's filled button and Skip its tonal one.
+ */
+export function guideStyle(look: BrandLook): string {
+  const a = (alpha: number): string => withAlpha(look.primary, alpha)
+  const edge = (alpha: number): string => withAlpha(look.edge, alpha)
+  const shade = look.dark ? 'rgba(0,0,0,.55)' : 'rgba(20,16,60,.18)'
+  const font = look.font.replace(/'/g, '"')
+  return ':host{all:initial}'
+    + `.ring{position:fixed;box-sizing:border-box;border:3px solid ${look.primary};border-radius:${look.radius}px;pointer-events:none;box-shadow:0 0 0 1.5px ${edge(0.95)},inset 0 0 0 1.5px ${edge(0.9)},0 0 0 6px ${a(0.22)},0 0 22px 2px ${a(0.5)};animation:gp 1.3s ease-in-out infinite}`
+    + `@keyframes gp{50%{box-shadow:0 0 0 1.5px ${edge(0.95)},inset 0 0 0 1.5px ${edge(0.9)},0 0 0 10px ${a(0.1)},0 0 30px 4px ${a(0.65)}}}`
+    + '@media (prefers-reduced-motion:reduce){.ring{animation:none}}'
+    + `.tag{position:fixed;left:0;top:0;pointer-events:auto;display:flex;align-items:center;gap:6px;box-sizing:border-box;max-width:min(380px,calc(100vw - 16px));padding:5px 5px 5px 12px;border-radius:${look.radius + 4}px;background:${look.surface};color:${look.onSurface};border:1px solid ${look.outline};font:500 13px/1.35 ${font};letter-spacing:.1px;box-shadow:0 0 0 1px ${look.dark ? 'rgba(255,255,255,.08)' : 'rgba(255,255,255,.6)'},0 8px 24px ${shade},0 2px 6px ${shade};user-select:none;-webkit-font-smoothing:antialiased}`
+    + `.n{flex:none;display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;background:${look.pc};color:${look.onPc};font:600 11px/1 ${font};white-space:nowrap}`
+    + '.n:empty{display:none}'
+    + '.t{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;padding:3px 4px 3px 0}'
+    + `button{all:initial;cursor:pointer;box-sizing:border-box;display:inline-flex;align-items:center;height:30px;padding:0 13px;border-radius:999px;font:500 12.5px/1 ${font};letter-spacing:.1px;background:${look.tonal};color:${look.onTonal};white-space:nowrap;transition:filter .15s}`
+    + `button.ok{background:${look.primary};color:${look.onPrimary}}`
+    + `button:hover{filter:brightness(${look.dark ? 1.08 : 0.94})}`
+    + `button:focus-visible{outline:2px solid ${look.primary};outline-offset:2px}`
+}
+
 /** Draws the highlight on the chosen element and resolves when the person acts (or the guide is ended). */
 export function guideShowScript(spec: GuideShowSpec): string {
   return `(async () => {
 ${PAGE_PRELUDE}
 ${FIND}
-const spec = ${JSON.stringify({ idleMs: 2000, earlyMs: 1500, ...spec })};
+const spec = ${JSON.stringify({ idleMs: 2000, earlyMs: 1500, ...spec, look: undefined })};
 const G = globalThis.__agentGuide || (globalThis.__agentGuide = { sessions: {}, recent: [], recorder: false });
 const poolOf = () => { const m = guideMatches(spec.query); return spec.mode === 'partial' ? (m.partial || []) : (m.exact || []); };
 let el = poolOf()[spec.pick] || poolOf()[0] || null;
@@ -189,16 +218,7 @@ host.style.cssText = 'all:initial;position:fixed;inset:0;width:100vw;height:100v
 const topLayer = typeof host.showPopover === 'function';
 if (topLayer) host.setAttribute('popover', 'manual');
 const root = host.attachShadow({ mode: 'closed' });
-root.innerHTML = '<style>'
-  + ':host{all:initial}'
-  + '.ring{position:fixed;box-sizing:border-box;border:3px solid #ff5a1f;border-radius:9px;pointer-events:none;box-shadow:0 0 0 4px rgba(255,90,31,.28),0 0 18px rgba(255,90,31,.55);animation:gp 1.3s ease-in-out infinite}'
-  + '@keyframes gp{50%{box-shadow:0 0 0 9px rgba(255,90,31,.10),0 0 26px rgba(255,90,31,.75)}}'
-  + '.tag{position:fixed;left:0;top:0;pointer-events:auto;display:flex;align-items:center;gap:6px;box-sizing:border-box;max-width:min(360px,calc(100vw - 16px));padding:6px 6px 6px 10px;border-radius:11px;background:#1d1b20;color:#fff;font:600 13px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.35);user-select:none}'
-  + '.n{opacity:.65;font-weight:500;white-space:nowrap}'
-  + '.t{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}'
-  + 'button{all:initial;cursor:pointer;box-sizing:border-box;font:600 12px/1 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:7px 9px;border-radius:8px;background:rgba(255,255,255,.14);color:#fff;white-space:nowrap}'
-  + 'button.ok{background:#ff5a1f}'
-  + 'button:hover{filter:brightness(1.12)}'
+root.innerHTML = '<style>' + ${JSON.stringify(guideStyle(spec.look ?? brandLook()))}
   + '</style><div class="ring" part="ring"></div><div class="tag" role="status" aria-live="polite"><span class="n"></span><span class="t"></span><button class="ok" type="button">I did it</button><button class="skip" type="button">Skip</button></div>';
 const ring = root.querySelector('.ring');
 const tag = root.querySelector('.tag');
@@ -332,7 +352,8 @@ return await new Promise((resolve) => {
     delete G.sessions[spec.token];
     resolve(out);
   };
-  G.sessions[spec.token] = { end: (why) => finish(why || 'cancelled') };
+  // restyle: the app's theme or accent changed while this ring shows (guideRestyleScript).
+  G.sessions[spec.token] = { end: (why) => finish(why || 'cancelled'), restyle: (css) => { const st = root.querySelector('style'); if (st) st.textContent = css; } };
   let typed = false;
   // Listeners only watch: no preventDefault, no stopPropagation, so the page gets every event of his as usual.
   const onClick = (e) => {
@@ -439,4 +460,14 @@ export function parseMatches(value: unknown): FrameMatches & { bad?: string } {
     items: Array.isArray(raw['items']) ? raw['items'].filter((x): x is string => typeof x === 'string') : [],
     ...(typeof raw['bad'] === 'string' ? { bad: raw['bad'] } : {}),
   }
+}
+
+/** His theme or accent changed while a guide shows: every ring and label in this frame takes the new look at once. */
+export function guideRestyleScript(look: BrandLook): string {
+  return `(() => {
+const G = globalThis.__agentGuide;
+let n = 0;
+if (G) for (const key of Object.keys(G.sessions)) { const s = G.sessions[key]; if (s && typeof s.restyle === 'function') { try { s.restyle(${JSON.stringify(guideStyle(look))}); n++; } catch (e) { /* gone */ } } }
+return n;
+})()`
 }

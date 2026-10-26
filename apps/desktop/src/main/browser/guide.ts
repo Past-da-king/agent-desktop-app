@@ -7,6 +7,7 @@
  * This is the loop, over a GuideHost (guide-host.ts gives the real one, over the tab's debugger and every frame of
  * it, cross-site frames included; tests give a fake or a Playwright page). Pure of Electron.
  */
+import type { BrandLook } from '../../shared/brand'
 import { guideClearScript, guideFindScript, guideShowScript, parseMatches, parseShow, PICK_ATTR, type GuideQuery, type ShowResult } from './guide-page'
 
 export interface GuideTarget {
@@ -207,6 +208,9 @@ export interface GuideOptions {
   clipboardClearMs?: number
   /** What his paste key is called on this computer. */
   pasteKey?: string
+  /** The app's brand look (his theme and accent) for the ring and label, read again for every step so a change he
+   * makes in Settings shows on the next highlight at the latest. Default: light theme, iris. */
+  look?: BrandLook | (() => BrandLook)
 }
 
 export const GUIDE_TIMEOUT_MS = 5 * 60_000
@@ -254,7 +258,7 @@ export async function runGuide(host: GuideHost, steps: GuideStep[], options: Gui
       if (fills && fill !== null) await fill.put(step.value!, step.sensitive === true)
       const shownAt = now()
       options.onStep?.({ kind: 'shown', n, step: shown })
-      const outcome = await waitForHim(host, found, shown, n, steps.length, stepToken, deadline, options.signal, now, fills ? { paste: true, ...(step.sensitive === true ? { secret: true } : { expect: step.value! }) } : {})
+      const outcome = await waitForHim(host, found, shown, n, steps.length, stepToken, deadline, options.signal, now, { ...(fills ? { paste: true, ...(step.sensitive === true ? { secret: true } : { expect: step.value! }) } : {}), ...(options.look === undefined ? {} : { look: typeof options.look === 'function' ? options.look() : options.look }) })
       const clip = fills && fill !== null ? await fill.settle() : undefined
       const gotAt = now()
       const log: StepLog = {
@@ -395,7 +399,7 @@ async function waitForHim(
   deadline: number,
   signal: AbortSignal | undefined,
   now: () => number,
-  extra: { paste?: boolean; expect?: string; secret?: boolean } = {},
+  extra: { paste?: boolean; expect?: string; secret?: boolean; look?: BrandLook } = {},
 ): Promise<{ outcome: StepOutcome; show: ShowResult | null }> {
   const show = host
     .evaluate(found.frame.key, guideShowScript({ token, query: found.query, mode: found.mode, pick: found.pick, label: step.label, step: n, total, ...extra }))
