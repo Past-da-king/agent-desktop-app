@@ -44,6 +44,7 @@ export class AnthropicProvider implements LlmProvider {
     tools: ToolSpec[],
     model: string,
     maxTokens = 4096,
+    signal?: AbortSignal,
   ): Promise<Completion> {
     const body: JsonObject = {
       model,
@@ -66,7 +67,7 @@ export class AnthropicProvider implements LlmProvider {
         'anthropic-version': '2023-06-01',
       },
       body,
-      { fetchImpl: this.fetchImpl },
+      { fetchImpl: this.fetchImpl, ...(signal === undefined ? {} : { signal }) },
     )
     const content = Array.isArray(res.content) ? res.content : []
     const blocks: Block[] = []

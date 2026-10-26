@@ -3,10 +3,13 @@
  * joins the running work, with full context, and the agent may drop its old line of work and carry on; if it is
  * different work it runs separately and the person just gets a summary.
  *
- * Deciding: a quick word check first (ported from HeuristicPolicy in reference/phone/Branching.kt): "ok thanks",
- * "wait, I meant...", "also..." are plainly about the running work. Anything else goes to a short classifier call
- * on a cheap model with the running task and the new message. When the classifier is missing, slow, fails or is
- * unsure, the message JOINS: the running agent has the full context and can still spin it off itself.
+ * Deciding, cheaply and locally (26 Oct 2026: his messages are never queued, so nothing slow sits in front of them):
+ * a quick word check first (ported from HeuristicPolicy in reference/phone/Branching.kt): "ok thanks", "wait, I
+ * meant...", "whoa, stop", "also..." are plainly about the running work. A message that names the running task, or
+ * comes within a short window of his last one, is the same task by default. Only a message none of that settles may
+ * go to an optional quick classifier (an API model, capped at a few seconds); with none, a later message that names
+ * nothing of the task is different work. Missing, slow, failed or unsure: the message JOINS, because a missed stop
+ * is the costly mistake.
  */
 import type { BusyRoute } from '@agent/core'
 
@@ -18,9 +21,9 @@ const ACK_WORDS = new Set([
   'right', 'noted', 'np', 'ta', 'lol', 'haha', 'so', 'much', 'a', 'lot',
 ])
 const SUPERSEDE_START =
-  /^(wait|hold on|hang on|actually|no wait|no,|sorry|scrap that|forget (that|it)|never ?mind|ignore (that|the last|what)|disregard|cancel (that|it)|i meant|i mean|correction|instead|change of plan|on second thought|stop that|not that)\b/i
+  /^(wait|whoa|woah|hold on|hold up|hang on|stop|pause|actually|no wait|no no|no,|nope,|sorry|scrap that|forget (that|it)|never ?mind|ignore (that|the last|what)|disregard|cancel|i meant|i mean|correction|instead|change of plan|on second thought|not that|don'?t|do not|that'?s (wrong|not)|wrong|careful|hmm|eish|haibo)\b/i
 const SUPERSEDE_ANYWHERE =
-  /\b(i meant|i actually meant|scrap that|forget (that|it)|never ?mind|ignore (that|what i (said|asked))|disregard (that|what)|change of plan|instead of that)\b/i
+  /\b(i meant|i actually meant|scrap that|forget (that|it)|never ?mind|ignore (that|what i (said|asked))|disregard (that|what)|change of plan|instead of that|(wasn'?t|isn'?t|was not|is not|not) clear|misunderstood|not what i (meant|asked|said|want(ed)?)|that'?s (wrong|not (it|right|what))|stop (that|it|now|doing|everything)|don'?t (do|send|push|deploy) (that|it|anything)|do not (do|send|push|deploy))\b/i
 const RELATED_START =
   /^(also|and also|and |plus|one more thing|oh and|while you'?re at it|additionally|btw|by the way|can you also|and then|on top of that|as well|make sure|don'?t forget|remember to|how'?s it going|how is it going|any progress|are you (done|nearly done|still)|status)\b/i
 
@@ -51,6 +54,8 @@ export interface RouteQuestion {
   recent: string[]
   /** True when the message carries files. */
   hasFiles?: boolean
+  /** How long since his previous message in this chat. Absent: just now (inside the same-task window). */
+  sinceLastMs?: number
 }
 
 /** A cheap model call answering same/different. Implementations must honour the signal. */
@@ -86,23 +91,79 @@ export function parseVerdict(reply: string): Verdict {
 
 export interface RouteDecision {
   route: BusyRoute
-  /** Why, in a few words, for the log and tests: 'words', 'classifier', 'unsure', 'timeout', 'no-classifier', 'error'. */
+  /**
+   * Why, in a few words, for the log and tests: 'words', 'mentions', 'classifier', 'unsure', 'timeout',
+   * 'no-classifier', 'error', 'local'.
+   */
   why: string
   relation: Relation
 }
 
-export const CLASSIFY_TIMEOUT_MS = 20_000
+/**
+ * A second message this soon after his last one is about the same task unless something clearly says otherwise
+ * (his rule, 26 Oct 2026: within a short window, or mentioning the running task, it is the same task by default).
+ */
+export const SAME_TASK_WINDOW_MS = 120_000
 
-/** Same task joins; different work goes alongside; anything uncertain joins. Never throws. */
+/**
+ * The classifier is optional and must be quick: it only ever runs for a message the words and the window could not
+ * settle, and never longer than this. Too slow, failed or unsure: the message joins (a missed stop is the costly
+ * mistake), so his message is never held back for long.
+ */
+export const CLASSIFY_TIMEOUT_MS = 2_500
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'that', 'this', 'with', 'from', 'have', 'what', 'when', 'where', 'which', 'will', 'would', 'could',
+  'should', 'there', 'their', 'them', 'they', 'then', 'than', 'your', 'about', 'into', 'just', 'like', 'make', 'some',
+  'want', 'need', 'please', 'also', 'more', 'only', 'very', 'been', 'were', 'does', 'done', 'doing', 'thing', 'things',
+  'today', 'tomorrow', 'know', 'think', 'look', 'find', 'give', 'take', 'tell', 'send', 'check',
+])
+
+function contentWords(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((word) => word.length >= 4 && !STOP_WORDS.has(word))
+      .map((word) => word.replace(/(ing|ed|es|s)$/, '')),
+  )
+}
+
+/** Does the new message name something the running task is about (a word that matters, in both)? */
+export function mentionsTask(goal: string, text: string): boolean {
+  const task = contentWords(goal)
+  if (task.size === 0) return false
+  for (const word of contentWords(text)) if (word.length >= 3 && task.has(word)) return true
+  return false
+}
+
+/** The cheap local call, no model: same, different, or unsure (inside the window with nothing else to go on). */
+export function localVerdict(question: RouteQuestion): { verdict: Verdict; why: string; relation: Relation } {
+  const relation = heuristicRelation(question.text)
+  if (relation !== 'unclear') return { verdict: 'same', why: 'words', relation }
+  if (question.text.trim() === '') return { verdict: 'same', why: 'words', relation }
+  if (mentionsTask(question.goal, question.text)) return { verdict: 'same', why: 'mentions', relation }
+  const since = question.sinceLastMs ?? 0
+  if (since <= SAME_TASK_WINDOW_MS) return { verdict: 'unsure', why: 'window', relation }
+  const words = question.text.trim().split(/\s+/).length
+  return words >= 4 ? { verdict: 'different', why: 'local', relation } : { verdict: 'same', why: 'local', relation }
+}
+
+/**
+ * Same task joins; different work goes alongside; anything uncertain joins. Never throws, and never waits on a model
+ * longer than `timeoutMs` (the words and the window settle most messages with no model at all).
+ */
 export async function decideRoute(
   question: RouteQuestion,
   classifier: Classifier | null,
   timeoutMs = CLASSIFY_TIMEOUT_MS,
 ): Promise<RouteDecision> {
-  const relation = heuristicRelation(question.text)
-  if (relation !== 'unclear') return { route: 'join', why: 'words', relation }
-  if (question.text.trim() === '') return { route: 'join', why: 'words', relation }
-  if (classifier === null) return { route: 'join', why: 'no-classifier', relation }
+  const local = localVerdict(question)
+  const relation = local.relation
+  if (local.verdict === 'same') return { route: 'join', why: local.why, relation }
+  if (classifier === null) {
+    return local.verdict === 'different' ? { route: 'alongside', why: 'local', relation } : { route: 'join', why: 'no-classifier', relation }
+  }
 
   const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -114,7 +175,9 @@ export async function decideRoute(
   })
   try {
     const verdict = await Promise.race([classifier(question, controller.signal), timeout])
-    if (verdict === 'timeout') return { route: 'join', why: 'timeout', relation }
+    if (verdict === 'timeout') {
+      return local.verdict === 'different' ? { route: 'alongside', why: 'local', relation } : { route: 'join', why: 'timeout', relation }
+    }
     if (verdict === 'different') return { route: 'alongside', why: 'classifier', relation }
     return { route: 'join', why: verdict === 'same' ? 'classifier' : 'unsure', relation }
   } catch {
