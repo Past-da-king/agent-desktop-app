@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { fitWindowToDisplay, looksSnapped, type FittedWindow, type Rect } from '../src/main/window-fit'
+import { fitWindowToDisplay, frameDelta, looksSnapped, withoutFrame, type FittedWindow, type Rect } from '../src/main/window-fit'
 import { quickAskPosition, QUICK_ASK_HEIGHT, QUICK_ASK_WIDTH } from '../src/main/hotkey'
 import { pillBounds } from '../src/main/dictation/pill'
 
@@ -126,6 +126,25 @@ describe('looksSnapped', () => {
     expect(looksSnapped({ x: 0, y: 408, width: 768, height: 408 }, LAPTOP_TASKBAR)).toBe(true)
     expect(looksSnapped({ x: 120, y: 40, width: 1100, height: 700 }, LAPTOP_TASKBAR)).toBe(false)
     expect(looksSnapped({ x: 0, y: 0, width: 1536, height: 816 }, LAPTOP_TASKBAR)).toBe(false)
+  })
+})
+
+describe('a restart does not grow the window', () => {
+  it('saves the size it was opened at, not the frame-padded size Windows reports at 125%', () => {
+    // Measured on the built app: created at 1200x700, getBounds() says 1202x702.
+    const delta = frameDelta({ width: 1200, height: 700 }, { width: 1202, height: 702 })
+    let saved = { width: 1200, height: 700, x: 100, y: 50, maximized: false }
+    for (let restart = 0; restart < 20; restart++) {
+      const opened = fitWindowToDisplay(saved, [LAPTOP_TASKBAR], OPTIONS)
+      const reported = { x: opened.x as number, y: opened.y as number, width: opened.width + 2, height: opened.height + 2 }
+      saved = { ...withoutFrame(reported, delta), maximized: false }
+    }
+    expect(saved).toEqual({ width: 1200, height: 700, x: 100, y: 50, maximized: false })
+  })
+
+  it('ignores a difference too big to be the frame (a scale change resized it)', () => {
+    expect(frameDelta({ width: 1200, height: 700 }, { width: 1500, height: 875 })).toEqual({ width: 0, height: 0 })
+    expect(frameDelta({ width: 1200, height: 700 }, { width: 1200, height: 700 })).toEqual({ width: 0, height: 0 })
   })
 })
 

@@ -18,7 +18,15 @@ import {
   type OpenDialogOptions,
   type Rectangle,
 } from 'electron'
-import { fitWindowToDisplay, looksSnapped, sameRect, workAreasPrimaryFirst } from './window-fit'
+import {
+  fitWindowToDisplay,
+  frameDelta,
+  looksSnapped,
+  sameRect,
+  withoutFrame,
+  workAreasPrimaryFirst,
+  type FrameDelta,
+} from './window-fit'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
 import { FileBrainLocks } from './brain-locks'
@@ -280,6 +288,13 @@ const WINDOW_FIT = { minWidth: WINDOW_MIN_WIDTH, minHeight: WINDOW_MIN_HEIGHT, d
 
 /** The last rectangle he gave the window himself (moved or resized, not snapped, maximised or minimised). */
 let lastFreeBounds: Rectangle | null = null
+/** How much bigger the system reports the window than it was made (window-fit.ts frameDelta); taken off before saving. */
+let mainFrameDelta: FrameDelta = { width: 0, height: 0 }
+
+/** The window's rectangle as it would be asked for again: what it reports, less the frame difference. */
+function chosenBounds(win: BrowserWindow): Rectangle {
+  return withoutFrame(win.getBounds(), mainFrameDelta)
+}
 
 function currentWorkAreas(): Rectangle[] {
   try {
@@ -311,7 +326,7 @@ function trackFreeBounds(win: BrowserWindow): void {
     timer = setTimeout(() => {
       timer = null
       if (win.isDestroyed() || win.isMaximized() || win.isMinimized() || win.isFullScreen()) return
-      const bounds = win.getBounds()
+      const bounds = chosenBounds(win)
       const area = workAreaOf(bounds)
       if (area !== null && looksSnapped(bounds, area)) return
       lastFreeBounds = bounds
@@ -328,7 +343,7 @@ function trackFreeBounds(win: BrowserWindow): void {
 function refitWindowsToScreens(): void {
   const win = mainWindow
   if (win !== null && !win.isDestroyed() && !win.isMaximized() && !win.isMinimized() && !win.isFullScreen()) {
-    const bounds = win.getBounds()
+    const bounds = chosenBounds(win)
     const fit = fitWindowToDisplay({ ...bounds, maximized: false }, currentWorkAreas(), { ...WINDOW_FIT, allowMaximize: false })
     if (fit.x !== null && fit.y !== null) {
       const next = { x: fit.x, y: fit.y, width: fit.width, height: fit.height }
@@ -362,7 +377,7 @@ function watchScreens(): void {
 
 function writeWindowState(file: string, win: BrowserWindow): void {
   try {
-    let bounds = win.getNormalBounds()
+    let bounds = withoutFrame(win.getNormalBounds(), mainFrameDelta)
     if (!win.isMaximized() && lastFreeBounds !== null) {
       const area = workAreaOf(bounds)
       if (area !== null && looksSnapped(bounds, area)) bounds = lastFreeBounds
@@ -489,6 +504,7 @@ function createWindow(stateFile: string): BrowserWindow {
   })
 
   mainWindow = win
+  mainFrameDelta = frameDelta(saved, win.getBounds())
   if (saved.x !== null && saved.y !== null) {
     lastFreeBounds = { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
   }
@@ -496,10 +512,10 @@ function createWindow(stateFile: string): BrowserWindow {
   watchScreens()
 
   win.once('ready-to-show', () => {
-    // A screen scale other than the one it was saved at can make Windows resize it on creation: put it back.
+    // A screen scale other than the one it was saved at can make Windows resize or move it on creation: put it back.
     if (saved.x !== null && saved.y !== null) {
       const want = { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
-      if (!sameRect(win.getBounds(), want)) win.setBounds(want)
+      if (!sameRect(chosenBounds(win), want)) win.setBounds(want)
     }
     if (saved.maximized) win.maximize()
     win.show()
