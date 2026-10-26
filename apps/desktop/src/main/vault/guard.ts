@@ -15,7 +15,7 @@
 import type { JsonObject, Tool, ToolContext } from '@agent/core'
 
 import { recordRun, takeRun, type ToolRun } from '../tools/run-capture'
-import { fillInput, vaultRuns, type VaultResolved, type VaultRun } from './placeholders'
+import { fillInput, hasPlaceholder, vaultRuns, type VaultResolved, type VaultRun } from './placeholders'
 import type { VaultStore } from './store'
 
 /** Tools whose text input may carry placeholders, filled in before the tool sees it. */
@@ -31,6 +31,7 @@ export const VAULT_FILL_TOOLS: ReadonlySet<string> = new Set([
   'apps_run',
   'webapp_run',
   'webapp_test',
+  'browser_guide',
 ])
 
 /** Tools that fill placeholders themselves (they need the value where only they know the shell or language). */
@@ -75,7 +76,9 @@ export function guardTool(tool: Tool, vault: VaultStore): Tool {
       const run = vaultRunFor(vault, ctx)
       let used: JsonObject = input
       if (!elsewhere && VAULT_FILL_TOOLS.has(name)) {
-        const filled = fillInput(input, run)
+        // A guide step whose value is a Vault item is sensitive: never shown, kept or left on the clipboard.
+        const marked = name === 'browser_guide' ? markVaultSteps(input) : input
+        const filled = fillInput(marked, run)
         if ('error' in filled) return filled.error
         used = filled.value as JsonObject
       }
@@ -95,6 +98,17 @@ export function guardTool(tool: Tool, vault: VaultStore): Tool {
   }
   wrapped.add(guarded)
   return guarded
+}
+
+/** browser_guide: each step (or the single target) whose value holds a {{vault:...}} placeholder gets sensitive: true. */
+export function markVaultSteps(input: JsonObject): JsonObject {
+  const mark = (step: unknown): unknown => {
+    if (step === null || typeof step !== 'object' || Array.isArray(step)) return step
+    const o = step as JsonObject
+    return typeof o['value'] === 'string' && hasPlaceholder(o['value']) ? { ...o, sensitive: true } : o
+  }
+  const top = mark(input) as JsonObject
+  return Array.isArray(input['steps']) ? { ...top, steps: input['steps'].map(mark) as JsonObject[] } : top
 }
 
 function scrubRun(run: ToolRun, scrub: (text: string) => string): ToolRun {

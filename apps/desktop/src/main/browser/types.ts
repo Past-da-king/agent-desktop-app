@@ -1,3 +1,6 @@
+import type { GuideStep } from './guide'
+import type { GuideLog } from './guide-log'
+
 /**
  * The slice of the browser the tools use. `AgentBrowser` implements it for real; tests pass a small
  * fake, so tool behaviour can be checked without Electron.
@@ -50,6 +53,19 @@ export interface BrowserDriver {
   openNewTab?(url: string): Promise<string>
   /** browser_close: the acting agent closes its current tab, one of its tabs by id, or all of them (run-tabs.ts). */
   closeOwnTab?(id?: string, all?: boolean): Promise<string>
+  /**
+   * browser_guide: highlight each step's element for the person in the agent's tab, wait for their own click or
+   * typing, and return the moment it is done (guide.ts). Only a browser a person can see has it.
+   */
+  guide?(request: GuideRequest, signal?: AbortSignal): Promise<string>
+  /** The step log of every guided session (guide-log.ts), for browser_guide_log and browser_guide_save_app. */
+  guideLog?(): GuideLog
+}
+
+export interface GuideRequest {
+  steps: GuideStep[]
+  /** The whole guide's limit. */
+  timeoutMs?: number
 }
 
 /** Stands in until the window exists, and in tests that do not care about the browser. */
