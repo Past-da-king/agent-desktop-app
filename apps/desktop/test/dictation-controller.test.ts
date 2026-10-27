@@ -175,6 +175,26 @@ afterEach(() => {
 })
 
 describe('DictationController', () => {
+  it('a type that never settles (the window crashed mid-insert) ends the dictation, and the next press starts again', async () => {
+    const h = harness({ type: () => new Promise(() => undefined), typeLimitMs: 15_000 })
+    const session = await listening(h)
+    h.controller.audio(session, LOUD)
+    h.transcriber().say('Create the SharePoint file.')
+    h.controller.toggle('plain')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.controller.phase).toBe('typing')
+    // Before the fix it stayed here for good, and every press did nothing.
+    h.controller.toggle('plain')
+    expect(h.controller.phase).toBe('typing')
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.controller.phase).toBe('idle')
+    expect(h.views.at(-1)).toMatchObject({ phase: 'error', message: 'Could not type it. The words are kept in Recordings.' })
+    expect(h.held.has('Escape')).toBe(false)
+    h.controller.toggle('plain')
+    expect(h.controller.phase).toBe('starting')
+    expect(h.commands.at(-1)).toMatchObject({ type: 'start' })
+  })
+
   it('press, speak, press again: the words are typed where the cursor is', async () => {
     const h = harness()
     const session = await listening(h)

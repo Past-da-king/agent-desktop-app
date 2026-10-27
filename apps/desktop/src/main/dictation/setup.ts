@@ -19,6 +19,7 @@ import { DictationController, type BatchResult } from './controller'
 import { electronClipboard, keySenderFor, typeText, type KeySender, type TypeOutcome } from './paste'
 import { PillWindow, type PillOptions } from './pill'
 import { dictationTarget, type DictationSurface } from './target'
+import { insertBounded } from './insert'
 import { EVENTS } from '../../shared/channels'
 import { safeSend } from '../alive'
 import { LiveTranscriber, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, languageHint, replayRecording } from './transcriber'
@@ -218,8 +219,16 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     ownTarget = null
     if (target !== null) {
       if (!target.isFocused()) target.focus()
-      await target.webContents.insertText(text)
-      return 'inserted'
+      // Bounded: a renderer that crashes mid-insert must never leave dictation stuck in typing.
+      const result = await insertBounded(target.webContents, text)
+      if (result === 'inserted') return 'inserted'
+      deps.log('Dictation insert did not land, copied instead', { result, characters: text.length })
+      try {
+        clipboard.writeText(text)
+      } catch {
+        // The words are still kept with the recording on disk.
+      }
+      return 'copied'
     }
     const started = Date.now()
     const outcome = await typeText(text, { clipboard: board, keys })

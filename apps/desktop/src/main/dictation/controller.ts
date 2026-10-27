@@ -79,6 +79,8 @@ export interface DictationDeps {
   micStartMs?: number
   /** The most finishing may take for a recording of `bytes`, from the stop to the words typed. */
   finishLimitMs?: (bytes: number) => number
+  /** The most typing the words may take; past it the dictation ends (the words stay with the recording). */
+  typeLimitMs?: number
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** Called as a dictation starts, before anything else moves (the app notes where the cursor is). */
   began?: () => void
@@ -110,6 +112,8 @@ const MAX_RECORDING_BYTES = 16_000 * 2 * 60 * 10
 const BYTES_PER_SECOND = 16_000 * 2
 /** How long a failed dictation's error, with its Retry, stays up. The recording is kept until the next one. */
 const RETRY_SHOW_MS = 20_000
+/** Typing into a window or another app takes about a second; past this something is wrong. */
+const TYPE_LIMIT_MS = 15_000
 
 /** The default finishing limit: 30 s, plus one for every two said, at most 100 s. */
 export function defaultFinishLimitMs(bytes: number): number {
@@ -583,13 +587,28 @@ export class DictationController {
     // The words are kept with the recording before they are typed.
     void session.rec?.final(text)
     // Typing is not cancelled half way; Esc after this point is too late.
-    let outcome: TypeOutcome | 'inserted' = 'copied'
+    let outcome: TypeOutcome | 'inserted' | 'stuck' = 'copied'
+    let typeTimer: ReturnType<typeof setTimeout> | null = null
     try {
-      outcome = await this.deps.type(text)
+      outcome = await Promise.race([
+        this.deps.type(text),
+        new Promise<'stuck'>((resolve) => {
+          typeTimer = setTimeout(() => resolve('stuck'), this.deps.typeLimitMs ?? TYPE_LIMIT_MS)
+        }),
+      ])
     } catch {
       outcome = 'copied'
+    } finally {
+      if (typeTimer !== null) clearTimeout(typeTimer)
     }
     if (this.session !== session) return
+    if (outcome === 'stuck') {
+      // Never a dictation that stays in typing: the shortcut and the microphone would do nothing until a restart.
+      this.log('Dictation typing never finished', { characters: text.length, ms: this.now() - session.phaseSince })
+      this.end(session)
+      this.flash('error', 'Could not type it. The words are kept in Recordings.', RETRY_SHOW_MS)
+      return
+    }
     this.log('Dictation typed', { outcome, characters: text.length, clean: session.clean, ms: this.now() - session.phaseSince })
     this.end(session)
     if (outcome === 'copied') {
