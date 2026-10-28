@@ -35,7 +35,7 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
   const file = typeof meta['file'] === 'string' ? meta['file'] : ''
   const given = typeof meta['durationMs'] === 'number' ? meta['durationMs'] : 0
   const audio = useRef<HTMLAudioElement | null>(null)
-  const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'paused' | 'missing'>('idle')
+  const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'paused' | 'missing' | 'broken'>('idle')
   const [at, setAt] = useState(0)
   const [length, setLength] = useState(given)
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1)
@@ -92,7 +92,8 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
       await el.play()
       setState('playing')
     } catch {
-      setState('missing')
+      // The sound arrived but would not play: that is not "not on this computer".
+      setState('broken')
     }
   }
 
@@ -149,7 +150,7 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
             <i key={i} className={i / wave.length < done ? 'on' : ''} style={{ height: `${Math.round(h * 100)}%` }} />
           ))}
         </div>
-        <span className="vnote-time">{state === 'missing' ? 'Not on this computer' : clock(live || at > 0 ? at : length)}</span>
+        <span className="vnote-time">{state === 'missing' ? 'Not on this computer' : state === 'broken' ? 'Could not play' : clock(live || at > 0 ? at : length)}</span>
         <button type="button" className="vnote-speed" onClick={nextSpeed} aria-label={`Speed ${speed} times, change`}>
           {speed}x
         </button>
