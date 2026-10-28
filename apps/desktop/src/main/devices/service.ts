@@ -44,6 +44,8 @@ export interface DeviceStoreLike {
   get(entity: 'device', id: string): Promise<DeviceRow | null>
   upsert(entity: 'device', row: Partial<DeviceRow>): Promise<DeviceRow>
   onChange(listener: (change: { entity: string }) => void): () => void
+  /** The newest change-log seq (db.ts logSeq). */
+  logSeq?(): number
 }
 
 export interface IpcHandleLike {
@@ -217,6 +219,7 @@ export class DevicesService {
             },
           }
         },
+        logSeq: () => this.deps.store.logSeq?.() ?? 0,
         callRpc: (session, method, args) => callAllowed(this.deps.registry, this.server.added(), session, method, args),
         onConnections: () => this.changed(),
         onSeen: (id) => this.seen(id),

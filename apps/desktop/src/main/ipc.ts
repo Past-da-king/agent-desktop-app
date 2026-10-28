@@ -42,7 +42,11 @@ import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
 import { asWriter } from './memory/history'
 import { isIconImage } from '../shared/project-icon'
+import { feedState } from './devices/feed-state'
+import { changesForPhone, isPhoneListOpts, listForPhone } from './devices/phone-reads'
 import { wireOf } from './devices/registry'
+import { DEVICE_CHANNELS } from '../shared/device-channels'
+import { rememberCards, trimHelperRow } from '../shared/device-feed'
 import { DEVICE_CHAT_ROWS, boundRows, isLiveHelper, isOpenCard } from '../shared/device-list'
 import { lightRow } from '../shared/light-row'
 import { parseRouteTarget } from '../shared/route-target'
@@ -362,9 +366,11 @@ export function registerIpc(deps: IpcDeps): () => void {
 
   // ---- data ----
 
-  handle(CHANNELS.data.list, async (event, rawEntity) => {
+  handle(CHANNELS.data.list, async (event, rawEntity, rawOpts) => {
     const entity = entityArg(rawEntity)
     // Listed rows travel light (a run's long output stays behind); data.get has the whole row.
+    // A phone that asks for a small list (data use, shared/device-feed.ts) is sent just that.
+    if (wireOf(event) !== null && isPhoneListOpts(rawOpts)) return listForPhone(store, entity, rawOpts)
     if (wireOf(event) !== null) {
       // A linked device is sent a bounded list, never the whole table: one frame of hundreds of megabytes starves the
       // link's pings and the device drops it (shared/device-list.ts).
@@ -373,6 +379,29 @@ export function registerIpc(deps: IpcDeps): () => void {
       return entity === 'chat_item' ? boundRows(light as Array<{ kind?: unknown; meta?: unknown; createdAt?: unknown }>, (row) => isOpenCard(row) || isLiveHelper(row, Date.now())) : boundRows(light)
     }
     return (await store.list(entity)).map((row) => lightRow(entity, row))
+  })
+
+  // ---- a linked phone's small reads (data use, 28 Oct 2026): see shared/device-feed.ts ----
+
+  // What the phone keeps and wants: set on every connect, and again when it opens or leaves the helpers screen.
+  handle(DEVICE_CHANNELS.prefs, async (event, rawPrefs) => {
+    const wire = wireOf(event)
+    if (wire === null) return null
+    return feedState.setPrefs(wire.deviceId, rawPrefs)
+  })
+
+  // The rows that changed after a change-log seq, shaped for a phone; a reset when the gap is too wide to be small.
+  handle(DEVICE_CHANNELS.since, async (event, rawSeq) => {
+    if (wireOf(event) === null) throw new Error('Only a linked device asks for that.')
+    return changesForPhone(store, typeof rawSeq === 'number' ? rawSeq : -1)
+  })
+
+  // A page of the main chat, older than `before` (a created-at), newest last.
+  handle(DEVICE_CHANNELS.page, async (event, rawBefore, rawLimit) => {
+    if (wireOf(event) === null) throw new Error('Only a linked device asks for that.')
+    const before = typeof rawBefore === 'number' && Number.isFinite(rawBefore) ? rawBefore : undefined
+    const page = await store.phoneChatPage(before, typeof rawLimit === 'number' ? rawLimit : 20)
+    return { rows: page.rows.map((row) => trimHelperRow(lightRow('chat_item', row))), more: page.more }
   })
 
   handle(CHANNELS.data.get, async (_event, rawEntity, rawId) => {
@@ -472,7 +501,13 @@ export function registerIpc(deps: IpcDeps): () => void {
     emit: (snapshot) => send(EVENTS.helperCards, snapshot),
     running: (id) => (chat.states?.() ?? []).some((info) => info.chat === id && info.running),
   })
-  handle(CHANNELS.helpers.cards, async () => helperFeed.snapshot())
+  handle(CHANNELS.helpers.cards, async (event) => {
+    const snapshot = await helperFeed.snapshot()
+    // A phone that asked is now holding exactly this list: its next updates are deltas on top of it.
+    const wire = wireOf(event)
+    if (wire !== null && feedState.prefsOf(wire.deviceId).v >= 2) feedState.setCards(wire.deviceId, rememberCards(snapshot))
+    return snapshot
+  })
 
   handle(CHANNELS.helpers.stopAll, async () => {
     if (deps.helpers === undefined) return 0
