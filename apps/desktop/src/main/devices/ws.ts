@@ -1,11 +1,13 @@
 /**
  * The smallest WebSocket (RFC 6455) this node needs, server side, plus a client for tests and node-to-node calls.
- * Text and binary messages, fragmentation, ping/pong and close. No extensions, no compression. `ws` is not in the
- * tree, and this is about two hundred lines.
+ * Text and binary messages, fragmentation, ping/pong and close. One extension, permessage-deflate (RFC 7692), and only
+ * when the client offers it: without context takeover on either side, so each message stands alone and a client that
+ * does not offer it (every older phone and node) gets plain frames as before. `ws` is not in the tree.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
+import { constants as zlibConstants, deflateRawSync, inflateRawSync } from 'node:zlib'
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 export const MAX_MESSAGE = 48 * 1024 * 1024
@@ -17,9 +19,9 @@ export function acceptKey(key: string): string {
 }
 
 /** One frame. Clients must mask (`mask` true); servers must not. */
-export function encodeFrame(opcode: number, payload: Buffer, mask = false, fin = true): Buffer {
+export function encodeFrame(opcode: number, payload: Buffer, mask = false, fin = true, rsv1 = false): Buffer {
   const len = payload.length
-  const head: number[] = [(fin ? 0x80 : 0) | opcode]
+  const head: number[] = [(fin ? 0x80 : 0) | (rsv1 ? 0x40 : 0) | opcode]
   const maskBit = mask ? 0x80 : 0
   if (len < 126) head.push(maskBit | len)
   else if (len < 65536) head.push(maskBit | 126, (len >> 8) & 0xff, len & 0xff)
@@ -41,6 +43,37 @@ export interface Frame {
   opcode: number
   payload: Buffer
   masked: boolean
+  /** RSV1: the message this frame starts is compressed (permessage-deflate). */
+  rsv1: boolean
+}
+
+/** Messages shorter than this go out plain even on a compressing link (the saving would not pay for the work). */
+export const DEFLATE_MIN = 256
+/** The tail every sync-flushed deflate block ends with; permessage-deflate leaves it off the wire. */
+const DEFLATE_TAIL = Buffer.from([0x00, 0x00, 0xff, 0xff])
+
+export function deflateMessage(payload: Buffer): Buffer {
+  const out = deflateRawSync(payload, { finishFlush: zlibConstants.Z_SYNC_FLUSH })
+  return out.length >= 4 && out.subarray(out.length - 4).equals(DEFLATE_TAIL) ? out.subarray(0, out.length - 4) : out
+}
+
+export function inflateMessage(payload: Buffer, max = MAX_MESSAGE): Buffer {
+  return inflateRawSync(Buffer.concat([payload, DEFLATE_TAIL]), { maxOutputLength: max, finishFlush: zlibConstants.Z_SYNC_FLUSH })
+}
+
+/**
+ * Whether a client's Sec-WebSocket-Extensions offer includes a permessage-deflate we can answer with no context
+ * takeover and the default window (an offer that insists on a smaller server window is not taken).
+ */
+export function offersDeflate(header: string | string[] | undefined): boolean {
+  const text = Array.isArray(header) ? header.join(',') : (header ?? '')
+  for (const offer of text.split(',')) {
+    const parts = offer.split(';').map((part) => part.trim().toLowerCase())
+    if (parts[0] !== 'permessage-deflate') continue
+    if (parts.some((part) => part.startsWith('server_max_window_bits'))) continue
+    return true
+  }
+  return false
 }
 
 /** Feeds bytes in, gives whole frames out. Throws on a frame bigger than `max`. */
@@ -87,7 +120,7 @@ export class FrameReader {
     const payload = Buffer.from(b.subarray(start, start + len))
     if (key !== null) for (let i = 0; i < payload.length; i += 1) payload[i] = (payload[i] ?? 0) ^ (key[i % 4] ?? 0)
     this.buffer = b.subarray(start + len)
-    return { fin: (first & 0x80) !== 0, opcode: first & 0x0f, payload, masked }
+    return { fin: (first & 0x80) !== 0, opcode: first & 0x0f, payload, masked, rsv1: (first & 0x40) !== 0 }
   }
 }
 
@@ -99,7 +132,10 @@ export class WsConnection {
   private parts: Buffer[] = []
   private partsOpcode = 0
   private partsSize = 0
+  private partsCompressed = false
   private closed = false
+  /** permessage-deflate was agreed: messages of DEFLATE_MIN bytes or more are sent compressed, compressed ones read. */
+  deflate = false
   private readonly messageListeners = new Set<(message: SocketMessage) => void>()
   private readonly closeListeners = new Set<(code: number) => void>()
 
@@ -130,7 +166,15 @@ export class WsConnection {
   }
 
   sendText(text: string): void {
-    this.write(OP.text, Buffer.from(text, 'utf8'))
+    const bytes = Buffer.from(text, 'utf8')
+    if (this.deflate && bytes.length >= DEFLATE_MIN) {
+      const packed = deflateMessage(bytes)
+      if (packed.length < bytes.length) {
+        this.write(OP.text, packed, true)
+        return
+      }
+    }
+    this.write(OP.text, bytes)
   }
 
   ping(): void {
@@ -147,9 +191,9 @@ export class WsConnection {
     this.socket.end()
   }
 
-  private write(opcode: number, payload: Buffer): void {
+  private write(opcode: number, payload: Buffer, rsv1 = false): void {
     if (this.closed || this.socket.destroyed) return
-    this.socket.write(encodeFrame(opcode, payload, this.isClient))
+    this.socket.write(encodeFrame(opcode, payload, this.isClient, true, rsv1))
   }
 
   /** Bytes read off the socket (or left over from the upgrade request). */
@@ -185,6 +229,7 @@ export class WsConnection {
       this.parts = []
       this.partsSize = 0
       this.partsOpcode = frame.opcode
+      this.partsCompressed = frame.rsv1 && this.deflate
     }
     this.parts.push(frame.payload)
     this.partsSize += frame.payload.length
@@ -193,9 +238,17 @@ export class WsConnection {
       return
     }
     if (!frame.fin) return
-    const whole = Buffer.concat(this.parts)
+    let whole: Buffer = Buffer.concat(this.parts)
     this.parts = []
     this.partsSize = 0
+    if (this.partsCompressed) {
+      try {
+        whole = inflateMessage(whole)
+      } catch {
+        this.close(1007, 'bad compressed message')
+        return
+      }
+    }
     const message: SocketMessage = this.partsOpcode === OP.binary ? { binary: whole } : { text: whole.toString('utf8') }
     for (const listener of this.messageListeners) listener(message)
   }
@@ -217,11 +270,15 @@ export function acceptUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer
     socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
     return null
   }
+  const deflate = offersDeflate(req.headers['sec-websocket-extensions'])
   socket.write(
     'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
-      `Sec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`,
+      `Sec-WebSocket-Accept: ${acceptKey(key)}\r\n` +
+      (deflate ? 'Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n' : '') +
+      '\r\n',
   )
   const connection = new WsConnection(socket, false)
+  connection.deflate = deflate
   if (head.length > 0) connection.feed(head)
   return connection
 }

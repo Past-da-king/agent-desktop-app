@@ -28,6 +28,7 @@ import {
   type SyncStore,
 } from '@agent/core'
 
+import { phoneKeepsChatRow } from '../shared/device-feed'
 import { isLiveHelper, isOpenCard } from '../shared/device-list'
 import { changedFields, currentWriter, versionFields, type MemoryWriter } from './memory/history'
 import { redactDeep } from './vault/redact'
@@ -51,6 +52,9 @@ const SLICE_ROWS = 500
 
 /** How many of the newest rows the walk looks through before the quiet chats are read by their own index. */
 const WALK_ROWS = 6000
+
+/** How far a page of the main chat looks back through other rows before it gives up. */
+const PAGE_WALK_ROWS = 40_000
 
 /**
  * A chat row's chat, read inside SQLite: `meta` is JSON text inside the payload JSON. Rows of the first chat carry
@@ -197,6 +201,39 @@ export class Store implements SyncStore {
       if (isOpenCard(row.payload) || isLiveHelper(row.payload, now)) picked.set(row.cid, row)
     }
     return sortedRows([...picked.values()], false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap['chat_item'])
+  }
+
+  /**
+   * A page of the main chat for a phone: the newest `limit` rows created before `before` (a created-at, or none for the
+   * newest), oldest first, leaving out what a phone never shows row by row (a helper's steps, other chats' lines).
+   * Walks the created-at index in slices and yields between them, like listChatItemsForDevice.
+   */
+  async phoneChatPage(before: number | undefined, limit: number): Promise<{ rows: Array<EntityMap['chat_item']>; more: boolean }> {
+    const want = Math.max(1, Math.min(200, Math.floor(limit)))
+    const slice = this.db.prepare(
+      `SELECT cid, stamp, deleted, payload FROM rows WHERE entity = 'chat_item' AND deleted = 0 AND json_extract(payload, '$.createdAt') < ? ORDER BY json_extract(payload, '$.createdAt') DESC, stamp DESC LIMIT ?`,
+    )
+    let at = before === undefined ? Number.MAX_SAFE_INTEGER : before
+    const out: StoredRow[] = []
+    let scanned = 0
+    let more = false
+    for (;;) {
+      const rows = slice.all(at, SLICE_ROWS).map(rowFromSql)
+      for (const row of rows) {
+        if (!phoneKeepsChatRow(row.payload as { kind?: unknown; meta?: unknown })) continue
+        if (out.length >= want) {
+          more = true
+          break
+        }
+        out.push(row)
+      }
+      const last = rows[rows.length - 1]
+      scanned += rows.length
+      if (more || rows.length < SLICE_ROWS || last === undefined || scanned >= PAGE_WALK_ROWS) break
+      at = numberField(last.payload.createdAt)
+      await yieldNow()
+    }
+    return { rows: sortedRows(out, false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap['chat_item']), more }
   }
 
   /**

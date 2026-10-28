@@ -4,6 +4,7 @@
  * remote bridge (renderer/bridge/remote.ts), so the two cannot drift apart.
  */
 import { CHANNELS, EVENTS } from './channels'
+import { DEVICE_RPC_CHANNELS } from './device-channels'
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from './devices-channels'
 import { MEMORY_CHANNELS, MEMORY_EVENTS } from './memory-channels'
 import { MEMORY_HISTORY_CHANNELS } from './memory-history-channels'
@@ -21,11 +22,10 @@ function flatten(tree: Tree, prefix: string, out: Record<string, string>): Recor
 }
 
 /** Dotted method name to IPC channel, for every method the main process serves. */
-export const RPC_CHANNELS: Readonly<Record<string, string>> = flatten(
-  { ...CHANNELS, memory: { ...MEMORY_CHANNELS, ...MEMORY_HISTORY_CHANNELS }, devices: DEVICES_CHANNELS, vault: VAULT_CHANNELS },
-  '',
-  {},
-)
+export const RPC_CHANNELS: Readonly<Record<string, string>> = {
+  ...flatten({ ...CHANNELS, memory: { ...MEMORY_CHANNELS, ...MEMORY_HISTORY_CHANNELS }, devices: DEVICES_CHANNELS, vault: VAULT_CHANNELS }, '', {}),
+  ...DEVICE_RPC_CHANNELS,
+}
 
 /**
  * What a paired device may call: everything a person uses day to day. Never: secrets, keys and sign-ins, window
@@ -39,6 +39,9 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'account.status',
   'account.syncNow',
   'data.list',
+  'data.since',
+  'data.page',
+  'device.prefs',
   'data.get',
   'data.upsert',
   'data.remove',

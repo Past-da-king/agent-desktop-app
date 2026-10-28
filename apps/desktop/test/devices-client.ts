@@ -59,9 +59,13 @@ export interface RpcClient {
   closed: Promise<number>
   close(): void
   send(frame: unknown): void
+  /** Bytes read off the socket since it opened (what the link cost, after any compression). */
+  bytesIn(): number
+  /** Whether permessage-deflate was agreed. */
+  deflated: boolean
 }
 
-export function connectRpc(base: string, fp: string, pass: string, hello: unknown, tools?: unknown[]): Promise<RpcClient> {
+export function connectRpc(base: string, fp: string, pass: string, hello: unknown, tools?: unknown[], options: { deflate?: boolean } = {}): Promise<RpcClient> {
   return new Promise((resolve, reject) => {
     const req = request(`${base}/v1/rpc`, {
       agent: false,
@@ -72,6 +76,7 @@ export function connectRpc(base: string, fp: string, pass: string, hello: unknow
         'Sec-WebSocket-Version': '13',
         'Sec-WebSocket-Key': Buffer.from('agent-devices-01').toString('base64'),
         Authorization: `Bearer ${pass}`,
+        ...(options.deflate === true ? { 'Sec-WebSocket-Extensions': 'permessage-deflate' } : {}),
       },
     })
     req.on('socket', (socket) => {
@@ -82,8 +87,13 @@ export function connectRpc(base: string, fp: string, pass: string, hello: unknow
     })
     req.on('response', (res) => reject(new Error(`upgrade refused: ${res.statusCode ?? 0}`)))
     req.on('error', reject)
-    req.on('upgrade', (_res, socket, head) => {
+    req.on('upgrade', (res, socket, head) => {
       const conn = new WsConnection(socket, true)
+      conn.deflate = options.deflate === true && String(res.headers['sec-websocket-extensions'] ?? '').includes('permessage-deflate')
+      let received = head.length
+      socket.on('data', (chunk: Buffer) => {
+        received += chunk.length
+      })
       if (head.length > 0) conn.feed(head)
       let next = 1
       const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
@@ -116,6 +126,8 @@ export function connectRpc(base: string, fp: string, pass: string, hello: unknow
       // The phone's own frame: tools at the top level, beside the facts (protocol s11).
       conn.sendText(JSON.stringify(tools === undefined ? { type: 'hello', device: hello } : { type: 'hello', device: hello, tools }))
       resolve({
+        bytesIn: () => received,
+        deflated: conn.deflate,
         call: (method, ...args) =>
           new Promise((ok, fail) => {
             const id = String(next++)

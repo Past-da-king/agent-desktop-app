@@ -8,7 +8,12 @@ import { createServer, type Server } from 'node:https'
 import type { AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
 
+import type { DataChange } from '@agent/core'
+
+import { EVENTS } from '../../shared/channels'
+import { cardsDelta, dropsChatNudge, rememberCards, shapeChange, type CardsSnapshot } from '../../shared/device-feed'
 import { RPC_EVENTS } from '../../shared/rpc-methods'
+import { feedState } from './feed-state'
 import { ConnectionLog, peerOf } from './conn-log'
 import { compilePath, matchPath, passFrom, type CompiledPath } from './router'
 import { RpcSession } from './rpc'
@@ -28,6 +33,8 @@ export interface DevicesServerOptions {
   self(): { id: string; facts: DeviceFacts }
   /** Runs one RPC call that no `addRpc` method answered (rpc.ts callAllowed). */
   callRpc(session: RpcSession, method: string, args: unknown[]): Promise<unknown>
+  /** The newest change-log seq, stamped on the data events a v2 phone hears so it can ask for what it missed. */
+  logSeq?(): number
   /** A device connected, said hello or went away. */
   onConnections?(): void
   /** A device was heard from (for lastSeen). */
@@ -180,7 +187,37 @@ export class DevicesServer implements DevicesHost {
   /** A main-process event: passed on to every connection when it is one devices may hear. */
   broadcast(channel: string, payload: unknown): void {
     if (!RPC_EVENTS.has(channel)) return
-    this.emit(null, channel, payload)
+    for (const session of this.sessions) {
+      if (session.facts === null) continue
+      const out = this.shape(session.deviceId, channel, payload)
+      if (out !== undefined) session.event(channel, out)
+    }
+  }
+
+  /** What one device is sent of an event (undefined: nothing). A device that sent no prefs hears it whole. */
+  private shape(deviceId: string, channel: string, payload: unknown): unknown {
+    const prefs = feedState.prefsOf(deviceId)
+    if (prefs.v < 2) return payload
+    if (channel === EVENTS.chat) return dropsChatNudge(payload, prefs) ? undefined : payload
+    if (channel === EVENTS.data) {
+      const shaped = shapeChange(payload as DataChange, prefs)
+      if (shaped === null) return undefined
+      const seq = this.options.logSeq?.()
+      return seq === undefined ? shaped : { ...shaped, seq }
+    }
+    if (channel === EVENTS.helperCards) {
+      if (prefs.metered && !prefs.helpers) return undefined
+      const snapshot = payload as CardsSnapshot
+      const held = feedState.cardsHeld(deviceId)
+      if (held === undefined) {
+        feedState.setCards(deviceId, rememberCards(snapshot))
+        return snapshot
+      }
+      const { delta, next } = cardsDelta(held, snapshot)
+      feedState.setCards(deviceId, next)
+      return delta === null ? undefined : { ...delta, delta: true }
+    }
+    return payload
   }
 
   added(): ReadonlyMap<string, RpcMethod> {
@@ -401,7 +438,7 @@ export class DevicesServer implements DevicesHost {
     }
     this.options.onSeen?.(deviceId)
     const openedAt = Date.now()
-    this.connLog.note(`ws-open:${deviceId}`, 'Device connected', { device: deviceId, from })
+    this.connLog.note(`ws-open:${deviceId}`, 'Device connected', { device: deviceId, from, deflate: conn.deflate })
     const session = new RpcSession(conn, {
       deviceId,
       call: (from, method, args) => this.options.callRpc(from, method, args),
@@ -412,6 +449,7 @@ export class DevicesServer implements DevicesHost {
       },
       onClose: (closed, code) => {
         this.sessions.delete(closed)
+        if (![...this.sessions].some((other) => other.deviceId === deviceId)) feedState.clear(deviceId)
         this.connLog.linkEnded(deviceId, Date.now() - openedAt, { code, hello: closed.facts !== null, from })
         this.options.onConnections?.()
       },
