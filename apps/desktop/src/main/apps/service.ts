@@ -175,12 +175,13 @@ export class AppsService {
    * Opens the sign-in for an app in the person's own browser. The returned `wait` resolves when
    * Composio reports a new active account ('connected'), after five minutes ('timeout') or on abort.
    */
-  async begin(app: string): Promise<{ wait(signal?: AbortSignal): Promise<'connected' | 'timeout' | 'stopped'> }> {
+  async begin(app: string, opts: { open?: boolean } = {}): Promise<{ link: string; before: Set<string>; wait(signal?: AbortSignal): Promise<'connected' | 'timeout' | 'stopped'> }> {
     const backend = this.backend()
     if (backend === null) throw new Error(NO_KEY)
     const before = new Set((await backend.accounts([app])).filter((a) => a.status === 'ACTIVE').map((a) => a.id))
     const link = await backend.connectLink(app)
-    await this.deps.openExternal(link)
+    // A linked phone opens the sign-in in its own browser, so the link goes to it and not to this computer's.
+    if (opts.open !== false) await this.deps.openExternal(link)
     this.connecting.add(app)
     this.changed()
     const wait = async (signal?: AbortSignal): Promise<'connected' | 'timeout' | 'stopped'> => {
@@ -207,7 +208,7 @@ export class AppsService {
         this.changed()
       }
     }
-    return { wait }
+    return { link, before, wait }
   }
 
   /** From Connections: open the sign-in and return at once; the page updates when it is done. */
@@ -220,6 +221,31 @@ export class AppsService {
       return { ok: true, message: `Sign in to ${appName(app)} in your browser. This page updates when it is connected.` }
     } catch (cause) {
       return { ok: false, message: cause instanceof Error ? cause.message : String(cause) }
+    }
+  }
+
+  /**
+   * A linked phone adds an app (or another account of one): the sign-in link comes back to it, to open in its own
+   * browser. When the account shows up it goes into `profileId` (an agent profile), if one was picked. Nothing is
+   * polled for the phone: this computer waits for the account, as it does for its own Connect button.
+   */
+  async connectForDevice(app: string, profileId: string): Promise<{ ok: boolean; link: string; message: string }> {
+    if (this.backend() === null) return { ok: false, link: '', message: 'Add your Composio key on the computer first.' }
+    try {
+      const started = await this.begin(app, { open: false })
+      void started
+        .wait()
+        .then(async (result) => {
+          if (result !== 'connected' || profileId === '') return
+          const fresh = (await this.accounts()).filter((a) => a.app === app && a.status === 'ACTIVE' && !started.before.has(a.id))
+          const refs = await this.accountRefs(fresh.map((a) => a.id))
+          for (const ref of refs) this.profiles.setMember(profileId, ref, true)
+          this.changed()
+        })
+        .catch(() => undefined)
+      return { ok: true, link: started.link, message: `Sign in to ${appName(app)}.` }
+    } catch (cause) {
+      return { ok: false, link: '', message: cause instanceof Error ? cause.message : String(cause) }
     }
   }
 

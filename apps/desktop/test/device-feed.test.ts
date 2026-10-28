@@ -356,5 +356,18 @@ describe('a linked phone on mobile data', () => {
       old.close()
     }
   })
+
+  it('a phone may ask the computer to start connecting an app, and gets the answer back to open itself', async () => {
+    const phone = await link()
+    try {
+      const answer = (await phone.call('apps.connectLink', 'gmail', '')) as { ok: boolean; link: string; message: string }
+      // This test computer has no apps service: it says so plainly, and nothing opens on the computer.
+      expect(answer.ok).toBe(false)
+      expect(answer.message.length).toBeGreaterThan(3)
+      await expect(phone.call('apps.connectLink', 'Not A Slug!', '')).rejects.toThrow()
+    } finally {
+      phone.close()
+    }
+  })
 })
 

@@ -747,6 +747,16 @@ export function registerIpc(deps: IpcDeps): () => void {
     return deps.apps.connect(app)
   })
 
+  // A linked phone adds an app or another account: the sign-in link comes back to open on the phone.
+  handle(DEVICE_CHANNELS.connectApp, async (event, rawApp, rawProfile) => {
+    if (wireOf(event) === null) throw new Error('Only a linked device asks for that.')
+    const app = requireString(rawApp, 'app', 64).trim().toLowerCase()
+    if (!/^[a-z0-9_]{2,60}$/.test(app)) throw new Error('Invalid app')
+    const profile = typeof rawProfile === 'string' ? rawProfile.slice(0, 64) : ''
+    if (deps.apps === undefined) return { ok: false, link: '', message: 'Not available in this build.' }
+    return deps.apps.connectForDevice(app, profile)
+  })
+
   handle(CHANNELS.apps.disconnect, async (_event, rawId) => {
     const id = requireString(rawId, 'accountId', 200)
     await deps.apps?.disconnect(id)

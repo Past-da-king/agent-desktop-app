@@ -7,6 +7,7 @@ export const DEVICE_CHANNELS = {
   prefs: 'agent:device.prefs',
   since: 'agent:data.since',
   page: 'agent:data.page',
+  connectApp: 'agent:apps.connectLink',
 } as const
 
 /** The same, by dotted RPC name. */
@@ -14,4 +15,5 @@ export const DEVICE_RPC_CHANNELS: Readonly<Record<string, string>> = {
   'device.prefs': DEVICE_CHANNELS.prefs,
   'data.since': DEVICE_CHANNELS.since,
   'data.page': DEVICE_CHANNELS.page,
+  'apps.connectLink': DEVICE_CHANNELS.connectApp,
 }
