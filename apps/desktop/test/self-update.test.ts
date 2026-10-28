@@ -239,6 +239,21 @@ describe('self update', () => {
     expect(silent).toMatch(/left no result at .*result\.json and no log at .*launcher\.log/)
   })
 
+  it('a reinstall of the same version that failed is a failure, though the running version matches', async () => {
+    const { updater, dir, quits, busy } = setup()
+    await updater.install(installer(dir, 'Agent-0.2.52-setup.exe'), 'chat_9')
+    busy.on = false
+    await until(() => quits.length > 0)
+    const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
+    writeFileSync(
+      join(note.work, 'result.json'),
+      JSON.stringify(result({ wanted: '0.2.52', stage: 'checking that no file is in use', error: 'a file of the app is still in use after 20 s: C:\\A\\resources\\app.asar, held by node.exe (pid 18560, C:\\node.exe)' })),
+    )
+    const after = setup({ userData: dir, currentVersion: '0.2.52' }).updater.resume()!
+    expect(after.ok).toBe(false)
+    expect(resumeNote(after)).toMatch(/FAILED: wanted 0\.2\.52 .* Reason: while checking that no file is in use: .*app\.asar, held by node\.exe \(pid 18560/)
+  })
+
   it('an old-style note (from a version before this launcher) still reports', () => {
     const { dir } = setup()
     writeFileSync(join(dir, 'update-pending.json'), JSON.stringify({ from: '0.2.52', to: '0.2.53', chat: '', installer: 'Agent-0.2.53-setup.exe', at: 1 }))
@@ -353,7 +368,7 @@ describe.runIf(onWindows)('the update launcher on Windows (real WMI start, real 
     try {
       const r = await runLauncher(b, setup, '0.2.53')
       expect(r.ok).toBe(false)
-      expect(r.stage).toBe('checking that no file is in use')
+      expect({ stage: r.stage, error: r.error }).toMatchObject({ stage: 'checking that no file is in use' })
       expect(r.locked?.file).toBe(join(b.appDir, 'resources', 'app.asar'))
       expect(r.locked?.holders.map((h) => h.pid)).toContain(process.pid)
       expect(r.error).toContain(`app.asar, held by node.exe (pid ${process.pid}`)

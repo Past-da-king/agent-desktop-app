@@ -192,8 +192,9 @@ export const LAUNCHER_PS1 = String.raw`param([string]$ParamsFile)
 $ErrorActionPreference = 'Stop'
 $p = Get-Content -Raw -LiteralPath $ParamsFile | ConvertFrom-Json
 $r = [ordered]@{ version = 1; wanted = $p.wanted; stage = 'start'; ok = $false; appExited = $false; forced = $false; killed = @(); locked = $null; installerExit = $null; installedVersion = $null; rolledBack = $false; relaunched = $false; error = $null; startedAt = (Get-Date).ToString('o'); finishedAt = $null }
-function Log([string]$m) { Add-Content -LiteralPath $p.log -Value ((Get-Date).ToString('o') + ' ' + $m) -Encoding UTF8 }
-function Save { $r.finishedAt = (Get-Date).ToString('o'); ($r | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $p.result -Encoding UTF8 }
+function Retry([scriptblock]$write) { for ($i = 0; $i -lt 40; $i++) { try { & $write; return } catch { Start-Sleep -Milliseconds 50 } } }
+function Log([string]$m) { $line = (Get-Date).ToString('o') + ' ' + $m + [Environment]::NewLine; Retry { [IO.File]::AppendAllText($p.log, $line, [Text.Encoding]::UTF8) } }
+function Save { $r.finishedAt = (Get-Date).ToString('o'); $json = $r | ConvertTo-Json -Depth 6; Retry { [IO.File]::WriteAllText($p.result, $json, [Text.Encoding]::UTF8) } }
 $dir = $p.installDir.TrimEnd('\')
 $prefix = $dir + '\'
 function FromDir { @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { [ordered]@{ pid = [int]$_.ProcessId; name = [string]$_.Name; path = [string]$_.ExecutablePath } }) }
@@ -463,8 +464,9 @@ export class SelfUpdater {
         result = null
       }
     }
-    // The version this process runs is the proof; the launcher's result says why when it is not the one wanted.
-    const ok = compareVersions(now, note.to) >= 0
+    // The version this process runs must be the one wanted, and a launcher that reported a failure is a failure even
+    // then (a reinstall of the same version that never ran the installer still runs that version).
+    const ok = compareVersions(now, note.to) >= 0 && (result === null || result.ok)
     return { ...note, chat, now, ok, result, reason: ok ? null : failureReason(note, now, result, work) }
   }
 }
