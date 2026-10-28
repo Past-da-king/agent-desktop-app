@@ -109,6 +109,12 @@ export const routineCardId = (triggerId: string): string => `rt-${triggerId}`
 /** How often a routine's card is rewritten with the step it is on (each write is a row a phone may pull). */
 const ROUTINE_STEP_MS = 1_500
 
+/** A stopped routine's result in plain words: "Stopped by switching the routine off." */
+function stoppedText(why: string): string {
+  const words = why.startsWith('stopped by ') ? `Stopped by ${why.slice('stopped by '.length)}` : `Stopped: ${why}`
+  return `${words}.`
+}
+
 /** A step left running, as its meta reads inside the stored row (meta is JSON text in the row's JSON). */
 const RUNNING_IN_META = '\\"status\\":\\"running\\"'
 /**
@@ -996,11 +1002,11 @@ export class Runner {
       // Only a stop from outside (its X, helper_stop, switched off) makes it stopped; a routine that ends itself on a
       // card aborts its own turn and is waiting, not stopped.
       outcome = this.routineStopBy !== null ? { text: 'Stopped before it started.', waiting: false, failed: true, stopped: true } : await this.runRoutineTurn(trigger)
-      if (this.routineStopBy !== null) outcome = { text: `Stopped: ${this.routineStopBy}.`, waiting: false, failed: true, stopped: true }
+      if (this.routineStopBy !== null) outcome = { text: stoppedText(this.routineStopBy), waiting: false, failed: true, stopped: true }
       return outcome
     } catch (error) {
       outcome = this.routineStopBy !== null
-        ? { text: `Stopped: ${this.routineStopBy ?? 'it was stopped'}.`, waiting: false, failed: true, stopped: true }
+        ? { text: stoppedText(this.routineStopBy ?? 'it was stopped'), waiting: false, failed: true, stopped: true }
         : { text: friendlyError(error), waiting: false, failed: true }
       throw error
     } finally {

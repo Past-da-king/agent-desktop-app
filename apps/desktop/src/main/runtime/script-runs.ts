@@ -59,7 +59,7 @@ export function watchBackgroundScripts(store: DataStore, changed: () => void, no
     void script.done.then(async (outcome) => {
       live.end()
       const state = stoppedBy !== '' ? 'stopped' : outcome.ok ? 'done' : 'failed'
-      const result = stoppedBy !== '' ? `Stopped: ${stoppedBy}.` : outcome.ok ? (outcome.value ?? 'Done.') : outcome.timedOut === true ? 'It ran out of time.' : (outcome.error ?? 'It failed.')
+      const result = stoppedBy !== '' ? `${stoppedBy.charAt(0).toUpperCase()}${stoppedBy.slice(1)}.` : outcome.ok ? (outcome.value ?? 'Done.') : outcome.timedOut === true ? 'It ran out of time.' : (outcome.error ?? 'It failed.')
       const row = await store.get('chat_item', id).catch(() => null)
       const before = row === null ? meta : parseMeta(row.meta)
       await store
