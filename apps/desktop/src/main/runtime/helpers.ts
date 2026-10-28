@@ -1064,6 +1064,8 @@ export class HelperManager implements HelperHost {
       const meta = parseMeta(row.meta)
       if (meta['state'] !== 'working') continue
       if (typeof meta['projectChat'] === 'string' && meta['projectChat'] !== '') continue
+      // A routine's card (runner.ts routineCardId) is ended by its own run.
+      if (typeof meta['routine'] === 'object' && meta['routine'] !== null) continue
       if (this.pendingStops.has(row.id)) continue
       const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
       const life = Math.max(numberField(meta['startedAt']) || row.createdAt, lease?.heartbeatAt ?? 0)

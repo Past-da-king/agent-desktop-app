@@ -91,7 +91,20 @@ export interface RoutineRunResult {
   text: string
   /** True when the routine posted a question or approval card and stopped there. */
   waiting: boolean
+  /** True when the run itself failed (no brain, an error), not when it ran and reported a problem. */
+  failed?: boolean
 }
+
+/**
+ * A routine run's card in the main chat (28 Oct 2026: a routine ran with nothing on screen, so he could not see it
+ * working). A `helper` row, so the sidebar, the helpers view and a phone show it like any helper: its name, its live
+ * step, its result. One row per routine (`rt-<trigger id>`), opened again by each run. It carries `routine` so the
+ * helper service never takes it for a helper run of its own.
+ */
+export const routineCardId = (triggerId: string): string => `rt-${triggerId}`
+
+/** How often a routine's card is rewritten with the step it is on (each write is a row a phone may pull). */
+const ROUTINE_STEP_MS = 1_500
 
 export const WAITING_FOR_USER = 'Waiting for you'
 
@@ -255,6 +268,8 @@ export class Runner {
   private routineRunning = false
   private routineWaiting = false
   private routineController: AbortController | null = null
+  /** The running routine's card (routineCardId) and when its step line was last written. */
+  private routineCard: { id: string; stepAt: number; step: string; timer: ReturnType<typeof setTimeout> | null } | null = null
   private readonly askWaiters = new Map<string, (answer: string | null) => void>()
   private readonly decisionWaiters = new Map<string, (approved: boolean) => void>()
   /** Card id -> the chat it is in, for every card waiting on the person. */
@@ -296,7 +311,11 @@ export class Runner {
     // tracked, so a helper's question or approval was counted on the rail ("Waiting for you", 2) but never drawn
     // in Needs you or on the phone, and a card whose helper had ended could not be answered from there at all.
     const watched = deps.store as DataStore & { onChange?: (listener: (change: CardChange) => void) => () => void }
-    this.offCards = watched.onChange?.((change) => this.trackCard(change)) ?? null
+    this.offCards =
+      watched.onChange?.((change) => {
+        this.trackCard(change)
+        this.routineCardStopped(change)
+      }) ?? null
   }
 
   /** Keep the waiting list in step with the store: an open card row is waiting, an answered or deleted one is not. */
@@ -916,9 +935,16 @@ export class Runner {
     if (this.routineRunning) return { text: 'Another routine is still running.', waiting: false }
     this.routineRunning = true
     this.routineWaiting = false
+    let outcome: RoutineRunResult = { text: 'The routine stopped.', waiting: false, failed: true }
+    await this.openRoutineCard(trigger).catch(() => undefined)
     try {
-      return await this.runRoutineTurn(trigger)
+      outcome = await this.runRoutineTurn(trigger)
+      return outcome
+    } catch (error) {
+      outcome = { text: friendlyError(error), waiting: false, failed: true }
+      throw error
     } finally {
+      await this.closeRoutineCard(outcome).catch(() => undefined)
       this.routineRunning = false
       this.routineWaiting = false
       this.routineController = null
@@ -927,9 +953,84 @@ export class Runner {
     }
   }
 
+  /** The routine's card goes up in the main chat as working, so the sidebar shows it running. */
+  private async openRoutineCard(trigger: TriggerRow): Promise<void> {
+    const id = routineCardId(trigger.id)
+    const existing = await this.store.get('chat_item', id)
+    const old = existing === null ? {} : parseMeta(existing.meta)
+    const startedAt = this.now()
+    this.routineCard = { id, stepAt: 0, step: '', timer: null }
+    await this.store.upsert('chat_item', {
+      id,
+      kind: 'helper',
+      text: trigger.prompt.slice(0, 2000),
+      meta: JSON.stringify({
+        ...old,
+        id,
+        label: trigger.name,
+        state: 'working',
+        summary: 'Starting',
+        queued: false,
+        startedAt,
+        endedAt: null,
+        result: '',
+        routine: { id: trigger.id, name: trigger.name },
+      }),
+    })
+    this.emitFor(MAIN_CHAT, { type: 'chat_changed' })
+  }
+
+  /** The step a routine is on, as its card's line: written at most every ROUTINE_STEP_MS, the newest one last. */
+  private routineStep(text: string): void {
+    const card = this.routineCard
+    const step = clip(text.replace(/\s+/g, ' ').trim(), 140)
+    if (card === null || step === '') return
+    card.step = step
+    if (card.timer !== null) return
+    const wait = Math.max(0, card.stepAt + ROUTINE_STEP_MS - this.now())
+    card.timer = setTimeout(() => {
+      card.timer = null
+      if (this.routineCard !== card) return
+      card.stepAt = this.now()
+      void this.patchRoutineCard(card.id, { summary: card.step }, true).catch(() => undefined)
+    }, wait)
+    card.timer.unref?.()
+  }
+
+  private async closeRoutineCard(outcome: RoutineRunResult): Promise<void> {
+    const card = this.routineCard
+    this.routineCard = null
+    if (card === null) return
+    if (card.timer !== null) clearTimeout(card.timer)
+    const result = outcome.waiting ? WAITING_FOR_USER : outcome.text.trim()
+    await this.patchRoutineCard(card.id, {
+      state: outcome.failed === true ? 'failed' : 'done',
+      summary: clip((result.split('\n').find((line) => line.trim() !== '') ?? 'Done').trim(), 140),
+      result: result.slice(0, 6000),
+      endedAt: this.now(),
+    }, false)
+  }
+
+  private async patchRoutineCard(id: string, patch: Record<string, unknown>, onlyWhileWorking: boolean): Promise<void> {
+    const row = await this.store.get('chat_item', id)
+    if (row === null) return
+    const meta = parseMeta(row.meta)
+    if (onlyWhileWorking && meta['state'] !== 'working') return
+    await this.store.upsert('chat_item', { id, kind: row.kind, text: row.text, meta: JSON.stringify({ ...meta, ...patch }) })
+    this.emitFor(MAIN_CHAT, { type: 'chat_changed' })
+  }
+
+  /** Stop on a routine's card (the helpers view, a phone): the helper service marks it stopped, and the run ends. */
+  private routineCardStopped(change: CardChange): void {
+    const card = this.routineCard
+    const row = change.row as { id?: unknown; meta?: unknown } | undefined
+    if (card === null || row === undefined || row.id !== card.id || typeof row.meta !== 'string') return
+    if (parseMeta(row.meta)['state'] === 'stopped') this.routineController?.abort()
+  }
+
   private async runRoutineTurn(trigger: TriggerRow): Promise<RoutineRunResult> {
     const brain = mainBrain(this.brainDeps())
-    if (!isBrain(brain)) return { text: brain.message, waiting: false }
+    if (!isBrain(brain)) return { text: brain.message, waiting: false, failed: true }
     if (brain.kind === 'plan') return this.runCliRoutine(trigger, brain)
     const resolved = { provider: brain.provider, model: brain.model, current: this.settings.get() }
 
@@ -958,7 +1059,13 @@ export class Runner {
       this.routineController = controller
       const context = this.toolContext(controller.signal, 'routine')
       const loop = new AgentLoop({ provider: resolved.provider, model: resolved.model, tools: this.tools })
-      const text = await loop.run(system, history, context, { signal: controller.signal })
+      const text = await loop.run(system, history, context, {
+        signal: controller.signal,
+        // Its steps show on its card.
+        onEvent: async (event) => {
+          if (event.type === 'tool_started') this.routineStep(toolStepLabel(event.call.name))
+        },
+      })
 
       if (this.routineWaiting) return { text: WAITING_FOR_USER, waiting: true }
       const summary = text.trim()
@@ -967,7 +1074,7 @@ export class Runner {
         waiting: false,
       }
     } catch (error) {
-      return { text: friendlyError(error), waiting: false }
+      return { text: friendlyError(error), waiting: false, failed: true }
     }
   }
 
@@ -1419,12 +1526,15 @@ export class Runner {
       ...(brain.model === '' ? {} : { model: brain.model }),
       context: this.toolContext(controller.signal, 'routine'),
       signal: controller.signal,
-      onEvent: async () => undefined,
-      onCall: async () => undefined,
+      // Its steps show on its card (the engine's own tools and ours).
+      onEvent: async (event) => {
+        if (event.type === 'tool_started') this.routineStep(toolStepLabel(event.call.name))
+      },
+      onCall: async (call) => this.routineStep(toolStepLabel(call.name)),
       onResult: async () => undefined,
     })
     if (this.routineWaiting) return { text: WAITING_FOR_USER, waiting: true }
-    if (result.error !== undefined) return { text: result.error, waiting: false }
+    if (result.error !== undefined) return { text: result.error, waiting: false, failed: true }
     const summary = result.text.trim()
     return { text: summary === '' ? 'The routine finished without a summary.' : summary, waiting: false }
   }
@@ -1679,7 +1789,10 @@ export class Runner {
       owner: browserOwnerOf(role, chat),
       ...(role === 'main' && chat !== MAIN_CHAT ? { chat } : {}),
       activity: async (text, meta) => {
-        if (role === 'routine') return ++this.activitySeq
+        if (role === 'routine') {
+          this.routineStep(text)
+          return ++this.activitySeq
+        }
         const id = ++this.activitySeq
         const row = await this.store.upsert('chat_item', {
           kind: 'activity',
@@ -1989,6 +2102,12 @@ export function isOpenCardRow(row: { kind: string; meta: string }): boolean {
 
 function stringField(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+/** A tool's name as a step line on a routine's card: "mcp__agent__web_fetch" reads "Using web fetch". */
+export function toolStepLabel(name: string): string {
+  const bare = name.replace(/^mcp__[^_]+__/, '').replace(/[_-]+/g, ' ').trim()
+  return bare === '' ? 'Working' : `Using ${bare.charAt(0).toLowerCase()}${bare.slice(1)}`
 }
 
 function clip(text: string, limit: number): string {
