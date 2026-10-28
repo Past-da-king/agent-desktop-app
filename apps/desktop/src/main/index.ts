@@ -934,6 +934,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     packaged: app.isPackaged,
     busy: (chat) => runner?.state(chat).running ?? false,
     quit: () => app.quit(),
+    // The update could not start (the app stays up): the chat that asked hears the real reason.
+    tell: (chat, text) => void runner?.deliver(text, chat).catch(() => undefined),
+    // The launcher starts outside this app with the user's default environment: a copy run with its own data
+    // folder must come back with it.
+    relaunchEnv: userDataOverride !== '' ? { AGENT_USER_DATA: userDataOverride } : {},
     log: (message, detail) => logger.info(message, detail),
   })
   const appControl: AppControlDeps = {
@@ -1168,7 +1173,14 @@ async function startServices(win: BrowserWindow): Promise<void> {
     // Back from an update the agent started (app_update): it hears so in the chat that asked, and carries on.
     const updated = selfUpdater.resume()
     if (updated !== null) {
-      logger.info('Update finished', { from: updated.from, now: updated.now, ok: updated.ok })
+      logger.info('Update finished', {
+        from: updated.from,
+        now: updated.now,
+        ok: updated.ok,
+        installed: updated.result?.installedVersion ?? null,
+        installerExit: updated.result?.installerExit ?? null,
+        reason: updated.reason,
+      })
       void runner?.deliver(resumeNote(updated), updated.chat).catch(() => undefined)
     }
     // Helpers left working are now marked interrupted, so desks can start: anything that arrived meanwhile,

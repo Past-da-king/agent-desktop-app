@@ -494,7 +494,7 @@ function updateTool(deps: AppControlDeps): Tool {
     spec: {
       name: 'app_update',
       description:
-        "Install a newer version of this app from its installer file (for example C:\\Users\\me\\Downloads\\Agent-1.2.3-setup.exe) without any clicks: once this turn has ended the app closes, installs silently in the same place and opens again, and you get a note in this chat saying the update finished (version before and after) so you carry on. Tell the person in your reply that the app will restart for the update (a short notice, not a question). Nothing in the chat is lost.",
+        "Install a newer version of this app from its installer file (for example C:\\Users\\me\\Downloads\\Agent-1.2.3-setup.exe) without any clicks: once this turn has ended the app closes, installs silently in the same place and opens again, and you get a note in this chat saying the update finished (version before and after) or, if it failed, the real reason (installer exit code, a file in use and which process held it, the log path) so you carry on and can tell the person exactly what happened. Tell the person in your reply that the app will restart for the update (a short notice, not a question). Nothing in the chat is lost.",
       schema: schema(['installer'], { installer: str("Full path of this app's setup .exe") }),
     },
     run: async (input, ctx) => {
