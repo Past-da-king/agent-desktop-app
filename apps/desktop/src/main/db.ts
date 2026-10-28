@@ -28,6 +28,7 @@ import {
   type SyncStore,
 } from '@agent/core'
 
+import { isLiveHelper, isOpenCard } from '../shared/device-list'
 import { changedFields, currentWriter, versionFields, type MemoryWriter } from './memory/history'
 import { redactDeep } from './vault/redact'
 
@@ -44,6 +45,12 @@ export type StoreChangeListener = (change: StoreChange) => void
 
 /** Up to this many rows in one batch or sync are announced one by one; more becomes one reset per entity. */
 const MAX_SINGLE_CHANGES = 40
+
+/** Rows read per slice when a device's chat list is built, so no one slice holds the event loop for long. */
+const SLICE_ROWS = 500
+
+/** How many of the newest rows the walk looks through before the quiet chats are read by their own index. */
+const WALK_ROWS = 6000
 
 /**
  * A chat row's chat, read inside SQLite: `meta` is JSON text inside the payload JSON. Rows of the first chat carry
@@ -129,6 +136,67 @@ export class Store implements SyncStore {
     this.assertEntity(entity)
     const rows = this.readEntity(entity).filter((row) => !row.deleted)
     return sortedRows(rows, false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+  }
+
+  /**
+   * The chat rows a linked device needs: the newest `perChat` rows of every chat (the main chat and each project
+   * chat), plus every card still waiting for an answer and the helpers working now, oldest first. The table is
+   * walked newest first in slices along the created-at index, yielding between slices, so the event loop (and the link's pongs) is never held for more than a few milliseconds and the
+   * rest of the table is never parsed.
+   */
+  async listChatItemsForDevice(perChat: number, now: number = Date.now()): Promise<Array<EntityMap['chat_item']>> {
+    const want = Math.max(1, Math.floor(perChat))
+    // The chats that exist, from the chat index alone (no row is parsed).
+    const counts = new Map<string, number>([['main', 0]])
+    for (const row of this.db.prepare(`SELECT DISTINCT ${CHAT_SQL} AS chat FROM rows WHERE entity = 'chat_item'`).all()) {
+      const chat = row['chat']
+      if (typeof chat === 'string' && chat !== '') counts.set(chat, 0)
+    }
+    const picked = new Map<string, StoredRow>()
+    const slice = this.db.prepare(
+      `SELECT cid, stamp, deleted, payload FROM rows WHERE entity = 'chat_item' AND deleted = 0 AND json_extract(payload, '$.createdAt') <= ? ORDER BY json_extract(payload, '$.createdAt') DESC, stamp DESC LIMIT ?`,
+    )
+    let at = Number.MAX_SAFE_INTEGER
+    let scanned = 0
+    const done = new Set<string>()
+    for (;;) {
+      const rows = slice.all(at, SLICE_ROWS).map(rowFromSql)
+      let fresh = 0
+      for (const row of rows) {
+        if (done.has(row.cid)) continue
+        done.add(row.cid)
+        fresh += 1
+        const chat = chatOfPayload(row.payload)
+        const n = counts.get(chat) ?? 0
+        if (n >= want) continue
+        counts.set(chat, n + 1)
+        picked.set(row.cid, row)
+      }
+      const last = rows[rows.length - 1]
+      scanned += rows.length
+      if (rows.length < SLICE_ROWS || fresh === 0 || last === undefined || scanned >= WALK_ROWS || [...counts.values()].every((n) => n >= want)) break
+      at = numberField(last.payload.createdAt)
+      await yieldNow()
+    }
+    // A chat that has gone quiet is not in the recent walk: its own rows come by the chat index (small by nature).
+    for (const [chat, n] of counts) {
+      if (n >= want || chat === 'main') continue
+      const own = this.db
+        .prepare(`SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_chat WHERE entity = 'chat_item' AND deleted = 0 AND ${CHAT_SQL} = ?`)
+        .all(chat)
+        .map(rowFromSql)
+      for (const row of sortedRows(own, true).slice(0, want)) picked.set(row.cid, row)
+      await yieldNow()
+    }
+    const waiting = this.db
+      .prepare(`SELECT cid, stamp, deleted, payload FROM rows WHERE entity = 'chat_item' AND deleted = 0 AND json_extract(payload, '$.kind') IN ('question', 'approval', 'helper')`)
+      .all()
+      .map(rowFromSql)
+    for (const row of waiting) {
+      if (picked.has(row.cid)) continue
+      if (isOpenCard(row.payload) || isLiveHelper(row.payload, now)) picked.set(row.cid, row)
+    }
+    return sortedRows([...picked.values()], false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap['chat_item'])
   }
 
   /**
@@ -560,6 +628,22 @@ export class Store implements SyncStore {
 
   private assertEntity(entity: string): asserts entity is EntityName {
     if (!isEntityName(entity)) throw new Error(`Unknown entity: ${entity}`)
+  }
+}
+
+function yieldNow(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
+}
+
+/** A chat row's chat ('main' when untagged), read from its payload. */
+function chatOfPayload(payload: Record<string, unknown>): string {
+  const meta = payload['meta']
+  if (typeof meta !== 'string' || !meta.includes('"chat"')) return 'main'
+  try {
+    const chat = (JSON.parse(meta) as { chat?: unknown }).chat
+    return typeof chat === 'string' && chat !== '' ? chat : 'main'
+  } catch {
+    return 'main'
   }
 }
 

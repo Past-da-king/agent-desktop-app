@@ -42,6 +42,8 @@ import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
 import { asWriter } from './memory/history'
 import { isIconImage } from '../shared/project-icon'
+import { wireOf } from './devices/registry'
+import { DEVICE_CHAT_ROWS, boundRows, isLiveHelper, isOpenCard } from '../shared/device-list'
 import { lightRow } from '../shared/light-row'
 import { parseRouteTarget } from '../shared/route-target'
 import { picksFrom } from './settings'
@@ -360,9 +362,16 @@ export function registerIpc(deps: IpcDeps): () => void {
 
   // ---- data ----
 
-  handle(CHANNELS.data.list, async (_event, rawEntity) => {
+  handle(CHANNELS.data.list, async (event, rawEntity) => {
     const entity = entityArg(rawEntity)
     // Listed rows travel light (a run's long output stays behind); data.get has the whole row.
+    if (wireOf(event) !== null) {
+      // A linked device is sent a bounded list, never the whole table: one frame of hundreds of megabytes starves the
+      // link's pings and the device drops it (shared/device-list.ts).
+      const rows = entity === 'chat_item' ? await store.listChatItemsForDevice(DEVICE_CHAT_ROWS) : await store.list(entity)
+      const light = rows.map((row) => lightRow(entity, row))
+      return entity === 'chat_item' ? boundRows(light as Array<{ kind?: unknown; meta?: unknown; createdAt?: unknown }>, (row) => isOpenCard(row) || isLiveHelper(row, Date.now())) : boundRows(light)
+    }
     return (await store.list(entity)).map((row) => lightRow(entity, row))
   })
 
