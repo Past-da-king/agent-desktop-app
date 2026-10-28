@@ -19,13 +19,14 @@ import { filterRows } from '../src/shared/list-where'
 import { shapeChange } from '../src/shared/device-feed'
 import { titleOfChat } from '../src/main/runtime/chat-lines'
 
-const heard: { listener: ((change: DataChange) => void) | null; lists: number } = { listener: null, lists: 0 }
+const heard: { listener: ((change: DataChange) => void) | null; lists: number; gate: Promise<void> } = { listener: null, lists: 0, gate: Promise.resolve() }
 
 vi.mock('../src/renderer/bridge', () => ({
   agent: {
     data: {
       list: async () => {
         heard.lists += 1
+        await heard.gate
         return [{ id: 'a', createdAt: 1, kind: 'user', text: 'hello', meta: '{}' }]
       },
       onChanged: (callback: (change: DataChange) => void) => {
@@ -101,6 +102,30 @@ describe('a flood of changes reaches the window as a batch', () => {
       vi.advanceTimersByTime(DATA_BATCH_MS)
       expect(heard.lists).toBe(before + 1)
     } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('changes heard while a list is read are applied to it, and it is not read again', async () => {
+    vi.useFakeTimers()
+    try {
+      const { useData, DATA_BATCH_MS } = await import('../src/renderer/state/useData')
+      let open: () => void = () => undefined
+      heard.gate = new Promise<void>((resolve) => (open = resolve))
+      const before = heard.lists
+      const loading = useData.getState().load('task')
+      await Promise.resolve()
+      heard.listener!({ entity: 'task', row: { id: 't9', createdAt: 9, title: 'written during the read' } as never })
+      heard.listener!({ entity: 'task', id: 'a', deleted: true })
+      vi.advanceTimersByTime(DATA_BATCH_MS)
+      open()
+      await loading
+      vi.advanceTimersByTime(DATA_BATCH_MS)
+      await Promise.resolve()
+      expect(heard.lists).toBe(before + 1)
+      expect((useData.getState().rows.task as Array<{ id: string }>).map((row) => row.id)).toEqual(['t9'])
+    } finally {
+      heard.gate = Promise.resolve()
       vi.useRealTimers()
     }
   })

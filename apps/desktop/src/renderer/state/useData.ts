@@ -40,6 +40,19 @@ let pending: DataChange[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 export const DATA_BATCH_MS = 16
 
+/**
+ * Changes heard while a list is being read: applied to it once the read lands, instead of reading the whole list
+ * again (28 Oct 2026: at start-up every write during the first read of 63,000 chat rows made the window read them all
+ * a second time). Every write after the read began is here in order, so the last one per row wins.
+ */
+const heldWhileLoading = new Map<EntityName, DataChange[]>()
+
+function hold(change: DataChange): void {
+  const list = heldWhileLoading.get(change.entity)
+  if (list === undefined) heldWhileLoading.set(change.entity, [change])
+  else list.push(change)
+}
+
 function hear(change: DataChange): void {
   const state = useData.getState()
   // A list not on screen yet is read whole when something first asks for it.
@@ -59,12 +72,18 @@ export function flushChanges(): void {
   const patches: DataChange[] = []
   for (const change of changes) {
     if (reload.has(change.entity)) continue
+    const loading = state.loading[change.entity]
     // A batch says which rows changed: applied like single changes, the list is not read again.
-    if (change.reset === true && change.batch !== undefined && !state.loading[change.entity]) {
-      for (const each of change.batch) patches.push(each)
+    if (change.reset === true && change.batch !== undefined) {
+      for (const each of change.batch) (loading ? hold : (one: DataChange) => patches.push(one))(each)
       continue
     }
-    if (change.reset === true || (change.row === undefined && change.id === undefined) || state.loading[change.entity]) {
+    // Being read now: kept and applied when the read lands.
+    if (loading && change.reset !== true && (change.row !== undefined || change.id !== undefined)) {
+      hold(change)
+      continue
+    }
+    if (change.reset === true || (change.row === undefined && change.id === undefined) || loading) {
       reload.add(change.entity)
       continue
     }
@@ -97,12 +116,18 @@ export const useData = create<DataState>((set, get) => ({
       again.add(entity)
       return
     }
+    heldWhileLoading.delete(entity)
     set((state) => ({ loading: { ...state.loading, [entity]: true } }))
     try {
       const rows: Array<EntityMap[E]> = await agent.data.list(entity)
+      // What changed while it was read (held by flushChanges), applied on top in one pass.
+      flushChanges()
+      const held = heldWhileLoading.get(entity) ?? []
+      heldWhileLoading.delete(entity)
       set((state) => {
         const nextRows: RowStore = { ...state.rows }
-        nextRows[entity] = rows as unknown as RowStore[E]
+        const fresh = rows as unknown as Array<{ id: string; createdAt: number }>
+        nextRows[entity] = (held.length === 0 ? fresh : patchedMany(fresh, held)) as unknown as RowStore[E]
         return {
           rows: nextRows,
           loaded: { ...state.loaded, [entity]: true },
@@ -111,6 +136,7 @@ export const useData = create<DataState>((set, get) => ({
         }
       })
     } catch (error) {
+      heldWhileLoading.delete(entity)
       set((state) => ({
         loading: { ...state.loading, [entity]: false },
         errors: {
