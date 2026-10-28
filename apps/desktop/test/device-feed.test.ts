@@ -129,6 +129,12 @@ async function link(options: { deflate?: boolean } = {}): ReturnType<typeof conn
 
 /** 300 main-chat messages, helper steps (main chat but a helper's), a project chat, an old open question. */
 async function seedChat(): Promise<{ question: string }> {
+  // One transaction: 450 single writes each wait for the disk, which takes seconds on a Linux or WSL
+  // filesystem and made these tests time out there (they passed on Windows).
+  return store.batch(() => seedRows())
+}
+
+async function seedRows(): Promise<{ question: string }> {
   const t0 = Date.now() - 400_000
   for (let i = 0; i < 300; i += 1) await store.upsert('chat_item', { kind: i % 2 === 0 ? 'user' : 'agent', text: `message ${i}`, meta: '{}', createdAt: t0 + i * 1000 })
   for (let i = 0; i < 100; i += 1) await store.upsert('chat_item', { kind: 'activity', text: `step ${i}`, meta: JSON.stringify({ helper: 'h1', run: { stdout: 's'.repeat(5_000) } }), createdAt: t0 + i * 1000 + 1 })
