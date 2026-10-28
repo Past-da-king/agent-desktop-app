@@ -111,8 +111,15 @@ const ROUTINE_STEP_MS = 1_500
 
 /** A step left running, as its meta reads inside the stored row (meta is JSON text in the row's JSON). */
 const RUNNING_IN_META = '\\"status\\":\\"running\\"'
-/** How far back the start-up repair reads every step, whatever its meta looks like. */
-const RECENT_STEPS_MS = 2 * 24 * 60 * 60 * 1000
+/**
+ * How far back the start-up repair reads every step, whatever its meta looks like (a safety net under the exact
+ * match; two days was 17,000 steps and 1.3 s on his data).
+ */
+const RECENT_STEPS_MS = 2 * 60 * 60 * 1000
+/** A message of his that was being routed (pending, or joined and maybe not delivered), as its stored row reads. */
+const ROUTE_IN_META = '\\"route\\":'
+/** This device's last start (local kv, never synced): the start-up repair looks at steps since then. */
+const LAST_START_KEY = 'runner_last_start'
 
 export const WAITING_FOR_USER = 'Waiting for you'
 
@@ -864,13 +871,21 @@ export class Runner {
   private async repairRows(): Promise<void> {
     // Steps left running, by a raw match inside the database, and every row that is not a step: never the 57,000
     // finished steps (nearly all of the table's 240 MB) parsed on every start (28 Oct 2026).
-    // The last two days' steps are read whole too, so a step written some other way is still caught.
+    // A step can only have been left running by a run since the app's previous start: only those steps are looked
+    // at (the raw match over all 57,000 took most of a second on the main thread). No previous start recorded
+    // (first start of this build): all of them, once. The last two hours' are read whole too, as a safety net.
+    const local = this.store as DataStore & { localValue?(key: string): string | null; setLocalValue?(key: string, value: string): void }
+    const previous = Number(local.localValue?.(LAST_START_KEY) ?? '')
+    local.setLocalValue?.(LAST_START_KEY, String(this.now()))
+    const since = Number.isFinite(previous) && previous > 0 ? Math.max(0, previous - RECENT_STEPS_MS) : 0
     const [running, recent, rest] = await Promise.all([
-      listWhere(this.store, 'chat_item', { kind: 'activity', contains: RUNNING_IN_META }),
+      listWhere(this.store, 'chat_item', { kind: 'activity', contains: RUNNING_IN_META, ...(since > 0 ? { since } : {}) }),
       listWhere(this.store, 'chat_item', { kind: 'activity', since: this.now() - RECENT_STEPS_MS }),
-      listWhere(this.store, 'chat_item', { exceptKinds: ['activity'] }),
+      // The cards (to re-arm the open ones) and his messages that were being routed, nothing else.
+      listWhere(this.store, 'chat_item', { kinds: ['question', 'approval'] }),
     ])
-    const items = [...new Map([...running, ...recent, ...rest].map((row) => [row.id, row])).values()]
+    const routed = await listWhere(this.store, 'chat_item', { kind: 'user', contains: ROUTE_IN_META, ...(since > 0 ? { since } : {}) })
+    const items = [...new Map([...running, ...recent, ...rest, ...routed].map((row) => [row.id, row])).values()]
     const undelivered = new Map<string, ChatItem[]>()
     let changed = false
 
