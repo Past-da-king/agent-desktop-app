@@ -54,13 +54,22 @@ export async function startNewChat(): Promise<void> {
 export async function startProjectChat(project: ProjectRow): Promise<void> {
   const ui = useUi.getState()
   const previous = useChats.getState().open
-  let rows: ChatItem[] = []
-  try {
-    rows = await agent.data.list('chat_item')
-  } catch {
-    rows = []
+  // Each chat's own rows by index (a few, never the whole chat table): is anything in it yet?
+  const said = async (chat: string): Promise<boolean> => {
+    try {
+      const rows: ChatItem[] = await agent.data.where('chat_item', { chat, exceptKinds: ['branch'], limit: 20 })
+      return rows.some((row) => chatOf(row) === chat && row.kind !== 'branch' && !isDivider(row))
+    } catch {
+      return false
+    }
   }
-  const empty = project.chats.find((chat) => !rows.some((row) => chatOf(row) === chat && row.kind !== 'branch' && !isDivider(row)))
+  let empty: string | undefined
+  for (const chat of project.chats) {
+    if (!(await said(chat))) {
+      empty = chat
+      break
+    }
+  }
   if (empty !== undefined) {
     openChat(empty)
     ui.focusComposer()

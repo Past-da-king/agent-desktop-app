@@ -59,7 +59,8 @@ export function useSpeakReplies(enabled: boolean): void {
       if (event.type !== 'run_finished' || event.error !== undefined || since === 0) return
       if (useCall.getState().open) return
       const from = since
-      void agent.data.list('chat_item').then((items) => {
+      // Only the replies of this run, by index: never the whole chat table.
+      void agent.data.where('chat_item', { kind: 'agent', since: from - 1, newestFirst: true, limit: 50 }).then((items) => {
         const replies = items
           .filter((item) => item.kind === 'agent' && item.createdAt >= from)
           .sort((a, b) => a.createdAt - b.createdAt)

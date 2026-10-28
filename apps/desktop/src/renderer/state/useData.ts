@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 
 import { agent } from '../bridge'
-import { patched } from '../lib/patch'
+import { patched, patchedMany } from '../lib/patch'
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
 
@@ -59,6 +59,11 @@ export function flushChanges(): void {
   const patches: DataChange[] = []
   for (const change of changes) {
     if (reload.has(change.entity)) continue
+    // A batch says which rows changed: applied like single changes, the list is not read again.
+    if (change.reset === true && change.batch !== undefined && !state.loading[change.entity]) {
+      for (const each of change.batch) patches.push(each)
+      continue
+    }
     if (change.reset === true || (change.row === undefined && change.id === undefined) || state.loading[change.entity]) {
       reload.add(change.entity)
       continue
@@ -123,9 +128,16 @@ export const useData = create<DataState>((set, get) => ({
     if (changes.length === 0) return
     set((state) => {
       const nextRows = { ...state.rows } as Record<EntityName, unknown[]>
+      const perEntity = new Map<EntityName, DataChange[]>()
       for (const change of changes) {
-        const current = nextRows[change.entity] as Array<{ id: string; createdAt: number }>
-        nextRows[change.entity] = patched(current, change)
+        const list = perEntity.get(change.entity)
+        if (list === undefined) perEntity.set(change.entity, [change])
+        else list.push(change)
+      }
+      // One pass per list however many rows changed (a helper's burst, a sync): never a copy of the list per row.
+      for (const [entity, list] of perEntity) {
+        const current = nextRows[entity] as Array<{ id: string; createdAt: number }>
+        nextRows[entity] = list.length === 1 ? patched(current, list[0]!) : patchedMany(current, list)
       }
       return { rows: nextRows as unknown as RowStore }
     })

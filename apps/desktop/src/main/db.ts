@@ -47,6 +47,12 @@ export type StoreChangeListener = (change: StoreChange) => void
 /** Up to this many rows in one batch or sync are announced one by one; more becomes one reset per entity. */
 const MAX_SINGLE_CHANGES = 40
 
+/**
+ * A reset carries its changes (DataChange.batch) up to this many, so a window holding the list applies them instead
+ * of reading the whole entity again. Past it (a first sync, an import), the list is read again.
+ */
+const MAX_BATCH_CHANGES = 5000
+
 /** Rows read per slice when a device's chat list is built, so no one slice holds the event loop for long. */
 const SLICE_ROWS = 500
 
@@ -70,6 +76,7 @@ const CHAT_KEY =
   "COALESCE(NULLIF(CASE WHEN json_valid(json_extract(payload, '$.meta')) AND json_type(json_extract(payload, '$.meta'), '$.chat') = 'text' THEN json_extract(json_extract(payload, '$.meta'), '$.chat') END, ''), 'main')"
 
 const KIND_SQL = "json_extract(payload, '$.kind')"
+const STATUS_SQL = "json_extract(payload, '$.status')"
 const CREATED_SQL = "json_extract(payload, '$.createdAt')"
 
 /**
@@ -122,6 +129,8 @@ export class Store implements SyncStore {
       CREATE INDEX IF NOT EXISTS rows_thread_at ON rows(entity, json_extract(payload, '$.thread'), ${CREATED_SQL});
       CREATE INDEX IF NOT EXISTS rows_kind_at ON rows(entity, ${KIND_SQL}, ${CREATED_SQL});
       CREATE INDEX IF NOT EXISTS rows_chat_kind_at ON rows(entity, ${CHAT_KEY}, ${KIND_SQL}, ${CREATED_SQL});
+      -- Device commands and turn leases are polled by status every few seconds; read the open ones, not the history.
+      CREATE INDEX IF NOT EXISTS rows_status_at ON rows(entity, ${STATUS_SQL}, ${CREATED_SQL});
       CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_versions(
         memory_id TEXT NOT NULL,
@@ -409,7 +418,8 @@ export class Store implements SyncStore {
       else list.push(change)
     }
     for (const [entity, list] of perEntity) {
-      if (list.length > MAX_SINGLE_CHANGES) this.emit({ entity, reset: true })
+      if (list.length > MAX_BATCH_CHANGES) this.emit({ entity, reset: true })
+      else if (list.length > MAX_SINGLE_CHANGES) this.emit({ entity, reset: true, batch: lastPerRow(list) })
       else for (const change of list) this.emit(change)
     }
   }
@@ -720,6 +730,16 @@ function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args
     clauses.push(`${KIND_SQL} NOT IN (${except.map(() => '?').join(', ')})`)
     args.push(...except)
   }
+  if (where.statuses !== undefined) {
+    if (where.statuses.length === 0) return null
+    const statuses = [...new Set(where.statuses)]
+    clauses.push(`${STATUS_SQL} IN (${statuses.map(() => '?').join(', ')})`)
+    args.push(...statuses)
+  }
+  if (where.contains !== undefined && where.contains !== '') {
+    clauses.push('instr(payload, ?) > 0')
+    args.push(where.contains)
+  }
   if (where.chat !== undefined) {
     clauses.push(`${CHAT_KEY} = ?`)
     args.push(where.chat === '' ? 'main' : where.chat)
@@ -737,7 +757,9 @@ function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args
         ? 'rows_chat_kind_at'
         : wanted.length > 0 || except.length > 0
           ? 'rows_kind_at'
-          : 'rows_created'
+          : where.statuses !== undefined
+            ? 'rows_status_at'
+            : 'rows_created'
   const order = where.newestFirst === true ? 'DESC' : 'ASC'
   let sql = `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY ${index} WHERE ${clauses.join(' AND ')} ORDER BY ${CREATED_SQL} ${order}, stamp ${order}`
   if (where.limit !== undefined && where.limit > 0) {
@@ -745,6 +767,17 @@ function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args
     args.push(Math.floor(where.limit))
   }
   return { sql, args }
+}
+
+/** One change per row (the last one), in the order they happened. */
+function lastPerRow(changes: StoreChange[]): StoreChange[] {
+  const last = new Map<string, StoreChange>()
+  changes.forEach((change, at) => {
+    const id = change.id ?? (change.row as { id?: string } | undefined)?.id ?? `#${at}`
+    last.delete(id)
+    last.set(id, change)
+  })
+  return [...last.values()]
 }
 
 function yieldNow(): Promise<void> {

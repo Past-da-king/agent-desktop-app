@@ -12,6 +12,7 @@ import {
   type DataChange,
   type DeviceFactsInfo as DeviceFacts,
   type EntityName,
+  type ListWhere,
   type Settings,
   type Unsubscribe,
 } from '@agent/core'
@@ -22,6 +23,7 @@ import { MEMORY_EVENTS } from '../../shared/memory-channels'
 import { VAULT_EVENTS } from '../../shared/vault-channels'
 import { decodeWire, encodeWire } from '../../shared/rpc-methods'
 import { localRoutes } from '../../shared/route-target'
+import { filterRows } from '../../shared/list-where'
 
 const routes = localRoutes()
 
@@ -325,6 +327,14 @@ export async function createRemoteAgent(): Promise<AgentApi> {
 
     data: {
       list: (entity) => wire.call('data.list', [entity]) as never,
+      // An older computer has no data.where: its bounded list, filtered here.
+      where: (async (entity: EntityName, where: ListWhere) => {
+        try {
+          return await wire.call('data.where', [entity, where])
+        } catch {
+          return filterRows((await wire.call('data.list', [entity])) as Array<Record<string, unknown>>, where)
+        }
+      }) as never,
       get: (entity, id) => wire.call('data.get', [entity, id]) as never,
       upsert: (entity, row) => wire.call('data.upsert', [entity, row]) as never,
       remove: rpc('data.remove'),

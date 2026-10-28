@@ -197,7 +197,7 @@ export class DevicesServer implements DevicesHost {
   /** What one device is sent of an event (undefined: nothing). A device that sent no prefs hears it whole. */
   private shape(deviceId: string, channel: string, payload: unknown): unknown {
     const prefs = feedState.prefsOf(deviceId)
-    if (prefs.v < 2) return payload
+    if (prefs.v < 2) return channel === EVENTS.data && (payload as DataChange).batch !== undefined ? shapeChange(payload as DataChange, prefs) : payload
     if (channel === EVENTS.chat) return dropsChatNudge(payload, prefs) ? undefined : payload
     if (channel === EVENTS.data) {
       const shaped = shapeChange(payload as DataChange, prefs)

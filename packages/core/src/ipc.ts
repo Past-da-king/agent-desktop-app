@@ -771,6 +771,12 @@ export interface DataChange {
   id?: string
   deleted?: boolean
   reset?: boolean
+  /**
+   * With `reset`: the changes behind it, each with its row or deleted id, when a batch or a sync changed many rows
+   * at once. A list held in memory applies them instead of reading the whole entity again (a 63,000-row chat table
+   * re-read on every sync burned a core, 28 Oct 2026). Absent: the list really must be read again.
+   */
+  batch?: DataChange[]
 }
 
 /** The rows a list query narrows to (Store.listWhere); every field is optional. */
@@ -784,6 +790,13 @@ export interface ListWhere {
   kinds?: string[]
   /** Leave out rows of these kinds (a chat's `activity` steps hold nearly all of its bytes). */
   exceptKinds?: string[]
+  /** Rows whose `status` is one of these (device commands, turn leases). An empty list matches none. */
+  statuses?: string[]
+  /**
+   * Rows whose stored JSON holds this text as is (a meta flag such as `\"status\":\"running\"`, a path), matched
+   * inside the database without parsing the rows that do not hold it.
+   */
+  contains?: string
   /** Only rows created after this time (ms). */
   since?: number
   limit?: number
@@ -1493,6 +1506,11 @@ export interface AgentApi {
   data: {
     /** Every row of an entity. Chat rows come light: a long run record is cut short (get the row for all of it). */
     list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>>
+    /**
+     * Only the rows that match (one chat, some kinds, newer than a time, the newest N), read by index, light like
+     * list. Use it for anything that needs a few rows: never list a whole big entity to find them.
+     */
+    where<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>>
     /** One row in full, or null. */
     get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null>
     upsert<E extends EntityName>(entity: E, row: RowInput<E>): Promise<EntityMap[E]>

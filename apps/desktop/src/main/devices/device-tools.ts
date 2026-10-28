@@ -29,7 +29,8 @@ import {
   type ToolContext,
 } from '@agent/core'
 
-import type { DataStore } from '../runtime/data'
+import { listWhere, type DataStore } from '../runtime/data'
+import { OPEN_STATUSES } from './commands'
 import { latestOrigin } from './origin'
 import { MAIN_IDLE_MS, runEnded } from '../browser/run-tabs'
 import type { DeviceTool, DeviceToolGroup, DevicesHost } from './types'
@@ -377,7 +378,7 @@ export class DeviceToolHub {
   async deliverQueued(): Promise<void> {
     const host = this.host
     if (host === null) return
-    for (const row of await this.deps.store.list('device_command')) {
+    for (const row of await listWhere(this.deps.store, 'device_command', { statuses: ['queued'] })) {
       if (row.kind !== 'tool' || row.status !== 'queued' || row.expiresAt <= this.now()) continue
       if (host.isConnected(row.target)) await this.deliver(row)
     }
@@ -526,7 +527,7 @@ export class DeviceToolRunner {
   }
 
   async scan(): Promise<void> {
-    for (const row of await this.deps.store.list('device_command')) await this.consider(row)
+    for (const row of await listWhere(this.deps.store, 'device_command', { statuses: OPEN_STATUSES })) await this.consider(row)
   }
 
   async consider(row: DeviceCommandRow): Promise<void> {

@@ -24,6 +24,7 @@ import type {
   Decision,
   EntityMap,
   EntityName,
+  ListWhere,
   EnvironmentReport,
   HotkeyStatus,
   LearnedAppInfo,
@@ -108,6 +109,7 @@ const api: AgentApi = {
 
   data: {
     list: <E extends EntityName>(entity: E) => call<Array<EntityMap[E]>>(CHANNELS.data.list, entity),
+    where: <E extends EntityName>(entity: E, where: ListWhere) => call<Array<EntityMap[E]>>(CHANNELS.data.where, entity, where),
     get: <E extends EntityName>(entity: E, id: string) => call<EntityMap[E] | null>(CHANNELS.data.get, entity, id),
     upsert: <E extends EntityName>(entity: E, row: RowInput<E>) =>
       call<EntityMap[E]>(CHANNELS.data.upsert, entity, row),

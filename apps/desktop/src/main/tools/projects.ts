@@ -8,11 +8,11 @@ import { mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
-import { MAIN_CHAT, PROFILE_COLORS, bool, findProjects, parseAliases, pickMatch, schema, str, strList, NO_PICK, type AgentProfileInfo, type AiAccount, type AiPicks, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext } from '@agent/core'
+import { MAIN_CHAT, PROFILE_COLORS, bool, findProjects, parseAliases, pickMatch, schema, str, strList, NO_PICK, type AgentProfileInfo, type AiAccount, type AiPicks, type JsonObject, type ProfileColor, type ProjectRow, type RunState, type Tool, type ToolContext, type ChatItem } from '@agent/core'
 
 import { isIconImage } from '../../shared/project-icon'
 import type { DataStore } from '../runtime/data'
-import { chatOf, chatTitle, newProjectChatId, parseMeta } from '../runtime/chat-lines'
+import { chatOf, chatTitle, newProjectChatId, newestOfChat, parseMeta, titleOfChat } from '../runtime/chat-lines'
 
 import { viaFromMeta, type ChatVia } from '../../shared/sender'
 
@@ -161,7 +161,14 @@ function projectsList(deps: ProjectToolDeps): Tool {
       const only = text(input['project'])
       const shown = only === '' ? projects : [findProject(projects, only)].filter((p): p is ProjectRow => p !== null)
       if (shown.length === 0) return only === '' ? 'No projects yet. The user makes them in the rail (Projects, +).' : `No project called "${only}".`
-      const rows = await deps.store.list('chat_item')
+      // Each chat's title and last line by index, never the whole chat table (a tool call read 240 MB, 28 Oct 2026).
+      const facts = new Map<string, { title: string; last: ChatItem | undefined }>()
+      for (const project of shown) {
+        for (const chat of project.chats) {
+          const [title, newest] = await Promise.all([titleOfChat(deps.store, chat), newestOfChat(deps.store, chat, ['agent', 'user'], 10)])
+          facts.set(chat, { title, last: newest.find((row) => row.text.trim() !== '') })
+        }
+      }
       return shown
         .map((project) => {
           const lines = [`${project.name} (id ${project.id})${project.hidden ? ' [hidden]' : ''}${project.description === '' ? '' : `: ${clip(project.description, 200)}`}`]
@@ -169,11 +176,10 @@ function projectsList(deps: ProjectToolDeps): Tool {
           if ((project.aliases ?? []).length > 0) lines.push(`  also called: ${(project.aliases ?? []).join(', ')}`)
           if (project.chats.length === 0) lines.push('  no chats yet')
           for (const chat of project.chats) {
-            const own = rows.filter((row) => chatOf(row) === chat)
             const state = deps.state(chat)
             const status = state.waiting.length > 0 ? 'waiting for the user' : state.running ? 'working' : 'idle'
-            const last = [...own].reverse().find((row) => (row.kind === 'agent' || row.kind === 'user') && row.text.trim() !== '')
-            lines.push(`  - chat ${chat}: "${chatTitle(own)}", ${status}${last === undefined ? '' : `; last: ${clip(last.text, 160)}`}`)
+            const last = facts.get(chat)?.last
+            lines.push(`  - chat ${chat}: "${facts.get(chat)?.title ?? 'New chat'}", ${status}${last === undefined ? '' : `; last: ${clip(last.text, 160)}`}`)
           }
           return lines.join('\n')
         })
@@ -249,8 +255,7 @@ function messageMain(deps: ProjectToolDeps): Tool {
       if (project === null) return 'You are in the main thread already; just answer the user.'
       const message = text(input['message'])
       if (message === '') return 'Pass the message.'
-      const rows = (await deps.store.list('chat_item')).filter((row) => chatOf(row) === chat)
-      await deps.post(MAIN_CHAT, message, { from: 'project', name: project.name, chat, title: chatTitle(rows) })
+      await deps.post(MAIN_CHAT, message, { from: 'project', name: project.name, chat, title: await titleOfChat(deps.store, chat) })
       return 'Sent to the main agent.'
     },
   }

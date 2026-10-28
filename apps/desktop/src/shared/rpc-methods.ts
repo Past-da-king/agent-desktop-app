@@ -39,6 +39,7 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'account.status',
   'account.syncNow',
   'data.list',
+  'data.where',
   'data.since',
   'data.page',
   'device.prefs',

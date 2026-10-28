@@ -106,6 +106,11 @@ export const routineCardId = (triggerId: string): string => `rt-${triggerId}`
 /** How often a routine's card is rewritten with the step it is on (each write is a row a phone may pull). */
 const ROUTINE_STEP_MS = 1_500
 
+/** A step left running, as its meta reads inside the stored row (meta is JSON text in the row's JSON). */
+const RUNNING_IN_META = '\\"status\\":\\"running\\"'
+/** How far back the start-up repair reads every step, whatever its meta looks like. */
+const RECENT_STEPS_MS = 2 * 24 * 60 * 60 * 1000
+
 export const WAITING_FOR_USER = 'Waiting for you'
 
 /** Build the provider for the chosen settings, or null when nothing is set up yet. */
@@ -848,7 +853,15 @@ export class Runner {
   }
 
   private async repairRows(): Promise<void> {
-    const items = await this.store.list('chat_item')
+    // Steps left running, by a raw match inside the database, and every row that is not a step: never the 57,000
+    // finished steps (nearly all of the table's 240 MB) parsed on every start (28 Oct 2026).
+    // The last two days' steps are read whole too, so a step written some other way is still caught.
+    const [running, recent, rest] = await Promise.all([
+      listWhere(this.store, 'chat_item', { kind: 'activity', contains: RUNNING_IN_META }),
+      listWhere(this.store, 'chat_item', { kind: 'activity', since: this.now() - RECENT_STEPS_MS }),
+      listWhere(this.store, 'chat_item', { exceptKinds: ['activity'] }),
+    ])
+    const items = [...new Map([...running, ...recent, ...rest].map((row) => [row.id, row])).values()]
     const undelivered = new Map<string, ChatItem[]>()
     let changed = false
 

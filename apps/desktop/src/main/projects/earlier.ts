@@ -5,12 +5,13 @@
  */
 import { EARLIER_CHATS_PROJECT } from '@agent/core'
 
-import type { DataStore } from '../runtime/data'
+import { listWhere, type DataStore } from '../runtime/data'
 import { chatOf } from '../runtime/chat-lines'
 
 export async function adoptEarlierChats(store: DataStore, deleted: boolean): Promise<number> {
   if (deleted) return 0
-  const rows = await store.list('chat_item')
+  // Every chat has rows other than steps: those are enough to know its chats, by index (not the 240 MB of steps).
+  const rows = await listWhere(store, 'chat_item', { exceptKinds: ['activity'] })
   const projects = await store.list('project')
   const held = new Set(projects.flatMap((project) => project.chats))
   const firstSeen = new Map<string, number>()

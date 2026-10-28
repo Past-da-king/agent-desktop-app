@@ -89,6 +89,8 @@ export function trimHelperRow<T extends { kind?: unknown; meta?: unknown }>(row:
  * keeps goes trimmed; a deletion goes for kept entities only.
  */
 export function shapeChange(change: DataChange, prefs: DevicePrefs): DataChange | null {
+  // A reset's batch is for the window on this computer; a device reads its own bounded list again.
+  if (change.batch !== undefined) return { entity: change.entity, reset: true }
   if (prefs.v < 2) return change
   if (change.reset === true) return change
   if (!KEPT.has(change.entity)) return null

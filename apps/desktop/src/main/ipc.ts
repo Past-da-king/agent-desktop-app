@@ -15,10 +15,12 @@ import {
   type BrowserState,
   type BrowserViewMode,
   type ChatRunInfo,
+  type DataChange,
   type Decision,
   type EntityMap,
   type EntityName,
   type EnvironmentReport,
+  type ListWhere,
   type ProfileAccount,
   type ProfileColor,
   type RowInput,
@@ -49,6 +51,7 @@ import { DEVICE_CHANNELS } from '../shared/device-channels'
 import { rememberCards, trimHelperRow } from '../shared/device-feed'
 import { DEVICE_CHAT_ROWS, boundRows, isLiveHelper, isOpenCard } from '../shared/device-list'
 import { lightRow } from '../shared/light-row'
+import { listWhere } from './runtime/data'
 import { parseRouteTarget } from '../shared/route-target'
 import { picksFrom } from './settings'
 import type { AccountStore } from './accounts'
@@ -379,6 +382,15 @@ export function registerIpc(deps: IpcDeps): () => void {
       return entity === 'chat_item' ? boundRows(light as Array<{ kind?: unknown; meta?: unknown; createdAt?: unknown }>, (row) => isOpenCard(row) || isLiveHelper(row, Date.now())) : boundRows(light)
     }
     return lightRowsSliced(entity, await store.list(entity))
+  })
+
+  // A few rows by index (one chat, some kinds, the newest N): what the window and a linked computer ask instead of a
+  // whole entity when they need only some rows (28 Oct 2026: whole chat lists burned a core).
+  handle(CHANNELS.data.where, async (_event, rawEntity, rawWhere) => {
+    const entity = entityArg(rawEntity)
+    const where = listWhereArg(rawWhere)
+    const rows = await listWhere(store, entity, where)
+    return rows.map((row) => lightRow(entity, row))
   })
 
   // ---- a linked phone's small reads (data use, 28 Oct 2026): see shared/device-feed.ts ----
@@ -857,7 +869,7 @@ export function registerIpc(deps: IpcDeps): () => void {
   const offData = store.onChange((change) => {
     // Nothing in the window shows turns (the model's own transcript); sending them only costs.
     if (change.entity === 'turn') return
-    send(EVENTS.data, change.row === undefined ? change : { ...change, row: lightRow(change.entity, change.row) })
+    send(EVENTS.data, lightChange(change))
   })
   const offApps = deps.apps?.onChange(() => send(EVENTS.apps, null)) ?? (() => undefined)
   const offProfiles = deps.apps?.profiles.onChange(() => send(EVENTS.profiles, null)) ?? (() => undefined)
@@ -918,6 +930,13 @@ async function checkAccountKey(deps: IpcDeps, account: AiAccount, key: string): 
       message: error instanceof Error ? error.message : 'Could not check the key.',
     }
   }
+}
+
+/** A change as the window gets it: its row (and a batch's rows) light. */
+export function lightChange(change: DataChange): DataChange {
+  const out: DataChange = change.row === undefined ? { ...change } : { ...change, row: lightRow(change.entity, change.row) }
+  if (change.batch !== undefined) out.batch = change.batch.map((each) => (each.row === undefined ? each : { ...each, row: lightRow(each.entity, each.row) }))
+  return out
 }
 
 /**
@@ -1034,6 +1053,38 @@ function entityArg(value: unknown): EntityName {
   if (!isEntityName(value)) throw new Error('Unknown entity')
   return value
 }
+
+/** A ListWhere from the window or a linked device: only known fields of the right type; a limit is capped. */
+export function listWhereArg(value: unknown): ListWhere {
+  const raw = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+  const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+  const strs = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.filter((each): each is string => typeof each === 'string').slice(0, 50) : undefined)
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+  const where: ListWhere = {}
+  const thread = str(raw['thread'])
+  if (thread !== undefined) where.thread = thread
+  const chat = str(raw['chat'])
+  if (chat !== undefined) where.chat = chat
+  const kind = str(raw['kind'])
+  if (kind !== undefined) where.kind = kind
+  const kinds = strs(raw['kinds'])
+  if (kinds !== undefined) where.kinds = kinds
+  const exceptKinds = strs(raw['exceptKinds'])
+  if (exceptKinds !== undefined) where.exceptKinds = exceptKinds
+  const statuses = strs(raw['statuses'])
+  if (statuses !== undefined) where.statuses = statuses
+  const contains = str(raw['contains'])
+  if (contains !== undefined && contains !== '') where.contains = contains
+  const since = num(raw['since'])
+  if (since !== undefined) where.since = since
+  const limit = num(raw['limit'])
+  where.limit = Math.max(1, Math.min(MAX_WHERE_ROWS, Math.floor(limit ?? MAX_WHERE_ROWS)))
+  if (raw['newestFirst'] === true) where.newestFirst = true
+  return where
+}
+
+/** The most rows one data.where answers: it is for a few rows, never a whole table. */
+const MAX_WHERE_ROWS = 2000
 
 function parseHttpUrl(value: string): string {
   let url: URL

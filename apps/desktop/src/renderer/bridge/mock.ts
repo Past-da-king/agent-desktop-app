@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, GENERAL_PROFILE, MAIN_CHAT, PROFILE_COLORS, PROVIDERS, pickModel, resolvePick, vaultRefOf, DEFAULT_VAULT_PREFS, type VaultAuditEntry, type VaultItemMeta, type VaultPrefs } from '@agent/core'
 import { mockDevices } from './mock-devices'
+import { filterRows } from '../../shared/list-where'
 import type {
   WorkerEvent,
   WorkerInfo,
@@ -24,6 +25,7 @@ import type {
   Decision,
   EntityMap,
   EntityName,
+  ListWhere,
   EnvironmentReport,
   HotkeyStatus,
   RouteTarget,
@@ -826,6 +828,9 @@ export const mockAgent: AgentApi = {
   data: {
     async list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
       return copy(rows[entity] as Array<EntityMap[E]>)
+    },
+    async where<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>> {
+      return copy(filterRows(rows[entity] as Array<EntityMap[E]>, where))
     },
     async get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null> {
       const row = (rows[entity] as Array<EntityMap[E]>).find((each) => each.id === id)

@@ -8,7 +8,9 @@ import { join, normalize, resolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 
-import type { DeviceJoinResult, DeviceRow, DevicesStatus, PairingOfferInfo } from '@agent/core'
+import type { DeviceJoinResult, DeviceRow, DevicesStatus, ListWhere, PairingOfferInfo } from '@agent/core'
+
+import { filterRows } from '../../shared/list-where'
 
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../../shared/devices-channels'
 import { qrMatrix } from '../../shared/qr'
@@ -42,6 +44,8 @@ export interface DeviceStoreLike {
   /** Deletes a row (a tombstone that replicates). Without it a taken-out device's row stays, marked revoked. */
   remove?(entity: 'device', id: string): Promise<void>
   list(entity: 'chat_item'): Promise<Array<{ text: string; meta: string }>>
+  /** The rows that match, by index (the real Store). */
+  listWhere?(entity: 'chat_item', where: ListWhere): Promise<Array<{ text: string; meta: string }>>
   list(entity: 'project'): Promise<Array<{ path: string }>>
   get(entity: 'device', id: string): Promise<DeviceRow | null>
   upsert(entity: 'device', row: Partial<DeviceRow>): Promise<DeviceRow>
@@ -893,8 +897,15 @@ export class DevicesService {
     })
     if (!ok) {
       const forms = new Set([raw, target, JSON.stringify(raw).slice(1, -1), JSON.stringify(target).slice(1, -1)])
-      const rows = await this.deps.store.list('chat_item')
-      ok = rows.some((row) => [...forms].some((form) => row.text.includes(form) || row.meta.includes(form)))
+      // Matched inside the database (text in the row's JSON, meta one level deeper), never the whole chat table.
+      const stored = new Set([...forms].flatMap((form) => [form, JSON.stringify(form).slice(1, -1)]))
+      for (const form of stored) {
+        if (ok || form === '') continue
+        const where: ListWhere = { contains: form, limit: 200 }
+        const store = this.deps.store
+        const hits = store.listWhere !== undefined ? await store.listWhere('chat_item', where) : filterRows(await store.list('chat_item'), where)
+        ok = hits.some((row) => [...forms].some((each) => row.text.includes(each) || row.meta.includes(each)))
+      }
     }
     if (ok) this.allowedCache.set(target, this.now())
     return ok ? target : null

@@ -8,9 +8,11 @@
  */
 import { randomUUID } from 'node:crypto'
 
-import { MAIN_CHAT, type ChatItem } from '@agent/core'
+import { MAIN_CHAT, type ChatItem, type ListWhere } from '@agent/core'
 
-import type { DataStore } from './data'
+import { filterRows } from '../../shared/list-where'
+
+import { listWhere, type DataStore } from './data'
 
 export function parseMeta(raw: string): Record<string, unknown> {
   try {
@@ -70,6 +72,27 @@ export function chatTitle(rows: ChatItem[]): string {
   return first === undefined ? 'New chat' : short(first.text, 60)
 }
 
+/** What reading one chat's rows needs: the real Store's indexed query, or a list to filter (a small fake). */
+export interface ChatReader {
+  list(entity: 'chat_item'): Promise<ChatItem[]>
+  listWhere?(entity: 'chat_item', where: ListWhere): Promise<ChatItem[]>
+}
+
+async function chatRows(store: ChatReader, where: ListWhere): Promise<ChatItem[]> {
+  return store.listWhere !== undefined ? store.listWhere('chat_item', where) : filterRows(await store.list('chat_item'), where)
+}
+
+/** A chat's title (chatTitle) from its own notices and first messages, by index: never the whole chat table. */
+export async function titleOfChat(store: ChatReader, chat: string): Promise<string> {
+  const [notices, users] = await Promise.all([chatRows(store, { chat, kind: 'notice' }), chatRows(store, { chat, kind: 'user', limit: 20 })])
+  return chatTitle([...notices, ...users])
+}
+
+/** A chat's newest rows of these kinds, newest first, by index. */
+export async function newestOfChat(store: ChatReader, chat: string, kinds: string[], limit: number): Promise<ChatItem[]> {
+  return chatRows(store, { chat, kinds, newestFirst: true, limit })
+}
+
 /** Kinds that are part of a chat's history worth copying into a branch. */
 const COPIED = new Set(['user', 'agent', 'report', 'notice', 'activity', 'question', 'approval', 'call', 'voice_note'])
 
@@ -104,7 +127,7 @@ export async function branchChat(store: DataStore, itemId: string, now: () => nu
   const from = chatOf(point)
   // The store lists rows in the order they were written (time, then a clock that never ties), so the cut is
   // by position: two rows written in the same millisecond still fall on the right side of it.
-  const all = (await store.list('chat_item')).filter((row) => chatOf(row) === from)
+  const all = (await listWhere(store, 'chat_item', { chat: from })).filter((row) => chatOf(row) === from)
   const cut = all.findIndex((row) => row.id === point.id)
   const history = all.slice(0, cut + 1).filter((row) => row.id === point.id || copyable(row))
   const parentTitle = chatTitle(all)
@@ -122,7 +145,7 @@ export async function branchChat(store: DataStore, itemId: string, now: () => nu
   }
 
   const turns = transcriptUpTo(
-    (await store.list('turn')).filter((turn) => turn.thread === threadFor(from) && turn.createdAt <= point.createdAt),
+    (await listWhere(store, 'turn', { thread: threadFor(from) })).filter((turn) => turn.thread === threadFor(from) && turn.createdAt <= point.createdAt),
     point,
   )
   for (const turn of turns) {

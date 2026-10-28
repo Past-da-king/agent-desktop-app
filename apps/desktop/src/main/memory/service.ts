@@ -93,7 +93,7 @@ export class MemoryService {
    * background, and shows the note ("Saved 3 memories from the last chat") where the person is now looking.
    */
   private async newSeparateChat(chat: string, from: string): Promise<{ dividerId: string | null; saving: boolean }> {
-    const items = await this.deps.store.list('chat_item')
+    const items = await this.chatWithDividers(from, chat)
     const already = items.find((item) => isDividerRow(item) && chatOf(item) === chat)
     if (already !== undefined) return { dividerId: already.id, saving: false }
     const closing = chatSegments(items)
@@ -115,8 +115,22 @@ export class MemoryService {
    * summary in the background and the agent carries on fresh with that summary in context (runner withContextNotes
    * reads it off this divider). What it said is also filed into memory, as with any chat.
    */
+  /**
+   * What New chat needs to decide: the rows of these chats and every divider (a stretch filed from one chat is
+   * marked on a divider in another), by index, instead of the whole chat table.
+   */
+  private async chatWithDividers(...chats: string[]): Promise<ChatItem[]> {
+    const lists = await Promise.all([
+      ...chats.map((chat) => listWhere(this.deps.store, 'chat_item', { chat })),
+      listWhere(this.deps.store, 'chat_item', { kind: 'notice' }),
+    ])
+    const byId = new Map<string, ChatItem>()
+    for (const list of lists) for (const row of list) byId.set(row.id, row)
+    return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt)
+  }
+
   private async compressChat(chat: string): Promise<{ dividerId: string | null; saving: boolean }> {
-    const items = await this.deps.store.list('chat_item')
+    const items = await this.chatWithDividers(chat)
     const own = items.filter((item) => chatOf(item) === chat && item.kind !== 'branch')
     const latest = own.sort((a, b) => b.createdAt - a.createdAt)[0]
     if (latest === undefined || isDividerRow(latest)) return { dividerId: latest?.id ?? null, saving: false }
@@ -179,7 +193,8 @@ export class MemoryService {
 
   /** After a restart: chats that were still being filed are filed again. */
   async restore(): Promise<void> {
-    const items = await this.deps.store.list('chat_item')
+    // Dividers are notices: only those are read, by index.
+    const items = await listWhere(this.deps.store, 'chat_item', { kind: 'notice' })
     for (const item of items) {
       if (!isDividerRow(item)) continue
       if (memoryNote(item)?.status === 'saving') this.enqueue(item.id)

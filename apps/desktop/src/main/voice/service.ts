@@ -27,7 +27,7 @@ import type {
 import { buildSystemPrompt } from '../runtime/prompt'
 import { promptRulesFor } from '../runtime/prompt-rules'
 import { callVia, senderLine, viaFromMeta, type ChatVia } from '../../shared/sender'
-import type { DataStore } from '../runtime/data'
+import { listWhere, type DataStore } from '../runtime/data'
 import { visualMarkdown, voiceTools } from '../tools/voice'
 import {
   DEFAULT_CHOICE,
@@ -385,7 +385,8 @@ export class VoiceService {
       store.list('memory'),
       store.list('goal'),
       store.list('task'),
-      store.list('chat_item'),
+      // The recent lines only, by index: never the whole chat table.
+      listWhere(store, 'chat_item', { kinds: ['user', 'agent'], newestFirst: true, limit: RECENT_CHAT * 4 }),
       promptRulesFor(store),
     ])
     const recent = recentChat(chat)

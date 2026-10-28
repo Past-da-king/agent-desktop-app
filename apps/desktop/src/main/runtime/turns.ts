@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { DeviceRow, TurnLeaseRow } from '@agent/core'
 
-import type { DataStore } from './data'
+import { listWhere, type DataStore } from './data'
 import { chatTag } from './chat-lines'
 
 export const HEARTBEAT_MS = 10_000
@@ -170,7 +170,7 @@ export class TurnLeases implements LeaseHook {
   async recover(): Promise<number> {
     await this.readyGate?.()
     await this.settled()
-    const leases = (await this.deps.store.list('turn_lease')).filter((row) => row.status === 'running' && this.isOwn(row.brainId) && !this.begun.has(row.id))
+    const leases = (await listWhere(this.deps.store, 'turn_lease', { statuses: ['running'] })).filter((row) => row.status === 'running' && this.isOwn(row.brainId) && !this.begun.has(row.id))
     // Mark them all first: a second recover (or a crash during resume) never resumes the same run twice.
     const go: TurnLeaseRow[] = []
     for (const lease of leases) {
@@ -205,7 +205,7 @@ export class TurnLeases implements LeaseHook {
     const brainsOf = failover.brains
     const self = this.deps.selfId()
     const now = this.now()
-    const stale = (await this.deps.store.list('turn_lease')).filter(
+    const stale = (await listWhere(this.deps.store, 'turn_lease', { statuses: ['running'] })).filter(
       (row) => row.status === 'running' && !this.isOwn(row.brainId) && now - row.heartbeatAt > (this.deps.staleMs ?? STALE_MS),
     )
     if (stale.length === 0) return 0

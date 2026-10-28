@@ -42,7 +42,8 @@ export function QuickWindow(): JSX.Element {
       const since = sentAt.current
       if (since === 0) return
       try {
-        const rows = await agent.data.list('chat_item')
+        // Only the replies since the question, by index: never the whole chat table.
+        const rows = await agent.data.where('chat_item', { kinds: ['agent', 'notice'], since: since - 1, newestFirst: true, limit: 20 })
         const reply = rows
           .filter((row) => row.createdAt >= since && (row.kind === 'agent' || row.kind === 'notice'))
           .sort((a, b) => b.createdAt - a.createdAt)[0]

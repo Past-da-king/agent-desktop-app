@@ -17,17 +17,20 @@ import {
   type ChatItem,
   type FindField,
   type HelperCardsSnapshot,
+  type ListWhere,
   type ProjectRow,
   type RunState,
 } from '@agent/core'
 
-import { chatTitle, newProjectChatId } from '../runtime/chat-lines'
+import { newProjectChatId, newestOfChat, titleOfChat } from '../runtime/chat-lines'
 import { callVia, type ChatVia } from '../../shared/sender'
 
 export interface CallHandoffDeps {
   store: {
     list(entity: 'project'): Promise<ProjectRow[]>
     list(entity: 'chat_item'): Promise<ChatItem[]>
+    /** The rows that match, by index (the real Store). */
+    listWhere?(entity: 'chat_item', where: ListWhere): Promise<ChatItem[]>
     upsert(entity: 'project', row: Partial<ProjectRow> & { id: string }): Promise<unknown>
   }
   /**
@@ -95,19 +98,23 @@ function deviceName(origin: unknown): string {
 
 /** Everyone the call can talk to, main agent first. */
 export async function callTargets(deps: CallHandoffDeps, now: number = Date.now()): Promise<CallTarget[]> {
-  const [projects, rows, cards] = await Promise.all([deps.store.list('project'), deps.store.list('chat_item'), deps.cards().catch(() => null)])
-  const byChat = new Map<string, ChatItem[]>()
-  for (const row of rows) {
-    const chat = chatOf(row)
-    const list = byChat.get(chat)
-    if (list === undefined) byChat.set(chat, [row])
-    else list.push(row)
-  }
-  const sorted = (chat: string): ChatItem[] => (byChat.get(chat) ?? []).slice().sort((a, b) => a.createdAt - b.createdAt)
-  const lastLine = (chat: string): string => {
-    const own = sorted(chat).filter((row) => (row.kind === 'agent' || row.kind === 'activity') && row.text.trim() !== '')
-    return short(own[own.length - 1]?.text ?? '', 140)
-  }
+  const [projects, cards] = await Promise.all([deps.store.list('project'), deps.cards().catch(() => null)])
+  // Each chat's title and last line by index: never the whole chat table.
+  const lines = new Map<string, string>()
+  const titles = new Map<string, string>()
+  const wanted = [MAIN_CHAT, ...projects.filter((project) => !project.hidden).flatMap((project) => project.chats)]
+  await Promise.all(
+    wanted.map(async (chat) => {
+      const running = deps.state(chat).running
+      const [title, newest] = await Promise.all([
+        chat === MAIN_CHAT ? Promise.resolve('') : titleOfChat(deps.store, chat),
+        running ? newestOfChat(deps.store, chat, ['agent', 'activity'], 10) : Promise.resolve([] as ChatItem[]),
+      ])
+      titles.set(chat, title)
+      lines.set(chat, short(newest.find((row) => row.text.trim() !== '')?.text ?? '', 140))
+    }),
+  )
+  const lastLine = (chat: string): string => lines.get(chat) ?? ''
   const main = deps.state(MAIN_CHAT)
   const out: CallTarget[] = [
     { kind: 'main', id: MAIN_CHAT, name: deps.agentName().trim() || 'Your agent', glyph: '', running: main.running, doing: main.running ? lastLine(MAIN_CHAT) : '', chats: [] },
@@ -116,7 +123,7 @@ export async function callTargets(deps: CallHandoffDeps, now: number = Date.now(
     if (project.hidden) continue
     const chats = project.chats.map((chat) => {
       const running = deps.state(chat).running
-      return { id: chat, title: chatTitle(sorted(chat)), running, doing: running ? lastLine(chat) : '' }
+      return { id: chat, title: titles.get(chat) ?? 'New chat', running, doing: running ? lastLine(chat) : '' }
     })
     const busy = chats.find((chat) => chat.running)
     out.push({ kind: 'project', id: project.id, name: project.name, glyph: project.icon.glyph, running: busy !== undefined, doing: busy?.doing ?? '', chats })
