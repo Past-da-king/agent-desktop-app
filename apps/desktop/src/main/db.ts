@@ -62,6 +62,22 @@ const PAGE_WALK_ROWS = 40_000
  */
 const CHAT_SQL = "CASE WHEN json_valid(json_extract(payload, '$.meta')) THEN json_extract(json_extract(payload, '$.meta'), '$.chat') END"
 
+/**
+ * A chat row's chat as one value, 'main' for an untagged row (as chatOfPayload reads it), so every chat, the first
+ * one included, is one equality on the chat index.
+ */
+const CHAT_KEY =
+  "COALESCE(NULLIF(CASE WHEN json_valid(json_extract(payload, '$.meta')) AND json_type(json_extract(payload, '$.meta'), '$.chat') = 'text' THEN json_extract(json_extract(payload, '$.meta'), '$.chat') END, ''), 'main')"
+
+const KIND_SQL = "json_extract(payload, '$.kind')"
+const CREATED_SQL = "json_extract(payload, '$.createdAt')"
+
+/**
+ * Rows read per slice by a whole-entity list, with a yield between slices: reading 60,000 chat rows (hundreds of MB)
+ * in one go held the main thread for seconds and Windows showed "Not responding" (28 Oct 2026).
+ */
+const LIST_SLICE_ROWS = 1000
+
 const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule']
 
 /** Versions kept per memory page; the oldest go first. */
@@ -96,10 +112,16 @@ export class Store implements SyncStore {
         PRIMARY KEY(entity, cid)
       );
       CREATE INDEX IF NOT EXISTS rows_stamp ON rows(stamp);
-      CREATE INDEX IF NOT EXISTS rows_thread ON rows(entity, json_extract(payload, '$.thread'));
-      CREATE INDEX IF NOT EXISTS rows_kind ON rows(entity, json_extract(payload, '$.kind'));
-      CREATE INDEX IF NOT EXISTS rows_created ON rows(entity, json_extract(payload, '$.createdAt'));
-      CREATE INDEX IF NOT EXISTS rows_chat ON rows(entity, ${CHAT_SQL});
+      CREATE INDEX IF NOT EXISTS rows_created ON rows(entity, ${CREATED_SQL});
+      -- One index per filter, each ending in the created-at, so a filtered list is an index range (28 Oct 2026).
+      -- The single-column ones they replace were never picked: SQLite preferred rows_created for the ORDER BY and
+      -- scanned every chat row (240 MB) on each query. listWhere names its index (INDEXED BY) so that never returns.
+      DROP INDEX IF EXISTS rows_thread;
+      DROP INDEX IF EXISTS rows_kind;
+      DROP INDEX IF EXISTS rows_chat;
+      CREATE INDEX IF NOT EXISTS rows_thread_at ON rows(entity, json_extract(payload, '$.thread'), ${CREATED_SQL});
+      CREATE INDEX IF NOT EXISTS rows_kind_at ON rows(entity, ${KIND_SQL}, ${CREATED_SQL});
+      CREATE INDEX IF NOT EXISTS rows_chat_kind_at ON rows(entity, ${CHAT_KEY}, ${KIND_SQL}, ${CREATED_SQL});
       CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_versions(
         memory_id TEXT NOT NULL,
@@ -138,8 +160,27 @@ export class Store implements SyncStore {
 
   async list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
     this.assertEntity(entity)
-    const rows = this.readEntity(entity).filter((row) => !row.deleted)
+    const rows = (await this.readEntitySliced(entity)).filter((row) => !row.deleted)
     return sortedRows(rows, false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+  }
+
+  /**
+   * Every row of an entity, read along the primary key in slices with a yield between them, so a big table never
+   * holds the event loop (the window, the devices link, timers) for more than a slice.
+   */
+  private async readEntitySliced(entity: EntityName): Promise<StoredRow[]> {
+    const slice = this.db.prepare('SELECT cid, stamp, deleted, payload FROM rows WHERE entity = ? AND cid > ? ORDER BY cid LIMIT ?')
+    const out: StoredRow[] = []
+    let after = ''
+    for (;;) {
+      const rows = slice.all(entity, after, LIST_SLICE_ROWS).map(rowFromSql)
+      for (const row of rows) out.push(row)
+      const last = rows[rows.length - 1]
+      if (rows.length < LIST_SLICE_ROWS || last === undefined) break
+      after = last.cid
+      await yieldNow()
+    }
+    return out
   }
 
   /**
@@ -152,7 +193,7 @@ export class Store implements SyncStore {
     const want = Math.max(1, Math.floor(perChat))
     // The chats that exist, from the chat index alone (no row is parsed).
     const counts = new Map<string, number>([['main', 0]])
-    for (const row of this.db.prepare(`SELECT DISTINCT ${CHAT_SQL} AS chat FROM rows WHERE entity = 'chat_item'`).all()) {
+    for (const row of this.db.prepare(`SELECT DISTINCT ${CHAT_KEY} AS chat FROM rows INDEXED BY rows_chat_kind_at WHERE entity = 'chat_item'`).all()) {
       const chat = row['chat']
       if (typeof chat === 'string' && chat !== '') counts.set(chat, 0)
     }
@@ -186,14 +227,16 @@ export class Store implements SyncStore {
     for (const [chat, n] of counts) {
       if (n >= want || chat === 'main') continue
       const own = this.db
-        .prepare(`SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_chat WHERE entity = 'chat_item' AND deleted = 0 AND ${CHAT_SQL} = ?`)
-        .all(chat)
+        .prepare(
+          `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_chat_kind_at WHERE entity = 'chat_item' AND deleted = 0 AND ${CHAT_KEY} = ? ORDER BY ${CREATED_SQL} DESC, stamp DESC LIMIT ?`,
+        )
+        .all(chat, want)
         .map(rowFromSql)
       for (const row of sortedRows(own, true).slice(0, want)) picked.set(row.cid, row)
       await yieldNow()
     }
     const waiting = this.db
-      .prepare(`SELECT cid, stamp, deleted, payload FROM rows WHERE entity = 'chat_item' AND deleted = 0 AND json_extract(payload, '$.kind') IN ('question', 'approval', 'helper')`)
+      .prepare(`SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_kind_at WHERE entity = 'chat_item' AND deleted = 0 AND ${KIND_SQL} IN ('question', 'approval', 'helper')`)
       .all()
       .map(rowFromSql)
     for (const row of waiting) {
@@ -242,35 +285,21 @@ export class Store implements SyncStore {
    */
   async listWhere<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>> {
     this.assertEntity(entity)
-    const clauses = ['entity = ?', 'deleted = 0']
-    const args: Array<string | number> = [entity]
-    if (where.thread !== undefined) {
-      clauses.push("json_extract(payload, '$.thread') = ?")
-      args.push(where.thread)
-    }
-    if (where.kind !== undefined) {
-      clauses.push("json_extract(payload, '$.kind') = ?")
-      args.push(where.kind)
-    }
-    if (where.chat !== undefined) {
-      if (where.chat === 'main') clauses.push(`(${CHAT_SQL} IS NULL OR ${CHAT_SQL} = '' OR ${CHAT_SQL} = 'main')`)
-      else {
-        clauses.push(`${CHAT_SQL} = ?`)
-        args.push(where.chat)
-      }
-    }
-    if (where.since !== undefined && where.since > 0) {
-      clauses.push("json_extract(payload, '$.createdAt') > ?")
-      args.push(where.since)
-    }
-    const order = where.newestFirst === true ? 'DESC' : 'ASC'
-    let sql = `SELECT cid, stamp, deleted, payload FROM rows WHERE ${clauses.join(' AND ')} ORDER BY json_extract(payload, '$.createdAt') ${order}, stamp ${order}`
-    if (where.limit !== undefined && where.limit > 0) {
-      sql += ' LIMIT ?'
-      args.push(Math.floor(where.limit))
-    }
-    const rows = this.db.prepare(sql).all(...args).map(rowFromSql)
+    const query = listWhereSql(entity, where)
+    if (query === null) return []
+    const rows = this.db.prepare(query.sql).all(...query.args).map(rowFromSql)
     return sortedRows(rows, where.newestFirst === true).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+  }
+
+  /** How SQLite runs a listWhere (EXPLAIN QUERY PLAN lines), so a test can hold every shape to an index. */
+  listWherePlan(entity: EntityName, where: ListWhere): string[] {
+    this.assertEntity(entity)
+    const query = listWhereSql(entity, where)
+    if (query === null) return []
+    return this.db
+      .prepare(`EXPLAIN QUERY PLAN ${query.sql}`)
+      .all(...query.args)
+      .map((row) => stringField(row['detail']))
   }
 
   async get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null> {
@@ -666,6 +695,56 @@ export class Store implements SyncStore {
   private assertEntity(entity: string): asserts entity is EntityName {
     if (!isEntityName(entity)) throw new Error(`Unknown entity: ${entity}`)
   }
+}
+
+/** The SQL of a listWhere, or null when nothing can match (an empty kinds list, a kind outside it). */
+function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args: Array<string | number> } | null {
+  const clauses = ['entity = ?', 'deleted = 0']
+  const args: Array<string | number> = [entity]
+  if (where.thread !== undefined) {
+    clauses.push("json_extract(payload, '$.thread') = ?")
+    args.push(where.thread)
+  }
+  if (where.kinds !== undefined && where.kinds.length === 0) return null
+  if (where.kind !== undefined && where.kinds !== undefined && !where.kinds.includes(where.kind)) return null
+  const wanted = [...new Set(where.kind !== undefined ? [where.kind] : (where.kinds ?? []))]
+  if (wanted.length === 1) {
+    clauses.push(`${KIND_SQL} = ?`)
+    args.push(wanted[0]!)
+  } else if (wanted.length > 1) {
+    clauses.push(`${KIND_SQL} IN (${wanted.map(() => '?').join(', ')})`)
+    args.push(...wanted)
+  }
+  const except = where.exceptKinds ?? []
+  if (except.length > 0) {
+    clauses.push(`${KIND_SQL} NOT IN (${except.map(() => '?').join(', ')})`)
+    args.push(...except)
+  }
+  if (where.chat !== undefined) {
+    clauses.push(`${CHAT_KEY} = ?`)
+    args.push(where.chat === '' ? 'main' : where.chat)
+  }
+  if (where.since !== undefined && where.since > 0) {
+    clauses.push(`${CREATED_SQL} > ?`)
+    args.push(where.since)
+  }
+  // The index is named, never left to the planner: with no statistics SQLite picked rows_created (to skip a sort)
+  // and read every row of the entity, 0.4 to 1.8 s on the main thread per query on 60,000 chat rows (28 Oct 2026).
+  const index =
+    where.thread !== undefined
+      ? 'rows_thread_at'
+      : where.chat !== undefined
+        ? 'rows_chat_kind_at'
+        : wanted.length > 0 || except.length > 0
+          ? 'rows_kind_at'
+          : 'rows_created'
+  const order = where.newestFirst === true ? 'DESC' : 'ASC'
+  let sql = `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY ${index} WHERE ${clauses.join(' AND ')} ORDER BY ${CREATED_SQL} ${order}, stamp ${order}`
+  if (where.limit !== undefined && where.limit > 0) {
+    sql += ' LIMIT ?'
+    args.push(Math.floor(where.limit))
+  }
+  return { sql, args }
 }
 
 function yieldNow(): Promise<void> {

@@ -275,7 +275,7 @@ export class HeadlessBrowser implements BrowserDriver, BrowserProDriver {
         ...(sandbox ? [] : ['--no-sandbox']),
         'about:blank',
       ]
-      const proc = spawn(this.options.executable, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+      const proc = spawn(this.options.executable, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
       const port = await new Promise<number>((resolve) => {
         let text = ''
         const timer = setTimeout(() => resolve(0), 20_000)

@@ -37,6 +37,14 @@ export async function listWhere<E extends EntityName>(store: DataStore, entity: 
   let rows = (await store.list(entity)) as Array<Record<string, unknown> & EntityMap[E]>
   if (where.thread !== undefined) rows = rows.filter((row) => row['thread'] === where.thread)
   if (where.kind !== undefined) rows = rows.filter((row) => row['kind'] === where.kind)
+  if (where.kinds !== undefined) {
+    const kinds = new Set(where.kinds)
+    rows = rows.filter((row) => kinds.has(String(row['kind'])))
+  }
+  if (where.exceptKinds !== undefined && where.exceptKinds.length > 0) {
+    const except = new Set(where.exceptKinds)
+    rows = rows.filter((row) => !except.has(String(row['kind'])))
+  }
   if (where.chat !== undefined) rows = rows.filter((row) => chatOfRow(row) === where.chat)
   if (where.since !== undefined && where.since > 0) rows = rows.filter((row) => Number(row['createdAt']) > (where.since ?? 0))
   if (where.newestFirst === true) rows = [...rows].reverse()

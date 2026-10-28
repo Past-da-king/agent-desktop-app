@@ -353,7 +353,7 @@ export class CommandKeys implements KeySender {
   paste(): Promise<boolean> {
     return new Promise((resolve) => {
       try {
-        const child = spawn(this.file, this.args, { stdio: 'ignore' })
+        const child = spawn(this.file, this.args, { stdio: 'ignore', windowsHide: true })
         child.on('error', () => resolve(false))
         child.on('exit', (code) => resolve(code === 0))
       } catch {

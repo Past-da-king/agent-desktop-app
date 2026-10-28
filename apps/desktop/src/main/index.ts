@@ -788,7 +788,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     // Closing the tab an agent handed over answers its "needs you in the browser" card, so nothing waits forever.
     onHandoffClosed: () => {
       void (async () => {
-        const rows = store === null ? [] : await store.list('chat_item')
+        const rows = store === null ? [] : await store.listWhere('chat_item', { kind: 'question' })
         for (const row of rows) {
           if (row.kind !== 'question') continue
           let meta: Record<string, unknown> = {}

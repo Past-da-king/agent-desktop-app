@@ -13,6 +13,13 @@ import type { DataStore } from './data'
 
 const MAX_SUMMARY = 140
 const CHECK_MS = 2_000
+/**
+ * A followed chat whose rows did not change is read again only this often (28 Oct 2026: reading every followed
+ * chat's rows every 2 s, each read a scan of all chat rows, held the main thread and froze the window).
+ */
+const RECHECK_MS = 60_000
+/** The row kinds the close check needs: never a chat's activity steps, which hold nearly all of its bytes. */
+const CHECK_KINDS = ['helper', 'agent', 'notice']
 /** After a restart, how long a followed project chat gets for its turn lease to resume it before it can be closed. */
 const RESUME_GRACE_MS = 30_000
 
@@ -51,6 +58,10 @@ export class ProjectAgentRows {
   private readonly tracked = new Set<string>()
   /** Chats followed again after a restart, and until when they may not be closed (their lease is resuming them). */
   private readonly resuming = new Map<string, number>()
+  /** Followed chats that changed (or went idle) since their rows were last read; only these are read again. */
+  private readonly dirty = new Set<string>()
+  /** When each followed chat's rows were last read: a quiet chat is read again only after RECHECK_MS. */
+  private readonly checkedAt = new Map<string, number>()
   private readonly offChange: () => void
   private timer: ReturnType<typeof setInterval> | null = null
   private writing: Promise<unknown> = Promise.resolve()
@@ -59,10 +70,18 @@ export class ProjectAgentRows {
   constructor(private readonly deps: ProjectAgentDeps) {
     this.now = deps.now ?? Date.now
     this.offChange = deps.store.onChange((change) => {
-      if (change.entity !== 'chat_item' || change.row === undefined) return
+      if (change.entity !== 'chat_item') return
+      if (change.row === undefined) {
+        // A reset or a removal: any followed chat may have changed.
+        for (const chat of this.tracked) this.dirty.add(chat)
+        return
+      }
       const row = change.row as ChatItem
       const chat = chatOf(row)
-      if (chat !== MAIN_CHAT && this.tracked.has(chat)) this.serial(() => this.onRow(chat, row))
+      if (chat !== MAIN_CHAT && this.tracked.has(chat)) {
+        this.dirty.add(chat)
+        this.serial(() => this.onRow(chat, row))
+      }
     })
   }
 
@@ -115,6 +134,7 @@ export class ProjectAgentRows {
 
   private follow(chat: string): void {
     this.tracked.add(chat)
+    this.dirty.add(chat)
     if (this.timer === null) {
       this.timer = setInterval(() => this.serial(() => this.checkAll()), this.deps.checkMs ?? CHECK_MS)
       this.timer.unref?.()
@@ -139,11 +159,18 @@ export class ProjectAgentRows {
       const state = this.deps.state(chat)
       if (state.running || state.waiting.length > 0) {
         this.resuming.delete(chat)
+        // Read it once it goes quiet.
+        this.dirty.add(chat)
         continue
       }
       if ((this.resuming.get(chat) ?? 0) > this.now()) continue
       this.resuming.delete(chat)
-      const rows = (await this.deps.store.listWhere?.('chat_item', { chat })) ?? (await this.deps.store.list('chat_item')).filter((row) => chatOf(row) === chat)
+      if (!this.dirty.has(chat) && this.now() - (this.checkedAt.get(chat) ?? 0) < RECHECK_MS) continue
+      this.dirty.delete(chat)
+      this.checkedAt.set(chat, this.now())
+      const rows =
+        (await this.deps.store.listWhere?.('chat_item', { chat, kinds: CHECK_KINDS })) ??
+        (await this.deps.store.list('chat_item')).filter((row) => chatOf(row) === chat && CHECK_KINDS.includes(row.kind))
       if (rows.some((row) => row.kind === 'helper' && parse(row.meta)['state'] === 'working')) continue
       const last = [...rows].reverse().find((row) => row.kind === 'agent' || row.kind === 'notice')
       // A turn that was stopped ends on the runner's "Stopped" notice: the row reads stopped, not done.
@@ -156,6 +183,8 @@ export class ProjectAgentRows {
         endedAt: this.now(),
       }, false)
       this.tracked.delete(chat)
+      this.dirty.delete(chat)
+      this.checkedAt.delete(chat)
     }
     if (this.tracked.size === 0 && this.timer !== null) {
       clearInterval(this.timer)

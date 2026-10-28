@@ -181,6 +181,7 @@ async function start(args: Args): Promise<number> {
     const out = openSync(join(dataDir, 'logs', 'node.out'), 'a')
     const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'start', '--data-dir', dataDir], {
       detached: true,
+      windowsHide: true,
       // A service never keeps the folder it was started from (it may be a temp folder that goes away).
       cwd: homedir(),
       stdio: ['ignore', out, out],

@@ -138,5 +138,5 @@ export function spawnResolved(
     return spawnImpl(resolved.path, args, { ...common, windowsHide: common.windowsHide ?? true, shell: false })
   }
 
-  return spawnImpl(resolved.path, args, { ...common, shell: false })
+  return spawnImpl(resolved.path, args, { ...common, windowsHide: common.windowsHide ?? true, shell: false })
 }

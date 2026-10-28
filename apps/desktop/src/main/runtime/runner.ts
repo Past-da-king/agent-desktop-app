@@ -324,7 +324,7 @@ export class Runner {
 
   /** Read every card again (the store was reset, for example by a sync). */
   private async rearmCards(): Promise<void> {
-    const rows = await this.store.list('chat_item')
+    const rows = await listWhere(this.store, 'chat_item', { kinds: ['question', 'approval'] })
     const open = new Map<string, string>()
     for (const row of rows) if (isOpenCardRow(row)) open.set(row.id, chatOf(row))
     let changed = false
@@ -737,7 +737,7 @@ export class Runner {
    * file (the main agent's or a helper's) goes ahead too. Cards for anything sent or done elsewhere stay.
    */
   async approveComputerCards(): Promise<number> {
-    const rows = await this.store.list('chat_item')
+    const rows = await listWhere(this.store, 'chat_item', { kind: 'approval' })
     let count = 0
     for (const row of rows) {
       if (row.kind !== 'approval') continue
@@ -1112,7 +1112,8 @@ export class Runner {
    * turn, and for a branched chat with no transcript of its own, the conversation it was branched from.
    */
   private async withContextNotes(line: ChatLine, text: string, presence = ''): Promise<string> {
-    const rows = await listWhere(this.store, 'chat_item', { chat: line.chat })
+    // Only the kinds read below: a chat's activity steps are nearly all of its bytes (seconds to read on every message).
+    const rows = await listWhere(this.store, 'chat_item', { chat: line.chat, kinds: ['user', 'agent', 'report', 'notice', 'helper'] })
     const notes: string[] = []
 
     const carry = await this.carriedSummary(rows)
@@ -1194,9 +1195,8 @@ export class Runner {
 
   /** A few recent lines of a chat, oldest first, for the classifier. */
   private async recentLines(chat: string): Promise<string[]> {
-    const rows = (await listWhere(this.store, 'chat_item', { chat })).filter(
-      (row) => (row.kind === 'user' || row.kind === 'agent') && row.text.trim() !== '',
-    )
+    const newest = await listWhere(this.store, 'chat_item', { chat, kinds: ['user', 'agent'], newestFirst: true, limit: 40 })
+    const rows = [...newest].reverse().filter((row) => (row.kind === 'user' || row.kind === 'agent') && row.text.trim() !== '')
     return rows.slice(-7, -1).map((row) => `${row.kind === 'user' ? 'User' : 'Agent'}: ${row.text}`)
   }
 

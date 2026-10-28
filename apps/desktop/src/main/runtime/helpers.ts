@@ -886,11 +886,11 @@ export class HelperManager implements HelperHost {
   }
 
   async status(): Promise<string> {
-    const all = await this.store.list('chat_item')
-    const helpers = all.filter((row) => row.kind === 'helper').slice(-10)
+    const helpers = (await listWhere(this.store, 'chat_item', { kind: 'helper' })).slice(-10)
     if (helpers.length === 0) return 'No helpers have run yet.'
 
-    const activities = all.filter((row) => row.kind === 'activity')
+    const since = Math.min(...helpers.map((row) => row.createdAt)) - 1
+    const activities = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, since) })
     const nowMs = this.now()
     return helpers
       .sort((a, b) => {
@@ -1210,7 +1210,7 @@ export class HelperManager implements HelperHost {
 
   async restore(options: { defer?: boolean } = {}): Promise<void> {
     if (options.defer === true && this.heldNotices === null) this.heldNotices = []
-    const rows = await this.store.list('chat_item')
+    const rows = await listWhere(this.store, 'chat_item', { kind: 'helper' })
     const waiting: string[] = []
     for (const row of rows) {
       if (row.kind !== 'helper') continue
@@ -1948,7 +1948,7 @@ export class HelperManager implements HelperHost {
     if (chat === MAIN_CHAT) return true
     try {
       if ((await this.store.list('project')).some((project) => project.chats.includes(chat))) return true
-      const rows = await listWhere(this.store, 'chat_item', { chat })
+      const rows = await listWhere(this.store, 'chat_item', { chat, kinds: ['user', 'agent'] })
       return rows.some((row) => (row.kind === 'user' || row.kind === 'agent') && stringField(parseMeta(row.meta)['chat']) === chat)
     } catch {
       return true

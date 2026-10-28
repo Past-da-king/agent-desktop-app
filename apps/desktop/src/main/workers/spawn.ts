@@ -20,6 +20,7 @@ export const spawnWorker: WorkerSpawn = ({ manifest, dir, env }) => {
     case 'node':
       return spawn(process.execPath, [entry, ...manifest.args], {
         ...options,
+        windowsHide: true,
         env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
         shell: false,
       }) as unknown as ChildLike

@@ -780,6 +780,10 @@ export interface ListWhere {
   /** A chat row's chat: MAIN_CHAT matches rows with no chat tag. */
   chat?: string
   kind?: string
+  /** Rows of any of these kinds (with `kind` too: only that one, if it is in the list). An empty list matches none. */
+  kinds?: string[]
+  /** Leave out rows of these kinds (a chat's `activity` steps hold nearly all of its bytes). */
+  exceptKinds?: string[]
   /** Only rows created after this time (ms). */
   since?: number
   limit?: number

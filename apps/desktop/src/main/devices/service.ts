@@ -30,6 +30,8 @@ import { DevicesServer, contentTypeFor } from './server'
 import type { BrainRef, DeviceFacts, DeviceKind, DeviceRecord, DeviceRole, DevicesHost, DeviceToolResult, RouteReply, RouteRequest } from './types'
 
 const SEEN_EVERY_MS = 60_000
+/** How stale the firewall reading may get before a status read looks again (netsh is slow and prints every rule). */
+const FIREWALL_RECHECK_MS = 10 * 60_000
 const COOKIE_DAYS = 400
 /** How long a read of the network interfaces is reused (a new address shows within this). */
 const INTERFACES_TTL_MS = 5_000
@@ -145,6 +147,7 @@ export class DevicesService {
   private readonly uplink: Uplink
   private firewallState: FirewallState = 'unknown'
   private firewallAt = 0
+  private firewallChecking = false
   private rows = new Map<string, DeviceRow>()
   private readonly seenAt = new Map<string, number>()
   private error = ''
@@ -374,11 +377,27 @@ export class DevicesService {
     return this.status()
   }
 
-  /** Re-reads Windows Firewall at most every 30 s (it runs netsh). */
+  /**
+   * Re-reads Windows Firewall (it runs netsh, slow and large): on switching on, after Allow connections, and from a
+   * status read at most every 10 minutes. Was every 30 s from any status read, which ran netsh about once a minute
+   * all day (28 Oct 2026).
+   */
   private async checkFirewall(force = false): Promise<void> {
     const firewall = this.deps.firewall
     if (firewall === undefined || !firewall.needed || !this.enabled) return
-    if (!force && this.now() - this.firewallAt < 30_000) return
+    if (this.firewallChecking && !force) return
+    if (!force && this.now() - this.firewallAt < FIREWALL_RECHECK_MS) return
+    this.firewallChecking = true
+    try {
+      await this.readFirewall()
+    } finally {
+      this.firewallChecking = false
+    }
+  }
+
+  private async readFirewall(): Promise<void> {
+    const firewall = this.deps.firewall
+    if (firewall === undefined) return
     this.firewallAt = this.now()
     const state = await firewall.state(this.config.get().port)
     if (state !== this.firewallState) {

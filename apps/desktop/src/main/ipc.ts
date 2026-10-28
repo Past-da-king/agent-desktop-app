@@ -378,7 +378,7 @@ export function registerIpc(deps: IpcDeps): () => void {
       const light = rows.map((row) => lightRow(entity, row))
       return entity === 'chat_item' ? boundRows(light as Array<{ kind?: unknown; meta?: unknown; createdAt?: unknown }>, (row) => isOpenCard(row) || isLiveHelper(row, Date.now())) : boundRows(light)
     }
-    return (await store.list(entity)).map((row) => lightRow(entity, row))
+    return lightRowsSliced(entity, await store.list(entity))
   })
 
   // ---- a linked phone's small reads (data use, 28 Oct 2026): see shared/device-feed.ts ----
@@ -918,6 +918,19 @@ async function checkAccountKey(deps: IpcDeps, account: AiAccount, key: string): 
       message: error instanceof Error ? error.message : 'Could not check the key.',
     }
   }
+}
+
+/**
+ * The window's list, made light a slice at a time with a yield between slices: tens of thousands of chat rows made
+ * light in one go (each run's meta parsed) held the main thread for seconds on every reload (28 Oct 2026).
+ */
+async function lightRowsSliced<T>(entity: EntityName, rows: T[]): Promise<T[]> {
+  const out: T[] = []
+  for (let at = 0; at < rows.length; at += 1000) {
+    for (const row of rows.slice(at, at + 1000)) out.push(lightRow(entity, row))
+    if (at + 1000 < rows.length) await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+  return out
 }
 
 function fallbackAppInfo(): AppInfo {

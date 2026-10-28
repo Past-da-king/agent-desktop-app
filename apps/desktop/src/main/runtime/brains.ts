@@ -34,7 +34,7 @@ import {
 import { latestDividerAt } from '../memory/chats'
 import { keyFor } from '../accounts'
 import type { CliId } from './cli-agent'
-import type { DataStore } from './data'
+import { listWhere, type DataStore } from './data'
 
 /** The same shape runtime/runner.ts has: a provider for these settings and this key, or null. */
 export type ProviderFactory = (settings: Settings, apiKey: string) => LlmProvider | null
@@ -182,7 +182,8 @@ async function slotNow(deps: BrainDeps, chat: string): Promise<ChatBrainSlot & {
 async function dividerOf(deps: Pick<BrainDeps, 'store'>, chat: string): Promise<number> {
   if (deps.store === undefined) return 0
   try {
-    const rows = (await deps.store.list('chat_item')).filter((row) => chatOfRow(row) === chat)
+    // Dividers are notices: never every chat row (hundreds of MB) on each turn.
+    const rows = (await listWhere(deps.store, 'chat_item', { kind: 'notice', chat })).filter((row) => chatOfRow(row) === chat)
     return latestDividerAt(rows)
   } catch {
     return 0
