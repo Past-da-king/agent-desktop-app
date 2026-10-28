@@ -287,7 +287,8 @@ function BrowserChrome({
                   role="tab"
                   aria-selected={tab.active}
                   className="br-tab-title"
-                  title={tab.url === '' ? label : tab.url}
+                  title={`${tab.url === '' ? label : tab.url}${tab.ownerLabel !== undefined ? `\nOpened by ${tab.ownerLabel}` : ''}`}
+                  data-owner={tab.owner ?? ''}
                   onClick={() => {
                     void agent.browser.selectTab(tab.id)
                   }}

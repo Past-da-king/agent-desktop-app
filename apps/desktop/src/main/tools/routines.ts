@@ -53,6 +53,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
           profile: str('event only: the profile its desk works in, by name. Leave out for General'),
           device: str('Optional, not for event routines: which linked device runs it, by name. Leave out for the best one (a linked server when it can run it).'),
           event_id: str("Optional, 'at' only: the calendar event id of the meeting a follow-up job belongs to, so the job is brought forward when the meeting ends early"),
+          catch_up: bool("Optional, 'daily' only: true runs a missed day's run when the app is back (closed or asleep at its time). Default false: a run more than 15 minutes late is skipped."),
         },
       ),
     },
@@ -83,6 +84,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
         ...(kind === 'event' ? { gatherSeconds: gather, profile, deskId: '' } : {}),
         ...(device === '' ? {} : { device }),
         ...(eventId === '' ? {} : { eventId }),
+        ...(kind === 'daily' && input['catch_up'] === true ? { catchUp: true } : {}),
       })
       await ctx.activity(`New routine: ${name}`, { tool: 'routine_create' })
       return `Routine #${row.id} created: runs ${plainSchedule(kind, spec)}.${

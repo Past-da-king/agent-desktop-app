@@ -116,6 +116,7 @@ export function HelperCardList({
   /** A project chat card's X: off the panel until that chat moves again. No X when it is not given. */
   onClose?: (card: HelperCard) => void
 }): JSX.Element | null {
+  const { stopping, stop } = useStop()
   if (cards.length === 0 && main === null) return null
   const working = cards.filter((card) => card.state === 'working').length + (main === null ? 0 : 1)
   const replied = cards.filter((card) => card.waiting).length
@@ -128,7 +129,7 @@ export function HelperCardList({
       </div>
       <ul className="hp-list">
         {main !== null ? (
-          <li key="main" data-card="main">
+          <li key="main" data-card="main" className={main.waiting ? undefined : 'hp-li closable'}>
             <button type="button" className="hp-card hp-main" data-kind="main" aria-current={current === MAIN_CHAT ? true : undefined} onClick={() => onOpen({ kind: 'main' })} aria-label={`Open the main chat with ${main.label}`} title={main.line}>
               <span className="hp-av" aria-hidden="true">
                 <Mascot id={mascot} size={32} />
@@ -140,18 +141,26 @@ export function HelperCardList({
               </span>
               <span className={`pill ${main.waiting ? 'warn' : 'pri'}`}>{main.waiting ? 'Needs you' : 'Working'}</span>
             </button>
+            {main.waiting ? null : (
+              <button type="button" className="hp-close hp-stop" aria-label={`Stop ${main.label}`} title="Stop the main chat's run now" onClick={() => void agent.chat.stop(MAIN_CHAT)}>
+                <Icon name="x" size={16} />
+              </button>
+            )}
           </li>
         ) : null}
         {cards.map((card) => {
           const s = card.waiting ? { label: 'Your turn', tone: 'ok' } : stateLabel(card)
-          const closable = onClose !== undefined && card.kind === 'project-chat'
           const target = cardTarget(card)
+          // Every run at work has its stop on its card (28 Oct 2026: a routine and a background script ran unseen and
+          // could only be stopped by killing processes). A project chat stops its own run; anything else by its id.
+          const stoppable = card.state === 'working' && !card.waiting
+          const closable = !stoppable && onClose !== undefined && card.kind === 'project-chat'
           // A project chat's card reads as its project, named by its chat; a helper under it sits in its group; any other
           // project helper says which project it works in.
           const where = target.kind === 'project-chat' ? card.chatTitle || 'Project chat' : card.owner.kind === 'project' && card.depth === 0 ? card.owner.name : ''
           const opens = target.kind === 'project-chat' ? `Open the ${card.label} chat` : `Open ${card.label}, a helper`
           return (
-            <li key={card.id} className={`hp-li${card.depth === 1 ? ' hp-sub' : ''}${card.waiting ? ' waiting' : ''}${closable ? ' closable' : ''}`} data-card={card.id}>
+            <li key={card.id} className={`hp-li${card.depth === 1 ? ' hp-sub' : ''}${card.waiting ? ' waiting' : ''}${closable || stoppable ? ' closable' : ''}`} data-card={card.id}>
               <button type="button" className="hp-card" data-kind={target.kind} aria-current={target.kind === 'project-chat' && current !== '' && target.chat === current ? true : undefined} onClick={() => onOpen(target)} aria-label={opens} title={card.line}>
                 <OwnerAvatar owner={card.owner} helper={card} mascot={mascot} size={card.depth === 1 ? 28 : 32} />
                 <span className="hp-t">
@@ -174,6 +183,21 @@ export function HelperCardList({
                 </span>
                 <span className={`pill ${s.tone}`}>{s.label}</span>
               </button>
+              {stoppable ? (
+                <button
+                  type="button"
+                  className="hp-close hp-stop"
+                  aria-label={`Stop ${card.label}`}
+                  title="Stop it now (its run, its process and its browser tabs end)"
+                  disabled={stopping === card.id}
+                  onClick={() => {
+                    if (target.kind === 'project-chat') void agent.chat.stop(target.chat)
+                    else stop(card.id)
+                  }}
+                >
+                  <Icon name="x" size={16} />
+                </button>
+              ) : null}
               {closable ? (
                 <button
                   type="button"

@@ -87,7 +87,7 @@ describe('scheduler due logic', () => {
   })
 
   it('knows when today\'s daily time has passed, once a day', () => {
-    const after = trigger({ kind: 'daily', spec: '09:00' })
+    const after = trigger({ kind: 'daily', spec: '09:50' })
     const before = trigger({ kind: 'daily', spec: '11:00' })
     expect(isDue(after, NOW)).toBe(true)
     expect(isDue(before, NOW)).toBe(false)
@@ -111,7 +111,8 @@ describe('scheduler due logic', () => {
 
 describe('Scheduler', () => {
   it('catches up a missed daily run once, then leaves it until tomorrow', async () => {
-    await save(trigger({ id: 'daily-1', spec: '09:00', lastRunAt: NOW - 3 * DAY }))
+    // Missed by an hour: it runs only because it says catch up (a routine that does not is skipped, CATCH_UP_MS).
+    await save(trigger({ id: 'daily-1', spec: '09:00', lastRunAt: NOW - 3 * DAY, catchUp: true }))
     const runner = new FakeRunner()
     const { scheduler } = makeScheduler(runner)
 
@@ -140,7 +141,7 @@ describe('Scheduler', () => {
   })
 
   it('never runs two routines at once', async () => {
-    await save(trigger({ id: 'slow', spec: '09:00' }))
+    await save(trigger({ id: 'slow', spec: '09:50' }))
     let release: () => void = () => undefined
     const held = new Promise<void>((resolve) => {
       release = resolve
@@ -176,7 +177,7 @@ describe('Scheduler', () => {
   })
 
   it('says "Waiting for you" when a routine stops on a card', async () => {
-    await save(trigger({ id: 'asking', spec: '09:00' }))
+    await save(trigger({ id: 'asking', spec: '09:50' }))
     const runner = new FakeRunner()
     runner.result = async () => ({ text: WAITING_RESULT, waiting: true })
     const { scheduler, notices } = makeScheduler(runner)
@@ -191,7 +192,7 @@ describe('Scheduler', () => {
   })
 
   it('tells the notifier about a finished routine result', async () => {
-    await save(trigger({ id: 'reporting', spec: '09:00' }))
+    await save(trigger({ id: 'reporting', spec: '09:50' }))
     const runner = new FakeRunner()
     runner.result = async () => ({ text: 'Two bills are due.', waiting: false })
     const { scheduler, notices } = makeScheduler(runner)
@@ -202,7 +203,7 @@ describe('Scheduler', () => {
   })
 
   it('skips paused routines and routines that are not due', async () => {
-    await save(trigger({ id: 'paused', spec: '09:00', enabled: false }))
+    await save(trigger({ id: 'paused', spec: '09:50', enabled: false }))
     await save(trigger({ id: 'later', spec: '23:59', enabled: true }))
     const runner = new FakeRunner()
     const { scheduler } = makeScheduler(runner)

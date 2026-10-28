@@ -30,6 +30,7 @@ import { workerTools as backgroundWorkerTools, type WorkerToolDeps } from '../to
 import { browserRunner, webAppTools } from '../tools/webapps'
 import type { StepBudget } from './budget'
 import { browserOwner } from '../browser/owner'
+import { liveRuns, needsLiveRun } from './live-runs'
 import { voiceNoteTool, type VoiceNoteMaker } from '../tools/voice-note'
 import type { DataStore } from './data'
 import type { EnvironmentService } from './environment'
@@ -173,8 +174,20 @@ const MAIN_OWN_TOOLS: ReadonlySet<string> = new Set([
 function asOwner(tools: Tool[]): Tool[] {
   return tools.map((tool) => ({
     spec: tool.spec,
-    run: (input, ctx) => browserOwner.run({ owner: ctx.owner ?? ctx.agentLabel }, () => tool.run(input, ctx)),
+    run: (input, ctx) => {
+      const owner = ctx.owner ?? ctx.agentLabel
+      // Nothing drives the browser unseen (28 Oct 2026): a routine's browser calls need its run live and on screen.
+      if (drivesBrowser(tool.spec.name) && needsLiveRun(owner) && liveRuns.byOwner(owner).length === 0) {
+        return Promise.resolve('Not done: this run is not on screen (no live routine run), so it may not use the browser. It has ended or was stopped.')
+      }
+      return browserOwner.run({ owner }, () => tool.run(input, ctx))
+    },
   }))
+}
+
+/** A tool that opens or drives a page in the agent browser. */
+export function drivesBrowser(name: string): boolean {
+  return name.startsWith('browser_') || name.startsWith('webapp_') || name === 'vault_fill' || name === 'vault_login' || name === 'vault_passkey'
 }
 
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {

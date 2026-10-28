@@ -91,6 +91,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   // Rows: tasks, goals, routines, memories, projects, chats...
   'data.list': free('List rows of a kind: task, goal, routine, memory, project, chat, profile... (every list view)', 'entity'),
   'data.get': free('Read one row', 'entity, id'),
+  'data.where': free('Read only the rows that match, by index: { chat, kind, kinds, exceptKinds, statuses, contains, since, limit, newestFirst }', 'entity, where'),
   'data.upsert': { ...free('Create or change a row (every edit form: task, goal, trigger = routine, project, memory)', 'entity, row'), firstArgIn: EDITABLE_ENTITIES },
   'data.remove': {
     ...ask('Delete a row (every Delete button: task, goal, trigger = routine, project, memory)', 'entity, id'),

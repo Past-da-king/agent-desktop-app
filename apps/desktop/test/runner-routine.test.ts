@@ -80,7 +80,8 @@ describe('Runner routines', () => {
       text: 'Two meetings today, the first at nine.',
       waiting: false,
     })
-    expect(await database.list('chat_item')).toEqual([])
+    // Only its own card (routine-card.test.ts): no turn rows, no lines in the chat.
+    expect((await database.list('chat_item')).map((row) => row.id)).toEqual(['rt-routine-1'])
     expect(await database.list('turn')).toEqual([])
     expect(runner.state()).toEqual({ running: false, waiting: [] })
 
@@ -168,7 +169,7 @@ describe('Runner routines', () => {
   it('does not call a provider when there is no key', async () => {
     const { runner } = makeRunner({ hasKey: false, mode: 'none' }, null)
     const result = await runner.runRoutine(routine())
-    expect(result).toEqual({ text: 'Add an AI key in Settings to start', waiting: false })
+    expect(result).toEqual({ text: 'Add an AI key in Settings to start', waiting: false, failed: true })
   })
 
   it('turns a provider failure into a plain-words result', async () => {

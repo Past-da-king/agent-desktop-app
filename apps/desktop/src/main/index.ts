@@ -68,6 +68,9 @@ import { devicesState, ownBrainIds, type DevicesSyncDeps } from './devices/sync'
 import { attachDevicesSync } from './devices/attach'
 import { registerRelay, rolesFromStore } from './devices/relay'
 import { Scheduler } from './runtime/scheduler'
+import { watchBackgroundScripts } from './runtime/script-runs'
+import { liveRuns } from './runtime/live-runs'
+import { setOwnerLabeller } from './browser/owner'
 import { startOffload, type OffloadWire } from './devices/offload-wire'
 import { buildToolset, buildWorkerToolset } from './runtime/toolset'
 import { AppsService } from './apps/service'
@@ -1009,6 +1012,16 @@ async function startServices(win: BrowserWindow): Promise<void> {
     profiles: apps.profiles,
     learnedNames,
   }))
+  // Every browser tab names the run that owns it, in plain words (browser.state, the panel).
+  setOwnerLabeller((owner) => {
+    const run = liveRuns.byOwner(owner)[0]
+    if (run !== undefined) return `${run.kind}: ${run.label}`
+    if (owner.startsWith('helper:')) {
+      const helper = helpers.live().find((each) => each.id === owner.slice(7))
+      if (helper !== undefined) return `helper: ${helper.label}`
+    }
+    return ''
+  })
   // Where he is, on every message he sends (presence/presence.ts): his calendars are read from Connections and cached.
   const presenceStore = store
   presenceHandle = startPresence({
@@ -1154,8 +1167,17 @@ async function startServices(win: BrowserWindow): Promise<void> {
   })
   const placedWire = offloadWire
   // The start-up repairs each read the whole chat; they run once the window has painted, not before it.
+  // Routines start only once the start-up repair has run (28 Oct 2026: a routine started first, and the repair then
+  // marked its fresh card failed as if the app had closed under it; it ran on unseen).
+  let markRepaired: () => void = () => undefined
+  const repaired = new Promise<void>((resolve) => {
+    markRepaired = resolve
+  })
   const repairs = async (): Promise<void> => {
-    if (store === null || runner === null) return
+    if (store === null || runner === null) {
+      markRepaired()
+      return
+    }
     try {
       // Old chats from before projects sit under a hidden "Earlier chats" project (projects/earlier.ts).
       await adoptEarlierChats(store, store.deletedIds('project').has(EARLIER_CHATS_PROJECT))
@@ -1167,6 +1189,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     } catch {
       // Startup repair is best effort: the app must still open if a row cannot be rewritten.
     }
+    markRepaired()
     void projectAgents.restore().catch(() => undefined)
     // After the repairs: what a crash cut off runs again, once (runtime/turns.ts).
     void leases?.recover().catch(() => 0)
@@ -1263,7 +1286,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
     claim: (trigger) => placedWire.claimRoutine(trigger),
   })
-  scheduler.start()
+  // Background scripts show as runs with a stop, and end with the routine or helper that started them.
+  const scriptStore = store
+  watchBackgroundScripts(scriptStore, () => broadcast(EVENTS.chat, { type: 'chat_changed' }))
+  const startScheduler = scheduler
+  void Promise.race([repaired, new Promise<void>((resolve) => setTimeout(resolve, 120_000))]).then(() => startScheduler.start())
   // Workers come back on every start; each one catches up from its cursor on what it missed while closed.
   supervisor.start()
   registerWorkersIpc(ipcMain, { store: workers, supervisor, openPath: (path) => shell.openPath(path) })

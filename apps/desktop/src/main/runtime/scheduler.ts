@@ -41,6 +41,9 @@ export interface SchedulerDeps {
 }
 
 export const SCHEDULER_INTERVAL_MS = 30_000
+
+/** A daily run this late (the app was closed or asleep at its time) is skipped unless the routine says catch up. */
+export const CATCH_UP_MS = 15 * 60_000
 export const LAST_RESULT_CHARS = 300
 export const WAITING_RESULT = 'Waiting for you'
 
@@ -145,6 +148,13 @@ export class Scheduler {
     if (fresh === null) return
     if (!fresh.enabled && !force) return
 
+    // The slot is taken the moment the run starts (28 Oct 2026: a run cut off by an update, or killed, left the day's
+    // slot open, and the next start ran it again unseen). Whatever happens to this run, this slot never runs again.
+    const startedAt = this.now()
+    if (!isBuiltin(fresh) && fresh.kind !== 'event') {
+      await this.store.upsert('trigger', { id: fresh.id, lastRunAt: startedAt, lastStartedAt: startedAt })
+    }
+
     let outcome: RoutineRunResult
     try {
       if (isBuiltin(fresh)) {
@@ -211,7 +221,11 @@ export function isDue(trigger: TriggerRow, now: number): boolean {
       if (minutes === null) return false
       const todayAt = startOfLocalDay(now) + minutes * 60_000
       if (now < todayAt) return false
-      return trigger.lastRunAt === null || startOfLocalDay(trigger.lastRunAt) !== startOfLocalDay(now)
+      if (trigger.lastRunAt !== null && startOfLocalDay(trigger.lastRunAt) === startOfLocalDay(now)) return false
+      // Missed by more than a few minutes (closed, asleep): skipped unless it says catch up. A run started today
+      // and cut off counts as run (lastRunAt is set as it starts).
+      if (now - todayAt > CATCH_UP_MS && trigger.catchUp !== true) return false
+      return true
     }
     case 'interval': {
       const minutes = Number(trigger.spec)

@@ -404,10 +404,60 @@ interface Job {
   controller: AbortController
   promise: Promise<ScriptOutcome>
   outcome?: ScriptOutcome
+  label: string
+  line: string
 }
 
 const jobs = new Map<string, Job>()
 const MAX_JOBS = 100
+
+/** A background script as the app shows it: who started it, and the way to stop it. */
+export interface BackgroundScript {
+  id: string
+  /** The run that started it (`ToolContext.owner`): "routine", "helper:<id>", "main"... */
+  owner: string
+  /** Its creator's own label (the helper's name, "routine", "main"). */
+  label: string
+  started: number
+  /** The first line of its code, to tell two apart. */
+  line: string
+  stop(): void
+  /** Settles when it ends (done, failed, timed out or stopped). */
+  done: Promise<ScriptOutcome>
+}
+
+const scriptListeners = new Set<(script: BackgroundScript) => void>()
+
+/**
+ * Hear every background script as it starts (28 Oct 2026: one kept driving the browser for an hour after its run
+ * ended, and nothing showed it). The app gives each one a row with a stop, and ends it with its run.
+ */
+export function onBackgroundScript(listener: (script: BackgroundScript) => void): () => void {
+  scriptListeners.add(listener)
+  return () => {
+    scriptListeners.delete(listener)
+  }
+}
+
+/** Background scripts still running, oldest first. */
+export function runningScripts(): BackgroundScript[] {
+  return [...jobs.values()].filter((job) => job.outcome === undefined).map(asBackground)
+}
+
+/** Stops every background script a run started (its run ended or was stopped). Returns how many. */
+export function stopScriptsOf(owner: string): number {
+  let n = 0
+  for (const job of jobs.values()) {
+    if (job.owner !== owner || job.outcome !== undefined || job.controller.signal.aborted) continue
+    job.controller.abort()
+    n += 1
+  }
+  return n
+}
+
+function asBackground(job: Job): BackgroundScript {
+  return { id: job.id, owner: job.owner, label: job.label, started: job.started, line: job.line, stop: () => job.controller.abort(), done: job.promise }
+}
 
 function remember(job: Job): void {
   jobs.set(job.id, job)
@@ -461,12 +511,26 @@ export function scriptTools(options: ScriptToolOptions): Tool[] {
       }
       const id = `scr_${Date.now().toString(36)}${(scriptSeq += 1)}`
       const controller = new AbortController()
+      // Stopping the run that started it stops it too: it is part of that run, never left behind on its own.
+      const parent = ctx.signal
+      const onParentAbort = (): void => controller.abort()
+      if (parent?.aborted === true) return 'The run that asked for this script was stopped.'
+      parent?.addEventListener('abort', onParentAbort, { once: true })
       const promise = runScript({ code, tools, ctx, timeoutMs, id, signal: controller.signal, ...(options.events === undefined ? {} : { events: options.events }) })
-      const job: Job = { id, owner: ownerOf(ctx), started: Date.now(), controller, promise }
+      const firstLine = code.trim().split('\n').find((line) => line.trim() !== '') ?? ''
+      const job: Job = { id, owner: ownerOf(ctx), label: ctx.agentLabel, line: firstLine.trim().slice(0, 120), started: Date.now(), controller, promise }
       void promise.then((outcome) => {
         job.outcome = outcome
+        parent?.removeEventListener('abort', onParentAbort)
       })
       remember(job)
+      for (const listener of scriptListeners) {
+        try {
+          listener(asBackground(job))
+        } catch {
+          // A listener that fails must not stop the script from being started.
+        }
+      }
       return `Started in the background as ${id} (up to ${Math.round(timeoutMs / 1000)} s). Get its result with run_script_result { "id": "${id}" } (wait_seconds waits for it).`
     },
   }

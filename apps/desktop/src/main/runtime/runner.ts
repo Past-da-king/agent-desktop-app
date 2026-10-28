@@ -42,6 +42,7 @@ import {
 } from '@agent/core'
 
 import { listWhere, type DataStore } from './data'
+import { liveRuns } from './live-runs'
 import type { StepBudget } from './budget'
 import { chatBrainOf, isBrain, mainBrain, pickBrain, rosterFor, type Brain, type BrainDeps, type BrainLocks } from './brains'
 import type { HelperHost } from './helpers'
@@ -89,6 +90,8 @@ export interface SecretsView {
 export interface RoutineRunResult {
   /** The final text of the run, or the reason it could not start. */
   text: string
+  /** True when it was stopped (its card's X, helper_stop, the routine switched off). */
+  stopped?: boolean
   /** True when the routine posted a question or approval card and stopped there. */
   waiting: boolean
   /** True when the run itself failed (no brain, an error), not when it ran and reported a problem. */
@@ -273,6 +276,11 @@ export class Runner {
   private routineRunning = false
   private routineWaiting = false
   private routineController: AbortController | null = null
+  /** Why the running routine was stopped (the card's X, helper_stop, switching it off), or null. */
+  private routineStopBy: string | null = null
+  /** The running routine's id and its entry in the live runs (runtime/live-runs.ts). */
+  private routineTriggerId: string | null = null
+  private routineLive: { step(line: string): void; end(): void } | null = null
   /** The running routine's card (routineCardId) and when its step line was last written. */
   private routineCard: { id: string; stepAt: number; step: string; timer: ReturnType<typeof setTimeout> | null } | null = null
   private readonly askWaiters = new Map<string, (answer: string | null) => void>()
@@ -320,6 +328,7 @@ export class Runner {
       watched.onChange?.((change) => {
         this.trackCard(change)
         this.routineCardStopped(change)
+        this.routineSwitchedOff(change)
       }) ?? null
   }
 
@@ -948,16 +957,42 @@ export class Runner {
     if (this.routineRunning) return { text: 'Another routine is still running.', waiting: false }
     this.routineRunning = true
     this.routineWaiting = false
+    this.routineStopBy = null
+    // The run's own stop, made before anything starts: the card's X, helper_stop, Stop all and switching the routine
+    // off all end it through here, the engine's process included (28 Oct 2026: none of them could).
+    const controller = new AbortController()
+    this.routineController = controller
+    this.routineTriggerId = trigger.id
+    const live = liveRuns.start({
+      id: routineCardId(trigger.id),
+      kind: 'routine',
+      label: trigger.name,
+      owner: 'routine',
+      startedAt: this.now(),
+      stop: (by) => {
+        if (this.routineStopBy === null) this.routineStopBy = by === '' ? 'it was stopped' : `stopped by ${by}`
+        controller.abort()
+      },
+    })
+    this.routineLive = live
     let outcome: RoutineRunResult = { text: 'The routine stopped.', waiting: false, failed: true }
     await this.openRoutineCard(trigger).catch(() => undefined)
     try {
-      outcome = await this.runRoutineTurn(trigger)
+      // Only a stop from outside (its X, helper_stop, switched off) makes it stopped; a routine that ends itself on a
+      // card aborts its own turn and is waiting, not stopped.
+      outcome = this.routineStopBy !== null ? { text: 'Stopped before it started.', waiting: false, failed: true, stopped: true } : await this.runRoutineTurn(trigger)
+      if (this.routineStopBy !== null) outcome = { text: `Stopped: ${this.routineStopBy}.`, waiting: false, failed: true, stopped: true }
       return outcome
     } catch (error) {
-      outcome = { text: friendlyError(error), waiting: false, failed: true }
+      outcome = this.routineStopBy !== null
+        ? { text: `Stopped: ${this.routineStopBy ?? 'it was stopped'}.`, waiting: false, failed: true, stopped: true }
+        : { text: friendlyError(error), waiting: false, failed: true }
       throw error
     } finally {
       await this.closeRoutineCard(outcome).catch(() => undefined)
+      live.end()
+      this.routineLive = null
+      this.routineTriggerId = null
       this.routineRunning = false
       this.routineWaiting = false
       this.routineController = null
@@ -999,13 +1034,14 @@ export class Runner {
     const step = clip(text.replace(/\s+/g, ' ').trim(), 140)
     if (card === null || step === '') return
     card.step = step
+    this.routineLive?.step(step)
     if (card.timer !== null) return
     const wait = Math.max(0, card.stepAt + ROUTINE_STEP_MS - this.now())
     card.timer = setTimeout(() => {
       card.timer = null
       if (this.routineCard !== card) return
       card.stepAt = this.now()
-      void this.patchRoutineCard(card.id, { summary: card.step }, true).catch(() => undefined)
+      void this.keepRoutineCard(card.id, card.step).catch(() => undefined)
     }, wait)
     card.timer.unref?.()
   }
@@ -1017,7 +1053,7 @@ export class Runner {
     if (card.timer !== null) clearTimeout(card.timer)
     const result = outcome.waiting ? WAITING_FOR_USER : outcome.text.trim()
     await this.patchRoutineCard(card.id, {
-      state: outcome.failed === true ? 'failed' : 'done',
+      state: outcome.stopped === true ? 'stopped' : outcome.failed === true ? 'failed' : 'done',
       summary: clip((result.split('\n').find((line) => line.trim() !== '') ?? 'Done').trim(), 140),
       result: result.slice(0, 6000),
       endedAt: this.now(),
@@ -1033,12 +1069,39 @@ export class Runner {
     this.emitFor(MAIN_CHAT, { type: 'chat_changed' })
   }
 
+  /**
+   * The running routine's card says working, with its step, for as long as it runs: anything that marked it ended
+   * while it still ran (the start-up repair did, 28 Oct 2026, and the run went on unseen) is put right. A card
+   * marked stopped stops the run instead.
+   */
+  private async keepRoutineCard(id: string, step: string): Promise<void> {
+    const row = await this.store.get('chat_item', id)
+    if (row === null || this.routineCard?.id !== id) return
+    const meta = parseMeta(row.meta)
+    if (meta['state'] === 'stopped') {
+      liveRuns.stop(id, 'the person, from its card')
+      return
+    }
+    await this.store.upsert('chat_item', { id, kind: row.kind, text: row.text, meta: JSON.stringify({ ...meta, state: 'working', summary: step, endedAt: null, result: '', endReason: undefined }) })
+    this.emitFor(MAIN_CHAT, { type: 'chat_changed' })
+  }
+
+  /** A routine switched off or deleted while it runs: its run stops. */
+  private routineSwitchedOff(change: CardChange): void {
+    const id = this.routineTriggerId
+    if (id === null || (change.entity as string) !== 'trigger') return
+    const row = change.row as { id?: unknown; enabled?: unknown } | undefined
+    const gone = change.deleted === true && change.id === id
+    const off = row !== undefined && row.id === id && row.enabled === false
+    if (gone || off) liveRuns.stop(routineCardId(id), gone ? 'deleting the routine' : 'switching the routine off')
+  }
+
   /** Stop on a routine's card (the helpers view, a phone): the helper service marks it stopped, and the run ends. */
   private routineCardStopped(change: CardChange): void {
     const card = this.routineCard
     const row = change.row as { id?: unknown; meta?: unknown } | undefined
     if (card === null || row === undefined || row.id !== card.id || typeof row.meta !== 'string') return
-    if (parseMeta(row.meta)['state'] === 'stopped') this.routineController?.abort()
+    if (parseMeta(row.meta)['state'] === 'stopped') liveRuns.stop(card.id, 'the person, from its card')
   }
 
   private async runRoutineTurn(trigger: TriggerRow): Promise<RoutineRunResult> {
@@ -1068,7 +1131,7 @@ export class Runner {
         ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
       })
 
-      const controller = new AbortController()
+      const controller = this.routineController ?? new AbortController()
       this.routineController = controller
       const context = this.toolContext(controller.signal, 'routine')
       const loop = new AgentLoop({ provider: resolved.provider, model: resolved.model, tools: this.tools })
@@ -1528,7 +1591,7 @@ export class Runner {
 
   private async runCliRoutine(trigger: TriggerRow, brain: Brain & { kind: 'plan' }): Promise<RoutineRunResult> {
     if (this.cli === undefined) return { text: 'This build cannot run routines on a plan.', waiting: false }
-    const controller = new AbortController()
+    const controller = this.routineController ?? new AbortController()
     this.routineController = controller
     const result = await this.cli.turn({
       cli: brain.cli,

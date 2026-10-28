@@ -41,7 +41,8 @@ import {
   type FitResult,
   type ViewSpec,
 } from './emulation'
-import { currentOwner } from './owner'
+import { currentOwner, ownerLabel } from './owner'
+import { liveRuns } from '../runtime/live-runs'
 import {
   assessPage,
   diagnosis,
@@ -410,6 +411,16 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.emit()
   }
 
+  /** Which run a tab belongs to (it opened it, or drives it now), in plain words, with the id that stops it. */
+  private ownerFacts(tabId: string): { owner?: string; ownerLabel?: string; ownerRunId?: string } {
+    let owner = this.runTabs.ownerOf(tabId)
+    if (owner === undefined) for (const [who, tab] of this.ownerTabs) if (tab === tabId) owner = who
+    if (owner === undefined) return {}
+    const run = liveRuns.byOwner(owner)[0]
+    const runId = run?.id ?? (owner.startsWith('helper:') ? owner.slice(7) : undefined)
+    return { owner, ownerLabel: ownerLabel(owner), ...(runId === undefined ? {} : { ownerRunId: runId }) }
+  }
+
   state(): BrowserState {
     // The panel shows the tab in front, whichever profile it belongs to.
     const active = this.shownTab()
@@ -422,6 +433,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
         partition: tab.partition,
         embed: tab.view === null,
         view: pageSpecOf(tab.spec),
+        ...this.ownerFacts(tab.id),
       })),
       ...[...this.pending].map(([id, waiting]) => ({
         id,

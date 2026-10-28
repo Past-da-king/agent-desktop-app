@@ -38,6 +38,7 @@ import {
 
 import { siteFromCall, siteOf, stuckPhrase, urlFromResult, type ToolInFlight } from './stuck-tool'
 import { listWhere, type DataStore } from './data'
+import { liveRuns } from './live-runs'
 import type { CliHost } from './cli-host'
 import { projectFolderOf } from './work-folder'
 import { brainFor, isBrain, pickFor, rosterFor, type Brain, type BrainDeps } from './brains'
@@ -886,13 +887,20 @@ export class HelperManager implements HelperHost {
   }
 
   async status(): Promise<string> {
-    const helpers = (await listWhere(this.store, 'chat_item', { kind: 'helper' })).slice(-10)
-    if (helpers.length === 0) return 'No helpers have run yet.'
+    // Routine runs and background scripts first: running now, whatever their card says or how old it is.
+    const nowAt = this.now()
+    const live = liveRuns.list().map((run) => `#${run.id} ${run.label} [working, ${run.kind}, ${Math.max(0, Math.floor((nowAt - run.startedAt) / 60_000))}m]\nNow: ${run.line || 'working'}\nStop it with helper_stop and this id.`)
+    const all = await listWhere(this.store, 'chat_item', { kind: 'helper' })
+    // Every working card, then the newest others: a working one is never pushed out by newer finished ones.
+    const working = all.filter((row) => parseMeta(row.meta)['state'] === 'working' && !liveRuns.has(row.id))
+    const rest = all.filter((row) => parseMeta(row.meta)['state'] !== 'working' && !liveRuns.has(row.id)).slice(-Math.max(0, 10 - working.length))
+    const helpers = [...rest, ...working]
+    if (helpers.length === 0) return live.length === 0 ? 'No helpers have run yet.' : live.join('\n\n')
 
     const since = Math.min(...helpers.map((row) => row.createdAt)) - 1
     const activities = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, since) })
     const nowMs = this.now()
-    return helpers
+    const lines = helpers
       .sort((a, b) => {
         const left = parseMeta(a.meta)['state'] === 'working' ? 0 : 1
         const right = parseMeta(b.meta)['state'] === 'working' ? 0 : 1
@@ -915,7 +923,7 @@ export class HelperManager implements HelperHost {
         }
         return `${head}\nNow: ${stringField(meta['summary']) || 'thinking'}${steps === '' ? '' : `\nRecent steps: ${steps}`}`
       })
-      .join('\n\n')
+    return [...live, ...lines].join('\n\n')
   }
 
   /**
@@ -930,6 +938,8 @@ export class HelperManager implements HelperHost {
 
   /** `routed`: another brain sent this stop here, so it is never sent on again (no stop goes round in circles). */
   private async stopFrom(id: string, by: string, routed: boolean): Promise<boolean> {
+    // A routine run or background script: stopped at once, its process and tabs with it.
+    if (!this.runs.has(id) && liveRuns.stop(id, by)) return true
     const run = this.runs.get(id)
     if (run === undefined) {
       const link = this.link()
@@ -955,6 +965,7 @@ export class HelperManager implements HelperHost {
   }
 
   async stopAll(by = ''): Promise<number> {
+    const others = liveRuns.stopAll(by)
     const ids = [...this.runs.keys()]
     const away = [...this.remote.values()]
     for (const run of away) {
@@ -969,8 +980,8 @@ export class HelperManager implements HelperHost {
       if (run.controller === null) await this.endNotStarted(run)
       else run.controller.abort()
     }
-    if (ids.length > 0) this.emit({ type: 'chat_changed' })
-    return ids.length + away.length
+    if (ids.length > 0 || others > 0) this.emit({ type: 'chat_changed' })
+    return ids.length + away.length + others
   }
 
   /**
@@ -1064,7 +1075,9 @@ export class HelperManager implements HelperHost {
       const meta = parseMeta(row.meta)
       if (meta['state'] !== 'working') continue
       if (typeof meta['projectChat'] === 'string' && meta['projectChat'] !== '') continue
-      // A routine's card (runner.ts routineCardId) is ended by its own run.
+      // A routine run or background script (runtime/live-runs.ts) is ended by its own run.
+      if (liveRuns.has(row.id)) continue
+      // A routine's card (runner.ts routineCardId) is ended by its own run, wherever it runs.
       if (typeof meta['routine'] === 'object' && meta['routine'] !== null) continue
       if (this.pendingStops.has(row.id)) continue
       const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
@@ -1220,6 +1233,8 @@ export class HelperManager implements HelperHost {
       if (meta['state'] !== 'working') continue
       // Already taken up again on this start (a start another brain sent, a lease resumed): it is ours and running.
       if (this.runs.has(row.id)) continue
+      // A routine run or background script of this start (runtime/live-runs.ts): running now, not left over.
+      if (liveRuns.has(row.id)) continue
       // A project agent's row (runtime/project-agents.ts, it carries projectChat) is not a helper run: its project
       // chat resumes from its turn lease, and ProjectAgentRows.restore follows it again and closes it when that chat
       // is done. Failing it here left the card dead while the project's own helpers carried on (22 Oct 2026).

@@ -439,6 +439,13 @@ export interface TriggerRow extends RowBase {
   lastResult: string
   /** Set on a routine the app itself runs (not a prompt for the agent): only its time and on/off can change. */
   builtin?: string
+  /**
+   * daily only: a run missed by more than 15 minutes (the app was closed, the computer asleep) still runs when the
+   * app is back. Absent or false: it is skipped, and the routine runs at its next time.
+   */
+  catchUp?: boolean
+  /** When its current run started (set as a run starts, so a run cut off is never started again on its own). */
+  lastStartedAt?: number | null
   /** Devices (s12): which linked brain runs it, by name or id; '' or absent = the best one (a server first). */
   device?: string
   /** at only: the calendar event a meeting follow-up job belongs to, so an early end finds it (presence/meeting-jobs.ts). */
@@ -989,6 +996,12 @@ export interface BrowserTab {
   embed?: boolean
   /** How this tab's page is laid out (each tab keeps the view it was opened with). */
   view?: BrowserPageSpec
+  /** The run that opened or drives it ("routine", "helper:<id>", "main"...); absent: the person's own tab. */
+  owner?: string
+  /** That run in plain words ("routine: Cosmiprint engagement", "helper: Fix the build"). */
+  ownerLabel?: string
+  /** The id helper_stop takes to stop that run, when it can be stopped that way. */
+  ownerRunId?: string
 }
 
 /** The size and kind of page a tab lays out, for placing its <webview> (shared/page-place.ts). */

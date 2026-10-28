@@ -39,7 +39,10 @@ describe('what the window hears', () => {
     await store.batch(async () => {
       for (let i = 0; i < 60; i++) await store.upsert('task', { title: `t${i}` })
     })
-    expect(seen).toEqual([{ entity: 'task', reset: true }])
+    // One reset, carrying the 60 rows so a list in memory applies them instead of reading the table again.
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ entity: 'task', reset: true })
+    expect(seen[0]?.batch).toHaveLength(60)
     store.close()
   })
 

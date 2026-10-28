@@ -157,16 +157,20 @@ describe('project chat cards stay until he closes them', () => {
 })
 
 describe('the X on a card', () => {
-  it('is drawn for project chat cards only, and only when the list can close cards', () => {
+  it('closes only project chat cards, and every working card has a stop X instead', () => {
     const items = [...answered(), row('h-w', 'helper', 900, { id: 'h-w', label: 'Loose job', state: 'working', startedAt: 900 })]
     const list = helperCards(items, [project(['pc1'])])
     const closing = renderToStaticMarkup(createElement(HelperCardList, { cards: list, mascot: 'scout', onOpen: () => undefined, onClose: () => undefined }))
     expect(closing.match(/class="hp-close"/g)).toHaveLength(1)
+    // The working helper's card stops it (28 Oct 2026: nothing at work without a stop on screen).
+    expect(closing.match(/class="hp-close hp-stop"/g)).toHaveLength(1)
+    expect(closing).toContain('aria-label="Stop Loose job"')
     expect(closing).toContain('aria-label="Close the Shop Site card. The chat keeps going"')
     expect(closing).toContain('class="hp-li waiting closable"')
     expect(closing).toContain('Your turn')
     const plain = renderToStaticMarkup(createElement(HelperCardList, { cards: list, mascot: 'scout', onOpen: () => undefined }))
-    expect(plain).not.toContain('hp-close')
+    expect(plain).not.toContain('class="hp-close"')
+    expect(plain).toContain('hp-stop')
   })
 
   it('is invisible until the card is hovered (or the X has keyboard focus), and then takes the place of the pill', () => {
