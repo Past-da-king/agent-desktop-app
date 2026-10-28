@@ -3,8 +3,14 @@ import { resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'electron-vite'
 
+/** The workspace core, by path. */
+export const CORE = resolve(__dirname, '../../packages/core/src/index.ts')
+
 export default defineConfig({
   main: {
+    // Always this repo's own core, never whatever node_modules/@agent/core happens to link to: 0.2.91 was
+    // packaged in a copy whose link pointed at an older copy, and shipped that copy's settings defaults.
+    resolve: { alias: { '@agent/core': CORE } },
     // The workspace package ships TypeScript source, so bundle it into the main process rather
     // than leaving a require('@agent/core') that Node cannot load at runtime.
     build: {
@@ -18,6 +24,7 @@ export default defineConfig({
     },
   },
   preload: {
+    resolve: { alias: { '@agent/core': CORE } },
     build: {
       outDir: 'out/preload',
       sourcemap: false,
