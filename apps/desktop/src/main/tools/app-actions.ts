@@ -18,6 +18,7 @@ import { schema, str, type JsonObject, type Tool } from '@agent/core'
 import { RPC_CHANNELS } from '../../shared/rpc-methods'
 import { WORKER_CHANNELS } from '../../shared/workers-channels'
 import { WAKEUP_CHANNELS } from '../../shared/wakeups-channels'
+import { GIT_CHANNELS } from '../../shared/git-channels'
 import { MINIAPP_CHANNELS } from '../../shared/miniapps-channels'
 
 export interface AppActionRule {
@@ -51,6 +52,7 @@ export const APP_ACTION_CHANNELS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(WORKER_CHANNELS).map(([key, channel]) => [`workers.${key}`, channel])),
   ...Object.fromEntries(Object.entries(WAKEUP_CHANNELS).map(([key, channel]) => [`wakeups.${key}`, channel])),
   ...Object.fromEntries(Object.entries(MINIAPP_CHANNELS).map(([key, channel]) => [`miniapps.${key}`, channel])),
+  ...Object.fromEntries(Object.entries(GIT_CHANNELS).map(([key, channel]) => [`git.${key}`, channel])),
 }
 
 const free = (about: string, args?: string): AppActionRule => ({ kind: 'free', about, ...(args === undefined ? {} : { args }) })
@@ -118,6 +120,8 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'wakeups.test': tool('Ring a test wake-up (Settings > Wake-ups > Test)', 'wake_me'),
   'wakeups.selfId': free("This computer's device id (Settings > Wake-ups)"),
   'wakeups.devices': free("Each linked phone's wake-up permissions as it reported them (Settings > Wake-ups)"),
+  'git.log': tool('What the auto-commit committed and pushed per run (Settings > Git)', 'git_autocommit_log'),
+  'git.report': tool('Which project folders hold uncommitted or unpushed work (Settings > Git > Check projects)', 'git_status_report'),
   // Mini-apps: agents make and change them with the miniapp_* tools (which lint and check them). The frame bridge is
   // the window's own plumbing, and what an app may do without asking is his to decide alone.
   'miniapps.session': no("An open mini-app's bridge session", WINDOW_PLUMBING),

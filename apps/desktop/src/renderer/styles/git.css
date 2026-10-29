@@ -1,0 +1,11 @@
+/* Settings > Git (views/GitSettings.tsx). */
+.gitset-input{width:220px;max-width:100%}
+.gitset-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.gitset-row{display:flex;flex-direction:column;gap:2px;border:1px solid var(--outline-v);border-radius:var(--r-md);background:var(--s-lowest);padding:10px 12px;min-width:0}
+.gitset-row.warn{border-color:color-mix(in srgb,var(--err) 40%,var(--outline-v))}
+.gitset-top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.gitset-title{overflow-wrap:anywhere}
+@media (max-width:600px){
+  .gitset-ex{flex-wrap:wrap}
+  .gitset-input{width:100%}
+}

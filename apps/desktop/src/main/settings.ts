@@ -179,6 +179,15 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     if (typeof value !== 'number' || !Number.isFinite(value)) return INVALID
     return Math.min(120, Math.max(1, Math.round(value)))
   }
+  if (key === 'gitMaxFileMb') {
+    const number = typeof value === 'string' ? Number(value.trim()) : value
+    if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
+    return Math.min(500, Math.max(1, Math.round(number)))
+  }
+  if (key === 'gitExclude') {
+    if (typeof value !== 'string') return INVALID
+    return value.slice(0, 2000)
+  }
   if (key === 'wakeupVolume') {
     if (typeof value !== 'number' || !Number.isFinite(value)) return INVALID
     return Math.min(1, Math.max(0.1, Math.round(value * 100) / 100))

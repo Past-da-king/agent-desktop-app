@@ -1491,6 +1491,10 @@ export const mockAgent: AgentApi = {
   ...mockHotkeys(() => settings),
   workers: mockWorkers(),
   vault: mockVault(),
+  git: {
+    log: async () => [],
+    report: async () => [],
+  },
   wakeups: {
     test: async (severity) => `mock-${severity}`,
     ack: async () => true,

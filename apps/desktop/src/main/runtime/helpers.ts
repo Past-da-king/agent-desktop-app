@@ -207,6 +207,16 @@ export interface HelperManagerDeps {
   leases?: LeaseHook
   /** Placing helpers on another brain (s12). Can also be set later with setOffload. */
   offload?: OffloadLink
+  /** Auto-commit and push of a run's work in a git repo (Settings > Git; git/hook.ts). */
+  git?: RunGitHookLike | null
+}
+
+/** The part of git/hook.ts RunGitHook a run needs. */
+export interface RunGitHookLike {
+  begin(key: string, folder: string): Promise<void>
+  touch(key: string, input: unknown): Promise<void>
+  end(key: string, title: string): Promise<{ note: string; problem: boolean }>
+  drop(key: string): void
 }
 
 interface Ready {
@@ -386,6 +396,7 @@ export class HelperManager implements HelperHost {
   private readonly secrets: SecretsView
   private readonly providerFactory: ProviderFactory
   private readonly cli: CliHost | null
+  private readonly git: RunGitHookLike | null
   private readonly profiles: ProfileLookup | null
   private readonly learnedNames: () => Record<string, string>
   private readonly workerTools: Tool[]
@@ -446,6 +457,7 @@ export class HelperManager implements HelperHost {
     this.secrets = deps.secrets
     this.providerFactory = deps.providerFactory
     this.cli = deps.cli ?? null
+    this.git = deps.git ?? null
     this.profiles = deps.profiles ?? null
     this.learnedNames = deps.learnedNames ?? (() => ({}))
     this.workerTools = deps.workerTools
@@ -1395,6 +1407,7 @@ export class HelperManager implements HelperHost {
     const history: Msg[] = starting ?? [userMsg(run.brief, run.images ?? [])]
     if (starting === null) await this.appendTurn(run.id, history[0] as Msg)
     await this.updateMeta(run.id, { state: 'working', summary: 'Thinking', queued: false })
+    await this.gitBegin(run)
 
     let state: HelperState = 'failed'
     let result = ''
@@ -1438,6 +1451,26 @@ export class HelperManager implements HelperHost {
     await this.finish(run, state, result)
   }
 
+  /** The run starts: its project folder's repo is looked at, so its own changes can be told apart at the end. */
+  private async gitBegin(run: HelperRun): Promise<void> {
+    if (this.git === null) return
+    const folder = run.chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), run.chat)
+    await this.git.begin(`helper:${run.id}`, folder).catch(() => undefined)
+  }
+
+  /** The run ended: its work is committed and pushed (Settings > Git); one line for its parent when there is news. */
+  private async gitEnd(run: HelperRun, state: HelperState, result: string): Promise<string> {
+    if (this.git === null) return result
+    const key = `helper:${run.id}`
+    // Stopped by someone, handed on, or the app closing: not finished work, nothing is committed.
+    if (state === 'stopped' || run.quiet === true || this.closing) {
+      this.git.drop(key)
+      return result
+    }
+    const ended = await this.git.end(key, run.label).catch(() => ({ note: '', problem: false }))
+    return ended.note === '' ? result : `${result}\n\n${ended.note}`
+  }
+
   private async finish(run: HelperRun, state: HelperState, result: string): Promise<void> {
     const link = this.link()
     const away = link !== null && run.origin !== undefined && run.origin !== '' && !link.isSelf(run.origin) ? run.origin : ''
@@ -1445,6 +1478,7 @@ export class HelperManager implements HelperHost {
     // anything: it goes back to the brain that placed it, which runs it itself (s12).
     if (away !== '' && link !== null && state === 'failed' && CANNOT_RUN_HERE.test(result)) {
       link.cannotRun?.(run.pick.account, result)
+      this.git?.drop(`helper:${run.id}`)
       this.leases?.end(`job-${run.id}`, 'failed')
       this.runs.delete(run.id)
       this.active.delete(run.id)
@@ -1454,6 +1488,7 @@ export class HelperManager implements HelperHost {
       this.pump()
       return
     }
+    result = await this.gitEnd(run, state, result)
     this.leases?.end(`job-${run.id}`, state === 'failed' ? 'failed' : 'done')
     // What this run handed back is kept, so a session rebuilt later knows it (its card's result is overwritten).
     if (state === 'done' && !this.closing) await this.recordMessage(run.id, result, 'result')
@@ -2037,6 +2072,8 @@ export class HelperManager implements HelperHost {
         return
       }
       case 'tool_started': {
+        // A changing call names a repo: it is looked at before the change (reads and waits never are).
+        if (this.git !== null && !isInterruptible(event.call.name, (event.call.input ?? {}) as Record<string, unknown>)) await this.git.touch(`helper:${run.id}`, event.call.input).catch(() => undefined)
         const summary = describeCall(event.call)
         run.lastStep = summary
         run.inTool = { id: event.call.id, name: event.call.name, since: this.now() }
@@ -2494,6 +2531,7 @@ export class HelperManager implements HelperHost {
     run.controller = controller
     if (run.pushMessage === undefined) cli.forget(`helper:${run.id}`)
     await this.updateMeta(run.id, { state: 'working', summary: 'Thinking', queued: false })
+    await this.gitBegin(run)
 
     let state: HelperState = 'failed'
     let result = ''

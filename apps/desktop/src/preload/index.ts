@@ -55,8 +55,9 @@ import { MEMORY_HISTORY_CHANNELS } from '../shared/memory-history-channels'
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../shared/devices-channels'
 import { WORKER_CHANNELS, WORKER_EVENTS } from '../shared/workers-channels'
 import { WAKEUP_CHANNELS } from '../shared/wakeups-channels'
+import { GIT_CHANNELS } from '../shared/git-channels'
 import { MINIAPP_CHANNELS, MINIAPP_EVENTS } from '../shared/miniapps-channels'
-import type { MiniAppCheck, WakeDeviceStatus } from '@agent/core'
+import type { GitLogEntry, GitRepoState, MiniAppCheck, WakeDeviceStatus } from '@agent/core'
 import { VAULT_CHANNELS, VAULT_EVENTS } from '../shared/vault-channels'
 
 const platform: AgentApi['platform'] =
@@ -345,6 +346,10 @@ const api: AgentApi = {
     snooze: (id, minutes) => call<boolean>(WAKEUP_CHANNELS.snooze, id, minutes),
     selfId: () => call<string>(WAKEUP_CHANNELS.selfId),
     devices: () => call<WakeDeviceStatus[]>(WAKEUP_CHANNELS.devices),
+  },
+  git: {
+    log: () => call<GitLogEntry[]>(GIT_CHANNELS.log),
+    report: () => call<GitRepoState[]>(GIT_CHANNELS.report),
   },
   miniapps: {
     session: (appId) => call<string | null>(MINIAPP_CHANNELS.session, appId),

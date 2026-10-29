@@ -128,6 +128,10 @@ import { registerMiniAppIpc, registerMiniAppRpc } from './miniapps/ipc'
 import { MINIAPP_EVENTS } from '../shared/miniapps-channels'
 import type { MiniAppUi } from './tools/miniapps'
 import { registerWakeupIpc, registerWakeupRpc, WakeDeviceReports } from './wakeups/bridge'
+import { RunGitHook } from './git/hook'
+import { vaultHashesOf, type VaultHashes } from './git/secret-scan'
+import { gitStatusReport } from './git/report'
+import { GIT_CHANNELS } from '../shared/git-channels'
 import { WAKEUP_RPC } from '../shared/wakeups-channels'
 import { getDevicesHost } from './devices/service'
 
@@ -770,6 +774,29 @@ async function startServices(win: BrowserWindow): Promise<void> {
   setVaultRedactor((text) => vault.redact(text))
   vault.onChange(() => broadcast(VAULT_EVENTS.changed, null))
   const browserVault = new BrowserVault(vault, (message, detail) => logger.info(message, detail))
+  // Settings > Git: a run's work in a git repo is committed and pushed when it ends (git/hook.ts). Off by default.
+  const gitStore = store
+  const gitKv = { get: (key: string) => gitStore.localValue(key), set: (key: string, value: string) => gitStore.setLocalValue(key, value) }
+  let gitVault: { at: number; hashes: VaultHashes } | null = null
+  const gitHook = new RunGitHook({
+    settings: () => settings.get(),
+    kv: gitKv,
+    // The vault's values only as hashes, remade when the vault changes (the secret check compares hashes).
+    vault: () => {
+      const at = vault.changedAt()
+      if (gitVault === null || gitVault.at !== at) gitVault = { at, hashes: vaultHashesOf(vault.redactions().map((entry) => entry.needle)) }
+      return gitVault.hashes
+    },
+    log: (line) => logger.info(line),
+  })
+  ipcMain.handle(GIT_CHANNELS.log, () => gitHook.log(50))
+  ipcMain.handle(GIT_CHANNELS.report, async () => {
+    const projects = await gitStore.list('project').catch(() => [])
+    const folders = projects.filter((p) => p.path.trim() !== '').map((p) => ({ name: p.name, path: p.path }))
+    // The window's view never moves the nightly report's baseline: a scratch key-value.
+    const scratch = new Map<string, string>()
+    return (await gitStatusReport(folders, { get: (k) => scratch.get(k) ?? null, set: (k, v) => void scratch.set(k, v) }, { full: true })).repos
+  })
   // The old single AI choice becomes the first account, once; after that the accounts list is the truth.
   migrateLegacyAccount(settings, secrets)
   const accounts = new AccountStore(settings, secrets)
@@ -990,6 +1017,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     recordings,
     calendar: () => presenceHandle?.calendar ?? null,
     miniappUi: () => miniappUi,
+    git: { kv: gitKv, hook: () => gitHook },
   })
   // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
   // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
@@ -1034,6 +1062,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     notify: showNotification,
     profiles: apps.profiles,
     learnedNames,
+    git: gitHook,
   }))
   // Every browser tab names the run that owns it, in plain words (browser.state, the panel).
   setOwnerLabeller((owner) => {
@@ -1129,6 +1158,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     settings.onChange(() => wakeupService?.kick())
   }
   const tools = buildToolset({
+    git: { kv: gitKv, hook: () => gitHook },
     appControl: { ...appControl, update: selfUpdater },
     calendar: () => presenceHandle?.calendar ?? null,
     miniappUi: () => miniappUi,
@@ -1208,6 +1238,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },
     presence,
+    git: gitHook,
     store,
     settings,
     secrets,

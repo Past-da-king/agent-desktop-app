@@ -537,6 +537,11 @@ export async function createRemoteAgent(): Promise<AgentApi> {
     },
     // The Vault is listed from the computer; values never come to this device.
     // Wake-ups ring and are tested on the computer and the phone themselves; an answer from here is his too.
+    // Settings > Git is this computer's own; a remote window shows nothing for it.
+    git: {
+      log: async () => [],
+      report: async () => [],
+    },
     wakeups: {
       test: () => notHere('Testing a wake-up'),
       ack: (id) => wire.call('wakeups.ack', [id]) as Promise<boolean>,

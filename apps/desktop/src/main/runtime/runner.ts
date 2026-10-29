@@ -48,6 +48,7 @@ import { chatBrainOf, isBrain, mainBrain, pickBrain, rosterFor, type Brain, type
 import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
 import { projectFolderOf } from './work-folder'
+import type { RunGitHookLike } from './helpers'
 import { buildSystemPrompt, type ProjectContext } from './prompt'
 import type { CliId } from './cli-agent'
 import { quietTapNote } from './openui-prompt'
@@ -193,6 +194,8 @@ export interface RunnerDeps {
    * thread and project chats, never in the system prompt. Left out: no note.
    */
   presence?: { note(chat: string, meta: string): Promise<string> }
+  /** Auto-commit and push of a turn's work in a git repo (Settings > Git; git/hook.ts). */
+  git?: RunGitHookLike | null
 }
 
 interface ActivityRow {
@@ -282,6 +285,7 @@ export class Runner {
   private readonly locks: BrainLocks | undefined
   private readonly devices: RunnerDevices | undefined
   private readonly presence: RunnerDeps['presence']
+  private readonly git: RunGitHookLike | null
   /** The app is quitting: a turn cut off now keeps its lease running, so the next start resumes it. */
   private disposing = false
 
@@ -332,6 +336,7 @@ export class Runner {
     this.locks = deps.locks
     this.devices = deps.devices
     this.presence = deps.presence
+    this.git = deps.git ?? null
     // Every card row is a card the person can answer, whoever wrote it: this runner, a helper (runtime/helpers.ts),
     // a project agent, or a row synced from another device. Before 22 Oct 2026 only the runner's own cards were
     // tracked, so a helper's question or approval was counted on the rail ("Waiting for you", 2) but never drawn
@@ -1207,8 +1212,11 @@ export class Runner {
       // His own message (not another agent's, not a card answer) carries where he is right now.
       const presence = userRow !== null && parseMeta(userRow.meta)['via'] === undefined ? await this.presenceNote(line.chat, userRow.meta) : ''
       const prompt = await this.withContextNotes(line, text, presence)
+      await this.gitBegin(line.chat)
       error = await this.drive(line, prompt, images, controller.signal)
+      await this.gitEnd(line.chat, user?.text ?? line.goal, controller.signal.aborted)
     } finally {
+      this.git?.drop(`chat:${line.chat}`)
       if (lease !== null && !this.disposing) this.devices?.leases?.end(lease, error === undefined ? 'done' : 'failed')
       if (line.controller === controller) line.controller = null
       line.turn = null
@@ -1234,6 +1242,24 @@ export class Runner {
         )
       }
     }
+  }
+
+  /** A turn starts: the chat's project folder is looked at, so the turn's own changes can be told apart at the end. */
+  private async gitBegin(chat: string): Promise<void> {
+    if (this.git === null) return
+    const folder = chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), chat)
+    await this.git.begin(`chat:${chat}`, folder).catch(() => undefined)
+  }
+
+  /** The turn ended: its work is committed and pushed (Settings > Git). Only a problem is said in the chat. */
+  private async gitEnd(chat: string, title: string, stopped: boolean): Promise<void> {
+    if (this.git === null) return
+    if (stopped || this.disposing) {
+      this.git.drop(`chat:${chat}`)
+      return
+    }
+    const ended = await this.git.end(`chat:${chat}`, title.split('\n')[0] ?? '').catch(() => ({ note: '', problem: false }))
+    if (ended.problem && ended.note !== '') await this.notice(ended.note, chat)
   }
 
   /** Run a chat again after it was cut off (runtime/turns.ts), under the lease it had. Never waits for the run. */
@@ -1584,6 +1610,7 @@ export class Runner {
         },
         onCall: async (call) => {
           this.planTool(line, call.id, call.name, call.input, true, true)
+          if (this.git !== null && !isInterruptible(call.name, (call.input ?? {}) as Record<string, unknown>)) await this.git.touch(`chat:${chat}`, call.input).catch(() => undefined)
           await this.startActivity({ t: 'call', id: call.id, name: call.name, input: call.input }, chat)
         },
         onResult: async (call, output, isError) => {
@@ -1739,6 +1766,7 @@ export class Runner {
         this.emitFor(chat, { type: 'chat_changed' })
         return
       case 'tool_started':
+        if (this.git !== null && !isInterruptible(event.call.name, (event.call.input ?? {}) as Record<string, unknown>)) await this.git.touch(`chat:${chat}`, event.call.input).catch(() => undefined)
         await this.startActivity(event.call, chat)
         return
       case 'tool_finished':

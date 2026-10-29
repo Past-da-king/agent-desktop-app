@@ -42,6 +42,8 @@ import { WorkerStore } from '../main/workers/store'
 import { Supervisor } from '../main/workers/supervisor'
 import { registerIpc, type IpcMainLike } from '../main/ipc'
 import { Logger } from '../main/logger'
+import { RunGitHook } from '../main/git/hook'
+import { vaultHashesOf, type VaultHashes } from '../main/git/secret-scan'
 import { ChatIndex } from '../main/memory/chat-index'
 import { registerMemoryHistoryIpc } from '../main/memory/history-ipc'
 import { registerMemoryIpc } from '../main/memory/ipc'
@@ -346,7 +348,21 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   // calendar_events reads the presence calendar cache, started below.
   let presenceCalendar: CalendarReader | null = null
   const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault, recordings, calendar: () => presenceCalendar })), ...nodeTools], vault)
+  // Settings > Git: a run's work in a git repo on this machine is committed and pushed when it ends. Off by default.
+  const gitKv = { get: (key: string) => store.localValue(key), set: (key: string, value: string) => store.setLocalValue(key, value) }
+  let gitVault: { at: number; hashes: VaultHashes } | null = null
+  const gitHook = new RunGitHook({
+    settings: () => settings.get(),
+    kv: gitKv,
+    vault: () => {
+      const at = vault.changedAt()
+      if (gitVault === null || gitVault.at !== at) gitVault = { at, hashes: vaultHashesOf(vault.redactions().map((entry) => entry.needle)) }
+      return gitVault.hashes
+    },
+    log: (line) => logger.info(line),
+  })
   const helpers = new HelperManager({
+    git: gitHook,
     leases,
     store,
     cli: cliHost,
@@ -401,6 +417,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   wakeups.start()
   const tools = guardTools(browserTools([
     ...buildToolset({
+      git: { kv: gitKv, hook: () => gitHook },
       appControl,
       presence,
       store,
@@ -466,6 +483,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   })
   const router = eventRouter
   const theRunner = new Runner({
+    git: gitHook,
     devices: {
       leases,
       shellFor: (chat) => offloadWire?.shellFor(chat),

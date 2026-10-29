@@ -28,6 +28,7 @@ import { WorkLimits } from './WorkLimits'
 import { VaultSettings } from './Vault'
 import { PromptRulesSettings } from './PromptRules'
 import { WakeupsSettings } from './WakeupsSettings'
+import { GitSettings } from './GitSettings'
 
 function ResetDialog({ onClose }: { onClose: () => void }): JSX.Element {
   const navigate = useUi((state) => state.navigate)
@@ -520,6 +521,8 @@ export function Settings(): JSX.Element {
               <WorkLimits />
             </div>
           </section>
+
+          <GitSettings />
 
           <MemorySettings />
 

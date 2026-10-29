@@ -56,6 +56,7 @@ import { presenceTools, type MeetingEndedHost } from '../tools/presence'
 import { recordingsTools, type RecordingsReader } from '../tools/recordings'
 import { calendarTools, type CalendarReader } from '../tools/calendar'
 import { miniAppTools, type MiniAppUi } from '../tools/miniapps'
+import { gitTools, type GitToolDeps } from '../tools/git'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -107,6 +108,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   recordings?: RecordingsReader
   /** His connected calendars, read through the presence cache (presence/calendar.ts): calendar_events. */
   calendar?: () => CalendarReader | null
+  /** Settings > Git: git_status_report, git_autocommit_log. */
+  git?: Omit<GitToolDeps, 'store'>
   /** Showing and looking at mini-apps (the desktop window). Absent: the miniapp_* tools save and edit only. */
   miniappUi?: () => MiniAppUi | null
 }
@@ -269,6 +272,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...(deps.recordings === undefined ? [] : recordingsTools(deps.recordings)), // recordings_list, recordings_get
     ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
     ...calendarTools(deps.calendar ?? (() => null)), // calendar_events: every connected calendar in one list
+    ...(deps.git === undefined ? [] : gitTools({ ...deps.git, store: deps.store })), // git_status_report, git_autocommit_log
     ...miniAppTools({ store: deps.store, knownTools: () => names, ...(deps.miniappUi === undefined ? {} : { ui: deps.miniappUi }), ...(deps.devices === undefined ? {} : { devices: deps.devices }) }), // miniapp_guide, miniapp_create, miniapp_update, miniapp_list, miniapp_get, miniapp_open, miniapp_pin, miniapp_unpin, miniapp_undo, miniapp_check, miniapp_delete
   ]
   names = new Set(list.map((tool) => tool.spec.name))

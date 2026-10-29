@@ -136,6 +136,17 @@ export interface Settings {
   wakeupVolume: number
   /** Mini-apps: how many pinned apps the sidebar shows at most; the rest are a "+N" that opens the Apps page (1 to 20). */
   miniappPinCap: number
+  /**
+   * Git (Settings > Git): after a helper run or a chat turn that worked in a git repo, commit what that run changed
+   * as "WIP: <run title>" on the current branch (secrets, build output and the person's own edits left out). Off by default.
+   */
+  gitAutoCommit: boolean
+  /** Git: push after the auto-commit (never forced; -u when the branch has no upstream). */
+  gitAutoPush: boolean
+  /** Git: files bigger than this many MB are never auto-committed (1 to 500). */
+  gitMaxFileMb: number
+  /** Git: more patterns the auto-commit leaves out, comma or line separated ("*.mp4, scratch/"). */
+  gitExclude: string
   /** When the end-of-day memory pass runs, "HH:mm" local time; '' turns it off. */
   dailyMemoryAt: string
   /** Every AI account the person set up. Empty on an install that only ever used the old single choice. */
@@ -213,6 +224,10 @@ export const DEFAULT_SETTINGS: Settings = {
   wakeupQuietHours: '',
   wakeupVolume: 1,
   miniappPinCap: 8,
+  gitAutoCommit: false,
+  gitAutoPush: true,
+  gitMaxFileMb: 5,
+  gitExclude: '',
   dailyMemoryAt: '23:30',
   accounts: [],
   ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
@@ -1621,6 +1636,38 @@ export interface WakeupsApi {
   devices(): Promise<WakeDeviceStatus[]>
 }
 
+/** One auto-commit outcome (Settings > Git log). */
+export interface GitLogEntry {
+  at: number
+  run: string
+  title: string
+  repo: string
+  branch: string
+  status: 'committed' | 'pushed' | 'nothing' | 'skipped' | 'blocked' | 'failed'
+  commit?: string
+  files: number
+  pushed: boolean
+  note: string
+  reason: string
+}
+
+/** A project folder's git state (Settings > Git). */
+export interface GitRepoState {
+  name: string
+  root: string
+  branch: string
+  uncommitted: number
+  ahead: number
+  noUpstream: boolean
+  detached: boolean
+}
+
+/** Settings > Git: what the auto-commit did, and where work is waiting. */
+export interface GitApi {
+  log(): Promise<GitLogEntry[]>
+  report(): Promise<GitRepoState[]>
+}
+
 /** The window's side of mini-apps. Everything an open app's frame says goes through send, checked in main. */
 export interface MiniAppsApi {
   /** Opens a bridge session for a frame showing the app; null when there is no such app. */
@@ -1672,6 +1719,9 @@ export interface AgentApi {
 
   /** Wake-ups (docs/plans/wake-ups.md): his own answers and the test buttons. The log is the `wakeup` rows. */
   wakeups: WakeupsApi
+
+  /** Settings > Git (auto-commit and push after a run). */
+  git: GitApi
 
   /** Mini-apps (docs/plans/mini-apps.md): running an open app's bridge, and his own pins, order and deletes. The apps are `miniapp` rows. */
   miniapps: MiniAppsApi
