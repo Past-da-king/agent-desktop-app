@@ -472,3 +472,12 @@ button.mem-note:hover{background:color-mix(in srgb,var(--pc) 88%,var(--on-pc))}
 .mention-sent{border:0;cursor:pointer;font:inherit;font-size:12px}
 .mention-sent:hover{background:var(--s-high)}
 .mention-sent .mention-open{color:var(--primary);font-weight:600}
+.mention-sent .mention-said{font-weight:400;color:var(--on-sv);max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
+.mention-reply{align-self:stretch;max-width:720px;border-radius:20px;padding:12px 14px;background:color-mix(in srgb,var(--pf-bg) 45%,var(--s-lowest));border:1px solid color-mix(in srgb,var(--pf-solid) 35%,transparent);display:flex;flex-direction:column;gap:8px}
+.mention-reply-head{display:flex;align-items:center;gap:8px;font-size:13px}
+.mention-reply-head b{color:var(--pf-fg)}
+.mention-reply-head span{color:var(--on-sv)}
+.mention-reply-body{font-size:14px;max-height:220px;overflow:auto}
+.mention-reply-actions{display:flex;gap:8px;flex-wrap:wrap}
+.mention-reply-box{display:flex;gap:8px;align-items:flex-end}
+.mention-reply-box textarea{flex:1;resize:none;border:0;border-radius:16px;padding:10px 12px;background:var(--s-high);color:var(--on-bg);font:inherit}

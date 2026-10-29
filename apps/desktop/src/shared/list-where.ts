@@ -49,6 +49,7 @@ export function filterRows<R>(input: readonly R[], where: ListWhere): R[] {
     rows = rows.filter((row) => chatOfRow(row) === chat)
   }
   if (where.since !== undefined && where.since > 0) rows = rows.filter((row) => Number(row['createdAt']) > (where.since ?? 0))
+  if (where.before !== undefined && where.before > 0) rows = rows.filter((row) => Number(row['createdAt']) < (where.before ?? 0))
   if (where.newestFirst === true) rows = [...rows].reverse()
   if (where.limit !== undefined && where.limit > 0) rows = rows.slice(0, Math.floor(where.limit))
   return rows as unknown as R[]

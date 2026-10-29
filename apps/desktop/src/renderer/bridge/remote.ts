@@ -342,7 +342,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
     },
 
     chat: {
-      send: (text, attachments, chat) => wire.call('chat.send', [text, attachments ?? [], chat ?? '']) as Promise<void>,
+      send: (text, attachments, chat, options) => wire.call('chat.send', options === undefined ? [text, attachments ?? [], chat ?? ''] : [text, attachments ?? [], chat ?? '', options]) as Promise<void>,
       stop: (chat) => wire.call('chat.stop', [chat ?? '']) as Promise<void>,
       state: (chat) => wire.call('chat.state', [chat ?? '']) as never,
       states: rpc('chat.states'),

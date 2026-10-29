@@ -927,8 +927,16 @@ export interface ListWhere {
   contains?: string
   /** Only rows created after this time (ms). */
   since?: number
+  /** Only rows created before this time (ms): the page above the oldest one shown. */
+  before?: number
   limit?: number
   newestFirst?: boolean
+}
+
+/** How one message goes (AgentApi chat.send). */
+export interface ChatSendOptions {
+  /** The chat the person replied from on a project's card: the project's answer is shown there too. */
+  replyIn?: string
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1711,8 +1719,11 @@ export interface AgentApi {
   }
 
   chat: {
-    /** `chat` is the chat it goes to; MAIN_CHAT when left out. */
-    send(text: string, attachments?: Attachment[], chat?: string): Promise<void>
+    /**
+     * `chat` is the chat it goes to; MAIN_CHAT when left out. `options.replyIn`: a reply on a project's card in that
+     * chat; the project's answer comes back there as another card (main/runtime/mentions.ts).
+     */
+    send(text: string, attachments?: Attachment[], chat?: string, options?: ChatSendOptions): Promise<void>
     /** Stops that chat's run (MAIN_CHAT when left out). */
     stop(chat?: string): Promise<void>
     /** One chat's run and cards; with no chat, whether any chat is running and every waiting card. */

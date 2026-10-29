@@ -52,7 +52,7 @@ import { rememberCards, trimHelperRow } from '../shared/device-feed'
 import { DEVICE_CHAT_ROWS, boundRows, isLiveHelper, isOpenCard } from '../shared/device-list'
 import { lightRow } from '../shared/light-row'
 import { listWhere } from './runtime/data'
-import { mentionList, withMentions } from './runtime/mentions'
+import { mentionList, replyToProjectChat, withMentions } from './runtime/mentions'
 import { parseRouteTarget } from '../shared/route-target'
 import { picksFrom } from './settings'
 import type { AccountStore } from './accounts'
@@ -211,7 +211,8 @@ const EMPTY_BROWSER: BrowserState = {
 export function registerIpc(deps: IpcDeps): () => void {
   const { store, settings, secrets, account, ipcMain, windows } = deps
   // A message that names a project with '@' goes to that project's chat, from the window and every linked device alike.
-  const chat = withMentions(deps.chat, { store, state: (each) => deps.chat.state(each) })
+  const mentionDeps = { store, state: (each: string) => deps.chat.state(each) }
+  const chat = withMentions(deps.chat, mentionDeps)
   const send: Broadcast = deps.broadcast ?? (() => undefined)
   // Only files the person picked or dropped may be read back for a thumbnail.
   const previewPaths = new Set<string>()
@@ -446,11 +447,18 @@ export function registerIpc(deps: IpcDeps): () => void {
 
   // ---- chat ----
 
-  handle(CHANNELS.chat.send, async (event, rawText, rawAttachments, rawChat) => {
+  handle(CHANNELS.chat.send, async (event, rawText, rawAttachments, rawChat, rawOptions) => {
     const text = requireString(rawText, 'message', MAX_MESSAGE)
     const attachments = requireAttachments(rawAttachments)
     const target = optionalChat(rawChat)
     const origin = messageOrigin(event)
+    // A reply on a project's card: to that project chat, and its answer back to the chat the card is in.
+    const replyIn = typeof rawOptions === 'object' && rawOptions !== null ? optionalChat((rawOptions as Record<string, unknown>)['replyIn']) : undefined
+    if (replyIn !== undefined && target !== undefined && deps.chat !== undefined) {
+      const raw = deps.chat
+      const routed = await replyToProjectChat(mentionDeps, text, attachments, target, replyIn, (words, files, to) => (origin !== undefined ? raw.send(words, files, to, origin) : raw.send(words, files, to)))
+      if (routed) return
+    }
     if (origin !== undefined) await chat.send(text, attachments, target, origin)
     else if (target === undefined) await chat.send(text, attachments)
     else await chat.send(text, attachments, target)
@@ -1083,6 +1091,8 @@ export function listWhereArg(value: unknown): ListWhere {
   if (contains !== undefined && contains !== '') where.contains = contains
   const since = num(raw['since'])
   if (since !== undefined) where.since = since
+  const before = num(raw['before'])
+  if (before !== undefined) where.before = before
   const limit = num(raw['limit'])
   where.limit = Math.max(1, Math.min(MAX_WHERE_ROWS, Math.floor(limit ?? MAX_WHERE_ROWS)))
   if (raw['newestFirst'] === true) where.newestFirst = true

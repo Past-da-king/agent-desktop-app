@@ -10,7 +10,7 @@
  */
 import { MAIN_CHAT, type Attachment, type ChatItem, type JsonObject, type ProjectRow, type RunState } from '@agent/core'
 
-import { mentionProjects, mentionStamp, parseMention, type MentionNotice, type MentionProject } from '../../shared/mentions'
+import { mentionProjects, mentionStamp, parseMention, type MentionNotice, type MentionProject, type MentionReply } from '../../shared/mentions'
 import { chatOf, chatTag, newProjectChatId, newestOfChat } from './chat-lines'
 import type { DataStore } from './data'
 
@@ -19,6 +19,96 @@ export interface MentionDeps {
   state(chat: string): RunState
   /** Says a chat changed, so open windows redraw it (the notice row arrives as a data change anyway). */
   changed?(chat: string): void
+  /** How often the reply watch looks at the project chat's run (ms); tests make it short. */
+  pollMs?: number
+  /** How long a reply may take before the watch gives up (ms). */
+  replyWaitMs?: number
+  now?(): number
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+function clipLine(text: string, limit: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length <= limit ? flat : `${flat.slice(0, limit - 3)}...`
+}
+
+/**
+ * Sends his words into a project chat, leaves "Sent to X" in the chat they came from, and once the project's agent has
+ * answered puts that answer there too, as a card he can open or reply on (29 Oct 2026: a mention sent from the phone
+ * must come back to the phone). The watch reads only that chat's run state and its newest rows, by index.
+ */
+export async function routeTo(
+  deps: MentionDeps,
+  args: { text: string; attachments: Attachment[]; from: string; project: ProjectRow; chat: string; fresh: boolean; send: (text: string, attachments: Attachment[], chat: string) => Promise<void> },
+): Promise<MentionNotice> {
+  const { project, chat, from } = args
+  const now = deps.now ?? Date.now
+  const notice: MentionNotice = { project: project.id, name: project.name, chat, fresh: args.fresh }
+  const said = clipLine(args.text, 140)
+  const meta: JsonObject = { ...chatTag(from), mention: { ...notice, said } as unknown as JsonObject }
+  const sent = await deps.store.upsert('chat_item', { kind: 'notice', text: `Sent to ${project.name}`, meta: JSON.stringify(meta) } as Partial<ChatItem> as ChatItem)
+  deps.changed?.(from)
+  const since = Math.min(sent.createdAt, now()) - 1
+  // His own words in the project's chat. The turn there can run for minutes: never waited on here.
+  void (async () => {
+    try {
+      await args.send(args.text, args.attachments, chat)
+    } catch {
+      // The project chat says what went wrong itself.
+    }
+    await watchReply(deps, notice, project, from, since)
+  })().catch(() => undefined)
+  return notice
+}
+
+/** Waits for the project chat to finish answering, then copies its answer into the chat the message came from. */
+async function watchReply(deps: MentionDeps, notice: MentionNotice, project: ProjectRow, from: string, since: number): Promise<void> {
+  const poll = deps.pollMs ?? 1500
+  const now = deps.now ?? Date.now
+  const giveUp = now() + (deps.replyWaitMs ?? 3 * 60 * 60_000)
+  const answers = async (): Promise<ChatItem[]> =>
+    (await newestOfChat(deps.store as DataStore, notice.chat, ['agent'], 10)).filter((row) => chatOf(row) === notice.chat && row.createdAt > since && row.text.trim() !== '')
+  let quietSince = 0
+  while (now() < giveUp) {
+    if (deps.state(notice.chat).running) {
+      quietSince = 0
+    } else {
+      const found = await answers()
+      // An answer and a quiet chat (a run that ended, or one on another computer that has written): settled once it
+      // stays quiet for two looks, so a reply still streaming in is not cut short.
+      if (found.length > 0) {
+        if (quietSince === 0) quietSince = now()
+        else {
+          const last = found[0] as ChatItem
+          const reply: MentionReply = { ...notice, fresh: false, glyph: project.icon.glyph, color: project.icon.color }
+          await deps.store.upsert('chat_item', { kind: 'notice', text: last.text, meta: JSON.stringify({ ...chatTag(from), mentionReply: reply as unknown as JsonObject }) } as Partial<ChatItem> as ChatItem)
+          deps.changed?.(from)
+          return
+        }
+      }
+    }
+    await sleep(poll)
+  }
+}
+
+/**
+ * His reply on a project's card ("reply on that card"): it goes to that same project chat, and its answer comes back to
+ * the chat the card is in. False when `chat` is no project's chat (then it is an ordinary send).
+ */
+export async function replyToProjectChat(
+  deps: MentionDeps,
+  text: string,
+  attachments: Attachment[],
+  chat: string,
+  replyIn: string,
+  send: (text: string, attachments: Attachment[], chat: string) => Promise<void>,
+): Promise<boolean> {
+  if (chat === replyIn || (text.trim() === '' && attachments.length === 0)) return false
+  const project = (await deps.store.list('project')).find((row) => row.chats.includes(chat))
+  if (project === undefined || project.chats.includes(replyIn)) return false
+  await routeTo(deps, { text: text.trim(), attachments, from: replyIn, project, chat, fresh: false, send })
+  return true
 }
 
 /** The picker's list, or only "same" when the caller already has this one. */
@@ -74,12 +164,7 @@ export async function routeMention(
     chat = newProjectChatId()
     await deps.store.upsert('project', { id: project.id, chats: [...project.chats, chat] })
   }
-  const notice: MentionNotice = { project: project.id, name: project.name, chat, fresh }
-  const meta: JsonObject = { ...chatTag(from), mention: notice as unknown as JsonObject }
-  await deps.store.upsert('chat_item', { kind: 'notice', text: `Sent to ${project.name}`, meta: JSON.stringify(meta) } as Partial<ChatItem> as ChatItem)
-  deps.changed?.(from)
-  // His own words in the project's chat. The turn there can run for minutes: never waited on here.
-  void send(parsed.rest === '' ? text.trim() : parsed.rest, attachments, chat).catch(() => undefined)
+  const notice = await routeTo(deps, { text: parsed.rest === '' ? text.trim() : parsed.rest, attachments, from, project, chat, fresh, send })
   return { ...notice, rest: parsed.rest }
 }
 

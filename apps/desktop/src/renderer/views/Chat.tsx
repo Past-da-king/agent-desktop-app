@@ -1,6 +1,6 @@
 import { VoiceNote } from '../voice/VoiceNote'
 import { PROFILE_COLORS, fileSizeLabel, type Attachment, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
-import { Suspense, createContext, lazy, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { Suspense, createContext, lazy, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
@@ -8,7 +8,8 @@ import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
 import { branchFrom, openChat as openChatPage, startProjectChat } from '../lib/chat-actions'
-import { mentionNoticeOf } from '../../shared/mentions'
+import { mentionNoticeOf, mentionReplyOf } from '../../shared/mentions'
+import { toneStyle } from '../lib/profiles'
 import { projectOfChat, viaIcon, viaOf } from '../lib/projects'
 import { ProjectTile } from '../ui/ProjectTile'
 import { chatTitleOf, isSideRun, itemsOfChat, routeLine } from '../lib/chats'
@@ -763,6 +764,7 @@ const Row = memo(function Row({
     case 'notice':
       if (isDivider(item)) return <ChatDivider item={item} />
       if (mentionNoticeOf(parseMeta(item.meta)) !== null) return <MentionSent item={item} />
+      if (mentionReplyOf(parseMeta(item.meta)) !== null) return <MentionReplyCard item={item} />
       return (
         <div className="from">
           <Icon name={parseMeta(item.meta)['from'] === 'phone' ? 'phone' : 'bell'} size={14} />
@@ -786,10 +788,75 @@ function MentionSent({ item }: { item: ChatItem }): JSX.Element | null {
       <span>
         Sent to <b>{sent.name}</b>
         {sent.fresh ? ' in a new chat' : ''}
+        {sent.said !== undefined ? <span className="mention-said">: {sent.said}</span> : null}
       </span>
       <span className="mention-open">Open chat</span>
       <Icon name="arrow" size={14} />
     </button>
+  )
+}
+
+/**
+ * A project's answer to something he sent it with '@' (main/runtime/mentions.ts): its name and colour, the answer, a way
+ * into that chat, and a reply that goes back to the same project chat (its answer lands here again).
+ */
+function MentionReplyCard({ item }: { item: ChatItem }): JSX.Element | null {
+  const meta = parseMeta(item.meta)
+  const reply = mentionReplyOf(meta)
+  const projects = useEntity('project')
+  const [replying, setReplying] = useState(false)
+  const [draft, setDraft] = useState('')
+  if (reply === null) return null
+  const project = projects.find((row) => row.id === reply.project)
+  const icon: ProjectIcon = project?.icon ?? { glyph: reply.glyph || 'folder', color: (reply.color || 'iris') as ProfileColor }
+  const here = typeof meta['chat'] === 'string' && meta['chat'] !== '' ? meta['chat'] : MAIN_CHAT
+  const send = (): void => {
+    const words = draft.trim()
+    if (words === '') return
+    setDraft('')
+    setReplying(false)
+    void chat.send(words, [], reply.chat, { replyIn: here })
+  }
+  return (
+    <div className="pf mention-reply" style={toneStyle(icon.color) as CSSProperties} aria-label={`Reply from ${reply.name}`}>
+      <div className="mention-reply-head">
+        <ProjectTile icon={icon} size={22} />
+        <b>{reply.name}</b>
+        <span>replied</span>
+      </div>
+      <div className="mention-reply-body">
+        <Markdown text={item.text} />
+      </div>
+      <div className="mention-reply-actions">
+        <button type="button" className="chip" onClick={() => openChatPage(reply.chat)}>
+          Open {reply.name} chat
+        </button>
+        <button type="button" className="chip" onClick={() => setReplying((now) => !now)} aria-expanded={replying}>
+          Reply
+        </button>
+      </div>
+      {replying ? (
+        <div className="mention-reply-box">
+          <textarea
+            rows={2}
+            autoFocus
+            value={draft}
+            aria-label={`Reply to ${reply.name}`}
+            placeholder={`Reply to ${reply.name}`}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                send()
+              }
+            }}
+          />
+          <button type="button" className="send" aria-label={`Send to ${reply.name}`} onClick={send} disabled={draft.trim() === ''}>
+            <Icon name="arrow" size={20} />
+          </button>
+        </div>
+      ) : null}
+    </div>
   )
 }
 

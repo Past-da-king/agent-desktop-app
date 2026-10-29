@@ -173,6 +173,8 @@ export interface MentionNotice {
   chat: string
   /** A chat made for it (the project had none). */
   fresh: boolean
+  /** The start of what he sent, for the line. */
+  said?: string
 }
 
 export function mentionNoticeOf(meta: Record<string, unknown>): MentionNotice | null {
@@ -180,5 +182,20 @@ export function mentionNoticeOf(meta: Record<string, unknown>): MentionNotice | 
   if (typeof value !== 'object' || value === null) return null
   const v = value as Record<string, unknown>
   if (typeof v['chat'] !== 'string' || v['chat'] === '' || typeof v['name'] !== 'string') return null
-  return { project: typeof v['project'] === 'string' ? v['project'] : '', name: v['name'], chat: v['chat'], fresh: v['fresh'] === true }
+  return { project: typeof v['project'] === 'string' ? v['project'] : '', name: v['name'], chat: v['chat'], fresh: v['fresh'] === true, ...(typeof v['said'] === 'string' && v['said'] !== '' ? { said: v['said'] } : {}) }
 }
+
+/** The project's reply as the sending chat shows it: a card with the project's name and colour (meta.mentionReply). */
+export interface MentionReply extends MentionNotice {
+  glyph: string
+  color: string
+}
+
+export function mentionReplyOf(meta: Record<string, unknown>): MentionReply | null {
+  const value = meta['mentionReply']
+  if (typeof value !== 'object' || value === null) return null
+  const v = value as Record<string, unknown>
+  if (typeof v['chat'] !== 'string' || v['chat'] === '' || typeof v['name'] !== 'string') return null
+  return { project: typeof v['project'] === 'string' ? v['project'] : '', name: v['name'], chat: v['chat'], fresh: false, glyph: typeof v['glyph'] === 'string' ? v['glyph'] : '', color: typeof v['color'] === 'string' ? v['color'] : '' }
+}
+

@@ -18,7 +18,8 @@ import { SettingsStore } from '../src/main/settings'
 import { CHANNELS } from '../src/shared/channels'
 import { DEVICE_CHANNELS } from '../src/shared/device-channels'
 import { RPC_ALLOWED, RPC_CHANNELS } from '../src/shared/rpc-methods'
-import { insertMention, mentionAtCaret, mentionDone, mentionNoticeOf, mentionProjects, parseMention, rankMentions, type MentionProject } from '../src/shared/mentions'
+import { routeMention, type MentionDeps } from '../src/main/runtime/mentions'
+import { insertMention, mentionAtCaret, mentionDone, mentionNoticeOf, mentionReplyOf, mentionProjects, parseMention, rankMentions, type MentionProject } from '../src/shared/mentions'
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
 
@@ -33,6 +34,7 @@ let store: Store
 let handlers: Map<string, Handler>
 let sends: Array<{ text: string; chat: string; origin: unknown }>
 let running: Set<string>
+let answering = false
 let dispose: (() => void) | null = null
 
 function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
@@ -64,9 +66,14 @@ beforeEach(() => {
   handlers = new Map()
   sends = []
   running = new Set()
+  answering = false
   const ipcMain: IpcMainLike = { handle: (channel, listener) => void handlers.set(channel, listener) }
   const chat: ChatRunner = {
-    send: async (text: string, _attachments?: Attachment[], target?: string, origin?: unknown) => void sends.push({ text, chat: target ?? MAIN_CHAT, origin }),
+    send: async (text: string, _attachments?: Attachment[], target?: string, origin?: unknown) => {
+      sends.push({ text, chat: target ?? MAIN_CHAT, origin })
+      // A project chat's agent answers, the way a real turn ends with an agent row.
+      if (target !== undefined && target.startsWith('pc') && answering) await store.upsert('chat_item', { kind: 'agent', text: `answer to: ${text}`, meta: JSON.stringify({ chat: target }) })
+    },
     stop: () => undefined,
     state: (target?: string): RunState => ({ running: running.has(target ?? MAIN_CHAT), waiting: [] }),
     answer: async () => undefined,
@@ -215,5 +222,81 @@ describe('sending a mention', () => {
     const changed = (await invoke(DEVICE_CHANNELS.mentions, first.stamp)) as { stamp: string; projects?: MentionProject[] }
     expect(changed.stamp).not.toBe(first.stamp)
     expect(changed.projects?.map((p) => p.name)).toEqual(['Acme', 'Nova Print'])
+  })
+})
+
+async function until<T>(read: () => Promise<T | undefined>, ms = 8000): Promise<T> {
+  const end = Date.now() + ms
+  for (;;) {
+    const value = await read()
+    if (value !== undefined) return value
+    if (Date.now() > end) throw new Error('timed out')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+
+const replyCards = async (chat: string): Promise<ChatItem[]> => (await rows(chat)).filter((row) => mentionReplyOf(JSON.parse(row.meta) as Record<string, unknown>) !== null)
+
+describe('the project answers back where it was asked', () => {
+  const fast = (): MentionDeps => ({ store, state: (chat) => ({ running: running.has(chat), waiting: [] }), pollMs: 10 })
+  const answer = (chat: string, text: string): Promise<void> => store.upsert('chat_item', { kind: 'agent', text, meta: JSON.stringify({ chat }) }).then(() => undefined)
+
+  it("puts the project's answer in the sending chat as a card with its name and colour", async () => {
+    const made = await project('Acme', ['pcacme000000001'])
+    await routeMention(fast(), '@Acme fix the follow-ups', [], MAIN_CHAT, async (_text, _files, chat) => answer(chat, 'Fixed 3 follow-ups.'))
+    const card = await until(async () => (await replyCards(MAIN_CHAT))[0])
+    expect(card.text).toBe('Fixed 3 follow-ups.')
+    expect(mentionReplyOf(JSON.parse(card.meta) as Record<string, unknown>)).toMatchObject({ project: made.id, name: 'Acme', chat: 'pcacme000000001', glyph: 'bolt', color: 'teal' })
+    const sent = (await rows(MAIN_CHAT)).find((row) => row.text === 'Sent to Acme')
+    expect(mentionNoticeOf(JSON.parse(sent?.meta ?? '{}') as Record<string, unknown>)?.said).toBe('fix the follow-ups')
+  })
+
+  it('waits for a chat at work to finish, and takes its last answer', async () => {
+    await project('Acme', ['pcacme000000001'])
+    running.add('pcacme000000001')
+    await routeMention(fast(), '@Acme and the invoices', [], MAIN_CHAT, async () => undefined)
+    await answer('pcacme000000001', 'Working on the invoices...')
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(await replyCards(MAIN_CHAT)).toHaveLength(0)
+    await answer('pcacme000000001', 'Invoices done.')
+    running.delete('pcacme000000001')
+    const card = await until(async () => (await replyCards(MAIN_CHAT))[0])
+    expect(card.text).toBe('Invoices done.')
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(await replyCards(MAIN_CHAT)).toHaveLength(1)
+  })
+
+  it('a reply on the card goes to the same project chat, and its answer comes back as another card', async () => {
+    await project('Acme', ['pcother00000001', 'pcacme000000001'])
+    // The other chat is the newer one, so an @-mention would go there; the card's reply still goes to its own chat.
+    await store.upsert('chat_item', { kind: 'user', text: 'newer elsewhere', meta: JSON.stringify({ chat: 'pcother00000001' }) })
+    answering = true
+    await invoke(CHANNELS.chat.send, 'yes, send them', [], 'pcacme000000001', { replyIn: MAIN_CHAT })
+    expect(sends).toEqual([{ text: 'yes, send them', chat: 'pcacme000000001', origin: undefined }])
+    const card = await until(async () => (await replyCards(MAIN_CHAT))[0])
+    expect(card.text).toBe('answer to: yes, send them')
+    expect((await rows(MAIN_CHAT)).some((row) => row.text === 'Sent to Acme')).toBe(true)
+  }, 15000)
+
+  it('a plain send into a project chat stays a plain send', async () => {
+    await project('Acme', ['pcacme000000001'])
+    await invoke(CHANNELS.chat.send, 'just here', [], 'pcacme000000001')
+    expect(sends).toEqual([{ text: 'just here', chat: 'pcacme000000001', origin: undefined }])
+    expect(await rows(MAIN_CHAT)).toHaveLength(0)
+  })
+})
+
+describe("a project chat on the phone reads 20 at a time", () => {
+  it('data.where takes before: the page above the oldest one shown', async () => {
+    for (let i = 0; i < 30; i += 1) {
+      await store.upsert('chat_item', { kind: i % 2 === 0 ? 'user' : 'agent', text: `m${i}`, meta: JSON.stringify({ chat: 'pcpage00000001' }) })
+      await new Promise((resolve) => setTimeout(resolve, 3))
+    }
+    const first = (await invoke(CHANNELS.data.where, 'chat_item', { chat: 'pcpage00000001', kinds: ['user', 'agent'], limit: 20, newestFirst: true })) as ChatItem[]
+    expect(first.map((row) => row.text)[0]).toBe('m29')
+    expect(first).toHaveLength(20)
+    const oldest = Math.min(...first.map((row) => row.createdAt))
+    const older = (await invoke(CHANNELS.data.where, 'chat_item', { chat: 'pcpage00000001', kinds: ['user', 'agent'], limit: 20, newestFirst: true, before: oldest })) as ChatItem[]
+    expect(older.map((row) => row.text)).toEqual(['m9', 'm8', 'm7', 'm6', 'm5', 'm4', 'm3', 'm2', 'm1', 'm0'])
   })
 })

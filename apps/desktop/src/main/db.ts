@@ -748,6 +748,10 @@ function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args
     clauses.push(`${CREATED_SQL} > ?`)
     args.push(where.since)
   }
+  if (where.before !== undefined && where.before > 0) {
+    clauses.push(`${CREATED_SQL} < ?`)
+    args.push(where.before)
+  }
   // The index is named, never left to the planner: with no statistics SQLite picked rows_created (to skip a sort)
   // and read every row of the entity, 0.4 to 1.8 s on the main thread per query on 60,000 chat rows (28 Oct 2026).
   const index =

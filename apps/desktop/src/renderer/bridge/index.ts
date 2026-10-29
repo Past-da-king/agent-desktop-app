@@ -19,5 +19,5 @@ export const agent: AgentApi =
  */
 export const chat: AgentApi['chat'] = {
   ...agent.chat,
-  send: (text, attachments, target) => agent.chat.send(text, attachments, target ?? currentChat()),
+  send: (text, attachments, target, options) => (options === undefined ? agent.chat.send(text, attachments, target ?? currentChat()) : agent.chat.send(text, attachments, target ?? currentChat(), options)),
 }

@@ -9,6 +9,7 @@ import type {
   AppsStatus,
   AppInfo,
   Attachment,
+  ChatSendOptions,
   CallEvent,
   CallSummary,
   DictationCommand,
@@ -121,8 +122,8 @@ const api: AgentApi = {
   },
 
   chat: {
-    send: (text, attachments?: Attachment[], chat?: string) =>
-      call<void>(CHANNELS.chat.send, text, attachments ?? [], chat ?? ''),
+    send: (text, attachments?: Attachment[], chat?: string, options?: ChatSendOptions) =>
+      options === undefined ? call<void>(CHANNELS.chat.send, text, attachments ?? [], chat ?? '') : call<void>(CHANNELS.chat.send, text, attachments ?? [], chat ?? '', options),
     stop: (chat?: string) => call<void>(CHANNELS.chat.stop, chat ?? ''),
     state: (chat?: string) => call<RunState>(CHANNELS.chat.state, chat ?? ''),
     states: () => call<ChatRunInfo[]>(CHANNELS.chat.states),
