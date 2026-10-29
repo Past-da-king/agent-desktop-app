@@ -17,6 +17,7 @@ import { DeviceCommands } from './commands'
 import { DeviceToolHub, DeviceToolRunner } from './device-tools'
 import { originFromFacts, originLine, latestOrigin } from './origin'
 import { pinnedFetch } from './pinned-fetch'
+import { closeKeptAgents } from './socks'
 import { mergePeers, Replicator, registerSyncRoutes, type PeerTarget, type ReplicaStore } from './replicate'
 import type { DevicesHost, MessageOrigin } from './types'
 
@@ -189,6 +190,8 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
       offBundle()
       keeper.dispose()
       deps.leases?.setFailover(null)
+      // The links' kept connections (pinned-fetch.ts) go with them.
+      closeKeptAgents()
     },
   }
 }

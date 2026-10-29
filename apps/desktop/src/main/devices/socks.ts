@@ -132,7 +132,39 @@ export function proxyAgent(host = ''): Agent | false {
   // With a host: the proxy for that host (proxyFor). Without one (older callers): only the person's own proxy.
   const proxy = host === '' ? current : proxyFor(host)
   if (proxy === null) return false
-  const agent = new Agent({ keepAlive: false })
+  return proxiedAgent(proxy, false)
+}
+
+/**
+ * For the replication and health links between nodes: an Agent that keeps its connections open and hands them to the
+ * next request to the same address, direct or through the proxy for that host. Each request on a relayed overlay path
+ * (Tailscale through DERP, ~200 ms a round trip) used to open a new TCP and TLS connection, about 20 a minute when
+ * the agent was busy, and a share of those handshakes timed out in a userspace VPN (29 Oct 2026). One pooled
+ * connection per peer stays up instead. Callers must check the pin on every request, a reused socket included
+ * (pinned-fetch.ts does).
+ */
+export function keptAgent(host: string): Agent {
+  const proxy = proxyFor(host)
+  const key = proxy === null ? 'direct' : JSON.stringify(proxy)
+  const known = kept.get(key)
+  if (known !== undefined) return known
+  const agent = proxy === null ? new Agent(KEPT_OPTIONS) : proxiedAgent(proxy, true)
+  kept.set(key, agent)
+  return agent
+}
+
+/** Close every kept connection (a node stopping, a test ending). */
+export function closeKeptAgents(): void {
+  for (const agent of kept.values()) agent.destroy()
+  kept.clear()
+}
+
+// No TLS session cache: a resumed session carries no peer certificate, so the pin could not be checked on it.
+const KEPT_OPTIONS = { keepAlive: true, keepAliveMsecs: 15_000, maxSockets: 6, maxFreeSockets: 2, maxCachedSessions: 0, timeout: 60_000, scheduling: 'lifo' as const }
+const kept = new Map<string, Agent>()
+
+function proxiedAgent(proxy: SocksProxy, keepAlive: boolean): Agent {
+  const agent = new Agent(keepAlive ? KEPT_OPTIONS : { keepAlive: false })
   ;(agent as unknown as { createConnection: unknown }).createConnection = (
     options: ConnectionOptions & { host?: string; port?: number },
     done: (error: Error | null, socket?: Socket) => void,

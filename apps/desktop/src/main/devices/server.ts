@@ -127,6 +127,8 @@ export class DevicesServer implements DevicesHost {
   private readonly rpcMethods = new Map<string, RpcMethod>()
   private readonly sessions = new Set<RpcSession>()
   private server: Server | null = null
+  /** Every raw socket, so stop() also ends one still in its TLS handshake (closeAllConnections only knows HTTP ones). */
+  private readonly sockets = new Set<Duplex>()
   private readonly resultListeners = new Set<(deviceId: string, id: string, result: DeviceToolResult) => void>()
   private readonly connLog: ConnectionLog
 
@@ -273,6 +275,14 @@ export class DevicesServer implements DevicesHost {
     const server = createServer({ key: this.options.keyPem, cert: this.options.certPem, minVersion: 'TLSv1.2' }, (req, res) => {
       void this.onRequest(req, res)
     })
+    // Other nodes keep their replication connection open between requests (pinned-fetch.ts): do not drop it after
+    // Node's default 5 s of quiet, or every push over a slow relayed path pays a new TCP and TLS handshake again.
+    server.keepAliveTimeout = 65_000
+    server.headersTimeout = 70_000
+    server.on('connection', (socket: Duplex) => {
+      this.sockets.add(socket)
+      socket.on('close', () => this.sockets.delete(socket))
+    })
     server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => this.onUpgrade(req, socket, head))
     // A device that gives up during the handshake (a pin mismatch on its side, a wrong port) shows here.
     server.on('tlsClientError', (error: Error & { code?: string }, socket: { remoteAddress?: string }) => {
@@ -312,6 +322,9 @@ export class DevicesServer implements DevicesHost {
     await new Promise<void>((resolve) => {
       server.close(() => resolve())
       server.closeAllConnections?.()
+      // A peer keeps its connection alive (pinned-fetch.ts): end every socket, or one mid-handshake keeps close() open.
+      for (const socket of this.sockets) socket.destroy()
+      this.sockets.clear()
     })
   }
 

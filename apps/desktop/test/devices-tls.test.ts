@@ -5,6 +5,8 @@
 import { execFileSync } from 'node:child_process'
 import { X509Certificate } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createServer as createHttpsServer } from 'node:https'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -16,6 +18,7 @@ import { Store } from '../src/main/db'
 import { PinMismatch, fingerprintOf, pinnedFetch } from '../src/main/devices/pinned-fetch'
 import { Replicator, registerSyncRoutes } from '../src/main/devices/replicate'
 import { probeHealth } from '../src/main/devices/sync'
+import { closeKeptAgents } from '../src/main/devices/socks'
 import { startTestHost, type TestHost } from './devices-host'
 import { waitFor } from '../../../packages/core/test/helpers'
 
@@ -104,5 +107,41 @@ describe.skipIf(!hasOpenssl())('nodes over pinned HTTPS', () => {
     expect(await probeHealth({ ...row, fp: makeCert().fp })).toEqual({ up: false, ready: false })
     a.host.down = true
     expect(await probeHealth(row)).toEqual({ up: false, ready: false })
+  })
+  it('keeps one connection open for many requests, and still checks the pin on a reused one', async () => {
+    const cert = makeCert()
+    let handshakes = 0
+    let requests = 0
+    const server = createHttpsServer({ key: cert.key, cert: cert.cert }, (req, res) => {
+      requests += 1
+      req.resume()
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, path: req.url }))
+      })
+    })
+    server.keepAliveTimeout = 30_000
+    server.on('secureConnection', () => {
+      handshakes += 1
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(async () => {
+      closeKeptAgents()
+      server.closeAllConnections()
+      await new Promise((resolve) => server.close(resolve))
+    })
+    const url = `https://127.0.0.1:${(server.address() as AddressInfo).port}`
+    // Ten requests, each from a fresh pinnedFetch as the replicator makes them per pass: one handshake (was ten).
+    for (let i = 0; i < 10; i++) {
+      const res = await pinnedFetch(cert.fp)(`${url}/v1/sync/pull?since=${i}`, { method: i % 2 === 0 ? 'GET' : 'POST', body: i % 2 === 0 ? undefined : '{}' })
+      expect(res.status).toBe(200)
+    }
+    expect(requests).toBe(10)
+    expect(handshakes).toBe(1)
+    // The kept socket is pinned to this certificate: another pin on the same address is refused before anything is sent.
+    await expect(pinnedFetch(makeCert().fp)(`${url}/v1/health`)).rejects.toThrow(new PinMismatch().message)
+    expect(requests).toBe(10)
+    // And the right pin still works afterwards.
+    expect((await pinnedFetch(cert.fp)(`${url}/v1/health`)).status).toBe(200)
   })
 })

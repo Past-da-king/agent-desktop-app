@@ -44,6 +44,13 @@ export async function startTestHost(selfId: string, selfFacts: DeviceFacts = fac
     void handle(req, res)
   }
   const server: Server = tls === undefined ? createServer(onRequest) : createHttpsServer({ key: tls.key, cert: tls.cert }, onRequest)
+  // Every raw socket, so close() ends the ones still in a TLS handshake too (closeAllConnections only knows HTTP ones,
+  // and a peer that keeps its connection alive would otherwise go on using one forever).
+  const sockets = new Set<import('node:net').Socket>()
+  server.on('connection', (socket: import('node:net').Socket) => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+  })
 
   const host: TestHost = {
     url: '',
@@ -74,8 +81,9 @@ export async function startTestHost(selfId: string, selfFacts: DeviceFacts = fac
     },
     close: () =>
       new Promise<void>((resolve) => {
-        server.closeAllConnections()
         server.close(() => resolve())
+        server.closeAllConnections()
+        for (const socket of sockets) socket.destroy()
       }),
   }
 

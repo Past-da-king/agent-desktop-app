@@ -242,4 +242,68 @@ describe('replication between nodes', () => {
     again.close()
     rmSync(dir, { recursive: true, force: true })
   })
+  it('pushes a local change beside an open long poll instead of cutting it (one connection stays up)', async () => {
+    const a = await node('dev_a')
+    const b = await node('dev_b')
+    mesh([a, b])
+    const replicator = link(a, [b], 20)
+    replicator.start()
+    await a.store.upsert('memory', { title: 'First' })
+    await waitFor(async () => (await titles(b.store)).includes('First'), 8000)
+    // Let the link settle into its long poll on B.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const pulls = b.host.hits.get('/v1/sync/pull') ?? 0
+    const pushes = b.host.hits.get('/v1/sync/push') ?? 0
+    for (const title of ['Second', 'Third', 'Fourth']) {
+      await a.store.upsert('memory', { title })
+      await waitFor(async () => (await titles(b.store)).includes(title), 8000)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    // Every change went over promptly as a push; the poll on B was never cut short and restarted.
+    expect(b.host.hits.get('/v1/sync/push') ?? 0).toBeGreaterThan(pushes)
+    expect(b.host.hits.get('/v1/sync/pull') ?? 0).toBe(pulls)
+    // And B's changes still come back over that same poll.
+    await b.store.upsert('memory', { title: 'From B' })
+    await waitFor(async () => (await titles(a.store)).includes('From B'), 8000)
+  })
+
+  it('a node upgraded from a version that dropped newer entities reads just those once from its peer', async () => {
+    const a = await node('dev_a')
+    const b = await node('dev_b')
+    mesh([a, b])
+    await a.store.upsert('memory', { title: 'Known to every version' })
+    const wake = await a.store.upsert('wakeup', { title: 'Standup', severity: 'urgent' } as never)
+    // B ran an older version: it pulled A's whole log but dropped the wake-up (unknown to it), and kept no record of
+    // which entities it knew.
+    b.store.setLocalValue('peer_pull:dev_a', String(a.store.logSeq()))
+    expect(await b.store.list('wakeup')).toHaveLength(0)
+
+    moved.pulled = 0
+    link(b, [a]).start()
+    await waitFor(async () => (await b.store.list('wakeup')).some((row) => row.id === (wake as { id: string }).id), 8000)
+    // Only the entities it did not know came again: the memory row it already counted as pulled did not.
+    expect(await titles(b.store)).toEqual([])
+    expect(moved.pulled).toBe(1)
+    expect(b.store.localValue('peer_known:dev_a')).toContain('wakeup')
+
+    // Once only: a restart does not read them again.
+    b.replicator?.stop()
+    moved.pulled = 0
+    link(b, [a]).start()
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    expect(moved.pulled).toBe(0)
+  })
+
+  it('a fresh link records what it knows and reads nothing twice', async () => {
+    const a = await node('dev_a')
+    const b = await node('dev_b')
+    mesh([a, b])
+    await a.store.upsert('wakeup', { title: 'Lunch' } as never)
+    moved.pulled = 0
+    link(b, [a]).start()
+    await waitFor(async () => (await b.store.list('wakeup')).length === 1, 8000)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(moved.pulled).toBe(1)
+    expect(b.store.localValue('peer_known:dev_a')).toContain('miniapp')
+  })
 })

@@ -27,6 +27,8 @@ export interface Pulled {
   cursor: number
   /** A node (docs/devices-protocol.md s7) also says which version of its state bundle it has; the service does not. */
   bundle?: string
+  /** A node that honoured `entities` names them back; absent when it read the whole log (an older node). */
+  entities?: string[]
 }
 
 export interface AuthResult {
@@ -38,6 +40,8 @@ export interface PullOptions {
   /** Long-poll seconds. The service holds the request open up to 55 s and answers the instant a change arrives. */
   wait?: number
   signal?: AbortSignal
+  /** Only these entities (a node backfilling kinds of rows it did not know before). Older nodes ignore it. */
+  entities?: readonly string[]
 }
 
 export class SyncClient {
@@ -64,7 +68,8 @@ export class SyncClient {
   async pull(since: number, options: PullOptions = {}): Promise<Pulled> {
     const wait = Math.min(55, Math.max(0, Math.floor(options.wait ?? 0)))
     const sinceValue = Math.max(0, Math.floor(since))
-    const query = `since=${sinceValue}${wait > 0 ? `&wait=${wait}` : ''}`
+    const only = options.entities !== undefined && options.entities.length > 0 ? `&entities=${encodeURIComponent(options.entities.join(','))}` : ''
+    const query = `since=${sinceValue}${wait > 0 ? `&wait=${wait}` : ''}${only}`
     const json = await this.call('GET', `/v1/sync/pull?${query}`, undefined, options.signal)
     const raw = Array.isArray(json.changes) ? json.changes : []
     const changes: Change[] = []
@@ -74,6 +79,7 @@ export class SyncClient {
     }
     const pulled: Pulled = { changes, cursor: numberOr(json.cursor, sinceValue) }
     if (typeof json.bundle === 'string' && json.bundle !== '') pulled.bundle = json.bundle
+    if (Array.isArray(json.entities)) pulled.entities = json.entities.filter((e: unknown): e is string => typeof e === 'string')
     return pulled
   }
 

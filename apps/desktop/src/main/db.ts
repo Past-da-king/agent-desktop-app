@@ -85,7 +85,7 @@ const CREATED_SQL = "json_extract(payload, '$.createdAt')"
  */
 const LIST_SLICE_ROWS = 1000
 
-const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule', 'wakeup', 'miniapp']
+export const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule', 'wakeup', 'miniapp']
 
 /** Versions kept per memory page; the oldest go first. */
 const MAX_VERSIONS = 300
@@ -609,16 +609,19 @@ export class Store implements SyncStore {
    * `skipVia` are passed over (the peer already has them) but still move the cursor. Nothing while a batch is
    * open, so a change that may yet roll back never leaves this device.
    */
-  changesAfter(seq: number, limit = 500, skipVia = ''): { changes: Change[]; cursor: number } {
+  changesAfter(seq: number, limit = 500, skipVia = '', entities?: readonly string[]): { changes: Change[]; cursor: number } {
     const after = Math.max(0, Math.floor(seq))
     if (this.batching !== null) return { changes: [], cursor: after }
+    // Only some entities (a peer backfilling kinds of rows it did not know before): read just those.
+    const only = entities === undefined ? null : [...new Set(entities.filter(isEntityName))]
+    if (only !== null && only.length === 0) return { changes: [], cursor: after }
     const entries = this.db
       .prepare(
         `SELECT l.seq AS seq, l.entity AS entity, l.cid AS cid, l.via AS via, r.stamp AS stamp, r.deleted AS deleted, r.payload AS payload
          FROM change_log l LEFT JOIN rows r ON r.entity = l.entity AND r.cid = l.cid
-         WHERE l.seq > ? ORDER BY l.seq LIMIT ?`,
+         WHERE l.seq > ?${only === null ? '' : ` AND l.entity IN (${only.map(() => '?').join(', ')})`} ORDER BY l.seq LIMIT ?`,
       )
-      .all(after, Math.max(1, Math.floor(limit)))
+      .all(after, ...(only ?? []), Math.max(1, Math.floor(limit)))
     const changes: Change[] = []
     let cursor = after
     for (const entry of entries) {
