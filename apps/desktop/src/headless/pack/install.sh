@@ -101,6 +101,13 @@ if [ "$SRC_DIR" != "$HOME_DIR" ]; then
   if [ -f "$SRC_DIR/agent-net" ]; then cp "$SRC_DIR/agent-net" "$HOME_DIR/agent-net"; chmod 755 "$HOME_DIR/agent-net"; fi
 fi
 
+# A heap size set by hand on this machine (a big database needs more than the default) survives an update.
+HEAP="512"
+if [ -f "$HOME_DIR/bin/agent-node" ]; then
+  KEPT="$(sed -n 's/.*--max-old-space-size=\([0-9][0-9]*\).*/\1/p' "$HOME_DIR/bin/agent-node" | head -1)"
+  [ -n "$KEPT" ] && HEAP="$KEPT"
+fi
+
 cat > "$HOME_DIR/bin/agent-node" <<EOF
 #!/bin/sh
 # Written by install.sh. Run it as: agent-node start|stop|status|pair|devices
@@ -108,7 +115,7 @@ export AGENT_DATA_DIR="\${AGENT_DATA_DIR:-$DATA_DIR}"
 export PATH="$(dirname "$NODE"):\$HOME/.local/bin:\$PATH"
 ${CLAUDE:+export AGENT_CLAUDE_PATH="\${AGENT_CLAUDE_PATH:-$CLAUDE}"}
 ${CODEX:+export AGENT_CODEX_PATH="\${AGENT_CODEX_PATH:-$CODEX}"}
-export NODE_OPTIONS="\${NODE_OPTIONS:---max-old-space-size=512}"
+export NODE_OPTIONS="\${NODE_OPTIONS:---max-old-space-size=$HEAP}"
 exec "$NODE" "$HOME_DIR/agent-node.mjs" "\$@"
 EOF
 chmod 755 "$HOME_DIR/bin/agent-node"
