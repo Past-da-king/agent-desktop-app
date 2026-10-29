@@ -143,7 +143,10 @@ describe('the picker', () => {
     const message = withChip(acme, picked.rest)
     expect(message).toBe('@Acme please ')
     expect(chipOf(message, projects)).toMatchObject({ project: { name: 'Acme' }, rest: 'please ' })
-    expect(chipOf('@Acme', projects)).toMatchObject({ project: { name: 'Acme' }, rest: '' })
+    expect(chipOf('@Acme ', projects)).toMatchObject({ project: { name: 'Acme' }, rest: '' })
+    // Still being typed: no chip yet, or the space typed next would land after the chip.
+    expect(chipOf('@Acme', projects)).toBeNull()
+    expect(chipOf('@acme', projects)).toBeNull()
     expect(chipOf('@Acmex hi', projects)).toBeNull()
     expect(chipOf('hi @Acme', projects)).toBeNull()
   })

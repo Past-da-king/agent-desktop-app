@@ -151,7 +151,8 @@ export function chipOf(text: string, list: MentionProject[]): { project: Mention
   if (!text.startsWith('@')) return null
   const names = list.flatMap((project) => [project.name, ...project.aliases].map((name) => ({ project, name }))).sort((a, b) => b.name.length - a.name.length)
   const lower = text.slice(1).toLowerCase()
-  const hit = names.find((entry) => lower.startsWith(entry.name.toLowerCase()) && /^(\s|$)/.test(text.slice(1 + entry.name.length)))
+  // A space after the name: '@acme' still being typed is not a chip yet (its space would land after the chip).
+  const hit = names.find((entry) => lower.startsWith(entry.name.toLowerCase()) && /^\s/.test(text.slice(1 + entry.name.length)))
   if (hit === undefined) return null
   return { project: hit.project, rest: text.slice(1 + hit.name.length).replace(/^\s/, '') }
 }
