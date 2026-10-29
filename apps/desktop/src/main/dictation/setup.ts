@@ -16,6 +16,7 @@ import { applyAliases, EMPTY_VOCABULARY, vocabularyBrief, type Vocabulary } from
 import type { Recordings } from '../recordings/store'
 import { CLEANUP_MODELS, cleanUp } from './cleanup'
 import { DictationController, type BatchResult } from './controller'
+import { transcribeInChunks } from './chunks'
 import { electronClipboard, keySenderFor, typeText, type KeySender, type TypeOutcome } from './paste'
 import { PillWindow, type PillOptions } from './pill'
 import { dictationTarget, type DictationSurface } from './target'
@@ -210,7 +211,13 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
         deps.log('Dictation replay failed', { reason: error instanceof Error ? error.message : 'unknown' })
       }
     }
-    return deps.voice.transcribe(pcm, { names, signal })
+    if (pcm.length <= REPLAY_MAX_BYTES) return deps.voice.transcribe(pcm, { names, signal })
+    // A long recording in 30-second pieces, a few at once: one call with all of it can outlast the finishing limit.
+    return transcribeInChunks(pcm, (piece, pieceSignal) => deps.voice.transcribe(piece, { names, signal: pieceSignal }), {
+      signal,
+      ...(onUpdate === undefined ? {} : { onUpdate }),
+      log: deps.log,
+    })
   }
 
   async function typeInto(text: string): Promise<TypeOutcome | 'inserted'> {

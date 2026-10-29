@@ -114,6 +114,12 @@ const BYTES_PER_SECOND = 16_000 * 2
 const RETRY_SHOW_MS = 20_000
 /** Typing into a window or another app takes about a second; past this something is wrong. */
 const TYPE_LIMIT_MS = 15_000
+/**
+ * A cancel this soon after the stop is a click or a key meant for the stop itself, not a cancel: when the dictation
+ * stops (after quiet, or a Done click) the Cancel / Stop waiting button takes the place of Done under the pointer.
+ * 29 Oct 2026: an 89-second dictation was lost to a cancel 478 ms after it stopped after quiet.
+ */
+export const CANCEL_GRACE_MS = 1500
 
 /** The default finishing limit: 30 s, plus one for every two said, at most 100 s. */
 export function defaultFinishLimitMs(bytes: number): number {
@@ -148,6 +154,8 @@ interface Session {
 interface Kept {
   chunks: Buffer[]
   bytes: number
+  /** The words the live session had heard, used if the recording cannot be transcribed again. */
+  heard: string
   clean: boolean
   surface: DictationSurface
   rec: RecordingSink | null
@@ -255,7 +263,12 @@ export class DictationController {
       return
     }
     if (session !== null && (this.state === 'finishing' || this.state === 'cleaning')) {
-      this.log('Dictation cancelled while finishing', { ms: this.now() - session.phaseSince })
+      const since = this.now() - session.phaseSince
+      if (since < CANCEL_GRACE_MS) {
+        this.log('Dictation cancel ignored, it came just after the stop', { ms: since })
+        return
+      }
+      this.log('Dictation cancelled while finishing', { ms: since })
       this.keep(session)
       void session.rec?.failed('Cancelled while the words were coming.')
       session.abort?.abort(new Error('Cancelled.'))
@@ -295,7 +308,7 @@ export class DictationController {
       liveFailed: true,
       chunks: kept.chunks,
       bytes: kept.bytes,
-      text: '',
+      text: kept.heard,
       interim: '',
       startedAt: now,
       phaseSince: now,
@@ -533,7 +546,8 @@ export class DictationController {
       session.transcriber.close()
     }
     if (session.liveFailed && session.bytes > 0) {
-      const heardLive = session.transcriber.text()
+      // What the live session heard (or, on a Retry, what it had heard the first time): better than nothing.
+      const heardLive = session.transcriber.text() || session.text
       const onUpdate = (said: string, guess: string): void => {
         if (this.session !== session || this.state !== 'finishing') return
         session.text = said
@@ -631,7 +645,8 @@ export class DictationController {
 
   private keep(session: Session): void {
     if (session.bytes === 0) return
-    this.kept = { chunks: session.chunks, bytes: session.bytes, clean: session.clean, surface: this.surface, rec: session.rec }
+    const heard = session.transcriber.text().trim() || [session.text, session.interim].filter((part) => part.trim() !== '').join(' ')
+    this.kept = { chunks: session.chunks, bytes: session.bytes, heard, clean: session.clean, surface: this.surface, rec: session.rec }
   }
 
   private dismiss(): void {
