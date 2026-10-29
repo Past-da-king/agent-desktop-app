@@ -35,6 +35,8 @@ export interface MiniAppChange {
   permissions?: string[]
   subscribe?: string[]
   refreshMinutes?: number
+  /** Other names to find it by in search; the whole new list. */
+  aliases?: string[]
 }
 
 export interface MiniAppStoreDeps {
@@ -101,6 +103,7 @@ export class MiniAppStore {
       subscribe: uniq(input.subscribe ?? []),
       refreshMinutes: input.refreshMinutes ?? 0,
     }
+    const aliases = uniq(input.aliases ?? [])
     const same = (await this.store.list('miniapp')).find((app) => app.name.trim().toLowerCase() === draft.name.toLowerCase())
     if (same !== undefined) return { ok: false, why: `There is already an app called "${same.name}" (${same.id}). Change that one with miniapp_update, or pick another name.` }
     const why = this.lint(draft)
@@ -109,6 +112,7 @@ export class MiniAppStore {
     const app = await this.store.upsert('miniapp', {
       id: newMiniAppId(),
       ...draft,
+      ...(aliases.length > 0 ? { aliases } : {}),
       profile: who.profile,
       version: 1,
       history: [],
@@ -151,7 +155,13 @@ export class MiniAppStore {
     }
     const why = this.lint(draft)
     if (why !== null) return { ok: false, why }
+    const aliases = change.aliases === undefined ? undefined : uniq(change.aliases)
+    const aliasesChanged = aliases !== undefined && JSON.stringify(aliases) !== JSON.stringify(app.aliases ?? [])
     const unchanged = JSON.stringify(draftOf(app)) === JSON.stringify(draft)
+    if (unchanged && aliasesChanged && aliases !== undefined) {
+      // Only its search names: not a new version of the app.
+      return { ok: true, app: await this.store.upsert('miniapp', { ...app, aliases, updatedAt: this.now() }) }
+    }
     if (unchanged) return { ok: true, app, note: 'Nothing changed.' }
     const now = this.now()
     // A permission it no longer has cannot stay allowed without asking.
@@ -159,6 +169,7 @@ export class MiniAppStore {
     const next = await this.store.upsert('miniapp', {
       ...app,
       ...draft,
+      ...(aliases === undefined ? {} : { aliases }),
       allowed,
       version: app.version + 1,
       history: pushHistory(app.history, versionOf(app, who.by, who.reason, now)),

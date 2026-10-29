@@ -155,6 +155,7 @@ export function miniAppTools(deps: MiniAppToolDeps): Tool[] {
         schema: schema(['name', 'files'], {
           name: str('Short name he will see, e.g. "Week calendar"'),
           description: str('One line: what it shows'),
+          aliases: strList('Other names he may search for it by in Ctrl+K, e.g. ["diary", "schedule"] for a calendar'),
           icon: str(`An icon name (${MINIAPP_ICON_NAMES.slice(0, 12).join(', ')}...) or a small <svg> in currentColor`),
           files: FILES_SCHEMA,
           permissions: strList('Tools it may call: "task_list", "calendar_events", "apps_run:SLUG", "webapp_run:app/tool"'),
@@ -167,6 +168,7 @@ export function miniAppTools(deps: MiniAppToolDeps): Tool[] {
           {
             name: text(input['name']),
             description: text(input['description']),
+            aliases: list(input['aliases']) ?? [],
             icon: text(input['icon']) || 'apps',
             files: filesOf(input['files']) ?? {},
             permissions: list(input['permissions']) ?? [],
@@ -190,6 +192,7 @@ export function miniAppTools(deps: MiniAppToolDeps): Tool[] {
           patches: PATCHES_SCHEMA,
           name: str('New name'),
           description: str('New description'),
+          aliases: strList('The whole new list of other names to find it by in search'),
           icon: str('New icon'),
           permissions: strList('The whole new permission list'),
           subscribe: strList('The whole new topic list'),
@@ -206,6 +209,8 @@ export function miniAppTools(deps: MiniAppToolDeps): Tool[] {
         if (patches !== undefined) change.patches = patches
         if (typeof input['name'] === 'string' && input['name'].trim() !== '') change.name = input['name']
         if (typeof input['description'] === 'string') change.description = input['description']
+        const aliases = list(input['aliases'])
+        if (aliases !== undefined) change.aliases = aliases
         if (typeof input['icon'] === 'string' && input['icon'].trim() !== '') change.icon = input['icon']
         const permissions = list(input['permissions'])
         if (permissions !== undefined) change.permissions = permissions

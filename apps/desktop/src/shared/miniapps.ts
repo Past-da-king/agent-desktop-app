@@ -470,3 +470,18 @@ export function repin<T extends Pick<MiniAppRow, 'id' | 'pinned' | 'name'>>(apps
   }
   return changes
 }
+
+/**
+ * What search (Ctrl+K) finds a mini-app by: its name first, the other names it was given, then its one-line
+ * description, and the words "app" and "mini-app" lightly, so "apps" alone lists them all. Same weights as a project.
+ */
+export function miniAppFields(app: Pick<MiniAppRow, 'name' | 'description'> & { aliases?: unknown }): Array<{ text: string; weight: number; fuzzy?: boolean }> {
+  // A synced row from an older or newer build could carry anything here, so only strings count.
+  const aliases = Array.isArray(app.aliases) ? app.aliases.filter((alias): alias is string => typeof alias === 'string' && alias.trim() !== '') : []
+  return [
+    { text: app.name, weight: 1 },
+    ...aliases.map((alias) => ({ text: alias, weight: 0.95 })),
+    { text: app.description, weight: 0.6, fuzzy: false },
+    { text: 'app apps mini-app', weight: 0.3, fuzzy: false },
+  ]
+}

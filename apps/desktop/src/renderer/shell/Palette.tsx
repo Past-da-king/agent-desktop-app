@@ -10,11 +10,15 @@ import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { Dialog } from '../ui/Dialog'
 import { Icon, type IconName } from '../ui/Icon'
+import { MiniAppIcon } from '../ui/MiniAppIcon'
+import { miniAppFields } from '../../shared/miniapps'
 
 interface Action {
   id: string
   label: string
   icon: IconName
+  /** Drawn instead of `icon`: a mini-app's own icon. */
+  glyph?: ReactNode
   shortcut?: string
   run: () => void
   /** What search matches it by; the label when absent. A project adds its other names, description and folder. */
@@ -43,7 +47,7 @@ function Group({ label, entries, selected, onHover }: {
           onMouseEnter={() => onHover(index)}
           onClick={action.run}
         >
-          <Icon name={action.icon} size={20} />
+          {action.glyph ?? <Icon name={action.icon} size={20} />}
           {action.label}
           {action.shortcut ? (
             <span className="kbds">
@@ -61,6 +65,7 @@ export function Palette(): JSX.Element | null {
   const close = useUi((state) => state.closeOverlay)
   const navigate = useUi((state) => state.navigate)
   const projects = useEntity('project')
+  const miniApps = useEntity('miniapp')
   const focusComposer = useUi((state) => state.focusComposer)
   const openQuick = useUi((state) => state.openQuick)
   const settings = useSettings((state) => state.settings)
@@ -135,6 +140,17 @@ export function Palette(): JSX.Element | null {
       fields: [...projectFields(project), { text: project.hidden ? 'hidden project' : 'project', weight: 0.3, fuzzy: false }],
       run: closeAnd(() => navigate({ page: 'project', id: project.id })),
     })),
+    // Every mini-app he has: "calendar" then Enter opens his Calendar app straight away.
+    ...[...miniApps]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((app): Action => ({
+        id: `jump-miniapp-${app.id}`,
+        label: `${app.name} (app)`,
+        icon: 'apps',
+        glyph: <MiniAppIcon icon={app.icon} size={20} />,
+        fields: miniAppFields(app),
+        run: closeAnd(() => navigate({ page: 'miniapp', id: app.id })),
+      })),
   ]
   const doItems: Action[] = [
     {

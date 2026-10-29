@@ -467,6 +467,8 @@ export interface WakeupRow extends RowBase {
 export interface MiniAppRow extends RowBase {
   name: string
   description: string
+  /** Other names he may search for it by ("diary" for a Week calendar). Optional: older rows have none. */
+  aliases?: string[]
   /** A name from the app's own icon set, or a small SVG that draws only in currentColor (shared/miniapps.ts). */
   icon: string
   /** The profile whose accounts its data calls use ('' = General). */
