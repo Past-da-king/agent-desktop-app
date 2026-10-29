@@ -21,7 +21,17 @@ export interface CalendarEvent {
   where: string
   /** Which calendar app it came from (googlecalendar, outlook, file). */
   source: string
+  /** The link to join it online (Teams, Meet, Zoom), '' when there is none. */
+  joinUrl?: string
+  /** Who organised it. self: he did. Null when the calendar does not say. */
+  organiser?: { name: string; email: string; self: boolean } | null
+  /** His own answer to it. 'none' when there is nothing to answer (no invitation). */
+  response?: CalendarResponse
+  /** The connected calendar account it was read from (its email), so personal and work can be told apart. '' when unknown. */
+  account?: string
 }
+
+export type CalendarResponse = 'accepted' | 'tentative' | 'declined' | 'needsAction' | 'none'
 
 /** Something that reads his calendars for a window of time. Null: no calendar is connected. Throws when it cannot read. */
 export interface CalendarSource {
@@ -34,7 +44,8 @@ export interface CalendarSource {
 
 /** What the calendar reader needs from AppsService: his accounts in some apps, and running one action. */
 export interface CalendarApps {
-  activeAccounts(apps: string[]): Promise<Array<{ id: string; app: string }>>
+  /** label: who the account signed in as, when Connections knows it (often its email). */
+  activeAccounts(apps: string[]): Promise<Array<{ id: string; app: string; label?: string }>>
   backend(): { execute(slug: string, args: JsonObject, account: string | null): Promise<{ ok: boolean; text: string }> } | null
   /** The per-account rules he set in Connections. Only accounts he lets agents read without asking are read. */
   rulesFor?(accountId: string): AccountRules
@@ -43,8 +54,37 @@ export interface CalendarApps {
 export const CALENDAR_APPS = ['googlecalendar', 'outlook'] as const
 
 /** Every connected calendar account, read in one call each. No account: no events (and no error). */
-export function composioCalendarSource(apps: CalendarApps, log: (message: string, detail?: Record<string, unknown>) => void = () => undefined): CalendarSource {
+export function composioCalendarSource(apps: CalendarApps, log: (message: string, detail?: Record<string, unknown>) => void = () => undefined, now: () => number = Date.now): CalendarSource {
   let partial = false
+  // Which email each account is, learned once and kept (an Outlook reply does not say whose calendar it is).
+  const emails = new Map<string, string>()
+  const askedProfileAt = new Map<string, number>()
+  type Backend = NonNullable<ReturnType<CalendarApps['backend']>>
+  const remember = (id: string, email: string): string => {
+    emails.set(id, email)
+    return email
+  }
+  const outlookEmail = async (backend: Backend, account: { id: string; label?: string }, events: CalendarEvent[]): Promise<string> => {
+    const known = emails.get(account.id)
+    if (known !== undefined) return known
+    const label = emailIn(account.label)
+    if (label !== '') return remember(account.id, label)
+    const asked = askedProfileAt.get(account.id)
+    if (asked === undefined || now() - asked > PROFILE_RETRY_MS) {
+      askedProfileAt.set(account.id, now())
+      try {
+        const result = await backend.execute(OUTLOOK_PROFILE.slug, OUTLOOK_PROFILE.args, account.id)
+        const reply = unwrapComposio(result.text)
+        const found = result.ok && reply.ok ? profileEmail(reply.data) : ''
+        if (found !== '') return remember(account.id, found)
+        log('Calendar account email not read', { account: account.id, error: (reply.error ?? result.text).slice(0, 200) })
+      } catch (error) {
+        log('Calendar account email not read', { account: account.id, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    // Last: the organiser of a meeting he organised is him.
+    return events.find((event) => event.organiser?.self === true && event.organiser.email !== '')?.organiser?.email.toLowerCase() ?? ''
+  }
   return {
     incomplete: () => partial,
     async events(from, to) {
@@ -60,32 +100,50 @@ export function composioCalendarSource(apps: CalendarApps, log: (message: string
       let partialRead = false
       for (const account of accounts) {
         const app = account.app.toLowerCase()
-        const read = async (until: number): Promise<{ result: { ok: boolean; text: string }; reply: ReturnType<typeof unwrapComposio> }> => {
-          const call = app === 'outlook' ? outlookCall(from, until) : googleCall(from, until)
+        const replies: Array<{ data: unknown; text: string }> = []
+        /** Reads one span; a reply Connect cut short is read again as two halves. Returns the error, or null. */
+        const readSpan = async (start: number, end: number, depth: number): Promise<string | null> => {
+          const call = app === 'outlook' ? outlookCall(start, end) : googleCall(start, end)
           const result = await backend.execute(call.slug, call.args, account.id)
-          return { result, reply: unwrapComposio(result.text) }
+          const reply = unwrapComposio(result.text)
+          if (!result.ok || !reply.ok) return reply.error ?? result.text
+          if (reply.cut === true) {
+            // Too big to come back whole: Connect sent a preview (events cut short). Halves are smaller; past the
+            // last split keep what came and try again soon.
+            if (depth === 0) log('Calendar reply was cut short', { account: account.id, app, bytes: result.text.length, days: Math.round((end - start) / 86_400_000) })
+            if (depth < CUT_SPLITS && end - start > CUT_MIN_SPAN_MS) {
+              const mid = start + Math.floor((end - start) / 2)
+              return (await readSpan(start, mid, depth + 1)) ?? (await readSpan(mid, end, depth + 1))
+            }
+            partialRead = true
+          }
+          replies.push({ data: reply.data, text: result.text })
+          return null
         }
         try {
-          let { result, reply } = await read(to)
-          if (result.ok && reply.ok && reply.cut === true) {
-            // Too big to come back whole: Connect sent a preview (events cut short). The next two days are what the
-            // note needs most, so read those again; if even that is cut, keep what came and try again soon.
-            const shorter = Math.min(to, from + CUT_WINDOW_MS)
-            log('Calendar reply was cut short', { account: account.id, app, bytes: result.text.length, readAgainHours: Math.round((shorter - from) / 3_600_000) })
-            if (shorter < to) ({ result, reply } = await read(shorter))
-            if (reply.cut === true) partialRead = true
-          }
-          if (!result.ok || !reply.ok) {
+          const error = await readSpan(from, to, 0)
+          if (error !== null) {
             failures += 1
-            log('Calendar read failed', { account: account.id, app, error: (reply.error ?? result.text).slice(0, 300) })
+            log('Calendar read failed', { account: account.id, app, error: error.slice(0, 300) })
             continue
           }
           const key = app === 'outlook' ? 'value' : 'items'
-          const listed = findList(reply.data, key).length
-          const events = app === 'outlook' ? parseOutlookData(reply.data) : parseGoogleData(reply.data)
+          const listed = replies.reduce((sum, each) => sum + findList(each.data, key).length, 0)
+          // A meeting across the line between two halves comes back in both: once.
+          const ids = new Set<string>()
+          const events = replies
+            .flatMap((each) => (app === 'outlook' ? parseOutlookData(each.data) : parseGoogleData(each.data)))
+            .filter((event) => event.id === '' || (!ids.has(event.id) && ids.add(event.id) !== undefined))
+          // Which account: Google names a primary calendar after its account's email; Outlook is asked once.
+          const email =
+            app === 'outlook'
+              ? await outlookEmail(backend, account, events)
+              : replies.map((each) => emailIn(listHolder(each.data, 'items')['summary'])).find((one) => one !== '') || emailIn(account.label) || emails.get(account.id) || ''
+          if (app !== 'outlook' && email !== '') remember(account.id, email)
+          for (const event of events) event.account = email
           // A list came back but nothing was kept, or no list at all: say so, so a new reply shape is never a silent empty calendar.
-          if (events.length === 0 && (listed > 0 || !hasList(reply.data, key))) {
-            log('Calendar reply kept no meetings', { account: account.id, app, listed, reply: result.text.slice(0, 300) })
+          if (events.length === 0 && (listed > 0 || !replies.some((each) => hasList(each.data, key)))) {
+            log('Calendar reply kept no meetings', { account: account.id, app, listed, reply: (replies[0]?.text ?? '').slice(0, 300) })
           }
           found.push(...events)
         } catch (error) {
@@ -100,16 +158,62 @@ export function composioCalendarSource(apps: CalendarApps, log: (message: string
   }
 }
 
-/** A cut-short reply is read again for this long from the start of the window (the rest of today and the next two days). */
-const CUT_WINDOW_MS = 60 * 60 * 60_000
+/** An Outlook profile read that failed is tried again after this long (not on every calendar read). */
+const PROFILE_RETRY_MS = 6 * 60 * 60_000
+/** Who the Outlook account is (Microsoft Graph /me). */
+const OUTLOOK_PROFILE = { slug: 'OUTLOOK_GET_PROFILE', args: { user_id: 'me' } as JsonObject }
+
+function profileEmail(data: unknown): string {
+  return emailIn(findValue(data, ['mail', 'userPrincipalName', 'emailAddress', 'email']))
+}
+
+/** The first of these keys holding an email, however deep the reply wrapped it. */
+function findValue(value: unknown, keys: string[], depth = 0): string {
+  if (depth > 6 || typeof value !== 'object' || value === null || Array.isArray(value)) return ''
+  const obj = value as Record<string, unknown>
+  for (const key of keys) if (emailIn(obj[key]) !== '') return obj[key] as string
+  for (const inner of Object.values(obj)) {
+    const found = findValue(typeof inner === 'string' && inner.trim().startsWith('{') ? parseJson(inner) : inner, keys, depth + 1)
+    if (found !== '') return found
+  }
+  return ''
+}
+
+/** The text when it is an email address (lower case), else ''. */
+function emailIn(value: unknown): string {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text.toLowerCase() : ''
+}
+
+/**
+ * A cut-short reply is read again as two halves, each half again if it is cut too, at most this many times deep and
+ * never below a day (his real Outlook week with join links and organisers: 17 meetings, 19.7 KB, still whole).
+ */
+const CUT_SPLITS = 5
+const CUT_MIN_SPAN_MS = 24 * 60 * 60_000
 
 /**
  * Only the fields the note reads. Composio Connect saves a reply over a few thousand tokens to its own sandbox and
  * sends back only a preview, with each event cut short (29 Oct 2026: his Outlook week, 9,343 tokens), so asking for
  * less is what keeps the meetings in the reply.
  */
-const GOOGLE_FIELDS = 'items(id,status,summary,start,end,attendees(self,responseStatus),hangoutLink,conferenceData/conferenceSolution/name,location),nextPageToken'
-const OUTLOOK_SELECT = ['id', 'subject', 'start', 'end', 'isAllDay', 'isCancelled', 'responseStatus', 'onlineMeetingProvider', 'location']
+const GOOGLE_FIELDS =
+  'summary,items(id,status,summary,start,end,attendees(self,responseStatus),organizer(email,displayName,self),hangoutLink,conferenceData(conferenceSolution/name,entryPoints(entryPointType,uri)),location),nextPageToken'
+const OUTLOOK_SELECT = [
+  'id',
+  'subject',
+  'start',
+  'end',
+  'isAllDay',
+  'isCancelled',
+  'responseStatus',
+  'onlineMeetingProvider',
+  'onlineMeeting',
+  'onlineMeetingUrl',
+  'organizer',
+  'isOrganizer',
+  'location',
+]
 
 function googleCall(from: number, to: number): { slug: string; args: JsonObject } {
   return {
@@ -165,7 +269,7 @@ function errorText(value: unknown): string {
   return ''
 }
 
-/** Google Calendar events (items[]), without all-day, cancelled or declined ones. */
+/** Google Calendar events (items[]), without all-day or cancelled ones. Declined ones stay, marked declined. */
 export function parseGoogle(text: string): CalendarEvent[] {
   const reply = unwrapComposio(text)
   return reply.ok ? parseGoogleData(reply.data) : []
@@ -180,7 +284,8 @@ function parseGoogleData(data: unknown): CalendarEvent[] {
     // All-day entries (a date, no time) are days off and reminders, not meetings.
     if (typeof start['dateTime'] !== 'string' || typeof end['dateTime'] !== 'string') continue
     const attendees = Array.isArray(item['attendees']) ? (item['attendees'] as unknown[]).map(record) : []
-    if (attendees.some((one) => one['self'] === true && one['responseStatus'] === 'declined')) continue
+    const me = attendees.find((one) => one['self'] === true)
+    const organizer = record(item['organizer'])
     const startAt = Date.parse(start['dateTime'])
     const endAt = Date.parse(end['dateTime'])
     if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) continue
@@ -193,12 +298,29 @@ function parseGoogleData(data: unknown): CalendarEvent[] {
           : typeof item['location'] === 'string'
             ? onlineKind(item['location'])
             : ''
-    out.push({ id: text0(item['id']), title: text0(item['summary']) || '(no title)', start: startAt, end: endAt, where, source: 'googlecalendar' })
+    const points = record(item['conferenceData'])['entryPoints']
+    const video = (Array.isArray(points) ? points : []).map(record).find((point) => point['entryPointType'] === 'video' && /^https:\/\//.test(text0(point['uri'])))
+    const location = text0(item['location']).trim()
+    const joinUrl = text0(item['hangoutLink']) || text0(video?.['uri']) || (/^https:\/\/\S+$/.test(location) ? location : '')
+    const response: CalendarResponse =
+      me !== undefined ? googleResponse(me['responseStatus']) : organizer['self'] === true ? 'accepted' : attendees.length === 0 ? 'none' : 'needsAction'
+    out.push({
+      id: text0(item['id']),
+      title: text0(item['summary']) || '(no title)',
+      start: startAt,
+      end: endAt,
+      where,
+      source: 'googlecalendar',
+      joinUrl,
+      organiser: organiserOf(text0(organizer['displayName']), text0(organizer['email']), organizer['self'] === true),
+      response,
+      account: '',
+    })
   }
   return out
 }
 
-/** Outlook calendar view (value[]), without all-day, cancelled or declined ones. */
+/** Outlook calendar view (value[]), without all-day or cancelled ones. Declined ones stay, marked declined. */
 export function parseOutlook(text: string): CalendarEvent[] {
   const reply = unwrapComposio(text)
   return reply.ok ? parseOutlookData(reply.data) : []
@@ -208,7 +330,6 @@ function parseOutlookData(data: unknown): CalendarEvent[] {
   const out: CalendarEvent[] = []
   for (const item of findList(data, 'value')) {
     if (item['isCancelled'] === true || item['isAllDay'] === true) continue
-    if (record(item['responseStatus'])['response'] === 'declined') continue
     const startAt = outlookTime(record(item['start']))
     const endAt = outlookTime(record(item['end']))
     if (startAt === null || endAt === null || endAt <= startAt) continue
@@ -220,9 +341,41 @@ function parseOutlookData(data: unknown): CalendarEvent[] {
         : provider === 'teamsForBusiness'
           ? 'Teams'
           : onlineKind(text0(record(item['location'])['displayName']))
-    out.push({ id: text0(item['id']), title: text0(item['subject']) || '(no title)', start: startAt, end: endAt, where, source: 'outlook' })
+    const organizer = record(record(item['organizer'])['emailAddress'])
+    const place = text0(record(item['location'])['displayName']).trim()
+    const joinUrl = text0(online['joinUrl']) || text0(item['onlineMeetingUrl']) || (/^https:\/\/\S+$/.test(place) ? place : '')
+    out.push({
+      id: text0(item['id']),
+      title: text0(item['subject']) || '(no title)',
+      start: startAt,
+      end: endAt,
+      where,
+      source: 'outlook',
+      joinUrl,
+      organiser: organiserOf(text0(organizer['name']), text0(organizer['address']), item['isOrganizer'] === true),
+      response: outlookResponse(text0(record(item['responseStatus'])['response']), item['isOrganizer'] === true),
+      account: '',
+    })
   }
   return out
+}
+
+function organiserOf(name: string, email: string, self: boolean): CalendarEvent['organiser'] {
+  return name === '' && email === '' ? null : { name, email: email.toLowerCase(), self }
+}
+
+/** Google's answer for him: accepted, tentative, declined, needsAction. */
+function googleResponse(value: unknown): CalendarResponse {
+  return value === 'accepted' || value === 'tentative' || value === 'declined' || value === 'needsAction' ? value : 'none'
+}
+
+/** Outlook's answer for him, in the same words as Google's. A meeting he organised counts as accepted. */
+function outlookResponse(value: string, organiser: boolean): CalendarResponse {
+  if (value === 'organizer' || (organiser && (value === '' || value === 'none'))) return 'accepted'
+  if (value === 'accepted' || value === 'declined') return value
+  if (value === 'tentativelyAccepted') return 'tentative'
+  if (value === 'notResponded') return 'needsAction'
+  return 'none'
 }
 
 function outlookTime(value: Record<string, unknown>): number | null {
@@ -249,23 +402,29 @@ function onlineKind(place: string): string {
  * The first array of objects under `key`, however deep Composio wrapped it (data.items, data.response_data.value,
  * data.results[0].response.data.items...). It looks inside arrays of objects too, and inside JSON held as a string.
  */
-function findList(value: unknown, key: string, depth = 0): Array<Record<string, unknown>> {
-  if (depth > 8 || typeof value !== 'object' || value === null) return []
+function findList(value: unknown, key: string): Array<Record<string, unknown>> {
+  const direct = listHolder(value, key)[key]
+  return Array.isArray(direct) ? direct.filter((each) => typeof each === 'object' && each !== null).map(record) : []
+}
+
+/** The object holding the first `key` list of objects (the app's own reply: Google's summary sits beside items). */
+function listHolder(value: unknown, key: string, depth = 0): Record<string, unknown> {
+  if (depth > 8 || typeof value !== 'object' || value === null) return {}
   if (Array.isArray(value)) {
     for (const each of value.slice(0, 20)) {
-      const found = findList(each, key, depth + 1)
-      if (found.length > 0) return found
+      const found = listHolder(each, key, depth + 1)
+      if (key in found) return found
     }
-    return []
+    return {}
   }
   const obj = value as Record<string, unknown>
   const direct = obj[key]
-  if (Array.isArray(direct)) return direct.filter((each) => typeof each === 'object' && each !== null).map(record)
+  if (Array.isArray(direct) && direct.some((each) => typeof each === 'object' && each !== null)) return obj
   for (const inner of Object.values(obj)) {
-    const found = findList(typeof inner === 'string' && inner.trim().startsWith('{') ? parseJson(inner) : inner, key, depth + 1)
-    if (found.length > 0) return found
+    const found = listHolder(typeof inner === 'string' && inner.trim().startsWith('{') ? parseJson(inner) : inner, key, depth + 1)
+    if (key in found) return found
   }
-  return []
+  return {}
 }
 
 /** Whether the reply holds a `key` list at all (an empty calendar has one, with nothing in it). */
@@ -314,6 +473,10 @@ export function fileCalendarSource(path: string): CalendarSource {
           where: text0(item['where']),
           // A test file may say which calendar app each event is from (a proof of several calendars in one view).
           source: text0(item['source']) || 'file',
+          joinUrl: text0(item['joinUrl']),
+          organiser: organiserOf(text0(record(item['organiser'])['name']), text0(record(item['organiser'])['email']), record(item['organiser'])['self'] === true),
+          response: googleResponse(item['response']),
+          account: text0(item['account']),
         }))
         .filter((event) => Number.isFinite(event.start) && Number.isFinite(event.end) && event.end > from && event.start < to)
     },
@@ -416,9 +579,9 @@ export class CalendarCache {
     return this.known
   }
 
-  /** The cached meetings, soonest first. */
+  /** The cached meetings he has not declined, soonest first (the presence note, meetings that end early). */
   events(): CalendarEvent[] {
-    return this.list
+    return this.list.filter((event) => event.response !== 'declined')
   }
 
   /** Read the calendars again. A failure keeps what was read before; one read at a time. */
@@ -496,15 +659,17 @@ export class CalendarCache {
   }
 }
 
-/** The same meeting on two calendars (invited on both) shows once. */
+/** The same meeting on two calendars (invited on both) shows once: the copy he has not declined, else the first. */
 function dedupe(events: CalendarEvent[]): CalendarEvent[] {
-  const seen = new Set<string>()
+  const seen = new Map<string, number>()
   const out: CalendarEvent[] = []
   for (const event of events) {
     const key = `${event.start}|${event.end}|${event.title.trim().toLowerCase()}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(event)
+    const at = seen.get(key)
+    if (at === undefined) {
+      seen.set(key, out.length)
+      out.push(event)
+    } else if (out[at]?.response === 'declined' && event.response !== 'declined') out[at] = event
   }
   return out
 }

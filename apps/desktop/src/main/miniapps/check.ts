@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { BrowserWindow, ipcMain, session as sessions, type Session } from 'electron'
 import type { MiniAppCheck, MiniAppRow } from '@agent/core'
 
+import { CheckWatch, MUTATION_PROBE, waitForFirstData } from './check-wait'
 import type { MiniAppHost } from './host'
 import { serveMiniAppsIn } from './protocol'
 
@@ -31,14 +32,16 @@ export interface CheckDeps {
   outDir: string
   accent: () => string
   log: (message: string, detail?: Record<string, unknown>) => void
-  /** How long an app gets to draw after it loads (ms). */
-  settleMs?: number
+  /** How long an app gets to draw its first data after it loads, at most (ms). */
+  readyLimitMs?: number
 }
 
 export class MiniAppChecker {
   private readonly deps: CheckDeps
   private session: Session | null = null
   private readonly byContents = new Map<number, string>()
+  /** What each check page's bridge is doing (requests in flight, answered, ready), by session. */
+  private readonly watches = new Map<string, CheckWatch>()
   private queue: Promise<unknown> = Promise.resolve()
 
   constructor(deps: CheckDeps) {
@@ -56,7 +59,11 @@ export class MiniAppChecker {
       } catch {
         return
       }
+      if (typeof message !== 'object' || message === null) return
+      const watch = this.watches.get(sessionId)
+      watch?.sent(message as { op?: unknown; id?: unknown }, Date.now())
       void host.handle(sessionId, message as Record<string, unknown>).then((reply) => {
+        if (reply !== null) watch?.replied(Date.now())
         if (reply !== null && !event.sender.isDestroyed()) event.sender.send(CHECK_CHANNELS.push, JSON.stringify(reply))
       })
     })
@@ -85,6 +92,7 @@ export class MiniAppChecker {
     const dir = join(this.deps.outDir, app.id)
     mkdirSync(dir, { recursive: true })
     const issues: string[] = []
+    const notes: string[] = []
     const shots: string[] = []
     const s = this.checkSession()
     for (const look of CHECK_LOOKS) {
@@ -106,9 +114,25 @@ export class MiniAppChecker {
         throw new Error('The app is not loaded.')
       }
       this.byContents.set(win.webContents.id, sessionId)
+      const watch = new CheckWatch(Date.now())
+      this.watches.set(sessionId, watch)
       try {
         await win.loadURL(`miniapp://${app.id}/index.html?theme=${look.theme}&accent=${encodeURIComponent(this.deps.accent())}`)
-        await new Promise((resolve) => setTimeout(resolve, this.deps.settleMs ?? 1500))
+        // Shot once its first data is drawn: agent.ready(), or its requests answered and the page still (check-wait.ts).
+        await win.webContents.executeJavaScript(MUTATION_PROBE).catch(() => undefined)
+        const waited = await waitForFirstData({
+          watch,
+          lastMutation: async () => Number(await win.webContents.executeJavaScript('window.__checkMutatedAt||0')) || 0,
+          now: Date.now,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          ...(this.deps.readyLimitMs === undefined ? {} : { limitMs: this.deps.readyLimitMs }),
+        })
+        if (waited.how === 'timeout') {
+          notes.push(
+            `${label}: shot after ${Math.round(waited.ms / 1000)} s without its data drawn (${waited.inflight} request(s) still unanswered); it may show a loading state. Call agent.ready() once the first data is on the page.`,
+          )
+        }
+        this.deps.log('Mini-app check: shot', { app: app.id, look: label, how: waited.how, ms: waited.ms })
         const seen = (await win.webContents.executeJavaScript(
           `({sw:document.documentElement.scrollWidth,w:window.innerWidth,text:(document.body&&document.body.innerText||'').trim().length,els:document.body?document.body.querySelectorAll('*').length:0,theme:document.documentElement.getAttribute('data-theme'),bg:getComputedStyle(document.body).backgroundColor})`,
         )) as { sw: number; w: number; text: number; els: number; theme: string; bg: string }
@@ -128,13 +152,15 @@ export class MiniAppChecker {
         issues.push(`${label}: did not open: ${error instanceof Error ? error.message : String(error)}`)
       } finally {
         host.closeSession(sessionId)
+        this.watches.delete(sessionId)
         this.byContents.delete(win.webContents.id)
         win.destroy()
       }
     }
     // The same finding in each look is one line.
     const unique = [...new Set(issues)]
-    return { version: app.version, at: Date.now(), ok: unique.length === 0, issues: unique.slice(0, 20), shots }
+    const told = [...new Set(notes)]
+    return { version: app.version, at: Date.now(), ok: unique.length === 0, issues: unique.slice(0, 20), shots, ...(told.length === 0 ? {} : { notes: told.slice(0, 8) }) }
   }
 }
 

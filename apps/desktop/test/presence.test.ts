@@ -238,11 +238,14 @@ describe('the calendar cache', () => {
       }),
     })
     const events = await source.events(NOW - 60 * MIN, NOW + 7 * 24 * 60 * MIN)
-    expect(calls.map((call) => `${call.slug}@${call.account}`)).toEqual(['GOOGLECALENDAR_EVENTS_LIST@acc-g', 'OUTLOOK_GET_CALENDAR_VIEW@acc-o'])
-    expect(events.map((event) => [event.title, new Date(event.start).toISOString(), event.where])).toEqual([
+    // (Plus one read of who the Outlook account is: its label is not an email.)
+    expect(calls.map((call) => `${call.slug}@${call.account}`)).toEqual(['GOOGLECALENDAR_EVENTS_LIST@acc-g', 'OUTLOOK_GET_CALENDAR_VIEW@acc-o', 'OUTLOOK_GET_PROFILE@acc-o'])
+    // A declined one is kept, marked declined (calendar_events lists it; the note's cache leaves it out).
+    expect(events.filter((event) => event.response !== 'declined').map((event) => [event.title, new Date(event.start).toISOString(), event.where])).toEqual([
       ['Daily Scrum', '2026-10-26T09:00:00.000Z', 'Google Meet'],
       ['Standup', '2026-10-26T18:00:00.000Z', 'Teams'],
     ])
+    expect(events.filter((event) => event.response === 'declined').map((event) => event.title)).toEqual(['Declined one'])
     // Nothing connected: null, so the note has no calendar line.
     expect(await composioCalendarSource({ activeAccounts: async () => [], backend: () => ({ execute: async () => ({ ok: true, text: '' }) }) }).events(0, 1)).toBeNull()
     expect(await composioCalendarSource({ activeAccounts: async () => [], backend: () => null }).events(0, 1)).toBeNull()
@@ -406,7 +409,7 @@ describe('the calendar through Composio Connect', () => {
     await source.events(0, 1)
     const google = calls.find((call) => call.slug === 'GOOGLECALENDAR_EVENTS_LIST')?.args
     const outlook = calls.find((call) => call.slug === 'OUTLOOK_GET_CALENDAR_VIEW')?.args
-    expect(String(google?.['fields'])).toMatch(/^items\(.*start.*end.*\)/)
+    expect(String(google?.['fields'])).toMatch(/^summary,items\(.*start.*end.*\)/)
     expect(outlook?.['select']).toEqual(expect.arrayContaining(['subject', 'start', 'end', 'isAllDay', 'isCancelled', 'responseStatus']))
     expect(outlook?.['select']).not.toContain('body')
   })
@@ -432,7 +435,7 @@ describe('the calendar through Composio Connect', () => {
     const lines: string[] = []
     const source = composioCalendarSource(
       {
-        activeAccounts: async () => [{ id: 'o', app: 'outlook' }],
+        activeAccounts: async () => [{ id: 'o', app: 'outlook', label: 'me@company.example' }],
         backend: () => ({
           execute: async (_slug, args) => {
             windows.push([String(args['start_datetime']), String(args['end_datetime'])])
@@ -445,9 +448,12 @@ describe('the calendar through Composio Connect', () => {
     const from = Date.parse('2026-10-29T00:00:00Z')
     const events = await source.events(from, from + 7 * 24 * 60 * MIN)
     expect(events?.map((event) => event.title)).toEqual(['Strat Edge weekly review'])
-    expect(windows.length).toBe(2)
-    expect(Date.parse(windows[1]?.[1] ?? '') - from).toBeLessThanOrEqual(2 * 24 * 60 * MIN + 12 * 60 * MIN)
+    // Read again as two halves (the whole window, not only the next days); a meeting in both halves counts once.
+    expect(windows.length).toBe(3)
+    expect(windows.slice(1).map(([start, end]) => (Date.parse(end) - Date.parse(start)) / (24 * 60 * MIN))).toEqual([3.5, 3.5])
+    expect(windows[2]?.[1]).toBe(windows[0]?.[1])
     expect(lines).toContain('Calendar reply was cut short')
+    expect(source.incomplete?.()).toBe(false)
   })
 
   it('also retries when only one of the calendars failed', async () => {

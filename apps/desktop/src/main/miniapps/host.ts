@@ -262,6 +262,9 @@ export class MiniAppHost {
     switch (op) {
       case 'hello':
         return null
+      case 'ready':
+        // The app drew its first data (agent.ready()): the look check takes its screenshot now.
+        return null
       case 'error':
         if (session.errors.length < 20) session.errors.push(str(raw.text).slice(0, 300))
         return null

@@ -504,6 +504,8 @@ export interface MiniAppCheck {
   issues: string[]
   /** Screenshot files of the four looks, on the computer that checked it. */
   shots: string[]
+  /** What the agent should know that is not a fault (a look shot before its data came). */
+  notes?: string[]
 }
 
 export interface MiniAppVersion {

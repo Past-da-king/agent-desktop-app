@@ -27,7 +27,7 @@ export function calendarTools(calendar: () => CalendarReader | null, now: () => 
       spec: {
         name: 'calendar_events',
         description:
-          "The user's meetings on every calendar he connected (Google Calendar, Outlook), as one list, soonest first: title, start, end (ISO), where (Teams, Meet, Zoom or a place) and which calendar app. from and to are ISO date-times or dates (default: now to 7 days ahead; at most 62 days). Read-only. calendars 'none' means no calendar is connected.",
+          "The user's meetings on every calendar he connected (Google Calendar, Outlook), as one list, soonest first: title, start, end (ISO), where (Teams, Meet, Zoom or a place), joinUrl (the link to join, '' when none), organiser {name, email, self}, response (his own answer: accepted, tentative, declined, needsAction or none), calendar (the app) and account (the email of the calendar account it came from, to tell personal from work). Declined meetings are listed too, marked declined. from and to are ISO date-times or dates (default: now to 7 days ahead; at most 62 days). Read-only. calendars 'none' means no calendar is connected.",
         schema: schema([], {
           from: str('ISO date-time or date to start from (default now)'),
           to: str('ISO date-time or date to end at (default 7 days after from)'),
@@ -53,7 +53,11 @@ export function calendarTools(calendar: () => CalendarReader | null, now: () => 
             start: new Date(event.start).toISOString(),
             end: new Date(event.end).toISOString(),
             where: event.where,
+            joinUrl: event.joinUrl ?? '',
+            organiser: event.organiser ?? null,
+            response: event.response ?? 'none',
             calendar: event.source,
+            account: event.account ?? '',
           })),
         })
       },

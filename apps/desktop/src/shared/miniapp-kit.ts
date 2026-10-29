@@ -128,7 +128,8 @@ function accentTable(): Record<string, { light: string[]; dark: string[] }> {
 
 /**
  * The bridge, as the app's first script. `window.agent`: call(tool, args), subscribe(topic, fn), onRefresh(fn),
- * store.get/set/remove/keys, theme.get/onChange, ask(text). Results that are JSON come back parsed.
+ * store.get/set/remove/keys, theme.get/onChange, ask(text), ready() (its first data is drawn: the look check shoots).
+ * Results that are JSON come back parsed.
  */
 export function agentJs(): string {
   return `(function(){
@@ -139,7 +140,7 @@ var q=new URLSearchParams(location.search);
 var state={dark:q.get("theme")==="dark",accent:q.get("accent")||"iris"};
 function paint(){var r=document.documentElement;r.setAttribute("data-theme",state.dark?"dark":"light");var t=ACC[state.accent]||ACC.iris;var v=state.dark?t.dark:t.light;for(var i=0;i<KEYS.length;i++)r.style.setProperty(KEYS[i],v[i]);}
 paint();
-var transport=null,queue=[],seq=0,pending={},subs={},themeFns=[];
+var transport=null,queue=[],seq=0,pending={},subs={},themeFns=[],readySent=false;
 function send(m){if(transport)transport(m);else queue.push(m);}
 function flush(){var w=queue;queue=[];for(var i=0;i<w.length;i++)send(w[i]);}
 function parse(v){if(typeof v!=="string")return v;var s=v.trim();if(s[0]==="{"||s[0]==="["){try{return JSON.parse(s)}catch(e){}}return v;}
@@ -157,7 +158,8 @@ subscribe:function(topic,fn){topic=String(topic);var l=subs[topic]=subs[topic]||
 onRefresh:function(fn){return agent.subscribe("refresh",fn);},
 store:Object.freeze({get:function(k){return request("store.get",{key:String(k)}).then(function(v){return v==null?null:parse(v)})},set:function(k,v){return request("store.set",{key:String(k),value:typeof v==="string"?v:JSON.stringify(v)})},remove:function(k){return request("store.remove",{key:String(k)})},keys:function(){return request("store.keys",{})}}),
 theme:Object.freeze({get:function(){return{dark:state.dark,accent:state.accent}},onChange:function(fn){themeFns.push(fn);return function(){var i=themeFns.indexOf(fn);if(i>=0)themeFns.splice(i,1)}}}),
-ask:function(text){return request("ask",{text:String(text)});}
+ask:function(text){return request("ask",{text:String(text)});},
+ready:function(){if(!readySent){readySent=true;send({op:"ready"});}}
 };
 Object.freeze(agent);
 Object.defineProperty(window,"agent",{value:agent,writable:false,configurable:false});
