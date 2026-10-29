@@ -115,6 +115,13 @@ export function mentionAtCaret(text: string, caret: number): { start: number; qu
   return { start: at, query }
 }
 
+/** The '@' word is a whole name already, followed by a space (just picked or typed out): the list has nothing to add. */
+export function mentionDone(query: string, list: MentionProject[]): boolean {
+  if (!/\s$/.test(query)) return false
+  const said = query.trim().toLowerCase()
+  return list.some((project) => [project.name, ...project.aliases].some((name) => name.toLowerCase() === said))
+}
+
 /** The text with the picked project written in for the '@...' word at the caret, and where the caret goes. */
 export function insertMention(text: string, caret: number, name: string): { text: string; caret: number } {
   const found = mentionAtCaret(text, caret)

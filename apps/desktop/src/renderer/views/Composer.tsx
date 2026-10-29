@@ -2,7 +2,7 @@ import { attachmentProblem, type Attachment } from '@agent/core'
 import { memo, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, type ClipboardEvent } from 'react'
 
 import { agent, chat } from '../bridge'
-import { insertMention, mentionAtCaret, mentionProjects, rankMentions, type MentionProject } from '../../shared/mentions'
+import { insertMention, mentionAtCaret, mentionDone, mentionProjects, rankMentions, type MentionProject } from '../../shared/mentions'
 import { useEntity } from '../state/useData'
 import { useChatRunning } from '../state/useChats'
 import { useSettings } from '../state/useSettings'
@@ -81,7 +81,7 @@ export const Composer = memo(
     const [pickIndex, setPickIndex] = useState(0)
     const [dismissedAt, setDismissedAt] = useState(-1)
     const typing = mentionAtCaret(text, caret)
-    const picks: MentionProject[] = typing === null || typing.start === dismissedAt ? [] : rankMentions(typing.query, projects, 6)
+    const picks: MentionProject[] = typing === null || typing.start === dismissedAt || mentionDone(typing.query, projects) ? [] : rankMentions(typing.query, projects, 6)
     const picking = picks.length > 0
     const active = Math.min(pickIndex, Math.max(0, picks.length - 1))
     const pick = (project: MentionProject): void => {
@@ -264,6 +264,8 @@ export const Composer = memo(
               setText(event.target.value)
               setCaret(event.target.selectionStart)
               setPickIndex(0)
+              // Escape closes the list for that one '@' word; once it is gone, the next '@' opens it again.
+              if (dismissedAt >= 0 && mentionAtCaret(event.target.value, event.target.selectionStart)?.start !== dismissedAt) setDismissedAt(-1)
             }}
             onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
             onPaste={onPaste}

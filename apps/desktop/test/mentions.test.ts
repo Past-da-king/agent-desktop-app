@@ -18,7 +18,7 @@ import { SettingsStore } from '../src/main/settings'
 import { CHANNELS } from '../src/shared/channels'
 import { DEVICE_CHANNELS } from '../src/shared/device-channels'
 import { RPC_ALLOWED, RPC_CHANNELS } from '../src/shared/rpc-methods'
-import { insertMention, mentionAtCaret, mentionNoticeOf, mentionProjects, parseMention, rankMentions, type MentionProject } from '../src/shared/mentions'
+import { insertMention, mentionAtCaret, mentionDone, mentionNoticeOf, mentionProjects, parseMention, rankMentions, type MentionProject } from '../src/shared/mentions'
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
 
@@ -120,6 +120,13 @@ describe('the picker', () => {
   it('writes the picked name in for the typed word', () => {
     expect(insertMention('@imp', 4, 'Acme')).toEqual({ text: '@Acme ', caret: 6 })
     expect(insertMention('@imp fix it', 4, 'Acme')).toEqual({ text: '@Acme fix it', caret: 6 })
+  })
+
+  it('closes once the word is a whole name and a space (just picked), and stays open while it is still being typed', () => {
+    expect(mentionDone('Acme ', projects)).toBe(true)
+    expect(mentionDone('nova ', projects)).toBe(true)
+    expect(mentionDone('Acme', projects)).toBe(false)
+    expect(mentionDone('Agent ', projects)).toBe(false)
   })
 
   it('leaves hidden projects out', () => {
