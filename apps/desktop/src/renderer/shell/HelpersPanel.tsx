@@ -317,18 +317,6 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
         {helper.model !== '' ? <span className="hp-model">{helper.model}</span> : null}
         <span className={`pill ${s.tone}`}>{s.label}</span>
         <span className="hp-stage-gap" />
-        <button
-          type="button"
-          className="btn tonal sm hp-goto"
-          data-chat={homeChat}
-          title={parentChat !== '' ? `Open ${parentProject?.name ?? 'its project'} chat` : 'Open the chat that started it'}
-          onClick={() => {
-            close()
-            openChat(homeChat)
-          }}
-        >
-          Go to chat
-        </button>
         {helper.state === 'working' ? (
           <button type="button" className="btn text sm" disabled={stopping === helper.id} onClick={() => stop(helper.id)}>
             {stopping === helper.id ? 'Stopping' : 'Stop'}
@@ -346,18 +334,22 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
               <Markdown text={helper.brief} />
             </div>
             {helper.where !== '' ? <p className="small muted hp-where">{helper.state === 'working' ? 'Runs on' : 'Ran on'} <PlaceChip name={helper.where} /></p> : null}
-            {parentChat !== '' ? (
-              <button type="button" className="hp-parent" data-chat={parentChat} onClick={() => openChat(parentChat)}>
-                {parentProject !== null ? <ProjectTile icon={parentProject.icon} size={22} /> : <Icon name="chat" size={18} />}
-                <span className="hp-parent-t">
-                  <b>Open the project chat</b>
-                  <span>
-                    {parentProject?.name ?? 'Project'} · {chatTitleOf(itemsOfChat(items, parentChat))}
-                  </span>
-                </span>
-                <Icon name="chev" size={16} />
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="hp-parent hp-goto"
+              data-chat={homeChat}
+              onClick={() => {
+                close()
+                openChat(homeChat)
+              }}
+            >
+              {parentProject !== null ? <ProjectTile icon={parentProject.icon} size={22} /> : <Icon name="chat" size={18} />}
+              <span className="hp-parent-t">
+                <b>Go to chat</b>
+                <span>{parentChat !== '' ? `${parentProject?.name ?? 'Project'} · ${chatTitleOf(itemsOfChat(items, parentChat))}` : homeChat === MAIN_CHAT ? 'The main chat, where it was started' : chatTitleOf(itemsOfChat(items, homeChat))}</span>
+              </span>
+              <Icon name="chev" size={16} />
+            </button>
           </section>
           {current !== undefined ? (
             <div className="hp-now">

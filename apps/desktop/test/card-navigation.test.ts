@@ -169,7 +169,7 @@ describe('a helper card', () => {
     expect(useUi.getState().route.page).toBe('settings')
   })
 
-  it("links to the project chat it works in, which opens that chat in full; a main chat helper has no link", () => {
+  it("Go to chat opens the project chat it works in; a main chat helper's goes to the main chat", () => {
     const items = rows()
     expect(helperParentChat(items.find((item) => item.id === 'h-web') as ChatItem, [website, server])).toBe('pcweb1')
     expect(helperParentChat(items.find((item) => item.id === 'h-main') as ChatItem, [website, server])).toBe('')
@@ -180,10 +180,13 @@ describe('a helper card', () => {
     // Still the helper's own view: its brief and its steps.
     expect(html).toContain('Check every footer link')
     expect(html).toContain('Opening the contact page')
-    expect(html).toContain('Open the project chat')
+    expect(html).toContain('Go to chat')
     expect(html).toContain('data-chat="pcweb1"')
     expect(html).toContain('Website')
-    expect(view('h-main')).not.toContain('Open the project chat')
+    const main = view('h-main')
+    expect(main).toContain('Go to chat')
+    expect(main).toContain('data-chat="main"')
+    expect(main).toContain('The main chat, where it was started')
   })
 })
 
