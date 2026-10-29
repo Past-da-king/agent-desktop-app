@@ -22,6 +22,14 @@ import { checkCall, pinnedApps, toolOf } from '../../shared/miniapps'
 
 
 export function MiniApps(): JSX.Element {
+  return <MiniAppsSection />
+}
+
+/**
+ * Every mini-app he has: the Apps page, and (bare, with no page header) the Mini apps tab in Connections next to
+ * Connected apps and Learned apps.
+ */
+export function MiniAppsSection({ bare = false }: { bare?: boolean }): JSX.Element {
   const apps = useEntity('miniapp')
   const loaded = useEntityLoaded('miniapp')
   const settings = useSettings((state) => state.settings)
@@ -49,14 +57,20 @@ export function MiniApps(): JSX.Element {
   }
 
   return (
-    <div className="page">
-      <div className="ph">
-        <div>
-          <span className="eyebrow">APPS</span>
-          <h1 className="h1">{apps.length === 0 ? 'No apps yet' : `${apps.length} app${apps.length === 1 ? '' : 's'} made for you`}</h1>
-          <p className="lead">Dashboards, trackers and views your agent makes when you ask. Pin the ones you use most.</p>
+    <div className={bare ? 'ma-bare' : 'page'} data-section="mini-apps">
+      {bare ? (
+        <p className="small muted ma-bare-line">
+          {apps.length === 0 ? 'No mini-apps yet.' : `${apps.length} mini-app${apps.length === 1 ? '' : 's'} made for you.`} Dashboards, trackers and views your agent makes when you ask.
+        </p>
+      ) : (
+        <div className="ph">
+          <div>
+            <span className="eyebrow">APPS</span>
+            <h1 className="h1">{apps.length === 0 ? 'No apps yet' : `${apps.length} app${apps.length === 1 ? '' : 's'} made for you`}</h1>
+            <p className="lead">Dashboards, trackers and views your agent makes when you ask. Pin the ones you use most.</p>
+          </div>
         </div>
-      </div>
+      )}
 
       <form
         className="ma-ask"

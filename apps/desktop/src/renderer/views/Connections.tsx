@@ -13,6 +13,7 @@ import { Segmented } from '../ui/Segmented'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
 import { ConnectedAppsSection, LearnedAppsSection } from './ConnectedApps'
+import { MiniAppsSection } from './MiniApps'
 import { Machines, useOpenDevices } from './Machines'
 
 function Row({
@@ -73,7 +74,7 @@ function FoundGroup({ title, items }: { title: string; items: Found[] }): JSX.El
 }
 
 export function Connections(): JSX.Element {
-  const [appsTab, setAppsTab] = useState<'composio' | 'learned'>('composio')
+  const [appsTab, setAppsTab] = useState<'composio' | 'learned' | 'mini'>('composio')
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   const navigate = useUi((state) => state.navigate)
@@ -162,10 +163,11 @@ export function Connections(): JSX.Element {
           options={[
             { value: 'composio', label: 'Connected apps' },
             { value: 'learned', label: 'Learned apps' },
+            { value: 'mini', label: 'Mini apps' },
           ]}
         />
       </div>
-      {appsTab === 'composio' ? <ConnectedAppsSection /> : <LearnedAppsSection />}
+      {appsTab === 'composio' ? <ConnectedAppsSection /> : appsTab === 'learned' ? <LearnedAppsSection /> : <MiniAppsSection bare />}
 
       <div className="two conn-rest">
         <div className="stack">

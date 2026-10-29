@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react'
 
-import { closeCard, openTarget } from '../lib/card-open'
+import { dismissCard, openTarget } from '../lib/card-open'
 import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { Icon } from '../ui/Icon'
-import { HelperCardList, useCurrentChat, useMainCard, usePanelCards } from './HelpersPanel'
+import { HelperCardList, useMainCard, usePanelCards, useScopedCards } from './HelpersPanel'
 import { NeedsYou } from './NeedsYou'
 import { usePanelShown } from './Panel'
 
@@ -49,9 +49,7 @@ export function WorkButton(): JSX.Element | null {
 function WorkMenu(): JSX.Element {
   const close = useUi((store) => store.closeOverlay)
   const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
-  const cards = usePanelCards()
-  const main = useMainCard()
-  const current = useCurrentChat()
+  const { cards, main, current } = useScopedCards()
   const projects = useEntity('project')
   const box = useRef<HTMLDivElement>(null)
 
@@ -90,7 +88,7 @@ function WorkMenu(): JSX.Element {
             close()
             openTarget(target)
           }}
-          onClose={(card) => void closeCard(card, projects)}
+          onClose={(card) => void dismissCard(card, projects)}
         />
         {cards.length === 0 && main === null ? <p className="small muted">Nothing is working right now.</p> : null}
       </div>

@@ -3,12 +3,12 @@ import { PlaceChip } from '../ui/PlaceChip'
 import { useEffect, useMemo, useState } from 'react'
 
 import { agent } from '../bridge'
-import { cardTarget, closeCard, mainCard, openTarget, type CardTarget, type MainCard } from '../lib/card-open'
+import { cardTarget, dismissCard, mainCard, openTarget, type CardTarget, type MainCard } from '../lib/card-open'
 import { openChat } from '../lib/chat-actions'
 import { chatOf, chatTitleOf, itemsOfChat } from '../lib/chats'
 import { helperCards, helperIdOf, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
 import { metaText, parseMeta } from '../lib/meta'
-import { helperParentChat } from '../../shared/helper-cards'
+import { cardsForChat, helperParentChat } from '../../shared/helper-cards'
 import { useChats } from '../state/useChats'
 import { useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -113,7 +113,10 @@ export function HelperCardList({
   current?: string
   mascot: MascotId
   onOpen: (target: CardTarget) => void
-  /** A project chat card's X: off the panel until that chat moves again. No X when it is not given. */
+  /**
+   * A card's X: a working card stops and leaves, a finished one (a project chat's, or a helper's under it) leaves the
+   * list on every device (lib/card-open.ts dismissCard). Without it a working card's X only stops it.
+   */
   onClose?: (card: HelperCard) => void
 }): JSX.Element | null {
   const { stopping, stop } = useStop()
@@ -154,7 +157,7 @@ export function HelperCardList({
           // Every run at work has its stop on its card (28 Oct 2026: a routine and a background script ran unseen and
           // could only be stopped by killing processes). A project chat stops its own run; anything else by its id.
           const stoppable = card.state === 'working' && !card.waiting
-          const closable = !stoppable && onClose !== undefined && card.kind === 'project-chat'
+          const closable = !stoppable && onClose !== undefined
           // A project chat's card reads as its project, named by its chat; a helper under it sits in its group; any other
           // project helper says which project it works in.
           const where = target.kind === 'project-chat' ? card.chatTitle || 'Project chat' : card.owner.kind === 'project' && card.depth === 0 ? card.owner.name : ''
@@ -191,7 +194,8 @@ export function HelperCardList({
                   title="Stop it now (its run, its process and its browser tabs end)"
                   disabled={stopping === card.id}
                   onClick={() => {
-                    if (target.kind === 'project-chat') void agent.chat.stop(target.chat)
+                    if (onClose !== undefined) onClose(card)
+                    else if (target.kind === 'project-chat') void agent.chat.stop(target.chat)
                     else stop(card.id)
                   }}
                 >
@@ -202,8 +206,8 @@ export function HelperCardList({
                 <button
                   type="button"
                   className="hp-close"
-                  aria-label={`Close the ${card.label} card. The chat keeps going`}
-                  title="Close this card (the chat keeps going, and comes back when it moves)"
+                  aria-label={card.kind === 'project-chat' ? `Close the ${card.label} card. The chat keeps going` : `Close the ${card.label} card`}
+                  title={card.kind === 'project-chat' ? 'Close this card (the chat keeps going, and comes back when it moves)' : 'Close this card (its result stays in the chat)'}
                   onClick={() => onClose?.(card)}
                 >
                   <Icon name="x" size={16} />
@@ -227,14 +231,26 @@ export function useMainCard(): MainCard | null {
   return useMemo(() => mainCard(items, running, inMain, agentName), [items, running, inMain, agentName])
 }
 
-/** The side panel's card list (and the title bar's): a tap goes where lib/card-open.ts says. */
-export function HelpersPanel(): JSX.Element | null {
-  const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
-  const cards = usePanelCards()
+/**
+ * The cards for the chat on screen: in a project chat only that project's (the main chat's card is not one of them);
+ * in the main chat and on every other page, everything across all projects.
+ */
+export function useScopedCards(): { cards: HelperCard[]; main: MainCard | null; current: string } {
+  const all = usePanelCards()
   const main = useMainCard()
   const current = useCurrentChat()
   const projects = useEntity('project')
-  return <HelperCardList cards={cards} main={main} current={current} mascot={mascot} onOpen={openTarget} onClose={(card) => void closeCard(card, projects)} />
+  const cards = useMemo(() => cardsForChat(all, projects, current), [all, projects, current])
+  const inProject = current !== '' && current !== MAIN_CHAT
+  return { cards, main: inProject ? null : main, current }
+}
+
+/** The side panel's card list (and the title bar's): a tap goes where lib/card-open.ts says. */
+export function HelpersPanel(): JSX.Element | null {
+  const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
+  const { cards, main, current } = useScopedCards()
+  const projects = useEntity('project')
+  return <HelperCardList cards={cards} main={main} current={current} mascot={mascot} onOpen={openTarget} onClose={(card) => void dismissCard(card, projects)} />
 }
 
 /** The chat on screen, or '' when the window shows another page. */
@@ -275,6 +291,8 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
   // A helper working inside a project chat links to that chat; the chat is the project's own agent, not this job.
   const parentChat = row === undefined ? '' : helperParentChat(row, projects)
   const parentProject = parentChat === '' ? null : (projects.find((project) => project.chats.includes(parentChat)) ?? null)
+  // Go to chat: the chat it works for (its project chat, else the chat that started it, the main chat for most).
+  const homeChat = parentChat !== '' ? parentChat : row === undefined ? MAIN_CHAT : chatOf(row)
 
   if (helper === null) {
     return (
@@ -299,6 +317,18 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
         {helper.model !== '' ? <span className="hp-model">{helper.model}</span> : null}
         <span className={`pill ${s.tone}`}>{s.label}</span>
         <span className="hp-stage-gap" />
+        <button
+          type="button"
+          className="btn tonal sm hp-goto"
+          data-chat={homeChat}
+          title={parentChat !== '' ? `Open ${parentProject?.name ?? 'its project'} chat` : 'Open the chat that started it'}
+          onClick={() => {
+            close()
+            openChat(homeChat)
+          }}
+        >
+          Go to chat
+        </button>
         {helper.state === 'working' ? (
           <button type="button" className="btn text sm" disabled={stopping === helper.id} onClick={() => stop(helper.id)}>
             {stopping === helper.id ? 'Stopping' : 'Stop'}

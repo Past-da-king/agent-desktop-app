@@ -64,6 +64,24 @@ export function mainCard(items: ChatItem[], running: boolean, waiting: number, a
  * device's list) until that chat moves again. It only hides the card: the chat and its helpers keep going and
  * nothing is deleted. Kept on the project row, so it lasts through a restart.
  */
+/**
+ * A card's X: stops it if it still works and takes it off every device's list (main/runtime/card-dismiss.ts, RPC
+ * helpers.dismiss). On a computer too old for that, a working card is stopped and a project chat's card is closed
+ * here as before.
+ */
+export async function dismissCard(card: { id: string; kind: CardKind; state: string; waiting: boolean; projectChat: string; activityAt: number }, projects: ProjectRow[]): Promise<void> {
+  try {
+    if (await agent.helpers.dismiss(card.id)) return
+  } catch {
+    // An older computer: below.
+  }
+  const working = card.state === 'working' && !card.waiting
+  if (card.kind === 'project-chat') {
+    if (working) await agent.chat.stop(card.projectChat)
+    else await closeCard(card, projects)
+  } else if (working) await agent.helpers.stop(card.id)
+}
+
 export async function closeCard(card: { projectChat: string; activityAt: number }, projects: ProjectRow[]): Promise<void> {
   const chat = card.projectChat
   if (chat === '') return
