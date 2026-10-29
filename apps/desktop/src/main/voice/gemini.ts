@@ -332,7 +332,7 @@ export async function transcribe(
 ): Promise<string> {
   const wav = wavFromPcm(pcm, INPUT_RATE)
   const names = (options.names ?? []).filter((name) => name.trim() !== '').slice(0, 100)
-  const hint = names.length === 0 ? '' : ` Names the speaker may say, spelled as they should be written: ${names.join(', ')}.`
+  const hint = names.length === 0 ? '' : ` Names the speaker may say, spelled as they should be written: ${names.join(', ')}. Use this list only to spell a name that is clearly spoken; never write a name that is not said, and write nothing for silence, breathing or noise.`
   // A busy model (503) or one out of quota (429) hands over to the next one, like a missing one (404).
   return eachModel(preferring(choice.transcribe, TRANSCRIBE_MODELS), [404, 429, 503], async (model) => {
     const body = await post(

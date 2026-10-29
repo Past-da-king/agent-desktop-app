@@ -17,6 +17,7 @@ describe('dictation words from projects', () => {
       project('p4', 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789'),
       project('p5', 'A'.repeat(80)),
     ])
-    expect(words).toEqual(['Lender Selector', 'lender select', 'Old Shown', 'Kept Away'])
+    // A lower-case other name is not a name: it would bias the recogniser into saying it (29 Oct 2026).
+    expect(words).toEqual(['Lender Selector', 'Old Shown', 'Kept Away'])
   })
 })

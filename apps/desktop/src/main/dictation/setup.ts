@@ -17,6 +17,7 @@ import type { Recordings } from '../recordings/store'
 import { CLEANUP_MODELS, cleanUp } from './cleanup'
 import { DictationController, type BatchResult } from './controller'
 import { transcribeInChunks } from './chunks'
+import { addedNames, stripInjectedNames } from './injected'
 import { electronClipboard, keySenderFor, typeText, type KeySender, type TypeOutcome } from './paste'
 import { PillWindow, type PillOptions } from './pill'
 import { dictationTarget, type DictationSurface } from './target'
@@ -171,10 +172,20 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
         vocabulary: () => words,
         onUpdate: handlers.onUpdate,
         onDrop: handlers.onDrop,
+        onInjected: injected,
       }),
     batch: (pcm, signal, onUpdate) => batch(pcm, signal, onUpdate),
-    cleanUp: async (text) => cleanUp({ key }, text, CLEANUP_MODELS, vocabularyBrief((await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY)),
-    fixNames: async (text) => applyAliases(text, (await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY),
+    cleanUp: async (text) => {
+      const cleaned = await cleanUp({ key }, text, CLEANUP_MODELS, vocabularyBrief((await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY))
+      // Clean-up tidies; it never brings in a name that was not said. One that does is not used.
+      const added = addedNames(text, cleaned, words)
+      if (added.length > 0) {
+        deps.log('Dictation clean-up added a name, typed as said', { names: added.length })
+        throw new Error('The clean-up added a name')
+      }
+      return cleaned
+    },
+    fixNames: async (text) => withoutInjected(applyAliases(text, (await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY), words),
     type: async (text) => typeInto(text),
     mask: () => keys?.mask(),
     pill: pillWithDraft,
@@ -188,8 +199,25 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     log: deps.log,
   })
 
+  function injected(stretch: string): void {
+    // Only its size: the words themselves stay out of the log.
+    deps.log('Dictation left out a stretch of only names', { characters: stretch.length })
+  }
+
+  function withoutInjected(text: string, names: string[]): string {
+    const stripped = stripInjectedNames(text, names)
+    for (const stretch of stripped.dropped) injected(stretch)
+    return stripped.text
+  }
+
+  /** Every way a recording becomes text ends here: a stretch of nothing but names is left out. */
   async function batch(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
     const names = words
+    const result = await batchRaw(pcm, signal, names, onUpdate)
+    return result.ok ? { ok: true, text: withoutInjected(result.text, names) } : result
+  }
+
+  async function batchRaw(pcm: Buffer, signal: AbortSignal, names: string[], onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
     // A short recording goes through the live model again (quick, and the names apply); a long one, or one the
     // live model will not take, in one call. Both stop when `signal` aborts.
     if (pcm.length <= REPLAY_MAX_BYTES) {
@@ -201,6 +229,7 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
           socket: nodeSocket,
           languageCodes: languageHint(deps.locale),
           vocabulary: names,
+          onInjected: injected,
           pcm,
           signal,
           ...(onUpdate === undefined ? {} : { onUpdate }),

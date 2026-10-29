@@ -16,6 +16,7 @@ import type { JsonObject } from '@agent/core'
 
 import { INPUT_RATE } from '../voice/gemini'
 import type { SocketFactory, SocketLike } from '../voice/live'
+import { stripInjectedNames } from './injected'
 
 /** Google's live speech-to-text models, newest first. */
 export const TRANSCRIBE_LIVE_MODELS = ['gemini-3.5-transcribe-live']
@@ -44,6 +45,8 @@ export interface TranscriberOptions {
   onUpdate: (text: string, interim: string) => void
   /** The socket dropped after it was up. The caller can fall back to the recorded audio. */
   onDrop?: (reason: string) => void
+  /** A settled stretch that was nothing but vocabulary names was left out (injected.ts). */
+  onInjected?: (stretch: string) => void
 }
 
 export class LiveTranscriber {
@@ -59,6 +62,8 @@ export class LiveTranscriber {
   private settleTimer: ReturnType<typeof setTimeout> | null = null
   /** Waiting for a settled stretch after the stream ended (a replayed recording): quiet alone is not enough. */
   private needFinal = false
+  /** The vocabulary this session was set up with: a stretch of nothing but these names was not said. */
+  private names: string[] = []
 
   constructor(options: TranscriberOptions) {
     this.options = options
@@ -91,7 +96,8 @@ export class LiveTranscriber {
       this.socket = socket
       socket.onopen = () => {
         const words = this.options.vocabulary
-        socket.send(JSON.stringify(setupMessage({ ...this.options, vocabulary: typeof words === 'function' ? words() : (words ?? []) })))
+        this.names = cleanVocabulary(typeof words === 'function' ? words() : (words ?? []))
+        socket.send(JSON.stringify(setupMessage({ ...this.options, vocabulary: this.names })))
       }
       socket.onerror = () => {
         // The close event that follows carries the code.
@@ -208,7 +214,11 @@ export class LiveTranscriber {
     }
     const settled = textField(content['inputTranscription'])
     if (settled !== null && settled !== '') {
-      this.committed = joinSegment(this.committed, settled)
+      // Biasing towards names makes the model say them into quiet stretches: a stretch of nothing but names goes.
+      const stripped = stripInjectedNames(settled, this.names)
+      for (const stretch of stripped.dropped) this.options.onInjected?.(stretch)
+      const kept = stripped.dropped.length === 0 ? settled : /^\s/.test(settled) && stripped.text !== '' ? ` ${stripped.text}` : stripped.text
+      if (kept !== '') this.committed = joinSegment(this.committed, kept)
       this.interim = ''
       changed = true
       if (this.ended) this.needFinal = false
