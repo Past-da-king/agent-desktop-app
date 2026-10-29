@@ -1269,6 +1269,11 @@ export interface HelpersApi {
   stop(id: string): Promise<boolean>
   /** Stops every working helper and returns how many were asked to stop. */
   stopAll(): Promise<number>
+  /**
+   * A card's X or swipe: stops what it stands for if it still works (a card whose run is gone is ended as lost) and
+   * takes the card off every device's list. Nothing is deleted. True when the card was found.
+   */
+  dismiss(id: string): Promise<boolean>
   /** Every working helper and project agent card (and ones that just finished), for a linked device. */
   cards(): Promise<HelperCardsSnapshot>
   /** The cards changed: the whole new list. */

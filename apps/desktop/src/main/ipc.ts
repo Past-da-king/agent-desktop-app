@@ -67,6 +67,7 @@ import type { Secrets } from './secrets'
 import type { SettingsStore } from './settings'
 import { CHANNELS, EVENTS } from '../shared/channels'
 import { messageOrigin } from './devices/origin'
+import { dismissCard } from './runtime/card-dismiss'
 import type { MessageOrigin } from './devices/types'
 
 export interface IpcMainLike {
@@ -533,6 +534,23 @@ export function registerIpc(deps: IpcDeps): () => void {
     const wire = wireOf(event)
     if (wire !== null && feedState.prefsOf(wire.deviceId).v >= 2) feedState.setCards(wire.deviceId, rememberCards(snapshot))
     return snapshot
+  })
+
+  // A card's X (desktop) or swipe (phone): stop it if it still works, and take it off every device's list.
+  handle(CHANNELS.helpers.dismiss, async (_event, rawId) => {
+    const ref = requireString(rawId, 'card id', MAX_STRING)
+    const running = (id: string): boolean => (chat.states?.() ?? []).some((info) => info.chat === id && info.running)
+    const result = await dismissCard(ref, {
+      get: (id) => store.get('chat_item', id),
+      upsertItem: (patch) => store.upsert('chat_item', patch),
+      projects: () => store.list('project'),
+      upsertProject: (patch) => store.upsert('project', patch),
+      cards: async () => (await helperFeed.snapshot()).cards,
+      stopHelper: async (id) => (deps.helpers === undefined ? false : deps.helpers.stop(id, 'the person (closed its card)')),
+      stopChat: (id) => chat.stop(id),
+      chatRunning: running,
+    })
+    return result.ok
   })
 
   handle(CHANNELS.helpers.stopAll, async () => {

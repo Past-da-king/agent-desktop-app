@@ -1121,6 +1121,14 @@ export const mockAgent: AgentApi = {
       })
       return true
     },
+    async dismiss(id) {
+      const index = rows.chat_item.findIndex((item) => item.id === id && item.kind === 'helper')
+      const current = rows.chat_item[index]
+      if (index < 0 || !current) return false
+      const meta = parseMeta(current.meta)
+      patchCard(id, meta['state'] === 'working' ? { state: 'stopped', summary: 'Stopped', endedAt: Date.now(), queued: false, cardClosedAt: Date.now() + 1 } : { cardClosedAt: Date.now() })
+      return true
+    },
     async stopAll() {
       const working = rows.chat_item.filter(
         (item) => item.kind === 'helper' && parseMeta(item.meta)['state'] === 'working',

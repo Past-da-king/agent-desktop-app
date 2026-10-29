@@ -1258,6 +1258,13 @@ async function startServices(win: BrowserWindow): Promise<void> {
         })
       },
       approve: async (_row, summary, details, signal) => (runner === null ? false : runner.deviceContext(MAIN_CHAT, signal).approve(summary, details)),
+      // A learned app's tool marked read_only runs without a card, like a Composio read.
+      reads: (name, args) => {
+        if (name !== 'webapp_run') return null
+        const saved = learned.find(String(args['app'] ?? ''))
+        const tool = saved?.tools.find((each) => each.name === String(args['tool'] ?? '').trim())
+        return tool === undefined ? null : tool.readOnly
+      },
       ask: async (row, text) => {
         await runner?.send(`(From my mini-app "${row.name}") ${text}`)
       },

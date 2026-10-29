@@ -46,6 +46,11 @@ export interface MiniAppHostDeps {
   runTool: (app: MiniAppRow, tool: string, args: JsonObject, signal: AbortSignal) => Promise<string>
   /** An approval card in his chat; resolves with his decision. */
   approve: (app: MiniAppRow, summary: string, details: string, signal: AbortSignal) => Promise<boolean>
+  /**
+   * Whether a granted call only reads, when its name alone cannot tell: a learned app's tool says so itself
+   * (webapp_run of a read_only tool). null: not known, so it counts as a change and asks.
+   */
+  reads?: (tool: string, args: JsonObject) => boolean | null
   /** Hands a line from the app to his agent (agent.ask). */
   ask?: (app: MiniAppRow, text: string) => Promise<void>
   /** His calendars changed (presence/calendar.ts CalendarCache.onChange). */
@@ -380,7 +385,8 @@ export class MiniAppHost {
       return fail(verdict.why)
     }
     if (!this.rateOk(app.id)) return fail(`Too many calls: at most ${MINIAPP_RATE.calls} in ${MINIAPP_RATE.perMs / 1000} s.`)
-    if (!verdict.reads) {
+    const reads = verdict.reads || this.deps.reads?.(tool, args) === true
+    if (!reads) {
       if (session.mode === 'check') return { op: 'reply', id, ok: false, error: 'Not run during the check (it changes something).' }
       if (!app.allowed.includes(verdict.key)) {
         const yes = await this.deps.approve(app, `The app "${app.name}" wants to run ${verdict.key}`, JSON.stringify(args, null, 2).slice(0, 2000), session.controller.signal)

@@ -78,6 +78,7 @@ export const CHANNELS = {
   helpers: {
     stop: 'agent:helpers.stop',
     stopAll: 'agent:helpers.stopAll',
+    dismiss: 'agent:helpers.dismiss',
     cards: 'agent:helpers.cards',
   },
   apps: {

@@ -362,6 +362,14 @@ export const REAP_AFTER_MS = 3 * MINUTE_MS
 const LEASE_DEAD_MS = 3 * MINUTE_MS
 /** What a lost run's card and notice say. */
 const LOST_REASON = 'its run was lost: no device was running it any more'
+/**
+ * A card still marked working with no sign of life at all (no run here, no live lease, no step) for this long is ended
+ * whoever owns it: the device that started it went away (a phone reset, a server taken out, an older app), so the
+ * card would otherwise say working for ever.
+ */
+export const ORPHAN_ANY_MS = 2 * 60 * MINUTE_MS
+/** The same for a routine's card, which writes no steps of its own while its run works. */
+export const ORPHAN_ROUTINE_MS = 6 * 60 * MINUTE_MS
 
 /** Words a helper uses when it gives up. Usually it can do it; it needs sending back. */
 export const GAVE_UP =
@@ -1070,6 +1078,15 @@ export class HelperManager implements HelperHost {
     const rows = await listWhere(this.store, 'chat_item', { kind: 'helper' }).catch(() => [])
     const link = this.link()
     let ended = 0
+    // Helpers with a step in the last ORPHAN_ANY_MS, read once per pass and only when a card is that old.
+    let stepped: Set<string> | null = null
+    const steppedLately = async (id: string): Promise<boolean> => {
+      if (stepped === null) {
+        const recent = await listWhere(this.store, 'chat_item', { kind: 'activity', since: now - ORPHAN_ANY_MS }).catch(() => [])
+        stepped = new Set(recent.map((step) => stringField(parseMeta(step.meta)['helper'])).filter((each) => each !== ''))
+      }
+      return stepped.has(id)
+    }
     for (const row of rows) {
       if (row.kind !== 'helper' || this.runs.has(row.id) || this.queue.includes(row.id)) continue
       const meta = parseMeta(row.meta)
@@ -1077,19 +1094,41 @@ export class HelperManager implements HelperHost {
       if (typeof meta['projectChat'] === 'string' && meta['projectChat'] !== '') continue
       // A routine run or background script (runtime/live-runs.ts) is ended by its own run.
       if (liveRuns.has(row.id)) continue
-      // A routine's card (runner.ts routineCardId) is ended by its own run, wherever it runs.
-      if (typeof meta['routine'] === 'object' && meta['routine'] !== null) continue
       if (this.pendingStops.has(row.id)) continue
       const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
       const life = Math.max(numberField(meta['startedAt']) || row.createdAt, lease?.heartbeatAt ?? 0)
       if (now - life < this.reapAfterMs) continue
       const live = lease !== null && (lease.status === 'running' || lease.status === 'interrupted')
+      const beating = lease !== null && live && now - lease.heartbeatAt < LEASE_DEAD_MS
+      // A routine's card (runner.ts routineCardId) is ended by its own run, wherever it runs; only one left working
+      // with no lease beating for ORPHAN_ROUTINE_MS (its app closed under it, its device went away) is ended here.
+      if (typeof meta['routine'] === 'object' && meta['routine'] !== null) {
+        if (beating || now - life < ORPHAN_ROUTINE_MS) continue
+        if (await this.endUnrun(row.id, 'stopped', LOST_REASON)) ended += 1
+        continue
+      }
       const own = (brain: string): boolean => brain === '' || (this.offload === null ? true : this.offload.isSelf(brain))
       const runOn = stringField(meta['runOn'])
+      // Long silent: no lease beating, no step, nothing, for ORPHAN_ANY_MS. Whoever started it is gone (or it would
+      // have moved), so any brain ends it instead of leaving it working for ever.
+      const abandoned = async (): Promise<boolean> => !beating && now - life >= ORPHAN_ANY_MS && !(await steppedLately(row.id))
       // A card that names no brain is judged by its lease: one this brain began. With neither, whose it is is not
-      // known (another app's helper, a phone's): it is left alone.
-      if (runOn === '' && (lease === null || lease.brainId === '' || !own(lease.brainId))) continue
+      // known (another app's helper, a phone's): it is left alone until it has been silent for ORPHAN_ANY_MS.
+      if (runOn === '' && (lease === null || lease.brainId === '' || !own(lease.brainId))) {
+        if (await abandoned()) {
+          if (await this.endUnrun(row.id, 'stopped', LOST_REASON)) ended += 1
+        }
+        continue
+      }
       const here = runOn === '' || own(runOn)
+      if (!here && (link === null || !link.isSelf(stringField(meta['placedBy'])))) {
+        // Placed by another brain, which judges it; if that brain is gone for good, the card is ended once it has
+        // been silent for ORPHAN_ANY_MS.
+        if (await abandoned()) {
+          if (await this.endUnrun(row.id, 'stopped', LOST_REASON)) ended += 1
+        }
+        continue
+      }
       if (here) {
         // A lease that still beats is a run that lives: taken over by another brain (the lease failover), or one
         // this process still runs under a run map that lost track of it. Only a lease gone quiet is a lost run.

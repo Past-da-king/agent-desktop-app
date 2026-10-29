@@ -380,7 +380,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       attach: async () => false,
     },
 
-    helpers: { stop: rpc('helpers.stop'), stopAll: rpc('helpers.stopAll'), cards: rpc('helpers.cards'), onCards: on(EVENTS.helperCards) },
+    helpers: { stop: rpc('helpers.stop'), stopAll: rpc('helpers.stopAll'), dismiss: rpc('helpers.dismiss'), cards: rpc('helpers.cards'), onCards: on(EVENTS.helperCards) },
 
     apps: {
       status: rpc('apps.status'),

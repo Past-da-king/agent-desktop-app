@@ -309,8 +309,9 @@ describe('the orphan watch ends a card whose run is gone', () => {
     await a.db.upsert('turn_lease', { id: `job-${live}`, heartbeatAt: clock })
     clock += 60_000
     expect(await a.manager.reap()).toBe(0)
-    // A card that names no brain and has no lease (another app's) is not ours to end.
-    await b.db.upsert('chat_item', { kind: 'helper', text: 'x', meta: JSON.stringify({ label: 'Phone job', state: 'working', runToken: 'p1', startedAt: 1 }) })
+    // A card that names no brain and has no lease (another app's) is not ours to end while it is young (under
+    // ORPHAN_ANY_MS of silence; runlist.test.ts has the long-silent case).
+    await b.db.upsert('chat_item', { kind: 'helper', text: 'x', meta: JSON.stringify({ label: 'Phone job', state: 'working', runToken: 'p1', startedAt: clock - 30 * 60_000 }) })
     expect(await b.manager.reap()).toBe(0)
     expect(await stateOn(a, live)).toBe('working')
   })

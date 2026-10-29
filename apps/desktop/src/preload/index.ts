@@ -166,6 +166,7 @@ const api: AgentApi = {
   helpers: {
     stop: (id) => call<boolean>(CHANNELS.helpers.stop, id),
     stopAll: () => call<number>(CHANNELS.helpers.stopAll),
+    dismiss: (id) => call<boolean>(CHANNELS.helpers.dismiss, id),
     cards: () => call<HelperCardsSnapshot>(CHANNELS.helpers.cards),
     onCards: (callback) => on<HelperCardsSnapshot>(EVENTS.helperCards, callback),
   },

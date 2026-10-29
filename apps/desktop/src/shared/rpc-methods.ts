@@ -61,6 +61,7 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'browser.people',
   'helpers.stop',
   'helpers.stopAll',
+  'helpers.dismiss',
   'helpers.cards',
   'apps.status',
   'apps.catalog',

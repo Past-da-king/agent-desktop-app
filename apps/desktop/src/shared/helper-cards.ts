@@ -279,6 +279,8 @@ export function projectLine(view: HelperView, lines: ChatItem[]): string {
 export interface CardOptions {
   /** Whether a chat has a turn running now (the runner's state): its rows alone cannot always tell. */
   running?: (chat: string) => boolean
+  /** The clock, for the waiting cards' day (WAITING_CARD_MS). Default Date.now. */
+  now?: number
 }
 
 /**
@@ -309,6 +311,34 @@ function endedAtOf(meta: Meta): number {
   return metaNumber(meta, 'endedAt') ?? 0
 }
 
+/**
+ * A finished helper's card closed by the person (its X on the desktop, a swipe on the phone): `meta.cardClosedAt` on
+ * its own row, so it reaches every device and lasts through a restart. A helper that works again shows again.
+ */
+export function cardClosed(item: ChatItem): boolean {
+  const meta = metaOf(item)
+  if (helperState(metaText(meta, 'state')) === 'working') return false
+  const at = metaNumber(meta, 'cardClosedAt')
+  return at !== null && at >= Math.max(metaNumber(meta, 'startedAt') ?? item.createdAt, endedAtOf(meta))
+}
+
+/**
+ * How long a project chat that is done and waiting on the person keeps its card when nothing moves in it: a day.
+ * After that it leaves by itself (the chat and its answer stay), so no card is left in the list for ever.
+ */
+export const WAITING_CARD_MS = 24 * 60 * 60 * 1000
+
+/**
+ * The cards for the chat on screen. In a project chat only that project's cards show (its chats' cards and the
+ * helpers working in them); anywhere else (the main chat, another page) every card shows.
+ */
+export function cardsForChat<T extends { owner: HelperCardOwner; projectChat: string; parentChat: string; row: { meta: string } }>(cards: T[], projects: ProjectRow[], chat: string): T[] {
+  if (chat === '' || chat === MAIN_CHAT) return cards
+  const project = projectOfChat(projects, chat)
+  if (project === null || project.id === EARLIER_CHATS_PROJECT) return cards.filter((card) => card.projectChat === chat || card.parentChat === chat || chatOfRow(card.row) === chat)
+  return cards.filter((card) => (card.owner.kind === 'project' && card.owner.id === project.id) || project.chats.includes(card.projectChat) || project.chats.includes(card.parentChat))
+}
+
 function lastAgentLine(lines: ChatItem[]): ChatItem | undefined {
   for (let i = lines.length - 1; i >= 0; i--) if (lines[i]!.kind === 'agent') return lines[i]
   return undefined
@@ -318,8 +348,10 @@ function lastAgentLine(lines: ChatItem[]): ChatItem | undefined {
  * The side panel's cards (also the collapsed strip, the title bar's list and the feed a linked device hears):
  *  - every project chat that is working, or done and waiting on the person (its agent spoke last), whether the
  *    main agent handed it the work (a `pa-<chat>` row) or the person talks to it in its own chat. It stays until the
- *    person closes it with its X; nothing removes it by itself. A closed card comes back when its chat moves again.
- *  - under it, the helpers that chat started: the ones working, and the ones of its latest turn that finished;
+ *    person closes it with its X (or a swipe on the phone), or a day passes with nothing new in it (WAITING_CARD_MS).
+ *    A closed card comes back when its chat moves again.
+ *  - under it, the helpers that chat started: the ones working, and the ones of its latest turn that finished
+ *    (unless he closed that one: cardClosed);
  *  - every other helper while it works (a finished helper outside a shown chat leaves at once).
  * Working cards come first (running before queued, oldest first), then the waiting chats, newest first. Nothing is
  * cut: the panel scrolls.
@@ -395,6 +427,7 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       .filter((row) => {
         const meta = metaOf(row)
         if (helperState(metaText(meta, 'state')) === 'working') return true
+        if (cardClosed(row)) return false
         return turnAt > 0 && (metaNumber(meta, 'startedAt') ?? row.createdAt) >= turnAt
       })
       .map((row) => helperCard(row, 1))
@@ -409,6 +442,7 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       ...children.map((child) => child.activityAt),
     )
     if ((closed.get(chat) ?? -1) >= activityAt) continue
+    if (waiting && (options.now ?? Date.now()) - activityAt > WAITING_CARD_MS) continue
     const project = projectOf.get(chat)
     const answer = lastAgentLine(lines)
     // While it works with nothing of its own to say yet, its line says its helpers are on it rather than Starting.

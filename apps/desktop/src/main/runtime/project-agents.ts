@@ -22,6 +22,8 @@ const RECHECK_MS = 60_000
 const CHECK_KINDS = ['helper', 'agent', 'notice']
 /** After a restart, how long a followed project chat gets for its turn lease to resume it before it can be closed. */
 const RESUME_GRACE_MS = 30_000
+/** How often working rows nothing follows are looked for (restore). */
+const SWEEP_MS = 60_000
 
 export interface ProjectAgentDeps {
   store: DataStore & { onChange(listener: (change: DataChange) => void): () => void }
@@ -32,6 +34,8 @@ export interface ProjectAgentDeps {
   now?: () => number
   checkMs?: number
   resumeGraceMs?: number
+  /** How often restore runs again for rows nothing follows; 0 never. Default one minute. */
+  sweepMs?: number
 }
 
 export interface ProjectMeta {
@@ -64,6 +68,8 @@ export class ProjectAgentRows {
   private readonly checkedAt = new Map<string, number>()
   private readonly offChange: () => void
   private timer: ReturnType<typeof setInterval> | null = null
+  private sweeper: ReturnType<typeof setInterval> | null = null
+  private disposed = false
   private writing: Promise<unknown> = Promise.resolve()
   private readonly now: () => number
 
@@ -85,21 +91,33 @@ export class ProjectAgentRows {
     })
   }
 
-  /** On start: rows left working by a crash are followed again (the turn lease resumes their chats). */
+  /**
+   * On start: rows left working by a crash are followed again (the turn lease resumes their chats). Then every
+   * minute: a row marked working that nothing here follows (written by another device that went away, or synced in
+   * after start) is followed too, so it is closed once its chat is quiet instead of saying working for ever.
+   */
   async restore(): Promise<void> {
     for (const row of await this.deps.store.listWhere?.('chat_item', { kind: 'helper', chat: MAIN_CHAT }) ?? []) {
       const meta = parse(row.meta)
-      if (row.id.startsWith('pa-') && meta['state'] === 'working' && typeof meta['projectChat'] === 'string') {
+      if (row.id.startsWith('pa-') && meta['state'] === 'working' && typeof meta['projectChat'] === 'string' && !this.tracked.has(meta['projectChat'])) {
         this.resuming.set(meta['projectChat'], this.now() + (this.deps.resumeGraceMs ?? RESUME_GRACE_MS))
         this.follow(meta['projectChat'])
       }
     }
+    const every = this.deps.sweepMs ?? SWEEP_MS
+    if (this.sweeper === null && every > 0 && !this.disposed) {
+      this.sweeper = setInterval(() => void this.restore().catch(() => undefined), every)
+      this.sweeper.unref?.()
+    }
   }
 
   dispose(): void {
+    this.disposed = true
     this.offChange()
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
+    if (this.sweeper !== null) clearInterval(this.sweeper)
+    this.sweeper = null
   }
 
   /** The main agent handed `brief` to a project chat. */

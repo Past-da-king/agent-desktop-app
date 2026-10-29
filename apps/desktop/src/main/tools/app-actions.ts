@@ -159,6 +159,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   // Helpers
   'helpers.stop': free('Stop a helper (its card > Stop)', 'helperId'),
   'helpers.stopAll': free('Stop every helper'),
+  'helpers.dismiss': free('Close a card in the side panel (stops it first if it still works)', 'cardId'),
   'helpers.cards': free('The helper and project-agent cards in the side panel'),
   // Connected apps
   'apps.status': free('Connected apps and accounts (Connections)'),
