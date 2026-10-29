@@ -32,7 +32,7 @@
 .ma-menu button.danger{color:var(--err)}
 .ma-ctx-scrim{position:fixed;inset:0;z-index:60}
 .ma-ctx{position:fixed;right:auto;top:auto}
-.ma-dialog{display:flex;flex-direction:column;gap:12px;min-width:min(480px,86vw)}
+.ma-dialog{display:flex;flex-direction:column;gap:12px;min-width:0}
 .ma-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
 .ma-textarea{width:100%;padding:12px 14px;border-radius:var(--r-sm);border:1px solid var(--outline-v);background:var(--s-lowest);color:var(--on-bg);font:400 14px/1.45 var(--font);resize:vertical}
 .ma-textarea:focus{outline:2px solid var(--primary);outline-offset:-1px;border-color:transparent}
