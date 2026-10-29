@@ -1,6 +1,6 @@
 /**
- * Names the recogniser said that the speaker did not (29 Oct 2026: "Cosmiprint", "Network architecture.",
- * "Ayanda's birthday." typed into his dictations). Biasing a speech model towards a list of names makes it say those
+ * Names the recogniser said that the speaker did not (29 Oct 2026: a project's name and two memory page
+ * titles typed into his dictations). Biasing a speech model towards a list of names makes it say those
  * names into quiet stretches, breaths and noise. A stretch of words that is nothing but known names is that kind of
  * filler: it is dropped. A name inside real speech ("send it to Initech") stays.
  *

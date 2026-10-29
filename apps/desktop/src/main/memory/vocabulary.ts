@@ -17,15 +17,15 @@ export interface Vocabulary {
 }
 
 const NAMED_KINDS = new Set(['person', 'organisation', 'project'])
-/** The most words a name has; longer titles are descriptions ("Ayanda's finances and invoicing"), not names. */
+/** The most words a name has; longer titles are descriptions ("Someone's finances and invoicing"), not names. */
 const MAX_NAME_WORDS = 3
 /** Little words a name may have inside it ("Bank of Africa"), never first. */
 const NAME_JOINERS = new Set(['of', 'and', 'the', 'de', 'van', 'von', 'der', 'du', 'la', 'le', '&'])
 
 /**
  * The name a page or project goes by, or null when its title is a description rather than a name (29 Oct 2026: the
- * recogniser, biased with titles like "Ayanda's birthday", "Network architecture" and "Zernio for Cosmiprint
- * (sign-in)", typed them into quiet stretches of his dictations). A name is at most three words, each one starting
+ * recogniser, biased with titles like "Someone's birthday", "Network architecture" and "Sign-in for a
+ * product (how-to)", typed them into quiet stretches of his dictations). A name is at most three words, each one starting
  * with a capital letter or a digit (little joiners aside), with no "'s", colon or sentence in it. A trailing
  * "(...)" is dropped: "StudyCanvas (StudyCVNS)" is StudyCanvas.
  */
