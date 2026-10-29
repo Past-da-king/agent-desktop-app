@@ -389,6 +389,67 @@ describe('the calendar through Composio Connect', () => {
     }
   })
 
+  it('asks for only the fields it reads, so Connect keeps the reply inline instead of cutting it to a preview', async () => {
+    const calls: Array<{ slug: string; args: JsonObject }> = []
+    const source = composioCalendarSource({
+      activeAccounts: async () => [
+        { id: 'g', app: 'googlecalendar' },
+        { id: 'o', app: 'outlook' },
+      ],
+      backend: () => ({
+        execute: async (slug, args) => {
+          calls.push({ slug, args })
+          return { ok: true, text: slug.startsWith('OUTLOOK') ? CONNECT_OUTLOOK : CONNECT_GOOGLE }
+        },
+      }),
+    })
+    await source.events(0, 1)
+    const google = calls.find((call) => call.slug === 'GOOGLECALENDAR_EVENTS_LIST')?.args
+    const outlook = calls.find((call) => call.slug === 'OUTLOOK_GET_CALENDAR_VIEW')?.args
+    expect(String(google?.['fields'])).toMatch(/^items\(.*start.*end.*\)/)
+    expect(outlook?.['select']).toEqual(expect.arrayContaining(['subject', 'start', 'end', 'isAllDay', 'isCancelled', 'responseStatus']))
+    expect(outlook?.['select']).not.toContain('body')
+  })
+
+  it('a reply Connect cut to a preview (events without their times) is read again for a shorter window, and logged', async () => {
+    // 29 Oct 2026, his Outlook: 9,343 tokens, so Connect saved the full reply to its sandbox and sent data_preview,
+    // each event cut off after 'recurrence' (no start, no subject).
+    const cut = JSON.stringify({
+      successful: true,
+      data: {
+        results: [
+          {
+            response: { successful: true, data_preview: { value: [{ id: 'x', isAllDay: false, isCancelled: false, recurrence: null, '...': '6 more fields' }] } },
+            structure_info: {},
+            tool_slug: 'OUTLOOK_GET_CALENDAR_VIEW',
+          },
+        ],
+        remote_file_info: { message: 'Complete response was large (9343 tokens). Full data saved to sandbox', file_path: '/mnt/files/mex/swam.json' },
+      },
+    })
+    expect(unwrapComposio(cut)).toMatchObject({ ok: true, cut: true })
+    const windows: Array<[string, string]> = []
+    const lines: string[] = []
+    const source = composioCalendarSource(
+      {
+        activeAccounts: async () => [{ id: 'o', app: 'outlook' }],
+        backend: () => ({
+          execute: async (_slug, args) => {
+            windows.push([String(args['start_datetime']), String(args['end_datetime'])])
+            return { ok: true, text: windows.length === 1 ? cut : CONNECT_OUTLOOK }
+          },
+        }),
+      },
+      (message) => lines.push(message),
+    )
+    const from = Date.parse('2026-10-29T00:00:00Z')
+    const events = await source.events(from, from + 7 * 24 * 60 * MIN)
+    expect(events?.map((event) => event.title)).toEqual(['Strat Edge weekly review'])
+    expect(windows.length).toBe(2)
+    expect(Date.parse(windows[1]?.[1] ?? '') - from).toBeLessThanOrEqual(2 * 24 * 60 * MIN + 12 * 60 * MIN)
+    expect(lines).toContain('Calendar reply was cut short')
+  })
+
   it('also retries when only one of the calendars failed', async () => {
     vi.useFakeTimers()
     try {

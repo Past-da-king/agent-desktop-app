@@ -57,12 +57,24 @@ export function composioCalendarSource(apps: CalendarApps, log: (message: string
       if (accounts.length === 0) return null
       const found: CalendarEvent[] = []
       let failures = 0
+      let partialRead = false
       for (const account of accounts) {
         const app = account.app.toLowerCase()
-        const call = app === 'outlook' ? outlookCall(from, to) : googleCall(from, to)
-        try {
+        const read = async (until: number): Promise<{ result: { ok: boolean; text: string }; reply: ReturnType<typeof unwrapComposio> }> => {
+          const call = app === 'outlook' ? outlookCall(from, until) : googleCall(from, until)
           const result = await backend.execute(call.slug, call.args, account.id)
-          const reply = unwrapComposio(result.text)
+          return { result, reply: unwrapComposio(result.text) }
+        }
+        try {
+          let { result, reply } = await read(to)
+          if (result.ok && reply.ok && reply.cut === true) {
+            // Too big to come back whole: Connect sent a preview (events cut short). The next two days are what the
+            // note needs most, so read those again; if even that is cut, keep what came and try again soon.
+            const shorter = Math.min(to, from + CUT_WINDOW_MS)
+            log('Calendar reply was cut short', { account: account.id, app, bytes: result.text.length, readAgainHours: Math.round((shorter - from) / 3_600_000) })
+            if (shorter < to) ({ result, reply } = await read(shorter))
+            if (reply.cut === true) partialRead = true
+          }
           if (!result.ok || !reply.ok) {
             failures += 1
             log('Calendar read failed', { account: account.id, app, error: (reply.error ?? result.text).slice(0, 300) })
@@ -82,16 +94,35 @@ export function composioCalendarSource(apps: CalendarApps, log: (message: string
         }
       }
       if (failures === accounts.length) throw new Error('No calendar could be read.')
-      partial = failures > 0
+      partial = failures > 0 || partialRead
       return found
     },
   }
 }
 
+/** A cut-short reply is read again for this long from the start of the window (the rest of today and the next two days). */
+const CUT_WINDOW_MS = 60 * 60 * 60_000
+
+/**
+ * Only the fields the note reads. Composio Connect saves a reply over a few thousand tokens to its own sandbox and
+ * sends back only a preview, with each event cut short (29 Oct 2026: his Outlook week, 9,343 tokens), so asking for
+ * less is what keeps the meetings in the reply.
+ */
+const GOOGLE_FIELDS = 'items(id,status,summary,start,end,attendees(self,responseStatus),hangoutLink,conferenceData/conferenceSolution/name,location),nextPageToken'
+const OUTLOOK_SELECT = ['id', 'subject', 'start', 'end', 'isAllDay', 'isCancelled', 'responseStatus', 'onlineMeetingProvider', 'location']
+
 function googleCall(from: number, to: number): { slug: string; args: JsonObject } {
   return {
     slug: 'GOOGLECALENDAR_EVENTS_LIST',
-    args: { calendarId: 'primary', timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString(), singleEvents: true, orderBy: 'startTime', maxResults: 100 },
+    args: {
+      calendarId: 'primary',
+      timeMin: new Date(from).toISOString(),
+      timeMax: new Date(to).toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 100,
+      fields: GOOGLE_FIELDS,
+    },
   }
 }
 
@@ -99,7 +130,7 @@ function outlookCall(from: number, to: number): { slug: string; args: JsonObject
   // Asked in UTC, so the times that come back (no offset of their own) are read as UTC.
   return {
     slug: 'OUTLOOK_GET_CALENDAR_VIEW',
-    args: { start_datetime: new Date(from).toISOString(), end_datetime: new Date(to).toISOString(), timezone: 'UTC', top: 100 },
+    args: { start_datetime: new Date(from).toISOString(), end_datetime: new Date(to).toISOString(), timezone: 'UTC', top: 100, select: OUTLOOK_SELECT },
   }
 }
 
@@ -108,7 +139,7 @@ function outlookCall(from: number, to: number): { slug: string; args: JsonObject
  * {successful, data: {results: [{response: {successful, data, error}}]}}; the REST API answers {successful, data}.
  * ok is false when either layer says it failed (or the text is an "Error:" or not JSON); data is the app's own answer.
  */
-export function unwrapComposio(text: string): { ok: boolean; data: unknown; error?: string } {
+export function unwrapComposio(text: string): { ok: boolean; data: unknown; error?: string; cut?: boolean } {
   const failed = text.trimStart().startsWith('Error:')
   const parsed = parseJson(failed ? text.trimStart().slice(6) : text)
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ok: false, data: null, error: text.slice(0, 300) || 'empty reply' }
@@ -119,6 +150,9 @@ export function unwrapComposio(text: string): { ok: boolean; data: unknown; erro
     const inner = 'response' in first ? record(first['response']) : first
     const error = errorText(inner['error']) || errorText(first['error']) || errorText(outer['error'])
     if (failed || inner['successful'] === false || outer['successful'] === false) return { ok: false, data: inner['data'] ?? null, error: error || 'Composio said the call failed' }
+    // A big reply: the whole of it went to Connect's sandbox file and only a cut preview came back.
+    const cut = !('data' in inner) && ('data_preview' in inner || 'remote_file_info' in record(outer['data']))
+    if (cut) return { ok: true, data: inner['data_preview'] ?? null, cut: true }
     return { ok: true, data: inner['data'] ?? inner }
   }
   if (failed || outer['successful'] === false) return { ok: false, data: outer['data'] ?? null, error: errorText(outer['error']) || 'Composio said the call failed' }
