@@ -40,7 +40,7 @@ export function cleanFacts(raw: unknown): DeviceFacts | null {
   }
 }
 
-const GROUPS: readonly DeviceToolGroup[] = ['browser', 'notifications', 'files', 'shell', 'approval', 'phone', 'other']
+const GROUPS: readonly DeviceToolGroup[] = ['browser', 'notifications', 'files', 'shell', 'approval', 'phone', 'location', 'other']
 const MAX_TOOLS = 80
 
 /** A device's tool catalogue from the wire (protocol s11): names, words and schema kept small. */

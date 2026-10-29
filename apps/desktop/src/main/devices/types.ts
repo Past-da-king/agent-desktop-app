@@ -9,7 +9,7 @@ export type DevicePlatform = 'android' | 'ios' | 'windows' | 'macos' | 'linux'
 export type DeviceRole = 'screen' | 'brain' | 'hands'
 
 /** What kind of thing a shared device tool does (s11); each group can be switched off per device. */
-export type DeviceToolGroup = 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'other'
+export type DeviceToolGroup = 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'location' | 'other'
 
 /** One tool a device lets other devices use (s11), as it advertises it in its hello. */
 export interface DeviceTool {

@@ -665,7 +665,7 @@ export interface DeviceToolInfo {
   name: string
   description: string
   params: Record<string, unknown>
-  group: 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'other'
+  group: 'browser' | 'notifications' | 'files' | 'shell' | 'approval' | 'phone' | 'location' | 'other'
   readOnly: boolean
 }
 

@@ -35,7 +35,7 @@ import { latestOrigin } from './origin'
 import { MAIN_IDLE_MS, runEnded } from '../browser/run-tabs'
 import type { DeviceTool, DeviceToolGroup, DevicesHost } from './types'
 
-export const TOOL_GROUPS: readonly DeviceToolGroup[] = ['browser', 'notifications', 'files', 'shell', 'approval', 'phone', 'other']
+export const TOOL_GROUPS: readonly DeviceToolGroup[] = ['browser', 'notifications', 'files', 'shell', 'approval', 'phone', 'location', 'other']
 
 /** What a device lets others use unless the person says otherwise: everything but its shell (and odds and ends). */
 export const DEFAULT_SHARE: Readonly<Record<DeviceToolGroup, boolean>> = {
@@ -44,6 +44,8 @@ export const DEFAULT_SHARE: Readonly<Record<DeviceToolGroup, boolean>> = {
   files: true,
   approval: true,
   phone: true,
+  // A phone's phone_location: the phone itself asks him once before it answers.
+  location: true,
   shell: false,
   other: false,
 }
@@ -594,7 +596,7 @@ function devicesListTool(deps: DeviceAgentToolDeps): Tool {
   return {
     spec: {
       name: 'devices_list',
-      description: "List the user's linked devices (phones, computers, servers): which are online and which tool groups each lets you use (browser, notifications, files, shell, approval, phone).",
+      description: "List the user's linked devices (phones, computers, servers): which are online and which tool groups each lets you use (browser, notifications, files, shell, approval, phone, location: phone_location gives the phone's position and suburb).",
       schema: schema([], {}),
     },
     run: async () => {
@@ -614,7 +616,7 @@ function deviceToolTool(deps: DeviceAgentToolDeps): Tool {
     spec: {
       name: 'device_tool',
       description:
-        'Run one tool on one of the user\'s linked devices (see devices_list): their phone\'s browser when a site blocks this computer, a notification or a question on their phone, a file from another computer. device: its name or id, or "best" to let the app choose (the device the user wrote from first).',
+        'Run one tool on one of the user\'s linked devices (see devices_list): their phone\'s browser when a site blocks this computer, a notification or a question on their phone, where their phone is (phone_location), a file from another computer. device: its name or id, or "best" to let the app choose (the device the user wrote from first).',
       schema: schema(['device', 'tool'], {
         device: str('Device name or id, or "best"'),
         tool: str("The tool's name on that device, from devices_list"),
