@@ -283,8 +283,8 @@ describe('replication between nodes', () => {
     await waitFor(async () => (await b.store.list('wakeup')).some((row) => row.id === (wake as { id: string }).id), 8000)
     // Only the entities it did not know came again: the memory row it already counted as pulled did not.
     expect(await titles(b.store)).toEqual([])
+    await waitFor(async () => (b.store.localValue('peer_known:dev_a') ?? '').includes('wakeup'), 8000)
     expect(moved.pulled).toBe(1)
-    expect(b.store.localValue('peer_known:dev_a')).toContain('wakeup')
 
     // Once only: a restart does not read them again.
     b.replicator?.stop()
@@ -303,7 +303,7 @@ describe('replication between nodes', () => {
     link(b, [a]).start()
     await waitFor(async () => (await b.store.list('wakeup')).length === 1, 8000)
     await new Promise((resolve) => setTimeout(resolve, 300))
+    await waitFor(async () => (b.store.localValue('peer_known:dev_a') ?? '').includes('miniapp'), 8000)
     expect(moved.pulled).toBe(1)
-    expect(b.store.localValue('peer_known:dev_a')).toContain('miniapp')
   })
 })
