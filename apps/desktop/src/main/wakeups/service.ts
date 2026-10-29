@@ -176,7 +176,7 @@ export class WakeupService {
       now,
       { firedBy, firedOn: this.selfId(), targets },
     )
-    if (plan.kind !== 'create') return plan.message
+    if (plan.kind !== 'create') throw new Error(plan.message)
     const saved = await this.deps.store.upsert('wakeup', plan.row)
     this.log('wakeups: test fired', { id: saved.id, severity, targets })
     this.kick()

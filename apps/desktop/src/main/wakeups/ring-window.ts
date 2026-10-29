@@ -4,8 +4,12 @@
  * in the page with Web Audio, no file). It never closes by itself and cannot be closed by Alt+F4: only an answer
  * (here, on the phone or in Settings) ends it. It cannot wake a sleeping computer; the phone covers that.
  *
- * The page has no preload and no Node: a button sets the URL hash, which the main process reads.
+ * The page has no preload and no Node: a button sets the page title to a signed line (this window's own random
+ * token), which the main process reads from 'page-title-updated' and swallows. (A data: page ignores URL hash
+ * changes, so the hash cannot carry it: found in the 0.2.96 test copy, the buttons did nothing.)
  */
+import { randomBytes } from 'node:crypto'
+
 import { BrowserWindow, screen, type Rectangle } from 'electron'
 
 import { HEADS_UP_CYCLE_MS, SEVERITY_LOOK } from '../../shared/wakeups'
@@ -88,10 +92,14 @@ export class RingWindow implements WakeRinger {
       // Only an answer closes it.
       if (!this.closing && this.items.length > 0) event.preventDefault()
     })
-    win.webContents.on('did-navigate-in-page', (_event, url) => this.onHash(url))
+    const token = randomBytes(12).toString('hex')
+    win.on('page-title-updated', (event, title) => {
+      event.preventDefault()
+      this.onSignal(title, token)
+    })
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     win.webContents.on('will-navigate', (event) => event.preventDefault())
-    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page(main))}`).then(() => {
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page(main, token))}`).then(() => {
       if (win.isDestroyed()) return
       this.render(win)
       if (!proof) {
@@ -115,10 +123,10 @@ export class RingWindow implements WakeRinger {
     void win.webContents.executeJavaScript(`window.render && window.render(${JSON.stringify(payload)})`).catch(() => undefined)
   }
 
-  private onHash(url: string): void {
-    const hash = decodeURIComponent(url.split('#')[1] ?? '')
-    const [what, id] = hash.split('|')
-    if (id === undefined || id === '') return
+  /** A button pressed: the title is "wake|<token>|<what>|<id>|<n>"; anything else (the page's own title) is ignored. */
+  private onSignal(title: string, token: string): void {
+    const [tag, got, what, id] = title.split('|')
+    if (tag !== 'wake' || got !== token || id === undefined || id === '') return
     const item = this.items.find((i) => i.id === id)
     this.deps.log?.('wakeups: pressed on the computer', { what, id })
     if (what === 'ack') this.deps.onAck(id)
@@ -136,7 +144,7 @@ export class RingWindow implements WakeRinger {
 }
 
 /** The ring page. `main`: this display plays the sound. */
-function page(main: boolean): string {
+function page(main: boolean, token: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Wake-up</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
 <style>
@@ -157,7 +165,7 @@ button:focus-visible{outline:4px solid #fff;outline-offset:3px}
 .more div{margin-top:6px}
 </style></head><body><div class="card" id="card"></div>
 <script>
-const MAIN=${main ? 'true' : 'false'};
+const MAIN=${main ? 'true' : 'false'};const TOKEN='${token}';let presses=0;
 let ctx=null,timer=null,current=null;
 window.__ring={playing:false,beeps:0,items:0};
 function beep(at,f,len,vol){const o=ctx.createOscillator(),g=ctx.createGain();o.type='square';o.frequency.value=f;g.gain.setValueAtTime(0,at);g.gain.linearRampToValueAtTime(vol,at+0.01);g.gain.setValueAtTime(vol,at+len-0.02);g.gain.linearRampToValueAtTime(0,at+len);o.connect(g);g.connect(ctx.destination);o.start(at);o.stop(at+len+0.01);window.__ring.beeps++}
@@ -167,7 +175,7 @@ window.__ring.playing=true;const every=it.severity==='heads_up'?cycle:2200;const
 const play=()=>{for(let i=0;i<once;i++)setTimeout(()=>burst(vol),i*2200)};play();timer=setInterval(play,every)}
 function stopSound(){if(timer)clearInterval(timer);timer=null;window.__ring.playing=false}
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
-function go(what,id){location.hash=encodeURIComponent(what+'|'+id+'|'+Date.now())}
+function go(what,id){presses++;window.__ring.pressed=what;document.title='wake|'+TOKEN+'|'+what+'|'+id+'|'+presses}
 window.render=function(p){const items=p.items;window.__ring.items=items.length;if(!items.length){stopSound();return}
 const it=items[0];document.body.style.background=it.look.bg;document.body.style.color=it.look.on;
 const card=document.getElementById('card');card.textContent='';

@@ -72,7 +72,7 @@ export function registerWakeupRpc(host: DevicesHost, deps: WakeBridgeDeps): void
   // The phone's own "Test a wake-up" button: rings that phone (and only it) through the same path as any wake.
   host.addRpc(WAKEUP_RPC.test, async (deviceId, args) => {
     const severity = isSeverity(args[0]) ? args[0] : 'urgent'
-    const result = await need().fireTest(severity, [deviceId], `test from ${await deps.nameOf(deviceId)}`)
+    const result = await need().fireTest(severity, [deviceId], await deps.nameOf(deviceId))
     return result
   })
 }
@@ -95,7 +95,7 @@ export function registerWakeupIpc(ipcMain: IpcMainLike, deps: WakeIpcDeps): void
     [WAKEUP_CHANNELS.test]: async (severity, devices) => {
       const service = need()
       const sev = isSeverity(severity) ? severity : 'urgent'
-      return service.fireTest(sev, devices === 'all' ? [] : [service.selfId()], 'test from Settings')
+      return service.fireTest(sev, devices === 'all' ? [] : [service.selfId()], 'Settings')
     },
     [WAKEUP_CHANNELS.ack]: async (id) => (typeof id === 'string' ? need().ack(id, { id: need().selfId(), name: deps.selfName() }) : false),
     [WAKEUP_CHANNELS.snooze]: async (id, minutes) =>
