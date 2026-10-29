@@ -85,7 +85,7 @@ const CREATED_SQL = "json_extract(payload, '$.createdAt')"
  */
 const LIST_SLICE_ROWS = 1000
 
-const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule', 'wakeup']
+const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule', 'wakeup', 'miniapp']
 
 /** Versions kept per memory page; the oldest go first. */
 const MAX_VERSIONS = 300
@@ -937,6 +937,11 @@ function defaultsFor(entity: EntityName): Record<string, unknown> {
         kind: 'wake', wake: '', severity: 'urgent', title: '', whatToDo: '', source: { kind: 'agent', ref: '', link: '' }, devices: 'auto', targets: [],
         dedupeKey: '', rateKey: '', at: 0, firedBy: '', firedOn: '', withdrawn: false, cancelled: false, repeats: 0, updatedAt: 0,
         by: '', byName: '', n: 0, until: 0, device: '',
+      }
+    case 'miniapp':
+      return {
+        name: '', description: '', icon: 'apps', profile: '', files: {}, permissions: [], subscribe: [], refreshMinutes: 0, version: 1, history: [],
+        pinned: 0, allowed: [], data: {}, check: { version: 0, at: 0, ok: false, issues: [], shots: [] }, by: '', openedAt: 0, updatedAt: 0,
       }
   }
 }

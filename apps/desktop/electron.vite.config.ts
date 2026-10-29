@@ -14,7 +14,8 @@ export default defineConfig({
     // The workspace package ships TypeScript source, so bundle it into the main process rather
     // than leaving a require('@agent/core') that Node cannot load at runtime.
     build: {
-      externalizeDeps: { exclude: ['@agent/core'] },
+      // Cordis (mini-apps' host side, main/miniapps/plugin-host.ts) is ESM only: bundled, like the core.
+      externalizeDeps: { exclude: ['@agent/core', '@deepseek-ai/cordis', '@deepseek-ai/cosmokit', '@standard-schema/spec'] },
       outDir: 'out/main',
       sourcemap: false,
       rollupOptions: {
@@ -29,8 +30,9 @@ export default defineConfig({
       outDir: 'out/preload',
       sourcemap: false,
       rollupOptions: {
-        input: resolve(__dirname, 'src/preload/index.ts'),
-        output: { format: 'cjs', entryFileNames: 'index.js' },
+        // index: the window's. miniapp-check: the mini-app look check's offscreen pages (main/miniapps/check.ts).
+        input: { index: resolve(__dirname, 'src/preload/index.ts'), 'miniapp-check': resolve(__dirname, 'src/preload/miniapp-check.ts') },
+        output: { format: 'cjs', entryFileNames: '[name].js' },
       },
     },
   },

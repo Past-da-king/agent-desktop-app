@@ -77,6 +77,7 @@ import { readConfig } from './node-config'
 import { relayTool, type RelayTarget } from './relay-tool'
 import { FileKeyCipher } from './file-cipher'
 import { startPresence } from '../main/presence/start'
+import type { CalendarReader } from '../main/tools/calendar'
 import { setWakeups, WakeupService } from '../main/wakeups/service'
 import { WAKEUP_RPC } from '../shared/wakeups-channels'
 import { getDevicesHost } from '../main/devices/service'
@@ -342,7 +343,9 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const appControl: AppControlDeps = { devices: () => getDevicesService(), links: () => devicesState.sync?.replicator.status() ?? [], settings, invoker: () => registryInvoker(registry) }
   // Recordings a linked device's mic makes here are written to disk as they happen (recordings/store.ts).
   const recordings = new Recordings({ root: join(dir, 'voice-notes', 'recordings'), log: (message, fields) => logger.info(message, fields) })
-  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault, recordings })), ...nodeTools], vault)
+  // calendar_events reads the presence calendar cache, started below.
+  let presenceCalendar: CalendarReader | null = null
+  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault, recordings, calendar: () => presenceCalendar })), ...nodeTools], vault)
   const helpers = new HelperManager({
     leases,
     store,
@@ -377,6 +380,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     log: (message, detail) => logger.info(message, detail),
   })
   const presence = presenceHandle.presence
+  presenceCalendar = presenceHandle.calendar
   // Wake-ups (main/wakeups): a server never rings itself; it books and fires them, and tells the linked devices.
   const wakeups = new WakeupService({
     store,
@@ -415,6 +419,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       vault,
       browserVault,
       recordings,
+      calendar: () => presenceCalendar,
       devices: {
         selfId: () => devicesState.sync?.selfId() ?? '',
         commands: () => devicesState.sync?.commands ?? null,

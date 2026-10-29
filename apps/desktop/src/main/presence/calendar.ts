@@ -364,6 +364,27 @@ export class CalendarCache {
   /** How many times a calendar was read (tests prove it is not per message). */
   reads = 0
   lastReadAt: number | null = null
+  private readonly listeners = new Set<() => void>()
+  private readFrom = 0
+  private readTo = 0
+
+  /** Told after a read that changed the meetings (mini-apps' calendar.changed). Returns the stopper. */
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  /**
+   * The meetings between from and to on every connected calendar (the calendar_events tool): from the cache when its
+   * last read covered that window, else one read of the calendars for it. Null: no calendar is connected.
+   */
+  async range(from: number, to: number): Promise<CalendarEvent[] | null> {
+    if (this.source === null) return null
+    if (this.known && from >= this.readFrom && to <= this.readTo) return this.list.filter((event) => event.end > from && event.start < to)
+    const events = await this.source.events(from, to)
+    this.reads += 1
+    return events === null ? null : dedupe(events).sort((a, b) => a.start - b.start)
+  }
 
   constructor(deps: CalendarCacheDeps) {
     this.source = deps.source
@@ -409,9 +430,21 @@ export class CalendarCache {
       this.reads += 1
       try {
         const events = await source.events(now - BACK_MS, now + AHEAD_MS)
+        const before = JSON.stringify(this.list)
         // Nothing connected (or disconnected since): no calendar line at all, rather than an empty calendar.
         this.list = events === null ? [] : dedupe(events).sort((a, b) => a.start - b.start)
         this.known = events !== null
+        this.readFrom = now - BACK_MS
+        this.readTo = now + AHEAD_MS
+        if (JSON.stringify(this.list) !== before) {
+          for (const listener of [...this.listeners]) {
+            try {
+              listener()
+            } catch {
+              // A listener failing never stops the cache.
+            }
+          }
+        }
         this.lastReadAt = now
         this.armEnd()
         if (source.incomplete?.() === true) this.armRetry('some calendars')

@@ -52,6 +52,10 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'app_actions',
   'recordings_list',
   'recordings_get',
+  'calendar_events',
+  'miniapp_guide',
+  'miniapp_list',
+  'miniapp_get',
   // A plan engine's own tools (Claude Code, Codex) that only read.
   'Read',
   'Glob',

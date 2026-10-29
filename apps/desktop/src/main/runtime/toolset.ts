@@ -54,6 +54,8 @@ import type { VaultStore } from '../vault/store'
 import type { BrowserVault } from '../vault/browser-vault'
 import { presenceTools, type MeetingEndedHost } from '../tools/presence'
 import { recordingsTools, type RecordingsReader } from '../tools/recordings'
+import { calendarTools, type CalendarReader } from '../tools/calendar'
+import { miniAppTools, type MiniAppUi } from '../tools/miniapps'
 
 export interface ToolsetDeps extends CoreToolDeps {
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
@@ -103,6 +105,10 @@ export interface ToolsetDeps extends CoreToolDeps {
   presence?: MeetingEndedHost
   /** His recordings and dictations, kept on disk as they happen (recordings/store.ts): recordings_list, recordings_get. */
   recordings?: RecordingsReader
+  /** His connected calendars, read through the presence cache (presence/calendar.ts): calendar_events. */
+  calendar?: () => CalendarReader | null
+  /** Showing and looking at mini-apps (the desktop window). Absent: the miniapp_* tools save and edit only. */
+  miniappUi?: () => MiniAppUi | null
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -221,7 +227,9 @@ function workerToolsets(deps: ToolsetDeps): Tool[] {
 function workerTools(deps: ToolsetDeps): Tool[] {
   const settings = deps.settings ?? { get: () => DEFAULT_SETTINGS }
   const name = deps.agentName
-  return [
+  // Every tool name in this set, so a mini-app's permission for a tool that does not exist is caught (tools/miniapps.ts).
+  let names: ReadonlySet<string> = new Set()
+  const list: Tool[] = [
     ...coreTools(deps), // now, ask_user, request_approval, notify_user, web_fetch, report
     ...memoryTools(deps.store), // memory_search, memory_get, memory_save, memory_update
     ...(deps.searchChats === undefined ? [] : chatTools({ store: deps.store, search: deps.searchChats })), // chats_search, chat_read
@@ -260,7 +268,11 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...(deps.vault === undefined ? [] : vaultTools({ vault: deps.vault, ...(deps.browser === undefined ? {} : { browser: deps.browser }), ...(deps.browserVault === undefined ? {} : { browserVault: deps.browserVault }) })), // vault_list, vault_fill, vault_login, vault_save, vault_reveal
     ...(deps.recordings === undefined ? [] : recordingsTools(deps.recordings)), // recordings_list, recordings_get
     ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
+    ...calendarTools(deps.calendar ?? (() => null)), // calendar_events: every connected calendar in one list
+    ...miniAppTools({ store: deps.store, knownTools: () => names, ...(deps.miniappUi === undefined ? {} : { ui: deps.miniappUi }) }), // miniapp_guide, miniapp_create, miniapp_update, miniapp_list, miniapp_get, miniapp_open, miniapp_pin, miniapp_unpin, miniapp_undo, miniapp_check, miniapp_delete
   ]
+  names = new Set(list.map((tool) => tool.spec.name))
+  return list
 }
 
 export function buildToolset(deps: ToolsetDeps): Tool[] {

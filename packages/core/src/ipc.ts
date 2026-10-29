@@ -134,6 +134,8 @@ export interface Settings {
   wakeupQuietHours: string
   /** Wake-ups: the alarm's loudness on this computer, 0.1 to 1. */
   wakeupVolume: number
+  /** Mini-apps: how many pinned apps the sidebar shows at most; the rest are a "+N" that opens the Apps page (1 to 20). */
+  miniappPinCap: number
   /** When the end-of-day memory pass runs, "HH:mm" local time; '' turns it off. */
   dailyMemoryAt: string
   /** Every AI account the person set up. Empty on an install that only ever used the old single choice. */
@@ -210,6 +212,7 @@ export const DEFAULT_SETTINGS: Settings = {
   wakeupSnoozeMinutes: 5,
   wakeupQuietHours: '',
   wakeupVolume: 1,
+  miniappPinCap: 8,
   dailyMemoryAt: '23:30',
   accounts: [],
   ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
@@ -309,6 +312,8 @@ export type EntityName =
   | 'prompt_rule'
   // Wake-ups (docs/plans/wake-ups.md): a wake that rings his devices until he answers, and its answers (WakeupRow).
   | 'wakeup'
+  // Mini-apps (docs/plans/mini-apps.md): a small app an agent made for him: files, permissions, versions (MiniAppRow).
+  | 'miniapp'
 
 export interface RowBase {
   id: string
@@ -453,6 +458,68 @@ export interface WakeupRow extends RowBase {
   device: string
 }
 
+/**
+ * A mini-app (29 Oct 2026, docs/plans/mini-apps.md): a small app an agent made when he asked (a dashboard, a tracker, a
+ * calendar view), saved as data so no app update is ever needed. It runs sandboxed (no network, nothing of the app but
+ * a bridge) and reads data only through the app's own tools, as far as `permissions` allow. Synced like every row, so
+ * every device has it. Each save is a version (the last few are kept in `history`), so "undo the last change" works.
+ */
+export interface MiniAppRow extends RowBase {
+  name: string
+  description: string
+  /** A name from the app's own icon set, or a small SVG that draws only in currentColor (shared/miniapps.ts). */
+  icon: string
+  /** The profile whose accounts its data calls use ('' = General). */
+  profile: string
+  /** Its files by name: index.html, plus any .js, .css, .svg or .json. Text only, 1 MB in all. */
+  files: Record<string, string>
+  /** The tools it may call: a tool name ("task_list"), or a tool and what it may reach ("apps_run:GOOGLECALENDAR_EVENTS_LIST"). */
+  permissions: string[]
+  /** What it listens to while it is open ("data.task", "calendar.changed", "worker.<id>"). */
+  subscribe: string[]
+  /** While open, it is asked to refresh every this many minutes (0 = only on open). Nothing runs while it is closed. */
+  refreshMinutes: number
+  /** The version number of what it is now (1 on create). */
+  version: number
+  /** The versions before this one, oldest first (the last few). */
+  history: MiniAppVersion[]
+  /** 0: on the Apps page only. Else pinned to the sidebar, ordered by this number (smallest first). */
+  pinned: number
+  /** Tools that change something which he lets this app run without asking each time. Only he sets this, in the window. */
+  allowed: string[]
+  /** Its own small key-value store (agent.store in the app). */
+  data: Record<string, string>
+  /** The last look at it in light and dark at 1440 and 390 wide: for which version, and what was found. */
+  check: MiniAppCheck
+  /** Who made it ("agent", "helper <label>"). */
+  by: string
+  openedAt: number
+  updatedAt: number
+}
+
+export interface MiniAppCheck {
+  version: number
+  at: number
+  ok: boolean
+  issues: string[]
+  /** Screenshot files of the four looks, on the computer that checked it. */
+  shots: string[]
+}
+
+export interface MiniAppVersion {
+  n: number
+  at: number
+  by: string
+  reason: string
+  name: string
+  description: string
+  icon: string
+  files: Record<string, string>
+  permissions: string[]
+  subscribe: string[]
+  refreshMinutes: number
+}
+
 export interface GoalRow extends RowBase {
   title: string
   why: string
@@ -568,6 +635,7 @@ export interface EntityMap {
   job: JobRow
   prompt_rule: PromptRuleRow
   wakeup: WakeupRow
+  miniapp: MiniAppRow
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1536,6 +1604,32 @@ export interface WakeupsApi {
   devices(): Promise<WakeDeviceStatus[]>
 }
 
+/** The window's side of mini-apps. Everything an open app's frame says goes through send, checked in main. */
+export interface MiniAppsApi {
+  /** Opens a bridge session for a frame showing the app; null when there is no such app. */
+  session(appId: string): Promise<string | null>
+  /** One message from the frame; resolves with the reply to hand back (null: none). */
+  send(sessionId: string, message: unknown): Promise<unknown>
+  close(sessionId: string): Promise<void>
+  /** Messages main sends an open frame (events, an edit or delete of its app). */
+  onPush(callback: (sessionId: string, message: unknown) => void): () => void
+  /** An agent asked to show an app. */
+  onOpen(callback: (appId: string) => void): () => void
+  pin(appId: string, position?: number): Promise<void>
+  unpin(appId: string): Promise<void>
+  /** The whole sidebar order (a drag). */
+  order(ids: string[]): Promise<void>
+  remove(appId: string): Promise<void>
+  undo(appId: string): Promise<string>
+  /** Lets the app run one tool that changes something without asking him each time (or takes that back). */
+  allow(appId: string, key: string, on: boolean): Promise<void>
+  check(appId: string): Promise<MiniAppCheck | null>
+  /** "Edit by asking": hands what he typed to his agent with the app named. */
+  askChange(appId: string, text: string): Promise<void>
+  /** Which engine runs the host side (cordis or plain). */
+  info(): Promise<{ engine: string }>
+}
+
 export interface WakeDeviceStatus {
   id: string
   name: string
@@ -1561,6 +1655,9 @@ export interface AgentApi {
 
   /** Wake-ups (docs/plans/wake-ups.md): his own answers and the test buttons. The log is the `wakeup` rows. */
   wakeups: WakeupsApi
+
+  /** Mini-apps (docs/plans/mini-apps.md): running an open app's bridge, and his own pins, order and deletes. The apps are `miniapp` rows. */
+  miniapps: MiniAppsApi
 
   settings: {
     get(): Promise<Settings>
