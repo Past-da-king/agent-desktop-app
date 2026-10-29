@@ -77,6 +77,9 @@ import { readConfig } from './node-config'
 import { relayTool, type RelayTarget } from './relay-tool'
 import { FileKeyCipher } from './file-cipher'
 import { startPresence } from '../main/presence/start'
+import { setWakeups, WakeupService } from '../main/wakeups/service'
+import { WAKEUP_RPC } from '../shared/wakeups-channels'
+import { getDevicesHost } from '../main/devices/service'
 
 /** What a headless node can do on its own device. Device commands (protocol s5.2) plug in through these. */
 export interface DeviceActions {
@@ -374,6 +377,24 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     log: (message, detail) => logger.info(message, detail),
   })
   const presence = presenceHandle.presence
+  // Wake-ups (main/wakeups): a server never rings itself; it books and fires them, and tells the linked devices.
+  const wakeups = new WakeupService({
+    store,
+    onChange: (listener) => store.onChange(listener),
+    selfId: () => devicesState.sync?.selfId() ?? '',
+    selfName: () => settings.get().deviceName,
+    selfRings: () => false,
+    devices: async () => (await store.list('device')).filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, kind: d.kind })),
+    settings: () => ({ snoozeMinutes: settings.get().wakeupSnoozeMinutes, quietHours: settings.get().wakeupQuietHours }),
+    broadcast: (snapshot) => getDevicesHost()?.emit(null, WAKEUP_RPC.changed, snapshot),
+    emitEvent: (input) => {
+      const stored = workers.addEvent(input.source, input)
+      if (stored !== null) void eventRouter?.offer(stored)
+    },
+    log: (message, detail) => logger.info(message, detail),
+  })
+  setWakeups(wakeups)
+  wakeups.start()
   const tools = guardTools(browserTools([
     ...buildToolset({
       appControl,
@@ -688,6 +709,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       for (const fn of stopHooks.splice(0)) await Promise.resolve(fn()).catch(() => undefined)
       scheduler.stop()
       presenceHandle.stop()
+      wakeups.stop()
+      setWakeups(null)
       theMemory.stop()
       router.stop()
       supervisor.stopAll()

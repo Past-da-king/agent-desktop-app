@@ -163,18 +163,26 @@ export class DevicesServer implements DevicesHost {
   emit(deviceId: string | null, name: string, payload: unknown): void {
     for (const session of this.sessions) {
       if (session.facts === null) continue
+      // A wake channel hears wake-ups only (main/wakeups/rpc.ts); everything else goes to the device's own link.
+      if (session.facts.wakeOnly === true && !name.startsWith('wakeups.')) continue
       if (deviceId === null || session.deviceId === deviceId) session.event(name, payload)
     }
   }
 
   factsOf(deviceId: string): DeviceFacts | null {
     let latest: DeviceFacts | null = null
-    for (const session of this.sessions) if (session.deviceId === deviceId && session.facts !== null) latest = session.facts
+    for (const session of this.sessions) if (session.deviceId === deviceId && session.facts !== null && session.facts.wakeOnly !== true) latest = session.facts
     return latest
   }
 
   isConnected(deviceId: string): boolean {
-    for (const session of this.sessions) if (session.deviceId === deviceId && session.open) return true
+    for (const session of this.sessions) if (session.deviceId === deviceId && session.open && session.facts?.wakeOnly !== true) return true
+    return false
+  }
+
+  /** A device holds its wake channel (or its main link) open now: a wake-up reaches it in seconds. */
+  wakeReachable(deviceId: string): boolean {
+    for (const session of this.sessions) if (session.deviceId === deviceId && session.open && session.facts !== null) return true
     return false
   }
 
@@ -188,7 +196,7 @@ export class DevicesServer implements DevicesHost {
   broadcast(channel: string, payload: unknown): void {
     if (!RPC_EVENTS.has(channel)) return
     for (const session of this.sessions) {
-      if (session.facts === null) continue
+      if (session.facts === null || session.facts.wakeOnly === true) continue
       const out = this.shape(session.deviceId, channel, payload)
       if (out !== undefined) session.event(channel, out)
     }
@@ -443,7 +451,8 @@ export class DevicesServer implements DevicesHost {
       deviceId,
       call: (from, method, args) => this.options.callRpc(from, method, args),
       onHello: (hello) => {
-        if (hello.facts !== null) this.options.onHello?.(deviceId, hello.facts)
+        // A wake channel's hello is not the device's facts (no tools, no name change): it only keeps it reachable.
+        if (hello.facts !== null && hello.facts.wakeOnly !== true) this.options.onHello?.(deviceId, hello.facts)
         this.options.onSeen?.(deviceId)
         this.options.onConnections?.()
       },

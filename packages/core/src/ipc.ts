@@ -1524,6 +1524,31 @@ export interface AppInfo {
   licencesUrl: string
 }
 
+/** Settings > Wake-ups. Answers here are his own hands (the same as the ringing screen). */
+export interface WakeupsApi {
+  /** Ring a test wake-up now: here (this computer) or all (every device). Returns what happened. */
+  test(severity: 'critical' | 'urgent' | 'heads_up', devices: 'here' | 'all'): Promise<string>
+  ack(id: string): Promise<boolean>
+  snooze(id: string, minutes?: number): Promise<boolean>
+  /** This computer's device id (the log says which wakes were sent here). */
+  selfId(): Promise<string>
+  /** What each linked phone reported about its wake-up permissions, and whether its wake channel is open. */
+  devices(): Promise<WakeDeviceStatus[]>
+}
+
+export interface WakeDeviceStatus {
+  id: string
+  name: string
+  kind: string
+  /** Its wake channel (or its app) is connected now. */
+  reachable: boolean
+  /** When it last reported, 0 never. */
+  reportedAt: number
+  appVersion: string
+  /** Each permission the phone needs, as it reported it. */
+  checks: Array<{ key: string; label: string; ok: boolean; help: string }>
+}
+
 export interface AgentApi {
   platform: AppPlatform
   version: string
@@ -1533,6 +1558,9 @@ export interface AgentApi {
 
   /** The Vault: passwords and keys the agent uses without seeing (vault.ts). Never values, except reveal. */
   vault: VaultApi
+
+  /** Wake-ups (docs/plans/wake-ups.md): his own answers and the test buttons. The log is the `wakeup` rows. */
+  wakeups: WakeupsApi
 
   settings: {
     get(): Promise<Settings>

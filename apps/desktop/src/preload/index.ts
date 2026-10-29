@@ -53,6 +53,8 @@ import { MEMORY_CHANNELS, MEMORY_EVENTS } from '../shared/memory-channels'
 import { MEMORY_HISTORY_CHANNELS } from '../shared/memory-history-channels'
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../shared/devices-channels'
 import { WORKER_CHANNELS, WORKER_EVENTS } from '../shared/workers-channels'
+import { WAKEUP_CHANNELS } from '../shared/wakeups-channels'
+import type { WakeDeviceStatus } from '@agent/core'
 import { VAULT_CHANNELS, VAULT_EVENTS } from '../shared/vault-channels'
 
 const platform: AgentApi['platform'] =
@@ -333,6 +335,13 @@ const api: AgentApi = {
     setSecret: (id, name, value) => call<void>(WORKER_CHANNELS.setSecret, id, name, value),
     openFolder: (id) => call<void>(WORKER_CHANNELS.openFolder, id),
     onChange: (callback) => on<null>(WORKER_EVENTS.changed, () => callback()),
+  },
+  wakeups: {
+    test: (severity, devices) => call<string>(WAKEUP_CHANNELS.test, severity, devices),
+    ack: (id) => call<boolean>(WAKEUP_CHANNELS.ack, id),
+    snooze: (id, minutes) => call<boolean>(WAKEUP_CHANNELS.snooze, id, minutes),
+    selfId: () => call<string>(WAKEUP_CHANNELS.selfId),
+    devices: () => call<WakeDeviceStatus[]>(WAKEUP_CHANNELS.devices),
   },
   vault: {
     list: () => call<VaultItemMeta[]>(VAULT_CHANNELS.list),

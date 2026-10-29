@@ -34,6 +34,11 @@ export interface DeviceFacts {
   urls: string[]
   /** The tools this device lets other devices use (protocol s11), as sent in its hello. */
   tools?: DeviceTool[]
+  /**
+   * A wake channel (wake-ups): a second, tiny link a phone keeps open from its foreground service. It hears only
+   * `wakeups.*` events, is never the device's facts or tools, and does not count as the device being on screen.
+   */
+  wakeOnly?: boolean
 }
 
 /** A device command of kind "tool" (protocol s5.2 and s11): run `tool` with `args`, answer with device.result. */
@@ -132,6 +137,8 @@ export interface DevicesHost {
   /** Facts of a connected device from its latest hello, or null. */
   factsOf(deviceId: string): DeviceFacts | null
   isConnected(deviceId: string): boolean
+  /** The device holds any link open now, its wake channel included (wake-ups reach it in seconds). */
+  wakeReachable?(deviceId: string): boolean
   /** This node's own id and facts. */
   self(): { id: string; facts: DeviceFacts }
   /**

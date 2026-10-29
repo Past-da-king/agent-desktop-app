@@ -9,6 +9,8 @@ import { platformOf } from '../main/devices/facts'
 import { findSidecar } from '../main/devices/net'
 import { attachDevicesSync } from '../main/devices/attach'
 import { registerRelay, rolesFromStore } from '../main/devices/relay'
+import { registerWakeupRpc, WakeDeviceReports } from '../main/wakeups/bridge'
+import { getWakeups } from '../main/wakeups/service'
 import { devicesState } from '../main/devices/sync'
 import { readConfig, writeConfig } from './node-config'
 import { PASS_SECRET } from './pair'
@@ -136,6 +138,8 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     ...(options.relayLoopback === true ? { allowLoopback: true } : {}),
     log: (message, detail) => runtime.logger.info(message, detail),
   })
+  // Wake-ups: a phone answers and reports here too, and hears wake-ups from this node when the computer is off.
+  registerWakeupRpc(node.host(), { service: getWakeups, reports: new WakeDeviceReports(), nameOf: async (id) => (await runtime.store.get('device', id))?.name ?? 'a device' })
   // Events the window would get go to paired devices too (only the ones they may hear).
   runtime.ipc.onEvent((channel, payload) => node.broadcast(channel, payload))
   // Where it listens is set before it starts, so it starts listening once, there.

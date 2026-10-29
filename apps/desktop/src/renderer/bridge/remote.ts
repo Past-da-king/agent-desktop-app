@@ -536,6 +536,14 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       onChange: noop,
     },
     // The Vault is listed from the computer; values never come to this device.
+    // Wake-ups ring and are tested on the computer and the phone themselves; an answer from here is his too.
+    wakeups: {
+      test: () => notHere('Testing a wake-up'),
+      ack: (id) => wire.call('wakeups.ack', [id]) as Promise<boolean>,
+      snooze: (id, minutes) => wire.call('wakeups.snooze', [id, minutes ?? null]) as Promise<boolean>,
+      selfId: async () => '',
+      devices: async () => [],
+    },
     vault: {
       list: () => wire.call('vault.list', []) as never,
       save: () => notHere('Changing the vault'),

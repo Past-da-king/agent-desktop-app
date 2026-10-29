@@ -117,6 +117,11 @@ import { DEFAULT_SHARE, DeviceToolHost } from './devices/device-tool-host'
 import { WindowsFirewall } from './devices/firewall'
 import { routeLate } from './devices/device-tools'
 import { startPresence, type PresenceHandle } from './presence/start'
+import { getWakeups, setWakeups, WakeupService } from './wakeups/service'
+import { RingWindow } from './wakeups/ring-window'
+import { registerWakeupIpc, registerWakeupRpc, WakeDeviceReports } from './wakeups/bridge'
+import { WAKEUP_RPC } from '../shared/wakeups-channels'
+import { getDevicesHost } from './devices/service'
 
 // Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
 const ipcMain = recordHandlers(electronIpcMain)
@@ -213,6 +218,8 @@ let supervisor: Supervisor | null = null
 let eventRouter: EventRouter | null = null
 /** Where the person is (presence/): the note on his messages, his calendars cached, meetings that end early. */
 let presenceHandle: PresenceHandle | null = null
+let wakeupService: WakeupService | null = null
+const wakeReports = new WakeDeviceReports()
 /** His recordings on disk (recordings/), and the pass that recovers, tells him and deletes old audio. */
 let recordingsStore: Recordings | null = null
 let recordingsUpkeep: Upkeep | null = null
@@ -1046,6 +1053,65 @@ async function startServices(win: BrowserWindow): Promise<void> {
     log: (message, detail) => logger.info(message, detail),
   })
   const presence = presenceHandle.presence
+  // Wake-ups (main/wakeups): rings this computer full screen until he answers, here, on the phone or in Settings.
+  {
+    const wakeStore = store
+    const me = (): { id: string; name: string } => ({ id: wakeupService?.selfId() ?? '', name: settings.get().deviceName })
+    const ring = new RingWindow({
+      onAck: (id) => void wakeupService?.ack(id, me()),
+      onSnooze: (id) => void wakeupService?.snooze(id, me()),
+      // Open is him acting on it: open the link and stop the ring.
+      onOpen: (id, link) => {
+        if (/^https?:\/\//i.test(link)) void shell.openExternal(link)
+        void wakeupService?.ack(id, me())
+      },
+      flash: (on) => {
+        if (mainWindow !== null && !mainWindow.isDestroyed()) mainWindow.flashFrame(on)
+      },
+      volume: () => settings.get().wakeupVolume,
+      snoozeMinutes: () => settings.get().wakeupSnoozeMinutes,
+      proof: process.env['AGENT_WAKEUP_PROOF'] === '1',
+      log: (message, detail) => logger.info(message, detail),
+    })
+    wakeupService = new WakeupService({
+      store: wakeStore,
+      onChange: (listener) => wakeStore.onChange(listener),
+      selfId: () => devicesState.sync?.selfId() ?? '',
+      selfName: () => settings.get().deviceName,
+      selfRings: () => settings.get().wakeupsRingHere,
+      devices: async () => (await wakeStore.list('device')).filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, kind: d.kind })),
+      settings: () => ({ snoozeMinutes: settings.get().wakeupSnoozeMinutes, quietHours: settings.get().wakeupQuietHours }),
+      idleSeconds: () => {
+        try {
+          return powerMonitor.getSystemIdleTime()
+        } catch {
+          return null
+        }
+      },
+      ringer: ring,
+      broadcast: (snapshot) => getDevicesHost()?.emit(null, WAKEUP_RPC.changed, snapshot),
+      emitEvent: (input) => {
+        const stored = workers.addEvent(input.source, input)
+        if (stored !== null) void eventRouter?.offer(stored)
+        workersChanged()
+      },
+      log: (message, detail) => logger.info(message, detail),
+    })
+    setWakeups(wakeupService)
+    wakeupService.start()
+    registerWakeupIpc(ipcMain, {
+      service: getWakeups,
+      reports: wakeReports,
+      nameOf: async (id) => (await wakeStore.get('device', id))?.name ?? 'a device',
+      selfName: () => settings.get().deviceName,
+      devices: async () =>
+        (await wakeStore.list('device'))
+          .filter((d) => !d.revoked && d.kind !== 'server' && d.id !== (devicesState.sync?.selfId() ?? ''))
+          .map((d) => ({ id: d.id, name: d.name, kind: d.kind, appVersion: d.facts?.appVersion ?? '' })),
+      reachable: (id) => getDevicesHost()?.wakeReachable?.(id) ?? false,
+    })
+    settings.onChange(() => wakeupService?.kick())
+  }
   const tools = buildToolset({
     appControl: { ...appControl, update: selfUpdater },
     presence,
@@ -1532,6 +1598,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     }
     // A page this computer fetches for the person's other nodes (a server a site blocks): relay.fetch.
     registerRelay(devices.host(), { store, rolesOf: rolesFromStore(store) })
+    // Wake-ups: the phone's ringing screen and wake channel answer and report here (main/wakeups/bridge.ts).
+    {
+      const wakeStore = store
+      registerWakeupRpc(devices.host(), { service: getWakeups, reports: wakeReports, nameOf: async (id) => (wakeStore === null ? 'a device' : ((await wakeStore.get('device', id))?.name ?? 'a device')) })
+    }
     await devices.start()
   } catch (error) {
     logger.error('Devices could not start', { message: error instanceof Error ? error.message : String(error) })
@@ -1580,6 +1651,9 @@ if (!app.requestSingleInstanceLock()) {
     scheduler = null
     presenceHandle?.stop()
     presenceHandle = null
+    wakeupService?.stop()
+    wakeupService = null
+    setWakeups(null)
     recordingsUpkeep?.stop()
     recordingsUpkeep = null
     eventRouter?.stop()

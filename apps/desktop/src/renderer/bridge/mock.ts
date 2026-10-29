@@ -1483,6 +1483,13 @@ export const mockAgent: AgentApi = {
   ...mockHotkeys(() => settings),
   workers: mockWorkers(),
   vault: mockVault(),
+  wakeups: {
+    test: async (severity) => `mock-${severity}`,
+    ack: async () => true,
+    snooze: async () => true,
+    selfId: async () => 'mock-pc',
+    devices: async () => [],
+  },
   memory: {
     async newChat(target) {
       const chatOfRow = (item: ChatItem): string => String(parseMeta(item.meta)['chat'] ?? MAIN_CHAT)

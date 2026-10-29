@@ -44,11 +44,14 @@ export const WHAT_MAX = 600
 /** A heads-up rings one cycle a minute (the screen stays up); critical and urgent ring without a break. */
 export const HEADS_UP_CYCLE_MS = 60_000
 
-/** The colour of each severity: the app's own tokens (renderer/styles/tokens.css --err, --tert, --ok). */
+/**
+ * The colour of each severity: the app's own light-theme tokens (renderer/styles/tokens.css --err, --tert, --ok), edge to
+ * edge with white text in both themes so it reads the same at 3 am as at noon (test/wakeups-ui.test.ts keeps parity).
+ */
 export const SEVERITY_LOOK: Record<WakeSeverity, { label: string; token: string; bg: string; on: string }> = {
-  critical: { label: 'Critical', token: '--err', bg: '#ba1a1a', on: '#ffffff' },
-  urgent: { label: 'Urgent', token: '--tert', bg: '#c26a00', on: '#ffffff' },
-  heads_up: { label: 'Heads-up', token: '--ok', bg: '#1b7f3b', on: '#ffffff' },
+  critical: { label: 'Critical', token: '--err', bg: '#B3261E', on: '#FFFFFF' },
+  urgent: { label: 'Urgent', token: '--tert', bg: '#8A5100', on: '#FFFFFF' },
+  heads_up: { label: 'Heads-up', token: '--ok', bg: '#1E6B3A', on: '#FFFFFF' },
 }
 
 export interface WakeSource {

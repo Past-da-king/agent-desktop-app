@@ -12,6 +12,7 @@ import { dirname } from 'node:path'
 import { DEFAULT_SETTINGS, NO_LIMIT_CAP, VOICES, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings, cleanRoster, knownRoster } from '@agent/core'
 
 import { upgradeHotkeys } from './hotkeys'
+import { validQuietHours } from '../shared/wakeups'
 
 export type SettingsChangeListener = (settings: Settings) => void
 
@@ -174,6 +175,19 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     return out
   }
 
+  if (key === 'wakeupSnoozeMinutes') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return INVALID
+    return Math.min(120, Math.max(1, Math.round(value)))
+  }
+  if (key === 'wakeupVolume') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return INVALID
+    return Math.min(1, Math.max(0.1, Math.round(value * 100) / 100))
+  }
+  if (key === 'wakeupQuietHours') {
+    if (typeof value !== 'string') return INVALID
+    const clean = value.replace(/\s+/g, '')
+    return validQuietHours(clean) ? clean : INVALID
+  }
   if (key === 'helpersRunOn') {
     if (typeof value !== 'string') return INVALID
     const clean = value.trim()

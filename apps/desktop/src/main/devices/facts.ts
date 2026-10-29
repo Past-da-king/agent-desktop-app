@@ -36,6 +36,7 @@ export function cleanFacts(raw: unknown): DeviceFacts | null {
     fingerprint: typeof value['fingerprint'] === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value['fingerprint']) ? value['fingerprint'] : '',
     urls,
     ...(value['tools'] === undefined ? {} : { tools: cleanTools(value['tools']) }),
+    ...(value['wakeOnly'] === true ? { wakeOnly: true } : {}),
   }
 }
 

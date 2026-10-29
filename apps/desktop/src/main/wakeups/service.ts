@@ -164,6 +164,23 @@ export class WakeupService {
     return { ok: true, id: saved.id, message: `Wake-up ${saved.id.slice(0, 8)} ${when} on ${where}. It rings until he answers on any device.` }
   }
 
+  /** A test wake from his own button (Settings, the phone): rings exactly the devices given (empty: every device). */
+  async fireTest(severity: FireInput['severity'], targets: string[], firedBy: string): Promise<string> {
+    const now = this.now()
+    const label = severity === 'critical' ? 'Critical' : severity === 'urgent' ? 'Urgent' : 'Heads-up'
+    const plan = planFire(
+      { severity, title: `Test: ${label} wake-up`, whatToDo: "This is a test of your wake-ups. Tap I'm on it to stop it, or Snooze.", source: { kind: 'test', ref: '', link: '' }, devices: targets.length === 0 ? 'all' : 'here', dedupeKey: '', at: null },
+      await this.deps.store.list('wakeup'),
+      now,
+      { firedBy, firedOn: this.selfId(), targets },
+    )
+    if (plan.kind !== 'create') return plan.message
+    const saved = await this.deps.store.upsert('wakeup', plan.row)
+    this.log('wakeups: test fired', { id: saved.id, severity, targets })
+    this.kick()
+    return saved.id
+  }
+
   async withdraw(ref: string): Promise<string> {
     const now = this.now()
     const views = foldWakes(await this.deps.store.list('wakeup'), now)
