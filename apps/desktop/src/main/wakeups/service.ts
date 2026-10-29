@@ -56,6 +56,8 @@ export interface WakeSnapshot {
   from: string
   wakes: Array<Pick<WakeView, 'id' | 'severity' | 'whatToDo' | 'ringAt' | 'state' | 'cancelled' | 'targets' | 'seen' | 'firedBy'> & { title: string; link: string; sourceKind: string }>
   snoozeMinutes: number
+  /** The sender's quiet hours ("22:00-07:00", '' none): a heads-up is silent in them on the phone too. */
+  quietHours: string
 }
 
 export interface WakeEvent {
@@ -237,6 +239,7 @@ export class WakeupService {
       now,
       from: this.selfId(),
       snoozeMinutes: this.deps.settings().snoozeMinutes,
+      quietHours: this.deps.settings().quietHours,
       wakes: views.map((v) => ({
         id: v.id,
         severity: v.severity,

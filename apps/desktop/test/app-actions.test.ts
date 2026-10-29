@@ -16,9 +16,10 @@ import { MEMORY_CHANNELS } from '../src/shared/memory-channels'
 import { MEMORY_HISTORY_CHANNELS } from '../src/shared/memory-history-channels'
 import { VAULT_CHANNELS } from '../src/shared/vault-channels'
 import { WORKER_CHANNELS } from '../src/shared/workers-channels'
+import { WAKEUP_CHANNELS } from '../src/shared/wakeups-channels'
 import { testContext, toolNamed } from './support'
 
-const ROOTS: Record<string, unknown> = { CHANNELS, DEVICES_CHANNELS, MEMORY_CHANNELS, MEMORY_HISTORY_CHANNELS, WORKER_CHANNELS, VAULT_CHANNELS }
+const ROOTS: Record<string, unknown> = { CHANNELS, DEVICES_CHANNELS, MEMORY_CHANNELS, MEMORY_HISTORY_CHANNELS, WORKER_CHANNELS, VAULT_CHANNELS, WAKEUP_CHANNELS }
 
 /** Every channel string the preload names (CHANNELS.chat.send and the like). */
 function preloadChannels(): string[] {

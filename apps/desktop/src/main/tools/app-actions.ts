@@ -17,6 +17,7 @@ import { schema, str, type JsonObject, type Tool } from '@agent/core'
 
 import { RPC_CHANNELS } from '../../shared/rpc-methods'
 import { WORKER_CHANNELS } from '../../shared/workers-channels'
+import { WAKEUP_CHANNELS } from '../../shared/wakeups-channels'
 
 export interface AppActionRule {
   kind: 'free' | 'ask' | 'tool' | 'no'
@@ -47,6 +48,7 @@ export const EDITABLE_ENTITIES = ['memory', 'goal', 'task', 'trigger', 'project'
 export const APP_ACTION_CHANNELS: Readonly<Record<string, string>> = {
   ...RPC_CHANNELS,
   ...Object.fromEntries(Object.entries(WORKER_CHANNELS).map(([key, channel]) => [`workers.${key}`, channel])),
+  ...Object.fromEntries(Object.entries(WAKEUP_CHANNELS).map(([key, channel]) => [`wakeups.${key}`, channel])),
 }
 
 const free = (about: string, args?: string): AppActionRule => ({ kind: 'free', about, ...(args === undefined ? {} : { args }) })
@@ -108,6 +110,12 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'chat.answer': no('Answer a question card', PERSON_ANSWERS),
   'chat.decide': no('Approve or decline an approval card', PERSON_ANSWERS),
   'chat.tap': no('Tap a button on a card', PERSON_ANSWERS),
+  // Wake-ups: only his hands answer one (the ringing screen, the phone, Settings > Wake-ups). Agents fire with wake_me.
+  'wakeups.ack': no("Answer a ringing wake-up: I'm on it (Settings > Wake-ups)", 'only the person answers a wake-up; no agent may silence one'),
+  'wakeups.snooze': no('Snooze a ringing wake-up (Settings > Wake-ups)', 'only the person answers a wake-up; no agent may silence one'),
+  'wakeups.test': tool('Ring a test wake-up (Settings > Wake-ups > Test)', 'wake_me'),
+  'wakeups.selfId': free("This computer's device id (Settings > Wake-ups)"),
+  'wakeups.devices': free("Each linked phone's wake-up permissions as it reported them (Settings > Wake-ups)"),
   // Routines
   'routines.runNow': free('Run a routine now (Routines > Run now)', 'routineId'),
   // Browser panel
