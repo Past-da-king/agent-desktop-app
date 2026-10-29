@@ -188,7 +188,7 @@ export class HelperFeed {
     items.push(...this.said.values())
     for (const [chat, row] of this.first) if (this.said.get(chat) !== row) items.push(row)
     const running = this.deps.running
-    const cards = helperCards(items, this.projects, running === undefined ? {} : { running }).map((card) => cardInfo(card))
+    const cards = helperCards(items, this.projects, running === undefined ? { now: this.now() } : { running, now: this.now() }).map((card) => cardInfo(card))
     const json = JSON.stringify(cards)
     if (json !== this.lastJson) {
       this.lastJson = json

@@ -279,7 +279,7 @@ export function projectLine(view: HelperView, lines: ChatItem[]): string {
 export interface CardOptions {
   /** Whether a chat has a turn running now (the runner's state): its rows alone cannot always tell. */
   running?: (chat: string) => boolean
-  /** The clock, for the waiting cards' day (WAITING_CARD_MS). Default Date.now. */
+  /** The clock, for the waiting cards' day (WAITING_CARD_MS); without it a waiting card stays until closed. */
   now?: number
 }
 
@@ -442,7 +442,7 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       ...children.map((child) => child.activityAt),
     )
     if ((closed.get(chat) ?? -1) >= activityAt) continue
-    if (waiting && (options.now ?? Date.now()) - activityAt > WAITING_CARD_MS) continue
+    if (waiting && options.now !== undefined && options.now - activityAt > WAITING_CARD_MS) continue
     const project = projectOf.get(chat)
     const answer = lastAgentLine(lines)
     // While it works with nothing of its own to say yet, its line says its helpers are on it rather than Starting.

@@ -82,7 +82,7 @@ export function usePanelCards(): HelperCard[] {
   const items = useEntity('chat_item')
   const projects = useEntity('project')
   const runs = useChats((state) => state.runs)
-  return useMemo(() => helperCards(items, projects, { running: (chat) => runs[chat]?.running === true }), [items, projects, runs])
+  return useMemo(() => helperCards(items, projects, { running: (chat) => runs[chat]?.running === true, now: Date.now() }), [items, projects, runs])
 }
 
 /** The same cards (the collapsed strip's faces and older callers). */
