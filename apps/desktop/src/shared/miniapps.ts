@@ -20,6 +20,29 @@ export const MINIAPP_STORE_MAX_BYTES = 256_000
 /** Calls an app may make in a window of time (one app; a loop that runs away is cut off). */
 export const MINIAPP_RATE = { calls: 40, perMs: 10_000 }
 export const MINIAPP_PIN_CAP_DEFAULT = 8
+/** Links an app may open (agent.openUrl, or a plain <a href> click): a few in a row, never a storm of tabs. */
+export const MINIAPP_OPEN_RATE = { opens: 4, perMs: 30_000 }
+export const MINIAPP_OPEN_MAX_CHARS = 4096
+
+/**
+ * agent.openUrl(url): only an https address with a host and no user name or password in it. The person's default
+ * browser opens it on the desktop; on the phone Android picks the app for it (a Teams or Meet link opens that app).
+ */
+export function checkOpenUrl(raw: unknown): { ok: true; url: string } | { ok: false; why: string } {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (text === '') return { ok: false, why: 'openUrl needs an https address.' }
+  if (text.length > MINIAPP_OPEN_MAX_CHARS) return { ok: false, why: `That address is longer than ${MINIAPP_OPEN_MAX_CHARS} characters.` }
+  let url: URL
+  try {
+    url = new URL(text)
+  } catch {
+    return { ok: false, why: 'openUrl needs a full https address (https://...).' }
+  }
+  if (url.protocol !== 'https:') return { ok: false, why: `Only https links open (not ${url.protocol.replace(/:$/, '')}).` }
+  if (url.hostname === '') return { ok: false, why: 'That address has no host.' }
+  if (url.username !== '' || url.password !== '') return { ok: false, why: 'A link with a user name or password in it does not open.' }
+  return { ok: true, url: url.href }
+}
 
 const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}\.(html|js|css|svg|json)$/
 
@@ -377,8 +400,12 @@ export function lintMiniApp(draft: MiniAppDraft, knownTools?: ReadonlySet<string
     scanColour(clean, file, out)
     if (kind !== 'js') scanCssRules(clean, file, out)
     else scanCssRules(clean.replace(/fontFamily\s*=/g, 'font-family:').replace(/borderRadius\s*=/g, 'border-radius:'), file, out)
+    // A link is not network: an https address as an <a href> or in agent.openUrl("...") opens through the bridge.
+    const links = clean
+      .replace(/(<a\b[^>]*\bhref\s*=\s*["'])(https:\/\/[^"'\s<>]*)(?=["'])/gi, (_m, pre: string, url: string) => pre + ' '.repeat(url.length))
+      .replace(/(\bopenUrl\s*\(\s*["'`])(https:\/\/[^"'`\s]*)(?=["'`])/g, (_m, pre: string, url: string) => pre + ' '.repeat(url.length))
     for (const [re, what] of NETWORK) {
-      const m = re.exec(clean)
+      const m = re.exec(links)
       if (m !== null) out.push({ file, line: lineOf(clean, m.index), rule: 'network', text: `${what}` })
     }
     for (const [re, what] of ESCAPES) {

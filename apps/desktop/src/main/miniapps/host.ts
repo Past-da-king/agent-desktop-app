@@ -10,7 +10,7 @@
  */
 import type { JsonObject, MiniAppRow } from '@agent/core'
 
-import { checkCall, lintMiniApp, MINIAPP_RATE, topicAllowed } from '../../shared/miniapps'
+import { checkCall, checkOpenUrl, lintMiniApp, MINIAPP_OPEN_RATE, MINIAPP_RATE, topicAllowed } from '../../shared/miniapps'
 import type { MiniAppStore } from './store'
 import { createPluginHost, type PluginHost, type Scope } from './plugin-host'
 
@@ -26,6 +26,7 @@ export interface BridgeMessage {
   key?: unknown
   value?: unknown
   text?: unknown
+  url?: unknown
 }
 
 export interface BridgeReply {
@@ -53,6 +54,11 @@ export interface MiniAppHostDeps {
   reads?: (tool: string, args: JsonObject) => boolean | null
   /** Hands a line from the app to his agent (agent.ask). */
   ask?: (app: MiniAppRow, text: string) => Promise<void>
+  /**
+   * Opens an https link from the app on this computer (shell.openExternal: his default browser, or the app that owns
+   * the link). Absent: links open nowhere. A phone session never opens here: the phone opens it itself.
+   */
+  openUrl?: (url: string) => Promise<void>
   /** His calendars changed (presence/calendar.ts CalendarCache.onChange). */
   onCalendarChange?: (listener: () => void) => () => void
   /** A background worker emitted an event. */
@@ -99,6 +105,7 @@ export class MiniAppHost {
   private readonly plugins = new Map<string, Plugin>()
   private readonly sessions = new Map<string, Session>()
   private readonly calls = new Map<string, number[]>()
+  private readonly opens = new Map<string, number[]>()
   private offRows: (() => void) | null = null
   private seq = 0
 
@@ -328,6 +335,8 @@ export class MiniAppHost {
         await this.deps.ask(app, text)
         return { op: 'reply', id, ok: true, result: 'Sent to your agent.' }
       }
+      case 'open':
+        return this.open(session, app, id, raw.url)
       default:
         return id === 0 ? null : fail(`Unknown request ${op}.`)
     }
@@ -359,6 +368,43 @@ export class MiniAppHost {
       }) ?? null
     }
     return null
+  }
+
+  /**
+   * agent.openUrl, and a plain link click in the app: https only, a few at a time, each one logged (the host only, a
+   * meeting link's path carries its key). The window opens it here; a phone session gets the checked address back and
+   * the phone opens it in the app Android picks; the look check opens nothing.
+   */
+  private async open(session: Session, app: MiniAppRow, id: number, raw: unknown): Promise<BridgeReply> {
+    const verdict = checkOpenUrl(raw)
+    const refuse = (why: string): BridgeReply => {
+      if (session.refused.length < 20) session.refused.push(`openUrl: ${why}`)
+      this.log('Mini-app link not opened', { app: app.id, why })
+      return { op: 'reply', id, ok: false, error: why }
+    }
+    if (!verdict.ok) return refuse(verdict.why)
+    if (session.mode === 'check') return { op: 'reply', id, ok: true, result: 'Not opened during the check.' }
+    const now = this.now()
+    const recent = (this.opens.get(app.id) ?? []).filter((at) => now - at < MINIAPP_OPEN_RATE.perMs)
+    if (recent.length >= MINIAPP_OPEN_RATE.opens) {
+      this.opens.set(app.id, recent)
+      return refuse(`Too many links: at most ${MINIAPP_OPEN_RATE.opens} in ${MINIAPP_OPEN_RATE.perMs / 1000} s.`)
+    }
+    recent.push(now)
+    this.opens.set(app.id, recent)
+    const host = new URL(verdict.url).host
+    if (session.mode === 'device') {
+      this.log('Mini-app link opened', { app: app.id, host, on: 'device' })
+      return { op: 'reply', id, ok: true, result: { open: verdict.url } }
+    }
+    if (this.deps.openUrl === undefined) return refuse('Links cannot be opened here.')
+    try {
+      await this.deps.openUrl(verdict.url)
+    } catch (error) {
+      return refuse(`It did not open: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    this.log('Mini-app link opened', { app: app.id, host, on: 'window' })
+    return { op: 'reply', id, ok: true, result: 'Opened.' }
   }
 
   private rateOk(appId: string): boolean {

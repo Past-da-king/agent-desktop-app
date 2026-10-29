@@ -128,8 +128,9 @@ function accentTable(): Record<string, { light: string[]; dark: string[] }> {
 
 /**
  * The bridge, as the app's first script. `window.agent`: call(tool, args), subscribe(topic, fn), onRefresh(fn),
- * store.get/set/remove/keys, theme.get/onChange, ask(text), ready() (its first data is drawn: the look check shoots).
- * Results that are JSON come back parsed.
+ * store.get/set/remove/keys, theme.get/onChange, ask(text), openUrl(url) (an https link, in his browser or the phone's
+ * app for it), ready() (its first data is drawn: the look check shoots). Results that are JSON come back parsed. A click
+ * on a plain <a href> to another address goes through openUrl too (the sandbox would otherwise drop it).
  */
 export function agentJs(): string {
   return `(function(){
@@ -159,10 +160,12 @@ onRefresh:function(fn){return agent.subscribe("refresh",fn);},
 store:Object.freeze({get:function(k){return request("store.get",{key:String(k)}).then(function(v){return v==null?null:parse(v)})},set:function(k,v){return request("store.set",{key:String(k),value:typeof v==="string"?v:JSON.stringify(v)})},remove:function(k){return request("store.remove",{key:String(k)})},keys:function(){return request("store.keys",{})}}),
 theme:Object.freeze({get:function(){return{dark:state.dark,accent:state.accent}},onChange:function(fn){themeFns.push(fn);return function(){var i=themeFns.indexOf(fn);if(i>=0)themeFns.splice(i,1)}}}),
 ask:function(text){return request("ask",{text:String(text)});},
+openUrl:function(url){return request("open",{url:String(url)});},
 ready:function(){if(!readySent){readySent=true;send({op:"ready"});}}
 };
 Object.freeze(agent);
 Object.defineProperty(window,"agent",{value:agent,writable:false,configurable:false});
+window.addEventListener("click",function(e){if(e.defaultPrevented||e.button!==0)return;var t=e.target,a=t&&t.closest?t.closest("a[href]"):null;if(!a)return;var href=a.getAttribute("href")||"";if(href===""||href.charAt(0)==="#"||/^\\s*javascript:/i.test(href))return;var u;try{u=new URL(href,location.href)}catch(x){return}if(u.protocol===location.protocol&&u.host===location.host)return;e.preventDefault();agent.openUrl(u.href).catch(function(err){send({op:"error",text:"openUrl: "+String(err&&err.message||err)})});});
 window.addEventListener("error",function(e){send({op:"error",text:String(e.message||e)})});
 window.addEventListener("unhandledrejection",function(e){send({op:"error",text:String(e.reason&&e.reason.message||e.reason)})});
 send({op:"hello"});

@@ -1299,6 +1299,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
       ask: async (row, text) => {
         await runner?.send(`(From my mini-app "${row.name}") ${text}`)
       },
+      // agent.openUrl and link clicks: checked https links in his default browser (or the app that owns the link).
+      openUrl: (url) => shell.openExternal(url),
       onCalendarChange: (listener) => presenceHandle?.calendar.onChange(listener) ?? (() => undefined),
       log: (message, detail) => logger.info(message, detail),
     })
