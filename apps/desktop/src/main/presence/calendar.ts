@@ -26,6 +26,8 @@ export interface CalendarEvent {
 /** Something that reads his calendars for a window of time. Null: no calendar is connected. Throws when it cannot read. */
 export interface CalendarSource {
   events(from: number, to: number): Promise<CalendarEvent[] | null>
+  /** True when the last events() read some calendars but not all (the cache then tries again soon). */
+  incomplete?(): boolean
 }
 
 // ---- Composio (the connectors already in use) -----------------------------------------------------------
@@ -41,9 +43,12 @@ export interface CalendarApps {
 export const CALENDAR_APPS = ['googlecalendar', 'outlook'] as const
 
 /** Every connected calendar account, read in one call each. No account: no events (and no error). */
-export function composioCalendarSource(apps: CalendarApps): CalendarSource {
+export function composioCalendarSource(apps: CalendarApps, log: (message: string, detail?: Record<string, unknown>) => void = () => undefined): CalendarSource {
+  let partial = false
   return {
+    incomplete: () => partial,
     async events(from, to) {
+      partial = false
       const backend = apps.backend()
       if (backend === null) return null
       const accounts = (await apps.activeAccounts([...CALENDAR_APPS])).filter(
@@ -57,16 +62,27 @@ export function composioCalendarSource(apps: CalendarApps): CalendarSource {
         const call = app === 'outlook' ? outlookCall(from, to) : googleCall(from, to)
         try {
           const result = await backend.execute(call.slug, call.args, account.id)
-          if (!result.ok) {
+          const reply = unwrapComposio(result.text)
+          if (!result.ok || !reply.ok) {
             failures += 1
+            log('Calendar read failed', { account: account.id, app, error: (reply.error ?? result.text).slice(0, 300) })
             continue
           }
-          found.push(...(app === 'outlook' ? parseOutlook(result.text) : parseGoogle(result.text)))
-        } catch {
+          const key = app === 'outlook' ? 'value' : 'items'
+          const listed = findList(reply.data, key).length
+          const events = app === 'outlook' ? parseOutlookData(reply.data) : parseGoogleData(reply.data)
+          // A list came back but nothing was kept, or no list at all: say so, so a new reply shape is never a silent empty calendar.
+          if (events.length === 0 && (listed > 0 || !hasList(reply.data, key))) {
+            log('Calendar reply kept no meetings', { account: account.id, app, listed, reply: result.text.slice(0, 300) })
+          }
+          found.push(...events)
+        } catch (error) {
           failures += 1
+          log('Calendar read failed', { account: account.id, app, error: error instanceof Error ? error.message : String(error) })
         }
       }
       if (failures === accounts.length) throw new Error('No calendar could be read.')
+      partial = failures > 0
       return found
     },
   }
@@ -87,10 +103,43 @@ function outlookCall(from: number, to: number): { slug: string; args: JsonObject
   }
 }
 
+/**
+ * What a Composio reply really says. Composio Connect (COMPOSIO_MULTI_EXECUTE_TOOL) wraps the app's answer as
+ * {successful, data: {results: [{response: {successful, data, error}}]}}; the REST API answers {successful, data}.
+ * ok is false when either layer says it failed (or the text is an "Error:" or not JSON); data is the app's own answer.
+ */
+export function unwrapComposio(text: string): { ok: boolean; data: unknown; error?: string } {
+  const failed = text.trimStart().startsWith('Error:')
+  const parsed = parseJson(failed ? text.trimStart().slice(6) : text)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ok: false, data: null, error: text.slice(0, 300) || 'empty reply' }
+  const outer = parsed as Record<string, unknown>
+  const results = record(outer['data'])['results']
+  if (Array.isArray(results) && results.length > 0) {
+    const first = record(results[0])
+    const inner = 'response' in first ? record(first['response']) : first
+    const error = errorText(inner['error']) || errorText(first['error']) || errorText(outer['error'])
+    if (failed || inner['successful'] === false || outer['successful'] === false) return { ok: false, data: inner['data'] ?? null, error: error || 'Composio said the call failed' }
+    return { ok: true, data: inner['data'] ?? inner }
+  }
+  if (failed || outer['successful'] === false) return { ok: false, data: outer['data'] ?? null, error: errorText(outer['error']) || 'Composio said the call failed' }
+  return { ok: true, data: 'data' in outer ? outer['data'] : outer }
+}
+
+function errorText(value: unknown): string {
+  if (typeof value === 'string') return value.trim().slice(0, 300)
+  if (typeof value === 'object' && value !== null) return JSON.stringify(value).slice(0, 300)
+  return ''
+}
+
 /** Google Calendar events (items[]), without all-day, cancelled or declined ones. */
 export function parseGoogle(text: string): CalendarEvent[] {
+  const reply = unwrapComposio(text)
+  return reply.ok ? parseGoogleData(reply.data) : []
+}
+
+function parseGoogleData(data: unknown): CalendarEvent[] {
   const out: CalendarEvent[] = []
-  for (const item of findList(parseJson(text), 'items')) {
+  for (const item of findList(data, 'items')) {
     if (item['status'] === 'cancelled') continue
     const start = record(item['start'])
     const end = record(item['end'])
@@ -117,8 +166,13 @@ export function parseGoogle(text: string): CalendarEvent[] {
 
 /** Outlook calendar view (value[]), without all-day, cancelled or declined ones. */
 export function parseOutlook(text: string): CalendarEvent[] {
+  const reply = unwrapComposio(text)
+  return reply.ok ? parseOutlookData(reply.data) : []
+}
+
+function parseOutlookData(data: unknown): CalendarEvent[] {
   const out: CalendarEvent[] = []
-  for (const item of findList(parseJson(text), 'value')) {
+  for (const item of findList(data, 'value')) {
     if (item['isCancelled'] === true || item['isAllDay'] === true) continue
     if (record(item['responseStatus'])['response'] === 'declined') continue
     const startAt = outlookTime(record(item['start']))
@@ -157,10 +211,19 @@ function onlineKind(place: string): string {
   return place.trim().slice(0, 60)
 }
 
-/** The first array of objects under `key`, however deep Composio wrapped it (data.items, data.response_data.value...). */
+/**
+ * The first array of objects under `key`, however deep Composio wrapped it (data.items, data.response_data.value,
+ * data.results[0].response.data.items...). It looks inside arrays of objects too, and inside JSON held as a string.
+ */
 function findList(value: unknown, key: string, depth = 0): Array<Record<string, unknown>> {
-  if (depth > 5 || typeof value !== 'object' || value === null) return []
-  if (Array.isArray(value)) return []
+  if (depth > 8 || typeof value !== 'object' || value === null) return []
+  if (Array.isArray(value)) {
+    for (const each of value.slice(0, 20)) {
+      const found = findList(each, key, depth + 1)
+      if (found.length > 0) return found
+    }
+    return []
+  }
   const obj = value as Record<string, unknown>
   const direct = obj[key]
   if (Array.isArray(direct)) return direct.filter((each) => typeof each === 'object' && each !== null).map(record)
@@ -169,6 +232,15 @@ function findList(value: unknown, key: string, depth = 0): Array<Record<string, 
     if (found.length > 0) return found
   }
   return []
+}
+
+/** Whether the reply holds a `key` list at all (an empty calendar has one, with nothing in it). */
+function hasList(value: unknown, key: string, depth = 0): boolean {
+  if (depth > 8 || typeof value !== 'object' || value === null) return false
+  if (Array.isArray(value)) return value.slice(0, 20).some((each) => hasList(each, key, depth + 1))
+  const obj = value as Record<string, unknown>
+  if (Array.isArray(obj[key])) return true
+  return Object.values(obj).some((inner) => hasList(typeof inner === 'string' && inner.trim().startsWith('{') ? parseJson(inner) : inner, key, depth + 1))
 }
 
 function parseJson(text: string): unknown {
@@ -214,10 +286,14 @@ export function fileCalendarSource(path: string): CalendarSource {
 }
 
 /** The source this app uses: the fake file when a test copy names one, else his connected calendars. */
-export function calendarSourceFor(apps: CalendarApps | null, env: NodeJS.ProcessEnv = process.env): CalendarSource | null {
+export function calendarSourceFor(
+  apps: CalendarApps | null,
+  env: NodeJS.ProcessEnv = process.env,
+  log?: (message: string, detail?: Record<string, unknown>) => void,
+): CalendarSource | null {
   const fake = (env['AGENT_FAKE_CALENDAR'] ?? '').trim()
   if (fake !== '') return fileCalendarSource(fake)
-  return apps === null ? null : composioCalendarSource(apps)
+  return apps === null ? null : composioCalendarSource(apps, log)
 }
 
 // ---- the cache -----------------------------------------------------------------------------------------
@@ -228,6 +304,8 @@ const BACK_MS = 12 * 60 * 60_000
 const AHEAD_MS = 7 * 24 * 60 * 60_000
 /** A refresh just after an event ends, so a meeting moved or added meanwhile is seen. */
 const AFTER_END_MS = 30_000
+/** A read that failed (all calendars or some) is tried again after these waits, then the normal refresh takes over. */
+export const CALENDAR_RETRY_MS = [60_000, 120_000, 300_000] as const
 
 export interface CalendarCacheDeps {
   source: CalendarSource | null
@@ -246,6 +324,8 @@ export class CalendarCache {
   private known = false
   private timer: ReturnType<typeof setInterval> | null = null
   private endTimer: ReturnType<typeof setTimeout> | null = null
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private retries = 0
   private running: Promise<void> | null = null
   /** How many times a calendar was read (tests prove it is not per message). */
   reads = 0
@@ -269,8 +349,10 @@ export class CalendarCache {
   stop(): void {
     if (this.timer !== null) clearInterval(this.timer)
     if (this.endTimer !== null) clearTimeout(this.endTimer)
+    if (this.retryTimer !== null) clearTimeout(this.retryTimer)
     this.timer = null
     this.endTimer = null
+    this.retryTimer = null
   }
 
   /** True once a calendar has been read successfully (an empty one counts). */
@@ -298,14 +380,34 @@ export class CalendarCache {
         this.known = events !== null
         this.lastReadAt = now
         this.armEnd()
+        if (source.incomplete?.() === true) this.armRetry('some calendars')
+        else this.retries = 0
       } catch (error) {
         this.log('Calendar not read', { message: error instanceof Error ? error.message : String(error) })
+        this.armRetry('no calendar')
       }
     })().finally(() => {
       this.running = null
     })
     this.running = run
     return run
+  }
+
+  /** After a failed read: try again in 1, then 2, then 5 minutes; after that the normal refresh carries on. */
+  private armRetry(what: string): void {
+    if (this.timer === null || this.retryTimer !== null) return
+    const wait = CALENDAR_RETRY_MS[this.retries]
+    if (wait === undefined) {
+      this.retries = 0
+      return
+    }
+    this.retries += 1
+    this.log('Calendar read again soon', { failed: what, inSeconds: wait / 1000, attempt: this.retries })
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      void this.refresh()
+    }, wait)
+    this.retryTimer.unref?.()
   }
 
   /** A refresh just after the next event in the cache ends. */
@@ -338,3 +440,4 @@ function dedupe(events: CalendarEvent[]): CalendarEvent[] {
   }
   return out
 }
+

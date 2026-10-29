@@ -44,7 +44,7 @@ export interface PresenceHandle {
 
 export function startPresence(options: StartPresenceOptions): PresenceHandle {
   const calendar = new CalendarCache({
-    source: calendarSourceFor(options.apps, options.env),
+    source: calendarSourceFor(options.apps, options.env, options.log),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.log === undefined ? {} : { log: options.log }),
   })

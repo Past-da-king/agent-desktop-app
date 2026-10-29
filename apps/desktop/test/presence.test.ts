@@ -31,6 +31,7 @@ import {
   composioCalendarSource,
   parseGoogle,
   parseOutlook,
+  unwrapComposio,
   type CalendarEvent,
   type CalendarSource,
 } from '../src/main/presence/calendar'
@@ -247,6 +248,171 @@ describe('the calendar cache', () => {
     expect(await composioCalendarSource({ activeAccounts: async () => [], backend: () => null }).events(0, 1)).toBeNull()
     expect(parseGoogle('not json')).toEqual([])
     expect(parseOutlook('{}')).toEqual([])
+  })
+})
+
+/** A reply exactly as Composio Connect gives it (COMPOSIO_MULTI_EXECUTE_TOOL wraps the app's answer in results[]). */
+function connectReply(slug: string, data: JsonObject, successful = true): string {
+  return JSON.stringify({
+    successful,
+    data: { results: [{ response: { successful, data }, tool_slug: slug, index: 0 }], total_count: 1, success_count: successful ? 1 : 0, error_count: successful ? 0 : 1 },
+    error: successful ? null : '1 out of 1 tools failed',
+    log_id: 'log_test',
+  })
+}
+
+const CONNECT_GOOGLE = connectReply('GOOGLECALENDAR_EVENTS_LIST', {
+  kind: 'calendar#events',
+  summary: 'ap@example.com',
+  timeZone: 'Africa/Johannesburg',
+  items: [
+    {
+      kind: 'calendar#event',
+      id: 'scrum_20261029T090000Z',
+      status: 'confirmed',
+      summary: 'GrowFactory - Daily Scrum',
+      start: { dateTime: '2026-10-29T11:00:00+02:00', timeZone: 'Africa/Johannesburg' },
+      end: { dateTime: '2026-10-29T11:30:00+02:00', timeZone: 'Africa/Johannesburg' },
+      hangoutLink: 'https://meet.google.com/abc-defg-hij',
+      attendees: [{ email: 'ap@example.com', self: true, responseStatus: 'accepted' }],
+      recurringEventId: 'scrum',
+    },
+  ],
+})
+
+const CONNECT_OUTLOOK = connectReply('OUTLOOK_GET_CALENDAR_VIEW', {
+  '@odata.context': "https://graph.microsoft.com/v1.0/$metadata#users('me')/calendarView",
+  value: [
+    {
+      id: 'AAMkAD-review',
+      subject: 'Strat Edge weekly review',
+      isAllDay: false,
+      isCancelled: false,
+      start: { dateTime: '2026-10-29T12:00:00.0000000', timeZone: 'UTC' },
+      end: { dateTime: '2026-10-29T13:00:00.0000000', timeZone: 'UTC' },
+      responseStatus: { response: 'accepted', time: '0001-01-01T00:00:00Z' },
+      onlineMeetingProvider: 'teamsForBusiness',
+      onlineMeeting: { joinUrl: 'https://teams.microsoft.com/l/meetup-join/x' },
+    },
+  ],
+})
+
+describe('the calendar through Composio Connect', () => {
+  function connectSource(replies: Record<string, () => { ok: boolean; text: string }>, log?: (message: string, detail?: Record<string, unknown>) => void): CalendarSource {
+    return composioCalendarSource(
+      {
+        activeAccounts: async () => [
+          { id: 'googlecalendar_khaja-knab', app: 'googlecalendar' },
+          { id: 'outlook_maine-baba', app: 'outlook' },
+        ],
+        backend: () => ({ execute: async (slug) => (replies[slug] ?? (() => ({ ok: true, text: '{}' })))() }),
+      },
+      log,
+    )
+  }
+
+  it('reads Google and Outlook meetings out of the results[] wrapper', async () => {
+    expect(parseGoogle(CONNECT_GOOGLE).map((event) => [event.title, new Date(event.start).toISOString(), event.where])).toEqual([
+      ['GrowFactory - Daily Scrum', '2026-10-29T09:00:00.000Z', 'Google Meet'],
+    ])
+    expect(parseOutlook(CONNECT_OUTLOOK).map((event) => [event.title, new Date(event.start).toISOString(), event.where])).toEqual([
+      ['Strat Edge weekly review', '2026-10-29T12:00:00.000Z', 'Teams'],
+    ])
+    const events = await connectSource({
+      GOOGLECALENDAR_EVENTS_LIST: () => ({ ok: true, text: CONNECT_GOOGLE }),
+      OUTLOOK_GET_CALENDAR_VIEW: () => ({ ok: true, text: CONNECT_OUTLOOK }),
+    }).events(0, Date.parse('2026-11-05T00:00:00Z'))
+    expect(events?.map((event) => event.title)).toEqual(['GrowFactory - Daily Scrum', 'Strat Edge weekly review'])
+  })
+
+  it('unwraps the reply, and an inner failure is a failure, not an empty calendar', () => {
+    expect(unwrapComposio(CONNECT_GOOGLE)).toMatchObject({ ok: true, data: { kind: 'calendar#events' } })
+    // The outer reply says it worked, the app's own answer says it did not.
+    const inner = JSON.stringify({ successful: true, data: { results: [{ response: { successful: false, data: {}, error: 'Token expired' } }] } })
+    expect(unwrapComposio(inner)).toMatchObject({ ok: false, error: 'Token expired' })
+    expect(unwrapComposio(`Error: ${connectReply('GOOGLECALENDAR_EVENTS_LIST', { http_error: '401' }, false)}`).ok).toBe(false)
+    // A plain REST reply (an API key, not Connect) passes through as it is.
+    expect(unwrapComposio(JSON.stringify({ successful: true, data: { items: [] } }))).toMatchObject({ ok: true, data: { items: [] } })
+    expect(unwrapComposio('not json').ok).toBe(false)
+  })
+
+  it('logs an inner failure and counts it as a calendar that could not be read', async () => {
+    const lines: Array<[string, Record<string, unknown> | undefined]> = []
+    const failed = JSON.stringify({ successful: true, data: { results: [{ response: { successful: false, data: {}, error: 'Token expired' } }] } })
+    const source = connectSource(
+      { GOOGLECALENDAR_EVENTS_LIST: () => ({ ok: true, text: failed }), OUTLOOK_GET_CALENDAR_VIEW: () => ({ ok: true, text: failed }) },
+      (message, detail) => lines.push([message, detail]),
+    )
+    await expect(source.events(0, 1)).rejects.toThrow()
+    expect(lines.filter(([message]) => message === 'Calendar read failed').length).toBe(2)
+    expect(JSON.stringify(lines)).toContain('Token expired')
+  })
+
+  it('logs a reply that had a list but kept no meetings, so a new shape is never silently empty', async () => {
+    const lines: Array<[string, Record<string, unknown> | undefined]> = []
+    const odd = connectReply('GOOGLECALENDAR_EVENTS_LIST', { events: [{ id: 'x', summary: 'Unknown shape' }] })
+    const source = connectSource(
+      { GOOGLECALENDAR_EVENTS_LIST: () => ({ ok: true, text: odd }), OUTLOOK_GET_CALENDAR_VIEW: () => ({ ok: true, text: CONNECT_OUTLOOK }) },
+      (message, detail) => lines.push([message, detail]),
+    )
+    const events = await source.events(0, 1)
+    expect(events?.map((event) => event.title)).toEqual(['Strat Edge weekly review'])
+    expect(lines.map(([message]) => message)).toContain('Calendar reply kept no meetings')
+  })
+
+  it('tries a failed read again after 1, 2 and 5 minutes, then waits for the normal refresh', async () => {
+    vi.useFakeTimers()
+    try {
+      let broken = true
+      const source = countingSource(() => {
+        if (broken) throw new Error('fetch failed')
+        return [SCRUM]
+      })
+      const cache = new CalendarCache({ source, now: () => NOW, refreshMs: 20 * MIN })
+      cache.start()
+      await vi.advanceTimersByTimeAsync(10)
+      expect(source.calls).toBe(1)
+      await vi.advanceTimersByTimeAsync(1 * MIN)
+      expect(source.calls).toBe(2)
+      await vi.advanceTimersByTimeAsync(2 * MIN)
+      expect(source.calls).toBe(3)
+      broken = false
+      await vi.advanceTimersByTimeAsync(5 * MIN)
+      expect(source.calls).toBe(4)
+      expect(cache.events().map((event) => event.id)).toEqual(['ev-scrum'])
+      // Recovered: no more retries until the 20-minute refresh.
+      await vi.advanceTimersByTimeAsync(5 * MIN)
+      expect(source.calls).toBe(4)
+      cache.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('also retries when only one of the calendars failed', async () => {
+    vi.useFakeTimers()
+    try {
+      let outlookDown = true
+      let reads = 0
+      const source = connectSource({
+        GOOGLECALENDAR_EVENTS_LIST: () => {
+          reads += 1
+          return { ok: true, text: CONNECT_GOOGLE }
+        },
+        OUTLOOK_GET_CALENDAR_VIEW: () => (outlookDown ? { ok: false, text: 'Error: fetch failed' } : { ok: true, text: CONNECT_OUTLOOK }),
+      })
+      const cache = new CalendarCache({ source, now: () => Date.parse('2026-10-29T08:00:00Z'), refreshMs: 20 * MIN })
+      cache.start()
+      await vi.advanceTimersByTimeAsync(10)
+      expect(cache.events().map((event) => event.title)).toEqual(['GrowFactory - Daily Scrum'])
+      outlookDown = false
+      await vi.advanceTimersByTimeAsync(1 * MIN)
+      expect(reads).toBe(2)
+      expect(cache.events().map((event) => event.title)).toEqual(['GrowFactory - Daily Scrum', 'Strat Edge weekly review'])
+      cache.stop()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
