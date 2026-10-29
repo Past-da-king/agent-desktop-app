@@ -12,6 +12,7 @@ import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { Button } from '../ui/Button'
+import { Icon } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
 import { foldWakes, SEVERITY_LOOK, shownTitle, type WakeSeverity, type WakeView } from '../../shared/wakeups'
@@ -76,6 +77,9 @@ export function WakeupsSettings(): JSX.Element {
         </p>
 
         <div className="rowc">
+          <div className="ri">
+            <Icon name="bell" size={22} />
+          </div>
           <div className="rt">
             <b>Ring on this computer</b>
             <span>A loud alarm and a full-screen screen on every display</span>
@@ -84,6 +88,9 @@ export function WakeupsSettings(): JSX.Element {
         </div>
 
         <div className="rowc">
+          <div className="ri">
+            <Icon name="clock" size={22} />
+          </div>
           <div className="rt">
             <b>Snooze</b>
             <span>Rings again after this long, same severity</span>
@@ -98,6 +105,9 @@ export function WakeupsSettings(): JSX.Element {
         </div>
 
         <div className="rowc">
+          <div className="ri">
+            <Icon name="moon" size={22} />
+          </div>
           <div className="rt">
             <b>Quiet hours</b>
             <span>Only a heads-up is silent then. Urgent and critical always ring.</span>
@@ -112,6 +122,9 @@ export function WakeupsSettings(): JSX.Element {
         </div>
 
         <div className="rowc">
+          <div className="ri">
+            <Icon name="sound" size={22} />
+          </div>
           <div className="rt">
             <b>Alarm volume</b>
             <span>On this computer. The phone uses its alarm volume, raised while it rings.</span>

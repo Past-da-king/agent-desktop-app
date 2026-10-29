@@ -71,6 +71,8 @@ export class RingWindow implements WakeRinger {
       width: bounds.width,
       height: bounds.height,
       frame: false,
+      // No resize frame: a frameless window with one is created a few pixels bigger than the display.
+      thickFrame: false,
       resizable: false,
       movable: false,
       minimizable: false,
