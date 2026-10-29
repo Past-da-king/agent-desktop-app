@@ -88,25 +88,33 @@ export function frameMayReach(from: string, to: string): boolean {
  * address (backing up its CSP). Logs what it stops.
  */
 export function guardMiniAppFrames(contents: WebContents, session: Session, log: (message: string, detail?: Record<string, unknown>) => void): void {
+  // The window's only frames are mini-apps (the agent's pages are <webview>s, their own web contents): no frame in
+  // it may navigate anywhere but miniapp://, whatever its address says now.
   contents.on('will-frame-navigate', (event) => {
-    const frame = event.frame
-    if (frame === null || frame === undefined || event.isMainFrame) return
-    const from = frame.url
-    if (parseMiniAppUrl(from) !== null && !frameMayReach(from, event.url)) {
+    if (event.isMainFrame) return
+    if (!event.url.startsWith(`${MINIAPP_SCHEME}://`)) {
       event.preventDefault()
-      log('Mini-app navigation stopped', { from: from.slice(0, 80), to: event.url.slice(0, 120) })
+      log('Mini-app navigation stopped', { to: event.url.slice(0, 120) })
     }
   })
   session.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*', 'file://*/*'] }, (details, callback) => {
-    const frameUrl = (() => {
+    if (details.webContentsId !== contents.id || contents.isDestroyed()) {
+      callback({})
+      return
+    }
+    // A sub-frame load, or anything a frame other than the window's own page asks for: a mini-app, stopped.
+    let fromSubframe = details.resourceType === 'subFrame'
+    if (!fromSubframe) {
       try {
-        return details.frame?.url ?? ''
+        const frame = details.frame
+        const main = contents.mainFrame
+        fromSubframe = frame !== null && frame !== undefined && (frame.processId !== main.processId || frame.routingId !== main.routingId)
       } catch {
-        return ''
+        fromSubframe = false
       }
-    })()
-    if (parseMiniAppUrl(frameUrl) !== null || parseMiniAppUrl(details.referrer ?? '') !== null) {
-      log('Mini-app request stopped', { from: frameUrl.slice(0, 80), to: details.url.slice(0, 120) })
+    }
+    if (fromSubframe || parseMiniAppUrl(details.referrer ?? '') !== null) {
+      log('Mini-app request stopped', { type: details.resourceType, to: details.url.slice(0, 120) })
       callback({ cancel: true })
       return
     }

@@ -93,6 +93,8 @@ export function shapeChange(change: DataChange, prefs: DevicePrefs): DataChange 
   if (change.batch !== undefined) return { entity: change.entity, reset: true }
   if (prefs.v < 2) return change
   if (change.reset === true) return change
+  // A mini-app's row carries its files: a device hears only that it changed, and reads the slim list (miniapps.list).
+  if (change.entity === 'miniapp') return { entity: 'miniapp', id: change.id ?? (change.row as { id?: string } | undefined)?.id ?? '', ...(change.deleted === true ? { deleted: true } : {}) }
   if (!KEPT.has(change.entity)) return null
   if (change.entity === 'memory' && change.row !== undefined) {
     const project = (change.row as { project?: unknown }).project

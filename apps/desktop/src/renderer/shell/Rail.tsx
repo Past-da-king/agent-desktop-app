@@ -184,7 +184,8 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
         ref={pjRef}
         className={`pj-rail${fit.small ? ' small' : ''}`}
         aria-label="Projects"
-        style={{ minHeight: header ? 0 : RAIL_PAD_SMALL + RAIL_TILE_SMALL + 4 }}
+        // The header's All link stands in for the tile only when there are projects to list; with none the + tile stays.
+        style={{ minHeight: header && projects.length > 0 ? 0 : RAIL_PAD_SMALL + RAIL_TILE_SMALL + 4 }}
       >
         {shown.map((project) => {
           const on = (route.page === 'project' && route.id === project.id) || (route.page === 'chat' && project.chats.includes(open))
@@ -205,7 +206,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
         })}
         {/* With no projects yet the + makes one; after that it opens all of them (with New project inside).
             With no room at all the expanded rail drops it: the header's All link does the same. */}
-        {fit.none && header ? null : (
+        {fit.none && header && projects.length > 0 ? null : (
           <button
             type="button"
             className="pj-app add"

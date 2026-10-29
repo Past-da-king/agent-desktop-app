@@ -165,11 +165,11 @@ function AppCard({
       <div className="ma-card-actions">
         {pinned && place !== undefined && count !== undefined && count > 1 ? (
           <>
-            <button type="button" className="ib" title="Move up" aria-label={`Move ${app.name} up`} disabled={place === 1} onClick={() => void agent.miniapps.pin(app.id, place - 1)}>
-              <Icon name="chev" size={16} />
+            <button type="button" className="ib flip" title="Move up" aria-label={`Move ${app.name} up`} disabled={place === 1} onClick={() => void agent.miniapps.pin(app.id, place - 1)}>
+              <Icon name="chevd" size={16} />
             </button>
-            <button type="button" className="ib flip" title="Move down" aria-label={`Move ${app.name} down`} disabled={place === count} onClick={() => void agent.miniapps.pin(app.id, place + 1)}>
-              <Icon name="chev" size={16} />
+            <button type="button" className="ib" title="Move down" aria-label={`Move ${app.name} down`} disabled={place === count} onClick={() => void agent.miniapps.pin(app.id, place + 1)}>
+              <Icon name="chevd" size={16} />
             </button>
           </>
         ) : null}

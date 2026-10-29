@@ -81,6 +81,7 @@ export class MiniAppChecker {
   private async run(app: MiniAppRow): Promise<MiniAppCheck> {
     const host = this.deps.host()
     if (host === null) throw new Error('Mini-apps are not running.')
+    await host.ensure(app)
     const dir = join(this.deps.outDir, app.id)
     mkdirSync(dir, { recursive: true })
     const issues: string[] = []

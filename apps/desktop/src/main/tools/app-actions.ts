@@ -18,6 +18,7 @@ import { schema, str, type JsonObject, type Tool } from '@agent/core'
 import { RPC_CHANNELS } from '../../shared/rpc-methods'
 import { WORKER_CHANNELS } from '../../shared/workers-channels'
 import { WAKEUP_CHANNELS } from '../../shared/wakeups-channels'
+import { MINIAPP_CHANNELS } from '../../shared/miniapps-channels'
 
 export interface AppActionRule {
   kind: 'free' | 'ask' | 'tool' | 'no'
@@ -49,6 +50,7 @@ export const APP_ACTION_CHANNELS: Readonly<Record<string, string>> = {
   ...RPC_CHANNELS,
   ...Object.fromEntries(Object.entries(WORKER_CHANNELS).map(([key, channel]) => [`workers.${key}`, channel])),
   ...Object.fromEntries(Object.entries(WAKEUP_CHANNELS).map(([key, channel]) => [`wakeups.${key}`, channel])),
+  ...Object.fromEntries(Object.entries(MINIAPP_CHANNELS).map(([key, channel]) => [`miniapps.${key}`, channel])),
 }
 
 const free = (about: string, args?: string): AppActionRule => ({ kind: 'free', about, ...(args === undefined ? {} : { args }) })
@@ -116,6 +118,20 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'wakeups.test': tool('Ring a test wake-up (Settings > Wake-ups > Test)', 'wake_me'),
   'wakeups.selfId': free("This computer's device id (Settings > Wake-ups)"),
   'wakeups.devices': free("Each linked phone's wake-up permissions as it reported them (Settings > Wake-ups)"),
+  // Mini-apps: agents make and change them with the miniapp_* tools (which lint and check them). The frame bridge is
+  // the window's own plumbing, and what an app may do without asking is his to decide alone.
+  'miniapps.session': no("An open mini-app's bridge session", WINDOW_PLUMBING),
+  'miniapps.send': no("A message from an open mini-app's frame", WINDOW_PLUMBING),
+  'miniapps.close': no("Closing an open mini-app's bridge", WINDOW_PLUMBING),
+  'miniapps.pin': tool('Pin a mini-app to the sidebar (Apps > Pin)', 'miniapp_pin'),
+  'miniapps.unpin': tool('Take a mini-app off the sidebar (Apps > Pinned)', 'miniapp_unpin'),
+  'miniapps.order': tool('Reorder the pinned mini-apps (drag on Apps or the sidebar)', 'miniapp_pin'),
+  'miniapps.remove': tool('Delete a mini-app (Apps > Delete)', 'miniapp_delete'),
+  'miniapps.undo': tool('Undo the last change to a mini-app (Apps > Undo)', 'miniapp_undo'),
+  'miniapps.allow': no('Let a mini-app change something without asking (Apps > What it may do)', 'only the person decides what an app may do without asking'),
+  'miniapps.check': tool("Look at a mini-app in light and dark at 1440 and 390 (the app's look check)", 'miniapp_check'),
+  'miniapps.askChange': no('Edit a mini-app by asking (his words to his agent)', 'an agent changes an app with miniapp_update'),
+  'miniapps.info': free('Which engine runs the mini-apps host side (cordis or plain)'),
   // Routines
   'routines.runNow': free('Run a routine now (Routines > Run now)', 'routineId'),
   // Browser panel

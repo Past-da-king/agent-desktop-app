@@ -351,3 +351,26 @@ describe('mini-apps on the sidebar and the tools', () => {
     expect((await store.list('miniapp')).length).toBe(0)
   })
 })
+
+describe('mini-apps and linked devices', () => {
+  it('a phone on the small feed hears only that an app changed, never its files', async () => {
+    const { shapeChange } = await import('../src/shared/device-feed')
+    const row = { id: 'maabcdefgh12', files: { 'index.html': 'x'.repeat(5000) } }
+    const shaped = shapeChange({ entity: 'miniapp', row } as never, { v: 2, metered: true, helpers: false } as never)
+    expect(shaped).toEqual({ entity: 'miniapp', id: 'maabcdefgh12' })
+    expect(JSON.stringify(shaped)).not.toContain('index.html')
+    expect(shapeChange({ entity: 'miniapp', id: 'maabcdefgh12', deleted: true } as never, { v: 2, metered: false, helpers: true } as never)).toEqual({ entity: 'miniapp', id: 'maabcdefgh12', deleted: true })
+  })
+})
+
+describe('a row that skipped the checks', () => {
+  it('never runs, whoever wrote it', async () => {
+    const store = new Store(':memory:')
+    const apps = new MiniAppStore({ store })
+    await store.upsert('miniapp', { id: 'mabadrow0001', name: 'Sneaky', icon: 'apps', files: { 'index.html': '<script>fetch("https://x.example")</script>' }, permissions: ['shell_run'] })
+    const host = new MiniAppHost({ apps, onRowsChange: (l) => store.onChange(l), runTool: async () => 'ran', approve: async () => true, host: plainHost() })
+    await host.start()
+    expect(host.openSession('mabadrow0001', () => undefined, 'window')).toBeNull()
+    await host.stop()
+  })
+})

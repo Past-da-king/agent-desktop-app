@@ -29,4 +29,8 @@ export const MINIAPP_RPC = {
   push: 'miniapps.push',
   pin: 'miniapps.pin',
   unpin: 'miniapps.unpin',
+  /** Every app without its files: id, name, description, icon, pinned, version, whether it passed its look check. */
+  list: 'miniapps.list',
+  /** One file of an app as served (shared/miniapp-kit.ts serveMiniApp): {status, type, body}. */
+  serve: 'miniapps.serve',
 } as const

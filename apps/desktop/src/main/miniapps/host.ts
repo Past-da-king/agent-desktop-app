@@ -10,7 +10,7 @@
  */
 import type { JsonObject, MiniAppRow } from '@agent/core'
 
-import { checkCall, MINIAPP_RATE, topicAllowed } from '../../shared/miniapps'
+import { checkCall, lintMiniApp, MINIAPP_RATE, topicAllowed } from '../../shared/miniapps'
 import type { MiniAppStore } from './store'
 import { createPluginHost, type PluginHost, type Scope } from './plugin-host'
 
@@ -147,6 +147,12 @@ export class MiniAppHost {
 
   private load(app: MiniAppRow): void {
     if (this.plugins.has(app.id)) return
+    // Whatever wrote the row (an older build, another device, a hand edit), an app that fails the checks never runs.
+    const findings = lintMiniApp(app)
+    if (findings.length > 0) {
+      this.log('Mini-app not loaded: it does not pass the checks', { app: app.id, first: findings[0]?.text ?? '' })
+      return
+    }
     const plugin: Plugin = { app, scope: null as unknown as Scope, sessions: new Set() }
     plugin.scope = this.engine.load(`miniapp:${app.id}`, ['miniappStore'], (scope) => {
       // The plugin's one standing effect: it is in the registry while it is loaded, and leaves it when unloaded.
@@ -169,6 +175,20 @@ export class MiniAppHost {
     }
     await plugin.scope.dispose()
     this.plugins.delete(id)
+  }
+
+  /**
+   * Makes sure this version of the app is loaded now (a save is followed at once by its look check, before the row
+   * change has reached the host): loads it, or reloads an older loaded version.
+   */
+  async ensure(app: MiniAppRow): Promise<void> {
+    const plugin = this.plugins.get(app.id)
+    if (plugin !== undefined && plugin.app.version === app.version) {
+      plugin.app = app
+      return
+    }
+    if (plugin !== undefined) await this.unload(app.id, plugin, 'app.changed')
+    this.load(app)
   }
 
   /** A frame opened the app. Null when there is no such app. */

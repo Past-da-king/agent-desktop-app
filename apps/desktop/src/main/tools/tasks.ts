@@ -6,6 +6,7 @@
  * goal is achieved when every step under it is done.
  */
 import {
+  bool,
   enumOf,
   schema,
   str,
@@ -87,16 +88,27 @@ function taskList(store: DataStore): Tool {
     spec: {
       name: 'task_list',
       description:
-        'List goals and tasks. With no status it shows everything still open; pass a status to see just those.',
+        'List goals and tasks. With no status it shows everything still open; pass a status to see just those. format json gives data (for a mini-app): {goals, tasks} with ids, status, owner, goalId, due and notes; include_done adds finished tasks.',
       schema: schema([], {
         status: enumOf('Only this status', ...STATUSES),
+        format: enumOf('text (default) or json', 'text', 'json'),
+        include_done: bool('Also the finished tasks (json or text)'),
       }),
     },
     run: async (input) => {
       const status = statusOf(input['status'])
       const goals = (await store.list('goal')).filter((goal) => goal.status === 'open')
       const all = await store.list('task')
-      const tasks = all.filter((task) => (status === null ? task.status !== 'done' : task.status === status))
+      const withDone = input['include_done'] === true
+      const tasks = all.filter((task) => (status === null ? withDone || task.status !== 'done' : task.status === status))
+      if (input['format'] === 'json') {
+        return JSON.stringify({
+          goals: goals.map((goal) => ({ id: goal.id, title: goal.title, why: goal.why })),
+          tasks: tasks
+            .sort((a, b) => a.createdAt - b.createdAt)
+            .map((task) => ({ id: task.id, title: task.title, status: task.status, owner: task.owner, goalId: task.goalId, due: task.dueAt === null ? null : new Date(task.dueAt).toISOString(), notes: task.notes, blocker: task.blocker })),
+        })
+      }
       if (goals.length === 0 && tasks.length === 0) return 'No open goals or tasks.'
 
       const goalIds = new Set(goals.map((goal) => goal.id))

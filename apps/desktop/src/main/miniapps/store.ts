@@ -244,9 +244,10 @@ export class MiniAppStore {
     if (app !== null) await this.store.upsert('miniapp', { ...app, check })
   }
 
+  /** When it was last opened, at most once in 10 minutes: the row carries its files, and every write syncs it. */
   async opened(id: string): Promise<void> {
     const app = await this.store.get('miniapp', id)
-    if (app !== null) await this.store.upsert('miniapp', { ...app, openedAt: this.now() })
+    if (app !== null && this.now() - app.openedAt > 10 * 60_000) await this.store.upsert('miniapp', { ...app, openedAt: this.now() })
   }
 
   // ---- the app's own store (agent.store) -------------------------------------------------------------------

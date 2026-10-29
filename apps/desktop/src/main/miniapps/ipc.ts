@@ -6,6 +6,7 @@
 import type { MiniAppCheck } from '@agent/core'
 
 import { MINIAPP_CHANNELS, MINIAPP_RPC } from '../../shared/miniapps-channels'
+import { MINIAPP_CSP, serveMiniApp } from '../../shared/miniapp-kit'
 import type { IpcMainLike } from '../ipc'
 import type { DevicesHost } from '../devices/types'
 import type { MiniAppHost, Push } from './host'
@@ -105,6 +106,28 @@ export function registerMiniAppRpc(host: DevicesHost, deps: { host: () => MiniAp
     const sid = typeof args[0] === 'string' ? args[0] : ''
     if (sessionsOf.get(deviceId)?.delete(sid) === true) deps.host()?.closeSession(sid)
     return true
+  })
+  host.addRpc(MINIAPP_RPC.list, async () =>
+    (await deps.apps.list()).map((app) => ({
+      id: app.id,
+      name: app.name,
+      description: app.description,
+      icon: app.icon,
+      pinned: app.pinned,
+      version: app.version,
+      checked: app.check.version === app.version && app.check.ok,
+      openedAt: app.openedAt,
+      updatedAt: app.updatedAt,
+    })),
+  )
+  // The phone's WebView asks for each file as it loads: the same answer the window's miniapp:// gets (no fonts: the
+  // phone has its own Roboto Flex).
+  host.addRpc(MINIAPP_RPC.serve, async (_deviceId, args) => {
+    const appId = typeof args[0] === 'string' ? args[0] : ''
+    const path = typeof args[1] === 'string' ? args[1].slice(0, 300) : '/'
+    const app = appId === '' ? null : await deps.apps.find(appId)
+    const out = serveMiniApp(app?.id === appId ? app.files : null, path)
+    return { status: out.status, type: out.type, body: typeof out.body === 'string' ? out.body : '', csp: MINIAPP_CSP }
   })
   host.addRpc(MINIAPP_RPC.pin, async (_deviceId, args) => {
     const done = await deps.apps.pin(typeof args[0] === 'string' ? args[0] : '', typeof args[1] === 'number' ? args[1] : undefined)

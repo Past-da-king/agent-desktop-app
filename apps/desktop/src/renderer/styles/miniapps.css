@@ -23,7 +23,7 @@
 .ma-look{margin-left:8px;vertical-align:middle}
 .ma-card-actions{display:flex;align-items:center;justify-content:flex-end;gap:4px}
 .ma-card-actions .ib{width:36px;height:36px}
-.ib.flip .ico{transform:rotate(180deg)}
+.ib.flip .ico,.ma-menu .flip .ico{transform:rotate(180deg)}
 .ma-menu-wrap{position:relative}
 .ma-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:30;min-width:220px;padding:6px;border-radius:var(--r-md);background:var(--s-lowest);box-shadow:var(--shadow);display:flex;flex-direction:column}
 .ma-menu button{display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;border-radius:var(--r-sm);color:var(--on-bg);font:500 14px/1 var(--font);text-align:left}

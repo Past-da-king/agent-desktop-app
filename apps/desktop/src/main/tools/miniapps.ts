@@ -40,7 +40,7 @@ index.html (required) plus any app.js, app.css, data.json, icon.svg (flat names,
 
 ## Data: only through the bridge
 - await agent.call(tool, args): runs one of the app's own tools as the user's agent would; JSON results come back parsed. Only tools listed in permissions. Reads run; anything that changes something (task_update, memory_save...) asks the user on an approval card the first time unless he allowed it.
-- Useful reads: task_list, routine_list, memory_search, memory_get, calendar_events {from, to} (every connected calendar in one list), worker_events, recordings_list, apps_run with a granted slug ("apps_run:GOOGLECALENDAR_EVENTS_LIST" or "apps_run:*"), webapp_run ("webapp_run:<app>/<tool>").
+- Useful reads: task_list {format: "json", include_done: true} (goals and tasks as data), routine_list, memory_search, memory_get, calendar_events {from, to} (every connected calendar in one list), worker_events, recordings_list, apps_run with a granted slug ("apps_run:GOOGLECALENDAR_EVENTS_LIST" or "apps_run:*"), webapp_run ("webapp_run:<app>/<tool>").
 - Never granted: web_fetch, shell, code, files_write, browser, vault, settings, devices, helpers, other mini-apps.
 - agent.subscribe(topic, fn) while open: data.task, data.goal (need task_list), data.trigger (routine_list), data.memory, calendar.changed (calendar_events), worker.<id> (worker_events); list them in subscribe. agent.onRefresh(fn) fires every refresh_minutes while open.
 - agent.store.get/set/remove/keys: the app's own small store (synced). agent.theme.get()/onChange(fn) if you draw on a canvas. agent.ask(text) hands a line to the user's agent.

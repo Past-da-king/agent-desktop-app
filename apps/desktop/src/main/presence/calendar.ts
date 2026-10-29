@@ -312,7 +312,8 @@ export function fileCalendarSource(path: string): CalendarSource {
           start: Date.parse(text0(item['start'])),
           end: Date.parse(text0(item['end'])),
           where: text0(item['where']),
-          source: 'file',
+          // A test file may say which calendar app each event is from (a proof of several calendars in one view).
+          source: text0(item['source']) || 'file',
         }))
         .filter((event) => Number.isFinite(event.start) && Number.isFinite(event.end) && event.end > from && event.start < to)
     },

@@ -137,8 +137,8 @@ function RailMenu({ id, x, y, place, count, onClose, onOpen }: { id: string; x: 
         <button type="button" role="menuitem" onClick={() => act(onOpen)}>
           <Icon name="play" size={16} /> Open
         </button>
-        <button type="button" role="menuitem" disabled={place <= 1} onClick={() => act(() => void agent.miniapps.pin(id, place - 1))}>
-          <Icon name="chev" size={16} /> Move up
+        <button type="button" role="menuitem" className="flip" disabled={place <= 1} onClick={() => act(() => void agent.miniapps.pin(id, place - 1))}>
+          <Icon name="chevd" size={16} /> Move up
         </button>
         <button type="button" role="menuitem" disabled={place >= count} onClick={() => act(() => void agent.miniapps.pin(id, place + 1))}>
           <Icon name="chevd" size={16} /> Move down

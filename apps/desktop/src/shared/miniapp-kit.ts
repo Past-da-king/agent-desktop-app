@@ -41,6 +41,11 @@ button{cursor:pointer;border:0;background:none;padding:0}
 h1,h2,h3,p{margin:0}
 ul,ol{margin:0;padding:0;list-style:none}
 :focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+::-webkit-scrollbar{width:12px;height:12px;background:transparent}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-button{display:none;width:0;height:0}
+::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--on-sv) 28%,transparent);border-radius:999px;border:4px solid transparent;background-clip:padding-box;min-height:40px}
+::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--on-sv) 45%,transparent);border-width:3px;background-clip:padding-box}
 ::selection{background:var(--pc);color:var(--on-pc)}
 :root{--chart-1:var(--primary);--chart-2:var(--tert);--chart-3:var(--ok);--chart-4:var(--err);--chart-5:var(--on-sv);--chart-6:var(--outline);--gap:16px}
 .h1{font:500 clamp(24px,3vw,34px)/1.15 var(--font);letter-spacing:-.4px;text-wrap:balance}

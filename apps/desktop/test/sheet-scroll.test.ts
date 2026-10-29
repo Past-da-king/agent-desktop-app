@@ -22,10 +22,11 @@ describe('every full page scrolls', () => {
     expect(/(?:^|\n)\.shell\{([^}]*)\}/.exec(css)?.[1]).toContain('grid-template-rows:minmax(0,1fr)')
   })
 
-  it('only Chat keeps the sheet still; the project page keeps its panel and scrolls', () => {
+  it('only Chat and an open mini-app (it scrolls inside its own frame) keep the sheet still; the project page keeps its panel and scrolls', () => {
     const app = read('../src/renderer/App.tsx')
     const owners = app.match(/ownScroll>\s*<(\w+)/g) ?? []
-    expect(owners.map((m) => /<(\w+)$/.exec(m)?.[1])).toEqual(['Chat'])
+    expect(owners.map((m) => /<(\w+)$/.exec(m)?.[1])).toEqual(['Chat', 'Loading'])
+    expect(app).toMatch(/<Shell ownScroll>\s*<Loading>\s*<MiniAppView /)
     expect(app).toMatch(/<Shell panel=\{<ChatPanel \/>\}>\s*<Project /)
   })
 })
