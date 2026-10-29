@@ -50,6 +50,8 @@ export interface RunGitHookDeps {
 }
 
 const LOG_KEY = 'git.autocommit.log'
+/** Full hashes of the commits the auto-commit made, newest first (an unpushed one of its own never blocks a push). */
+const OWN_KEY = 'git.autocommit.own'
 const LOG_MAX = 200
 /** How long a run waits for its starting look before it starts anyway. */
 export const BEGIN_WAIT_MS = 5000
@@ -147,6 +149,7 @@ export class RunGitHook {
           maxFileBytes: Math.max(1, settings.gitMaxFileMb || 5) * 1024 * 1024,
           exclude: settings.gitExclude.split(/[\n,]+/).map((part) => part.trim()).filter((part) => part !== ''),
           exec: this.exec,
+          ownCommit: (sha) => this.own().includes(sha),
           ...(vault === undefined ? {} : { vault }),
         }).catch(
           (error: unknown): AutoCommitResult => ({
@@ -165,6 +168,7 @@ export class RunGitHook {
         ),
       )
       results.push(result)
+      if (result.commitSha !== undefined) this.remember(result.commitSha)
       if (result.status !== 'nothing') this.record(key, title, result)
     }
     const problem = results.some((r) => r.status === 'skipped' || r.status === 'blocked' || r.status === 'failed' || r.secrets.length > 0 || r.mixed.length > 0 || (r.reason !== '' && !r.pushed))
@@ -178,6 +182,23 @@ export class RunGitHook {
       return Array.isArray(parsed) ? (parsed as GitLogEntry[]).slice(0, limit) : []
     } catch {
       return []
+    }
+  }
+
+  private own(): string[] {
+    try {
+      const parsed: unknown = JSON.parse(this.deps.kv.get(OWN_KEY) ?? '[]')
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+    } catch {
+      return []
+    }
+  }
+
+  private remember(sha: string): void {
+    try {
+      this.deps.kv.set(OWN_KEY, JSON.stringify([sha, ...this.own().filter((each) => each !== sha)].slice(0, 500)))
+    } catch {
+      // best effort
     }
   }
 

@@ -354,6 +354,24 @@ describe('RunGitHook', () => {
     expect(ended.problem).toBe(false)
   })
 
+  it("its own unpushed WIP (held back by a secret) never blocks the next run's push; someone else's still does", async () => {
+    const { root, bare } = repo()
+    const hook = new RunGitHook({ settings: gitSettings(), kv: kv() })
+    await hook.begin('s1', root)
+    write(root, 'src/keys.ts', `export const k = '${FAKE_AWS}'\n`)
+    write(root, 'src/ok.ts', 'ok\n')
+    const first = await hook.end('s1', 'Has a secret')
+    expect(first.results[0]?.status).toBe('committed')
+    expect(first.problem).toBe(true)
+    expect(remoteLog(bare)).toBe('first')
+    rmSync(join(root, 'src/keys.ts'))
+    await hook.begin('s2', root)
+    write(root, 'src/next.ts', 'next\n')
+    const second = await hook.end('s2', 'Next run')
+    expect(second.results[0]?.status).toBe('pushed')
+    expect(remoteLog(bare).split('\n')).toEqual(['WIP: Next run', 'WIP: Has a secret', 'first'])
+  })
+
   it('push off: committed, not pushed', async () => {
     const { root, bare } = repo()
     const hook = new RunGitHook({ settings: gitSettings({ gitAutoPush: false }), kv: kv() })

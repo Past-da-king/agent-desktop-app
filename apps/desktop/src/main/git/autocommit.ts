@@ -25,6 +25,8 @@ export interface RepoSnapshot {
   dirty: Map<string, string>
   /** Commits on the branch not on its upstream when the run started (someone else's unpushed work). */
   aheadBefore: number
+  /** Those commits' hashes, so the auto-commit's own earlier commits are not mistaken for someone else's. */
+  aheadShas?: string[]
   /** Too many changes to look at (thousands of untracked files): the repo is left alone. */
   tooBig?: boolean
 }
@@ -37,6 +39,8 @@ export interface AutoCommitOptions {
   exclude: string[]
   vault?: VaultHashes
   exec?: GitExec
+  /** Was this commit made by the auto-commit itself (an earlier run's WIP left unpushed)? */
+  ownCommit?: (sha: string) => boolean
 }
 
 export type AutoCommitStatus = 'committed' | 'pushed' | 'nothing' | 'skipped' | 'blocked' | 'failed'
@@ -48,6 +52,8 @@ export interface AutoCommitResult {
   /** Files committed. */
   files: string[]
   commit?: string
+  /** The full hash of the commit made. */
+  commitSha?: string
   pushed: boolean
   /** Files left out on purpose: secrets (by kind), changed before the run, junk, too big. */
   secrets: SecretHit[]
@@ -203,6 +209,11 @@ async function upstreamOf(exec: GitExec, root: string): Promise<string> {
   return up.code === 0 ? up.out.trim() : ''
 }
 
+async function aheadShasOf(exec: GitExec, root: string): Promise<string[]> {
+  const list = await git(exec, root, ['rev-list', '@{u}..HEAD'])
+  return list.code === 0 ? list.out.split(/\s+/).map((l) => l.trim()).filter((l) => l !== '') : []
+}
+
 async function aheadOf(exec: GitExec, root: string): Promise<number> {
   const count = await git(exec, root, ['rev-list', '--count', '@{u}..HEAD'])
   return count.code === 0 ? Number(count.out.trim()) || 0 : 0
@@ -238,9 +249,10 @@ export async function snapshot(folder: string, exec: GitExec = defaultGitExec): 
   const entries = await status(exec, root)
   if (entries === null) return null
   const head = await headOf(exec, root)
-  const aheadBefore = (await upstreamOf(exec, root)) === '' ? 0 : await aheadOf(exec, root)
-  if (entries.length > MAX_ENTRIES) return { root, head, dirty: new Map(), aheadBefore, tooBig: true }
-  return { root, head, dirty: await signatures(exec, root, entries), aheadBefore }
+  const aheadShas = (await upstreamOf(exec, root)) === '' ? [] : await aheadShasOf(exec, root)
+  const aheadBefore = aheadShas.length
+  if (entries.length > MAX_ENTRIES) return { root, head, dirty: new Map(), aheadBefore, aheadShas, tooBig: true }
+  return { root, head, dirty: await signatures(exec, root, entries), aheadBefore, aheadShas }
 }
 
 function readText(path: string, maxBytes: number): string | null {
@@ -370,6 +382,7 @@ export async function commitRun(before: RepoSnapshot, title: string, options: Au
     committed = await headOf(exec, root)
     result.files = toCommit
     result.commit = committed.slice(0, 7)
+    result.commitSha = committed
     result.status = 'committed'
   }
 
@@ -393,9 +406,11 @@ export async function commitRun(before: RepoSnapshot, title: string, options: Au
     result.note = say([facts, ...problems])
     return result
   }
-  if (before.aheadBefore > 0) {
-    result.reason = `${plural(before.aheadBefore, 'unpushed commit')} from before the run`
-    result.note = say([facts, `not pushed: the branch already had ${plural(before.aheadBefore, 'unpushed commit')} from before the run`, ...problems])
+  // Unpushed commits from before the run are someone else's to push, unless the auto-commit made them itself.
+  const foreign = before.aheadShas === undefined ? before.aheadBefore : before.aheadShas.filter((sha) => options.ownCommit?.(sha) !== true).length
+  if (foreign > 0) {
+    result.reason = `${plural(foreign, 'unpushed commit')} from before the run`
+    result.note = say([facts, `not pushed: the branch already had ${plural(foreign, 'unpushed commit')} from before the run`, ...problems])
     return result
   }
 
