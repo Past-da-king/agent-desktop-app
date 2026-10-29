@@ -8,7 +8,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { MemoryRow, ProjectRow } from '@agent/core'
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { addedNames, onlyNames, nameWords, stretches, stripInjectedNames } from '../src/main/dictation/injected'
+import { respellNames, soundsLike } from '../src/main/dictation/respell'
 import { LiveTranscriber, replayRecording } from '../src/main/dictation/transcriber'
 import { applyAliases, dictationWordsFromProjects, nameTerm, vocabularyFrom } from '../src/main/memory/vocabulary'
 import type { SocketLike } from '../src/main/voice/live'
@@ -145,5 +149,39 @@ describe('silence and unrelated speech never type a project name', () => {
     })
     const text = await replayRecording({ url: live.url, key: 'k', model: 'm', socket: nodeSocket, vocabulary: NAMES, pcm: Buffer.alloc(3200 * 3), signal: new AbortController().signal })
     expect(text).toBe('')
+  })
+})
+
+describe('names are spelled right after transcription, only for words that were said', () => {
+  const names = ['Cosmiprint', 'Initech', 'Mokoena', 'Finance', 'Impetix', 'GrowFactory', 'Northwind TVET College']
+
+  it('respells a close mis-hearing and leaves different words alone', () => {
+    expect(soundsLike('Cosmic print', 'Cosmiprint')).toBe(true)
+    expect(soundsLike('LonderCorp', 'Initech')).toBe(true)
+    expect(soundsLike('Mo Kena', 'Mokoena')).toBe(true)
+    expect(soundsLike('Cosmic shows', 'Cosmiprint')).toBe(false)
+    expect(respellNames('Email LonderCorp and Mo Kena about Impetics.', names).text).toBe('Email Initech and Mokoena about Impetix.')
+    // An ordinary word, another form of a name, or a name already right: as said.
+    expect(respellNames('Finances are tight, finance is late, Finance is fine.', names).text).toBe('Finances are tight, finance is late, Finance is fine.')
+    // A name never brings in more words than were heard.
+    expect(respellNames('Northwind sent it.', names).text).toBe('Northwind sent it.')
+  })
+
+  it('his 17:50 dictation heard as said: the two times he said it are spelled right, the unclear words stay his', () => {
+    // 20261029-175032-8743 through the live model with no name list (29 Oct 2026, test copy).
+    const heard =
+      "Somehow integrate that within the application instead of havingYeah, yeah, yeah, Cosmic shows like we're wasting real estate with that tab saying calendar. " +
+      "Oh, I really don't know why that thing saying calling Cosmic print there. Like that calling me print was not me before here before I mentioned Cosmic print, that was not me."
+    const fixed = respellNames(heard, names)
+    expect(fixed.text.match(/Cosmiprint/g)?.length).toBe(2)
+    expect(fixed.text).toContain('Yeah, yeah, yeah, Cosmic shows like')
+    expect(fixed.changed).toEqual([{ heard: 'Cosmic print', name: 'Cosmiprint' }, { heard: 'Cosmic print', name: 'Cosmiprint' }])
+  })
+
+  it('no recogniser is biased with names any more: not the live session, not a replay, not the one-call transcription', () => {
+    const setup = readFileSync(join(__dirname, '../src/main/dictation/setup.ts'), 'utf8')
+    expect(setup).not.toMatch(/vocabulary:\s*(\(\)\s*=>\s*)?(words|names)/)
+    expect(setup).not.toMatch(/transcribe\([^)]*names/)
+    expect(setup).toContain('respellNames(text, names)')
   })
 })

@@ -18,6 +18,7 @@ import { CLEANUP_MODELS, cleanUp } from './cleanup'
 import { DictationController, type BatchResult } from './controller'
 import { transcribeInChunks } from './chunks'
 import { addedNames, stripInjectedNames } from './injected'
+import { respellNames } from './respell'
 import { electronClipboard, keySenderFor, typeText, type KeySender, type TypeOutcome } from './paste'
 import { PillWindow, type PillOptions } from './pill'
 import { dictationTarget, type DictationSurface } from './target'
@@ -108,7 +109,7 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     return focused !== null && !focused.isDestroyed() && !pill.isPill(focused.webContents.id) ? focused : null
   }
 
-  // The words the recogniser should lean towards, from memory and projects: read as a dictation starts, so the
+  // The names to spell right after transcription, from memory and projects: read as a dictation starts, so the
   // next one has them at hand without waiting (the first one after launch uses the copy read at warm-up).
   let words: string[] = []
   const refreshWords = async (): Promise<string[]> => {
@@ -169,7 +170,8 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
         model: TRANSCRIBE_LIVE_MODELS[0] ?? 'gemini-3.5-transcribe-live',
         socket: nodeSocket,
         languageCodes: languageHint(deps.locale),
-        vocabulary: () => words,
+        // No name list: a recogniser biased towards names says them for unclear speech and into quiet stretches.
+        // Names are spelled right afterwards (fixNames), and only for words that were said.
         onUpdate: handlers.onUpdate,
         onDrop: handlers.onDrop,
         onInjected: injected,
@@ -185,7 +187,7 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
       }
       return cleaned
     },
-    fixNames: async (text) => withoutInjected(applyAliases(text, (await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY), words),
+    fixNames: async (text) => spellNames(applyAliases(text, (await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY), words),
     type: async (text) => typeInto(text),
     mask: () => keys?.mask(),
     pill: pillWithDraft,
@@ -210,15 +212,22 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     return stripped.text
   }
 
-  /** Every way a recording becomes text ends here: a stretch of nothing but names is left out. */
-  async function batch(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
-    const names = words
-    const result = await batchRaw(pcm, signal, names, onUpdate)
-    return result.ok ? { ok: true, text: withoutInjected(result.text, names) } : result
+  /** Mis-heard names respelled (only words that were said), then any stretch of nothing but names left out. */
+  function spellNames(text: string, names: string[]): string {
+    const respelled = respellNames(text, names)
+    if (respelled.changed.length > 0) deps.log('Dictation respelled names', { count: respelled.changed.length })
+    return withoutInjected(respelled.text, names)
   }
 
-  async function batchRaw(pcm: Buffer, signal: AbortSignal, names: string[], onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
-    // A short recording goes through the live model again (quick, and the names apply); a long one, or one the
+  /** Every way a recording becomes text ends here, transcribed as heard and then names spelled right. */
+  async function batch(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
+    const names = words
+    const result = await batchRaw(pcm, signal, onUpdate)
+    return result.ok ? { ok: true, text: spellNames(result.text, names) } : result
+  }
+
+  async function batchRaw(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
+    // A short recording goes through the live model again (quick); a long one, or one the
     // live model will not take, in one call. Both stop when `signal` aborts.
     if (pcm.length <= REPLAY_MAX_BYTES) {
       try {
@@ -228,8 +237,6 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
           model: TRANSCRIBE_LIVE_MODELS[0] ?? 'gemini-3.5-transcribe-live',
           socket: nodeSocket,
           languageCodes: languageHint(deps.locale),
-          vocabulary: names,
-          onInjected: injected,
           pcm,
           signal,
           ...(onUpdate === undefined ? {} : { onUpdate }),
@@ -240,9 +247,9 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
         deps.log('Dictation replay failed', { reason: error instanceof Error ? error.message : 'unknown' })
       }
     }
-    if (pcm.length <= REPLAY_MAX_BYTES) return deps.voice.transcribe(pcm, { names, signal })
+    if (pcm.length <= REPLAY_MAX_BYTES) return deps.voice.transcribe(pcm, { signal })
     // A long recording in 30-second pieces, a few at once: one call with all of it can outlast the finishing limit.
-    return transcribeInChunks(pcm, (piece, pieceSignal) => deps.voice.transcribe(piece, { names, signal: pieceSignal }), {
+    return transcribeInChunks(pcm, (piece, pieceSignal) => deps.voice.transcribe(piece, { signal: pieceSignal }), {
       signal,
       ...(onUpdate === undefined ? {} : { onUpdate }),
       log: deps.log,
