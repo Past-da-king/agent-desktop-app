@@ -19,7 +19,7 @@ import { CHANNELS } from '../src/shared/channels'
 import { DEVICE_CHANNELS } from '../src/shared/device-channels'
 import { RPC_ALLOWED, RPC_CHANNELS } from '../src/shared/rpc-methods'
 import { routeMention, type MentionDeps } from '../src/main/runtime/mentions'
-import { insertMention, mentionAtCaret, mentionDone, mentionNoticeOf, mentionReplyOf, mentionProjects, parseMention, rankMentions, type MentionProject } from '../src/shared/mentions'
+import { chipFromPick, chipFromTyping, chipOf, exactMention, insertMention, mentionAtCaret, mentionDone, mentionNoticeOf, mentionReplyOf, withChip, mentionProjects, parseMention, rankMentions, type MentionProject } from '../src/shared/mentions'
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
 
@@ -134,6 +134,28 @@ describe('the picker', () => {
     expect(mentionDone('nova ', projects)).toBe(true)
     expect(mentionDone('Acme', projects)).toBe(false)
     expect(mentionDone('Agent ', projects)).toBe(false)
+  })
+
+  it('a picked project is a chip in front of the words; the message itself stays @Name words', () => {
+    const acme = projects[0] as MentionProject
+    const picked = chipFromPick('please @ac', 10, acme)
+    expect(picked).toMatchObject({ rest: 'please ', caret: 7 })
+    const message = withChip(acme, picked.rest)
+    expect(message).toBe('@Acme please ')
+    expect(chipOf(message, projects)).toMatchObject({ project: { name: 'Acme' }, rest: 'please ' })
+    expect(chipOf('@Acme', projects)).toMatchObject({ project: { name: 'Acme' }, rest: '' })
+    expect(chipOf('@Acmex hi', projects)).toBeNull()
+    expect(chipOf('hi @Acme', projects)).toBeNull()
+  })
+
+  it('typing a whole @name and a space makes the chip at once, by name or other name, any case or spacing', () => {
+    expect(chipFromTyping('@acme ', 6, projects)).toMatchObject({ project: { name: 'Acme' }, rest: '', caret: 0 })
+    expect(chipFromTyping('@nova ', 6, projects)).toMatchObject({ project: { name: 'Nova Print' } })
+    expect(chipFromTyping('@agentdesktopapp ', 17, projects)).toMatchObject({ project: { name: 'Agent Desktop App' } })
+    expect(chipFromTyping('fix it @Acme ', 13, projects)).toMatchObject({ project: { name: 'Acme' }, rest: 'fix it ' })
+    expect(chipFromTyping('@acm ', 5, projects)).toBeNull()
+    expect(chipFromTyping('@acme', 5, projects)).toBeNull()
+    expect(exactMention('Blue-Ridge platform', projects)?.name).toBe('Blue Ridge Platform')
   })
 
   it('leaves hidden projects out', () => {

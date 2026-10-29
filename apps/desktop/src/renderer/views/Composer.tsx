@@ -1,8 +1,10 @@
 import { attachmentProblem, type Attachment } from '@agent/core'
-import { memo, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, type ClipboardEvent } from 'react'
+import { memo, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, type CSSProperties, type ClipboardEvent } from 'react'
 
 import { agent, chat } from '../bridge'
-import { insertMention, mentionAtCaret, mentionDone, mentionProjects, rankMentions, type MentionProject } from '../../shared/mentions'
+import { chipFromPick, chipFromTyping, chipOf, mentionAtCaret, mentionDone, mentionProjects, rankMentions, withChip, type MentionProject } from '../../shared/mentions'
+import { toneStyle } from '../lib/profiles'
+import { ProjectTile } from '../ui/ProjectTile'
 import { useEntity } from '../state/useData'
 import { useChatRunning } from '../state/useChats'
 import { useSettings } from '../state/useSettings'
@@ -80,21 +82,31 @@ export const Composer = memo(
     const [caret, setCaret] = useState(0)
     const [pickIndex, setPickIndex] = useState(0)
     const [dismissedAt, setDismissedAt] = useState(-1)
-    const typing = mentionAtCaret(text, caret)
+    // The message stays '@Name words' (what the computer routes); the box shows the project as a chip in front.
+    const chip = chipOf(text, projects)
+    const words = chip === null ? text : chip.rest
+    const typing = mentionAtCaret(words, caret)
     const picks: MentionProject[] = typing === null || typing.start === dismissedAt || mentionDone(typing.query, projects) ? [] : rankMentions(typing.query, projects, 6)
     const picking = picks.length > 0
     const active = Math.min(pickIndex, Math.max(0, picks.length - 1))
-    const pick = (project: MentionProject): void => {
-      const next = insertMention(text, caret, project.name)
-      setText(next.text)
-      setCaret(next.caret)
-      setPickIndex(0)
+    const placeCaret = (at: number): void => {
+      setCaret(at)
       requestAnimationFrame(() => {
         const area = composer.current
         if (area === null) return
         area.focus()
-        area.setSelectionRange(next.caret, next.caret)
+        area.setSelectionRange(at, at)
       })
+    }
+    const pick = (project: MentionProject): void => {
+      const next = chipFromPick(words, caret, project)
+      setText(withChip(project, next.rest))
+      setPickIndex(0)
+      placeCaret(next.caret)
+    }
+    const dropChip = (): void => {
+      setText(words)
+      placeCaret(0)
     }
 
     useEffect(() => {
@@ -254,24 +266,49 @@ export const Composer = memo(
             }}
           />
           <IconButton icon="shot" label="Grab a screenshot" comingSoon className="hide-m" />
+          {chip !== null ? (
+            <span className="pf mention-chip" style={toneStyle(chip.project.color) as CSSProperties} title={`Goes to ${chip.project.name}`}>
+              <ProjectTile icon={{ glyph: chip.project.glyph, color: chip.project.color as never, ...(chip.project.image === '' ? {} : { image: chip.project.image }) }} size={18} />
+              <span className="mention-chip-name">{chip.project.name}</span>
+              <button type="button" className="mention-chip-x" aria-label={`Do not send to ${chip.project.name}`} onClick={dropChip}>
+                <Icon name="x" size={12} />
+              </button>
+            </span>
+          ) : null}
           <textarea
             ref={composer}
             rows={1}
             placeholder={running ? 'Add to this, or ask for something else' : 'Ask anything, or @ a project'}
             aria-label="Message"
-            value={text}
+            value={words}
             onChange={(event) => {
-              setText(event.target.value)
-              setCaret(event.target.selectionStart)
+              const typed = event.target.value
+              const at = event.target.selectionStart
+              // A whole '@name' and a space becomes the chip at once ("@acme " -> [Acme]).
+              const made = chipFromTyping(typed, at, projects)
+              if (made !== null) {
+                setText(withChip(made.project, made.rest))
+                setPickIndex(0)
+                placeCaret(made.caret)
+                return
+              }
+              setText(chip === null ? typed : withChip(chip.project, typed))
+              setCaret(at)
               setPickIndex(0)
               // Escape closes the list for that one '@' word; once it is gone, the next '@' opens it again.
-              if (dismissedAt >= 0 && mentionAtCaret(event.target.value, event.target.selectionStart)?.start !== dismissedAt) setDismissedAt(-1)
+              if (dismissedAt >= 0 && mentionAtCaret(typed, at)?.start !== dismissedAt) setDismissedAt(-1)
             }}
             onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
             onPaste={onPaste}
             aria-autocomplete="list"
             aria-expanded={picking}
             onKeyDown={(event) => {
+              // Backspace right after the chip takes the whole chip away in one press.
+              if (chip !== null && event.key === 'Backspace' && event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0) {
+                event.preventDefault()
+                dropChip()
+                return
+              }
               if (picking && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
                 event.preventDefault()
                 setPickIndex((active + (event.key === 'ArrowDown' ? 1 : picks.length - 1)) % picks.length)

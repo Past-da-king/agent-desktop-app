@@ -17,11 +17,14 @@ export function MentionPicker({ items, active, onPick, onHover }: { items: Menti
           role="option"
           aria-selected={index === active}
           className={index === active ? 'mention-row on' : 'mention-row'}
-          // Keeps the caret in the message box: the pick happens on mouse down, before the box loses focus.
-          onMouseDown={(event) => {
+          // Picked the moment the finger or mouse goes down, and the message box keeps its focus: on a touch screen
+          // a pick on release could land after the list had moved or closed (29 Oct 2026, a tap did not select).
+          onPointerDown={(event) => {
             event.preventDefault()
             onPick(project)
           }}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => event.preventDefault()}
           onMouseEnter={() => onHover(index)}
         >
           <ProjectTile icon={{ glyph: project.glyph, color: project.color as never, ...(project.image === '' ? {} : { image: project.image }) }} size={28} />

@@ -481,3 +481,7 @@ button.mem-note:hover{background:color-mix(in srgb,var(--pc) 88%,var(--on-pc))}
 .mention-reply-actions{display:flex;gap:8px;flex-wrap:wrap}
 .mention-reply-box{display:flex;gap:8px;align-items:flex-end}
 .mention-reply-box textarea{flex:1;resize:none;border:0;border-radius:16px;padding:10px 12px;background:var(--s-high);color:var(--on-bg);font:inherit}
+.mention-chip{align-self:center;display:inline-flex;align-items:center;gap:6px;flex:none;max-width:45%;height:30px;padding:0 4px 0 4px;border-radius:999px;background:color-mix(in srgb,var(--pf-bg) 70%,var(--s-lowest));border:1px solid color-mix(in srgb,var(--pf-solid) 40%,transparent);color:var(--pf-fg);font-size:13px;font-weight:600}
+.mention-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mention-chip-x{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
+.mention-chip-x:hover{background:color-mix(in srgb,var(--pf-solid) 20%,transparent)}

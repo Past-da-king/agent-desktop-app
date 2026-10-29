@@ -131,6 +131,59 @@ export function insertMention(text: string, caret: number, name: string): { text
   return { text: head + after, caret: head.length }
 }
 
+/** A name as the person might type it: any case, spaces and punctuation ignored ("agentdesktopapp", "Agent-Desktop"). */
+function bare(name: string): string {
+  return name.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+}
+
+/** The project a whole '@' word names exactly (its name or another name, any case, spaces and punctuation ignored). */
+export function exactMention(word: string, list: MentionProject[]): MentionProject | null {
+  const said = bare(word)
+  if (said === '') return null
+  return list.find((project) => bare(project.name) === said) ?? list.find((project) => project.aliases.some((alias) => bare(alias) === said)) ?? null
+}
+
+/**
+ * The message box shows a picked project as a chip in front of the words (29 Oct 2026). The message itself stays
+ * '@Name words', so the computer routes it the same way whoever typed it: this splits it into the chip and the rest.
+ */
+export function chipOf(text: string, list: MentionProject[]): { project: MentionProject; rest: string } | null {
+  if (!text.startsWith('@')) return null
+  const names = list.flatMap((project) => [project.name, ...project.aliases].map((name) => ({ project, name }))).sort((a, b) => b.name.length - a.name.length)
+  const lower = text.slice(1).toLowerCase()
+  const hit = names.find((entry) => lower.startsWith(entry.name.toLowerCase()) && /^(\s|$)/.test(text.slice(1 + entry.name.length)))
+  if (hit === undefined) return null
+  return { project: hit.project, rest: text.slice(1 + hit.name.length).replace(/^\s/, '') }
+}
+
+/** The message with a chip in front: '@Name rest'. */
+export function withChip(project: MentionProject, rest: string): string {
+  return `@${project.name} ${rest}`
+}
+
+/**
+ * Typing turns a whole '@name' into a chip as soon as a space follows it ("@acme " -> [Acme]): the project it
+ * names exactly, and the words without it. Null while it is not a whole name yet.
+ */
+export function chipFromTyping(text: string, caret: number, list: MentionProject[]): { project: MentionProject; rest: string; caret: number } | null {
+  if (caret <= 0 || !/\s/.test(text.charAt(caret - 1))) return null
+  const found = mentionAtCaret(text, caret - 1)
+  if (found === null) return null
+  const project = exactMention(found.query, list)
+  if (project === null) return null
+  const rest = `${text.slice(0, found.start)}${text.slice(caret)}`.replace(/^\s+/, '')
+  return { project, rest, caret: Math.max(0, found.start) }
+}
+
+/** Picking from the list: the chip, and the words without the '@...' being typed. */
+export function chipFromPick(text: string, caret: number, project: MentionProject): { project: MentionProject; rest: string; caret: number } {
+  const found = mentionAtCaret(text, caret)
+  if (found === null) return { project, rest: text, caret }
+  const after = text.slice(caret).replace(/^\S*/, '')
+  const rest = `${text.slice(0, found.start)}${after}`.replace(/^\s+/, '')
+  return { project, rest, caret: found.start }
+}
+
 export interface ParsedMention {
   project: MentionProject
   /** The message without the mention. */
