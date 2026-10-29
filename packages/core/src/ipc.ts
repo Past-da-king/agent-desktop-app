@@ -126,6 +126,14 @@ export interface Settings {
    * default), 'week' or 'always'. Transcripts are always kept.
    */
   recordingAudioKeep: 'today' | 'week' | 'always'
+  /** Wake-ups: this computer rings (full-screen alarm) for wake-ups sent to it. Only he changes these, in Settings. */
+  wakeupsRingHere: boolean
+  /** Wake-ups: minutes a snooze lasts (1 to 120). */
+  wakeupSnoozeMinutes: number
+  /** Wake-ups: quiet hours "22:00-07:00" local, '' none. Only a heads-up is silent in them; urgent and critical ring. */
+  wakeupQuietHours: string
+  /** Wake-ups: the alarm's loudness on this computer, 0.1 to 1. */
+  wakeupVolume: number
   /** When the end-of-day memory pass runs, "HH:mm" local time; '' turns it off. */
   dailyMemoryAt: string
   /** Every AI account the person set up. Empty on an install that only ever used the old single choice. */
@@ -198,6 +206,10 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceName: 'Kore',
   speakReplies: false,
   recordingAudioKeep: 'today',
+  wakeupsRingHere: true,
+  wakeupSnoozeMinutes: 5,
+  wakeupQuietHours: '',
+  wakeupVolume: 1,
   dailyMemoryAt: '23:30',
   accounts: [],
   ai: { main: { account: '', model: '' }, helpers: { account: '', model: '' } },
@@ -295,6 +307,8 @@ export type EntityName =
   | 'job'
   // The person's standing instructions, in every agent's prompt from its next run (PromptRuleRow).
   | 'prompt_rule'
+  // Wake-ups (docs/plans/wake-ups.md): a wake that rings his devices until he answers, and its answers (WakeupRow).
+  | 'wakeup'
 
 export interface RowBase {
   id: string
@@ -399,6 +413,44 @@ export interface PromptRuleVersion {
   reason: string
   change: 'added' | 'edited' | 'removed' | 'restored'
   text: string
+}
+
+/**
+ * Wake-ups (29 Oct 2026, docs/plans/wake-ups.md): something needs the person NOW, so his devices ring until he answers.
+ * One entity, four kinds of row, each written by one writer so last-writer-wins never undoes an answer (the model is
+ * apps/desktop/src/shared/wakeups.ts): 'wake' (the wake, written by the wake_me tool), 'ack' (id <wake>:ack, he
+ * answered), 'snooze' (id <wake>:snooze:<n>, rings again at until), 'seen' (id <wake>:seen:<device>, a device has it).
+ */
+export interface WakeupRow extends RowBase {
+  kind: 'wake' | 'ack' | 'snooze' | 'seen'
+  /** ack, snooze, seen: the wake they answer. '' on a wake. */
+  wake: string
+  severity: 'critical' | 'urgent' | 'heads_up'
+  title: string
+  whatToDo: string
+  source: { kind: string; ref: string; link: string }
+  devices: 'auto' | 'here' | 'all'
+  /** Device ids it goes to first; empty: every device. */
+  targets: string[]
+  dedupeKey: string
+  rateKey: string
+  /** wake: when it rings first. ack, snooze, seen: when it happened. */
+  at: number
+  firedBy: string
+  firedOn: string
+  withdrawn: boolean
+  /** Its source went away while it was ringing: it rings on until he answers, marked cancelled. */
+  cancelled: boolean
+  repeats: number
+  updatedAt: number
+  /** ack and snooze: the device, and its name. */
+  by: string
+  byName: string
+  /** snooze: which snooze, and when it rings again. */
+  n: number
+  until: number
+  /** seen: the device that has it. */
+  device: string
 }
 
 export interface GoalRow extends RowBase {
@@ -515,6 +567,7 @@ export interface EntityMap {
   turn_lease: TurnLeaseRow
   job: JobRow
   prompt_rule: PromptRuleRow
+  wakeup: WakeupRow
 }
 
 // ---------------------------------------------------------------------------------------------------------------

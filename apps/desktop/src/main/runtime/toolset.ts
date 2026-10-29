@@ -24,6 +24,8 @@ import { memoryTools } from '../tools/memory'
 import { chatTools } from '../tools/chats'
 import { routineTools } from '../tools/routines'
 import { promptRuleTools } from '../tools/prompt-rules'
+import { wakeTools } from '../tools/wakeups'
+import { getWakeups } from '../wakeups/service'
 import { shellTools } from '../tools/shell'
 import { taskTools } from '../tools/tasks'
 import { workerTools as backgroundWorkerTools, type WorkerToolDeps } from '../tools/workers'
@@ -226,6 +228,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...taskTools(deps.store), // task_add, task_list, task_update, goal_create
     ...routineTools(deps.store, deps.now), // routine_create, routine_list, routine_update, routine_delete
     ...promptRuleTools(deps.store), // prompt_rules: the person's standing instructions, in every agent's prompt
+    ...wakeTools(getWakeups), // wake_me, wake_withdraw, wake_list: ring his devices until he answers (no tool answers or silences)
     ...backgroundWorkerTools(deps.workers === undefined ? undefined : { commands: () => settings.get().shell, ...deps.workers }), // worker_guide, worker_create, worker_update, worker_test, worker_list, worker_logs, worker_events, worker_control, worker_delete, worker_secret_set
     ...fileTools({
       settings,

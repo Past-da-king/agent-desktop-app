@@ -72,7 +72,8 @@ const SHARE_GROUPS = ['browser', 'files', 'notifications', 'approval', 'shell'] 
 const ROLES = ['brain', 'hands', 'screen'] as const
 
 /** Settings that only describe state (a key is saved, signed in): never set by hand. */
-export const SETTINGS_READ_ONLY: ReadonlySet<string> = new Set(['hasKey', 'hasVoiceKey', 'signedIn', 'syncEmail', 'onboarded'])
+// Wake-up settings too: no agent may switch a wake-up's ring off (only he changes them, in Settings > Wake-ups).
+export const SETTINGS_READ_ONLY: ReadonlySet<string> = new Set(['hasKey', 'hasVoiceKey', 'signedIn', 'syncEmail', 'onboarded', 'wakeupsRingHere', 'wakeupSnoozeMinutes', 'wakeupQuietHours', 'wakeupVolume'])
 
 /**
  * Settings that change what the agent may do on this computer, what it thinks with, or where data goes: changed only
