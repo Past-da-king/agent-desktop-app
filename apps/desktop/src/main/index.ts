@@ -18,6 +18,7 @@ import {
   shell,
   type OpenDialogOptions,
   type Rectangle,
+  session as electronSession,
 } from 'electron'
 import {
   fitWindowToDisplay,
@@ -36,7 +37,7 @@ import { HANDOFF_CLOSED } from './tools/browser'
 
 import type { AppPlatform } from '@agent/core'
 
-import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type MiniAppCheck, type MiniAppRow, type Settings } from '@agent/core'
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
@@ -119,6 +120,13 @@ import { routeLate } from './devices/device-tools'
 import { startPresence, type PresenceHandle } from './presence/start'
 import { getWakeups, setWakeups, WakeupService } from './wakeups/service'
 import { RingWindow } from './wakeups/ring-window'
+import { MiniAppStore } from './miniapps/store'
+import { MiniAppHost, setMiniAppHost } from './miniapps/host'
+import { guardMiniAppFrames, registerMiniAppScheme, rendererFonts, serveMiniAppsIn } from './miniapps/protocol'
+import { MiniAppChecker } from './miniapps/check'
+import { registerMiniAppIpc, registerMiniAppRpc } from './miniapps/ipc'
+import { MINIAPP_EVENTS } from '../shared/miniapps-channels'
+import type { MiniAppUi } from './tools/miniapps'
 import { registerWakeupIpc, registerWakeupRpc, WakeDeviceReports } from './wakeups/bridge'
 import { WAKEUP_RPC } from '../shared/wakeups-channels'
 import { getDevicesHost } from './devices/service'
@@ -139,6 +147,8 @@ if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
 const logsDir = join(app.getPath('userData'), 'logs')
 const logger = new Logger(logsDir)
+// Mini-apps are served from miniapp://<id>/ (main/miniapps/protocol.ts); a privileged scheme is declared before ready.
+registerMiniAppScheme()
 let crashDialogOpen = false
 
 function platformId(): AppPlatform {
@@ -219,6 +229,10 @@ let eventRouter: EventRouter | null = null
 /** Where the person is (presence/): the note on his messages, his calendars cached, meetings that end early. */
 let presenceHandle: PresenceHandle | null = null
 let wakeupService: WakeupService | null = null
+let miniappHost: MiniAppHost | null = null
+let miniappRpc: ((host: import('./devices/types').DevicesHost) => void) | null = null
+/** Showing and looking at mini-apps: only this window can (tools/miniapps.ts). */
+let miniappUi: MiniAppUi | null = null
 const wakeReports = new WakeDeviceReports()
 /** His recordings on disk (recordings/), and the pass that recovers, tells him and deletes old audio. */
 let recordingsStore: Recordings | null = null
@@ -974,6 +988,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     vault,
     browserVault,
     recordings,
+    calendar: () => presenceHandle?.calendar ?? null,
+    miniappUi: () => miniappUi,
   })
   // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
   // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
@@ -1114,6 +1130,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
   }
   const tools = buildToolset({
     appControl: { ...appControl, update: selfUpdater },
+    calendar: () => presenceHandle?.calendar ?? null,
+    miniappUi: () => miniappUi,
     presence,
     store,
     settings,
@@ -1216,6 +1234,89 @@ async function startServices(win: BrowserWindow): Promise<void> {
       for (const path of paths) filePicks.add(path)
     },
   })
+  // Mini-apps (docs/plans/mini-apps.md): the apps agents made, served sandboxed, their bridge run here, looked at
+  // offscreen in both themes and widths before he sees them.
+  {
+    const maStore = store
+    const miniapps = new MiniAppStore({ store: maStore, knownTools: () => new Set(helperToolset.map((tool) => tool.spec.name)) })
+    const filesOf = async (id: string): Promise<Record<string, string> | null> => (await maStore.get('miniapp', id))?.files ?? null
+    const font = rendererFonts(join(__dirname, '../renderer'))
+    miniappHost = new MiniAppHost({
+      apps: miniapps,
+      onRowsChange: (listener) => maStore.onChange(listener),
+      runTool: async (row, name, args, signal) => {
+        const tool = helperToolset.find((item) => item.spec.name === name)
+        if (tool === undefined || runner === null) throw new Error(`There is no ${name} here.`)
+        const base = runner.deviceToolContext(signal)
+        return tool.run(args, {
+          ...base,
+          agentLabel: `app ${row.name}`,
+          owner: `miniapp:${row.id}`,
+          ...(row.profile === '' ? {} : { profile: row.profile }),
+          activity: async () => 0,
+          updateActivity: async () => undefined,
+        })
+      },
+      approve: async (_row, summary, details, signal) => (runner === null ? false : runner.deviceContext(MAIN_CHAT, signal).approve(summary, details)),
+      ask: async (row, text) => {
+        await runner?.send(`(From my mini-app "${row.name}") ${text}`)
+      },
+      onCalendarChange: (listener) => presenceHandle?.calendar.onChange(listener) ?? (() => undefined),
+      log: (message, detail) => logger.info(message, detail),
+    })
+    setMiniAppHost(miniappHost)
+    void miniappHost.start().then(() => logger.info('Mini-apps started', { engine: miniappHost?.engine.kind ?? 'off' }))
+    serveMiniAppsIn(electronSession.defaultSession, filesOf, font)
+    guardMiniAppFrames(win.webContents, electronSession.defaultSession, (message, detail) => logger.info(message, detail))
+    const checker = new MiniAppChecker({
+      host: () => miniappHost,
+      filesOf,
+      font,
+      preload: join(__dirname, '../preload/miniapp-check.js'),
+      outDir: join(dir, 'miniapps', 'checks'),
+      accent: () => settings.get().accent,
+      log: (message, detail) => logger.info(message, detail),
+    })
+    // One look per app version, whoever asks (a tool, the window, or a version that arrived from another device).
+    const checking = new Map<string, Promise<MiniAppCheck>>()
+    const ensureChecked = (row: MiniAppRow): Promise<MiniAppCheck> => {
+      const key = `${row.id}:${row.version}`
+      const running = checking.get(key)
+      if (running !== undefined) return running
+      const run = checker.check(row).then(async (result) => {
+        await miniapps.setCheck(row.id, result)
+        return result
+      }).finally(() => checking.delete(key))
+      checking.set(key, run)
+      return run
+    }
+    miniappUi = {
+      open: async (row) => {
+        showMainWindow()
+        broadcast(MINIAPP_EVENTS.open, row.id)
+      },
+      check: ensureChecked,
+    }
+    maStore.onChange((change) => {
+      if (change.entity !== 'miniapp' || change.reset === true || change.row === undefined) return
+      const row = change.row as MiniAppRow
+      // A new version from another device (or the headless node) is looked at here before it is shown.
+      if (row.check.version !== row.version && !checking.has(`${row.id}:${row.version}`)) setTimeout(() => void ensureChecked(row).catch(() => undefined), 3000)
+    })
+    registerMiniAppIpc(ipcMain, {
+      host: () => miniappHost,
+      apps: miniapps,
+      push: (sessionId, message) => broadcast(MINIAPP_EVENTS.push, [sessionId, message]),
+      check: async (id) => {
+        const row = await miniapps.find(id)
+        return row === null ? null : ensureChecked(row)
+      },
+      askChange: async (id, name, text) => {
+        await runner?.send(`Change my mini-app "${name}" (${id}): ${text}`)
+      },
+    })
+    miniappRpc = (devicesHost) => registerMiniAppRpc(devicesHost, { host: () => miniappHost, apps: miniapps })
+  }
   offloadWire = startOffload({
     store,
     helpers,
@@ -1603,6 +1704,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
       const wakeStore = store
       registerWakeupRpc(devices.host(), { service: getWakeups, reports: wakeReports, nameOf: async (id) => (wakeStore === null ? 'a device' : ((await wakeStore.get('device', id))?.name ?? 'a device')) })
     }
+    // Mini-apps: the phone shows them in its WebView and runs their bridge here (main/miniapps/ipc.ts).
+    miniappRpc?.(devices.host())
     await devices.start()
   } catch (error) {
     logger.error('Devices could not start', { message: error instanceof Error ? error.message : String(error) })
@@ -1654,6 +1757,10 @@ if (!app.requestSingleInstanceLock()) {
     wakeupService?.stop()
     wakeupService = null
     setWakeups(null)
+    void miniappHost?.stop()
+    miniappHost = null
+    miniappUi = null
+    setMiniAppHost(null)
     recordingsUpkeep?.stop()
     recordingsUpkeep = null
     eventRouter?.stop()

@@ -15,11 +15,12 @@ export function useNeeds(): number {
   return useWaiting().length
 }
 
-const MOBILE: Array<{ page: 'home' | 'tasks' | 'memory' | 'routines' | 'connections'; icon: IconName; label: string }> = [
+const MOBILE: Array<{ page: 'home' | 'tasks' | 'memory' | 'routines' | 'apps' | 'connections'; icon: IconName; label: string }> = [
   { page: 'home', icon: 'home', label: 'Home' },
   { page: 'tasks', icon: 'tasks', label: 'Tasks' },
   { page: 'memory', icon: 'memory', label: 'Memory' },
   { page: 'routines', icon: 'clock', label: 'Routines' },
+  { page: 'apps', icon: 'grid', label: 'Apps' },
   { page: 'connections', icon: 'apps', label: 'Connections' },
 ]
 

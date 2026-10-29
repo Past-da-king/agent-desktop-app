@@ -17,13 +17,15 @@ import { useRoute, useUi } from '../state/useUi'
 import { Avatar } from '../ui/bits'
 import { Icon, type IconName } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
+import { PinnedApps } from './PinnedApps'
 
-const NAV: Array<{ page: 'home' | 'chat' | 'tasks' | 'memory' | 'routines' | 'connections'; icon: IconName; label: string }> = [
+const NAV: Array<{ page: 'home' | 'chat' | 'tasks' | 'memory' | 'routines' | 'apps' | 'connections'; icon: IconName; label: string }> = [
   { page: 'home', icon: 'home', label: 'Home' },
   { page: 'chat', icon: 'chat', label: 'Chat' },
   { page: 'tasks', icon: 'tasks', label: 'Tasks' },
   { page: 'memory', icon: 'memory', label: 'Memory' },
   { page: 'routines', icon: 'clock', label: 'Routines' },
+  { page: 'apps', icon: 'grid', label: 'Apps' },
   { page: 'connections', icon: 'apps', label: 'Connections' },
 ]
 
@@ -167,6 +169,8 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
           </button>
         )
       })}
+
+      <PinnedApps collapsed={railCollapsed} />
 
       <div className="eyebrow mute grp chats-h" ref={headRef}>
         <span>PROJECTS</span>

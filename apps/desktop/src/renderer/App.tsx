@@ -11,6 +11,7 @@ import { Mascot } from './ui/Mascot'
 import { readBootHint, writeBootHint } from './lib/boot-hint'
 import { applyAccent, applyTheme } from './state/theme'
 import { useData } from './state/useData'
+import { agent } from './bridge'
 
 // Screens off the chat load when first opened, so the chat is on screen sooner; each is one small file on disk.
 const Onboarding = lazy(() => import('./onboarding/Onboarding').then((m) => ({ default: m.Onboarding })))
@@ -19,6 +20,8 @@ const Memory = lazy(() => import('./views/Memory').then((m) => ({ default: m.Mem
 const Routines = lazy(() => import('./views/Routines').then((m) => ({ default: m.Routines })))
 const Settings = lazy(() => import('./views/Settings').then((m) => ({ default: m.Settings })))
 const Tasks = lazy(() => import('./views/Tasks').then((m) => ({ default: m.Tasks })))
+const MiniApps = lazy(() => import('./views/MiniApps').then((m) => ({ default: m.MiniApps })))
+const MiniAppView = lazy(() => import('./views/MiniAppView').then((m) => ({ default: m.MiniAppView })))
 
 /** A screen still loading from disk shows its bones, never a blank sheet. */
 function Loading({ children }: { children: ReactNode }): JSX.Element {
@@ -79,6 +82,23 @@ function Page(): JSX.Element {
           </Loading>
         </Shell>
       )
+    case 'apps':
+      return (
+        <Shell>
+          <Loading>
+            <MiniApps />
+          </Loading>
+        </Shell>
+      )
+    case 'miniapp':
+      // The app fills the sheet and scrolls inside its own frame.
+      return (
+        <Shell ownScroll>
+          <Loading>
+            <MiniAppView id={route.id} />
+          </Loading>
+        </Shell>
+      )
     case 'connections':
       return (
         <Shell>
@@ -118,6 +138,8 @@ function Page(): JSX.Element {
 function Main({ route }: { route: Route }): JSX.Element {
   useGlobalKeys()
   useHotkeyNotice()
+  // An agent showed him a mini-app (miniapp_open): open it in the sheet.
+  useEffect(() => agent.miniapps.onOpen((id) => useUi.getState().navigate({ page: 'miniapp', id })), [])
   const onboarding = route.page === 'onboarding'
 
   return (

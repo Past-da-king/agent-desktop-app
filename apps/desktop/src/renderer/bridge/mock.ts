@@ -708,7 +708,7 @@ export const mockAgent: AgentApi = {
         turn_lease: [],
         job: [],
         prompt_rule: [],
-        wakeup: [],
+        wakeup: [], miniapp: [],
         memory: [],
         goal: [],
         task: [],
@@ -1489,6 +1489,23 @@ export const mockAgent: AgentApi = {
     snooze: async () => true,
     selfId: async () => 'mock-pc',
     devices: async () => [],
+  },
+  // The browser preview has no main process to run an app's bridge: apps list from the rows, frames stay empty.
+  miniapps: {
+    session: async () => null,
+    send: async () => null,
+    close: async () => undefined,
+    onPush: () => () => undefined,
+    onOpen: () => () => undefined,
+    pin: async () => undefined,
+    unpin: async () => undefined,
+    order: async () => undefined,
+    remove: async () => undefined,
+    undo: async () => 'Not in the preview.',
+    allow: async () => undefined,
+    check: async () => null,
+    askChange: async () => undefined,
+    info: async () => ({ engine: 'preview' }),
   },
   memory: {
     async newChat(target) {

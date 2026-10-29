@@ -6,6 +6,7 @@ export const APP_PAGES = [
   'tasks',
   'memory',
   'routines',
+  'apps',
   'connections',
   'settings',
 ] as const
@@ -24,6 +25,8 @@ export type Route =
   | { page: 'dictation' }
   /** One project: its chats and its memory. */
   | { page: 'project'; id: string }
+  /** One mini-app, open in the sheet (docs/plans/mini-apps.md). */
+  | { page: 'miniapp'; id: string }
 
 export function isAppPage(value: string): value is AppPage {
   return (APP_PAGES as readonly string[]).includes(value)
@@ -48,6 +51,7 @@ export function parseHash(hash: string): Route | null {
   if (first === 'dictation') return { page: 'dictation' }
   if (first === 'chat' && second !== undefined && CHAT_ID.test(second)) return { page: 'chat', chat: second }
   if (first === 'project' && second !== undefined && /^[A-Za-z0-9_-]{1,64}$/.test(second)) return { page: 'project', id: second }
+  if (first === 'app' && second !== undefined && /^[a-z0-9]{1,40}$/.test(second)) return { page: 'miniapp', id: second }
   if (first && isAppPage(first)) return { page: first }
   return null
 }
@@ -57,6 +61,7 @@ export function hashFor(route: Route): string {
   if (route.page === 'quick-window') return '#/quick-window'
   if (route.page === 'dictation') return '#/dictation'
   if (route.page === 'project') return `#/project/${route.id}`
+  if (route.page === 'miniapp') return `#/app/${route.id}`
   // The main chat is plain `#/chat`; any other chat names itself, so Back and a reload land in the same chat.
   if (route.page === 'chat' && route.chat !== undefined && route.chat !== MAIN_CHAT && CHAT_ID.test(route.chat)) return `#/chat/${route.chat}`
   return `#/${route.page}`

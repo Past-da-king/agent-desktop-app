@@ -41,6 +41,15 @@ const PATHS = {
       <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6" />
     </>
   ),
+  // Mini-apps (the Apps page): three tiles and a plus, so it reads apart from Connections.
+  grid: (
+    <>
+      <rect x="4" y="4" width="6.5" height="6.5" rx="1.6" />
+      <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6" />
+      <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6" />
+      <path d="M16.75 13.5v6.5M13.5 16.75H20" />
+    </>
+  ),
   chat: <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v10a1.5 1.5 0 0 1-1.5 1.5H9l-4.5 3.5V17H5.5A1.5 1.5 0 0 1 4 15.5z" />,
   search: (
     <>

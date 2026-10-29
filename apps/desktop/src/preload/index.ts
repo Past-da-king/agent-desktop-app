@@ -54,7 +54,8 @@ import { MEMORY_HISTORY_CHANNELS } from '../shared/memory-history-channels'
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../shared/devices-channels'
 import { WORKER_CHANNELS, WORKER_EVENTS } from '../shared/workers-channels'
 import { WAKEUP_CHANNELS } from '../shared/wakeups-channels'
-import type { WakeDeviceStatus } from '@agent/core'
+import { MINIAPP_CHANNELS, MINIAPP_EVENTS } from '../shared/miniapps-channels'
+import type { MiniAppCheck, WakeDeviceStatus } from '@agent/core'
 import { VAULT_CHANNELS, VAULT_EVENTS } from '../shared/vault-channels'
 
 const platform: AgentApi['platform'] =
@@ -342,6 +343,22 @@ const api: AgentApi = {
     snooze: (id, minutes) => call<boolean>(WAKEUP_CHANNELS.snooze, id, minutes),
     selfId: () => call<string>(WAKEUP_CHANNELS.selfId),
     devices: () => call<WakeDeviceStatus[]>(WAKEUP_CHANNELS.devices),
+  },
+  miniapps: {
+    session: (appId) => call<string | null>(MINIAPP_CHANNELS.session, appId),
+    send: (sessionId, message) => call<unknown>(MINIAPP_CHANNELS.send, sessionId, message),
+    close: (sessionId) => call<void>(MINIAPP_CHANNELS.close, sessionId),
+    onPush: (callback) => on<[string, unknown]>(MINIAPP_EVENTS.push, (pair) => callback(pair[0], pair[1])),
+    onOpen: (callback) => on<string>(MINIAPP_EVENTS.open, (id) => callback(id)),
+    pin: (appId, position) => call<void>(MINIAPP_CHANNELS.pin, appId, position),
+    unpin: (appId) => call<void>(MINIAPP_CHANNELS.unpin, appId),
+    order: (ids) => call<void>(MINIAPP_CHANNELS.order, ids),
+    remove: (appId) => call<void>(MINIAPP_CHANNELS.remove, appId),
+    undo: (appId) => call<string>(MINIAPP_CHANNELS.undo, appId),
+    allow: (appId, key, on) => call<void>(MINIAPP_CHANNELS.allow, appId, key, on),
+    check: (appId) => call<MiniAppCheck | null>(MINIAPP_CHANNELS.check, appId),
+    askChange: (appId, text) => call<void>(MINIAPP_CHANNELS.askChange, appId, text),
+    info: () => call<{ engine: string }>(MINIAPP_CHANNELS.info),
   },
   vault: {
     list: () => call<VaultItemMeta[]>(VAULT_CHANNELS.list),

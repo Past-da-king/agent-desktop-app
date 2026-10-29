@@ -544,6 +544,33 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       selfId: async () => '',
       devices: async () => [],
     },
+    // Mini-apps run their bridge on the computer (miniapps.* RPC, main/miniapps/ipc.ts), like the phone's WebView.
+    miniapps: {
+      session: (appId) => wire.call('miniapps.session', [appId]) as Promise<string | null>,
+      send: (sessionId, message) => wire.call('miniapps.call', [sessionId, message]),
+      close: async (sessionId) => {
+        await wire.call('miniapps.close', [sessionId])
+      },
+      onPush: (callback) =>
+        wire.on('miniapps.push', (payload) => {
+          const value = (payload ?? {}) as { session?: string; message?: unknown }
+          if (typeof value.session === 'string') callback(value.session, value.message)
+        }),
+      onOpen: () => noop(),
+      pin: async (appId, position) => {
+        await wire.call('miniapps.pin', [appId, position ?? null])
+      },
+      unpin: async (appId) => {
+        await wire.call('miniapps.unpin', [appId])
+      },
+      order: () => notHere('Reordering apps'),
+      remove: () => notHere('Deleting an app'),
+      undo: () => notHere('Undoing an app change'),
+      allow: () => notHere('Changing what an app may do'),
+      check: async () => null,
+      askChange: () => notHere('Asking for an app change'),
+      info: async () => ({ engine: 'remote' }),
+    },
     vault: {
       list: () => wire.call('vault.list', []) as never,
       save: () => notHere('Changing the vault'),
