@@ -1,7 +1,9 @@
 import { attachmentProblem, type Attachment } from '@agent/core'
-import { memo, useEffect, useImperativeHandle, useRef, useState, forwardRef, type ClipboardEvent } from 'react'
+import { memo, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, type ClipboardEvent } from 'react'
 
 import { agent, chat } from '../bridge'
+import { insertMention, mentionAtCaret, mentionProjects, rankMentions, type MentionProject } from '../../shared/mentions'
+import { useEntity } from '../state/useData'
 import { useChatRunning } from '../state/useChats'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
@@ -11,6 +13,7 @@ import { Icon } from '../ui/Icon'
 import { DictateButton } from '../voice/DictateButton'
 import { DictationDraft } from '../voice/DictationDraft'
 import { AttachmentChip } from './AttachmentChip'
+import { MentionPicker } from './MentionPicker'
 
 /** Pasted text longer than this goes along as a text file instead of filling the composer (and the message limit). */
 const LONG_PASTE_CHARS = 12_000
@@ -71,6 +74,28 @@ export const Composer = memo(
     const [attachProblem, setAttachProblem] = useState('')
     const [reading, setReading] = useState(false)
     const composer = useRef<HTMLTextAreaElement>(null)
+    // '@' offers his projects (shared/mentions.ts); the main process sends a message that names one to its chat.
+    const projectRows = useEntity('project')
+    const projects = useMemo(() => mentionProjects(projectRows), [projectRows])
+    const [caret, setCaret] = useState(0)
+    const [pickIndex, setPickIndex] = useState(0)
+    const [dismissedAt, setDismissedAt] = useState(-1)
+    const typing = mentionAtCaret(text, caret)
+    const picks: MentionProject[] = typing === null || typing.start === dismissedAt ? [] : rankMentions(typing.query, projects, 6)
+    const picking = picks.length > 0
+    const active = Math.min(pickIndex, Math.max(0, picks.length - 1))
+    const pick = (project: MentionProject): void => {
+      const next = insertMention(text, caret, project.name)
+      setText(next.text)
+      setCaret(next.caret)
+      setPickIndex(0)
+      requestAnimationFrame(() => {
+        const area = composer.current
+        if (area === null) return
+        area.focus()
+        area.setSelectionRange(next.caret, next.caret)
+      })
+    }
 
     useEffect(() => {
       if (focusToken === 0) return
@@ -94,6 +119,8 @@ export const Composer = memo(
       if (value === '' && attachments.length === 0) return
       onSend()
       setText('')
+      setCaret(0)
+      setDismissedAt(-1)
       setAttachments([])
       setAttachProblem('')
       void chat.send(value, attachments, chatId)
@@ -217,6 +244,7 @@ export const Composer = memo(
           </div>
         ) : null}
         <DictationDraft />
+        {picking ? <MentionPicker items={picks} active={active} onPick={pick} onHover={setPickIndex} /> : null}
         <div className="compose-in">
           <IconButton
             icon="clip"
@@ -229,12 +257,35 @@ export const Composer = memo(
           <textarea
             ref={composer}
             rows={1}
-            placeholder={running ? 'Add to this, or ask for something else' : 'Ask anything'}
+            placeholder={running ? 'Add to this, or ask for something else' : 'Ask anything, or @ a project'}
             aria-label="Message"
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              setText(event.target.value)
+              setCaret(event.target.selectionStart)
+              setPickIndex(0)
+            }}
+            onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
             onPaste={onPaste}
+            aria-autocomplete="list"
+            aria-expanded={picking}
             onKeyDown={(event) => {
+              if (picking && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+                event.preventDefault()
+                setPickIndex((active + (event.key === 'ArrowDown' ? 1 : picks.length - 1)) % picks.length)
+                return
+              }
+              if (picking && (event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+                event.preventDefault()
+                const chosen = picks[active]
+                if (chosen !== undefined) pick(chosen)
+                return
+              }
+              if (picking && event.key === 'Escape') {
+                event.preventDefault()
+                setDismissedAt(typing?.start ?? -1)
+                return
+              }
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault()
                 send()

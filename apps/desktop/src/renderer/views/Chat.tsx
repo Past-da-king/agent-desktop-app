@@ -7,7 +7,8 @@ import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
-import { branchFrom, startProjectChat } from '../lib/chat-actions'
+import { branchFrom, openChat as openChatPage, startProjectChat } from '../lib/chat-actions'
+import { mentionNoticeOf } from '../../shared/mentions'
 import { projectOfChat, viaIcon, viaOf } from '../lib/projects'
 import { ProjectTile } from '../ui/ProjectTile'
 import { chatTitleOf, isSideRun, itemsOfChat, routeLine } from '../lib/chats'
@@ -761,6 +762,7 @@ const Row = memo(function Row({
       return <ReportRow item={item} onOpen={onOpenReport} />
     case 'notice':
       if (isDivider(item)) return <ChatDivider item={item} />
+      if (mentionNoticeOf(parseMeta(item.meta)) !== null) return <MentionSent item={item} />
       return (
         <div className="from">
           <Icon name={parseMeta(item.meta)['from'] === 'phone' ? 'phone' : 'bell'} size={14} />
@@ -771,6 +773,25 @@ const Row = memo(function Row({
       return <div className="from">{item.text}</div>
   }
 }, sameRow)
+
+/** "Sent to Acme": an @-mention went to that project's chat (main/runtime/mentions.ts); the line opens it. */
+function MentionSent({ item }: { item: ChatItem }): JSX.Element | null {
+  const sent = mentionNoticeOf(parseMeta(item.meta))
+  const projects = useEntity('project')
+  if (sent === null) return null
+  const project = projects.find((row) => row.id === sent.project)
+  return (
+    <button type="button" className="from mention-sent" onClick={() => openChatPage(sent.chat)} title={`Open the chat in ${sent.name}`}>
+      {project !== undefined ? <ProjectTile icon={project.icon} size={18} /> : <Icon name="chat" size={14} />}
+      <span>
+        Sent to <b>{sent.name}</b>
+        {sent.fresh ? ' in a new chat' : ''}
+      </span>
+      <span className="mention-open">Open chat</span>
+      <Icon name="arrow" size={14} />
+    </button>
+  )
+}
 
 /** Rows arrive as fresh objects from the main process: the same row is one whose content did not change. */
 function sameItem(a: ChatItem, b: ChatItem): boolean {

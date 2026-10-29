@@ -8,6 +8,8 @@ export const DEVICE_CHANNELS = {
   since: 'agent:data.since',
   page: 'agent:data.page',
   connectApp: 'agent:apps.connectLink',
+  /** The @-mention picker's project list, or "same" when the phone's copy is current (main/runtime/mentions.ts). */
+  mentions: 'agent:chat.mentions',
 } as const
 
 /** The same, by dotted RPC name. */
@@ -16,4 +18,5 @@ export const DEVICE_RPC_CHANNELS: Readonly<Record<string, string>> = {
   'data.since': DEVICE_CHANNELS.since,
   'data.page': DEVICE_CHANNELS.page,
   'apps.connectLink': DEVICE_CHANNELS.connectApp,
+  'chat.mentions': DEVICE_CHANNELS.mentions,
 }

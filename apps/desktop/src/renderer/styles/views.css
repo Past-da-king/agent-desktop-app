@@ -461,3 +461,14 @@ button.mem-note:hover{background:color-mix(in srgb,var(--pc) 88%,var(--on-pc))}
 .mh-said{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-radius:12px;background:var(--s-lowest);border:1px solid var(--outline-v);font-size:14px;line-height:1.6;overflow-wrap:anywhere}
 .mh-said-t{font:600 14px/1.3 var(--font)}
 @media (max-width:640px){.mh-when{margin-left:0;width:100%}}
+
+/* @-mentions: the picker above the message box, and the line a sent mention leaves (views/MentionPicker.tsx) */
+.mention-pick{max-width:860px;margin:0 auto 8px;background:var(--s-lowest);border:1px solid var(--outline-v);border-radius:20px;padding:6px;box-shadow:0 8px 28px rgba(0,0,0,.14);display:flex;flex-direction:column;gap:2px}
+.mention-head{font-size:12px;color:var(--on-sv);padding:6px 10px 4px}
+.mention-row{display:flex;align-items:center;gap:10px;min-height:44px;padding:6px 10px;border:0;border-radius:14px;background:transparent;color:var(--on-bg);font:inherit;text-align:left;cursor:pointer}
+.mention-row.on{background:var(--s-high)}
+.mention-name{font-weight:600;font-size:14px}
+.mention-also{font-size:12px;color:var(--on-sv);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mention-sent{border:0;cursor:pointer;font:inherit;font-size:12px}
+.mention-sent:hover{background:var(--s-high)}
+.mention-sent .mention-open{color:var(--primary);font-weight:600}

@@ -52,6 +52,7 @@ import { rememberCards, trimHelperRow } from '../shared/device-feed'
 import { DEVICE_CHAT_ROWS, boundRows, isLiveHelper, isOpenCard } from '../shared/device-list'
 import { lightRow } from '../shared/light-row'
 import { listWhere } from './runtime/data'
+import { mentionList, withMentions } from './runtime/mentions'
 import { parseRouteTarget } from '../shared/route-target'
 import { picksFrom } from './settings'
 import type { AccountStore } from './accounts'
@@ -208,7 +209,9 @@ const EMPTY_BROWSER: BrowserState = {
 }
 
 export function registerIpc(deps: IpcDeps): () => void {
-  const { store, settings, secrets, account, chat, ipcMain, windows } = deps
+  const { store, settings, secrets, account, ipcMain, windows } = deps
+  // A message that names a project with '@' goes to that project's chat, from the window and every linked device alike.
+  const chat = withMentions(deps.chat, { store, state: (each) => deps.chat.state(each) })
   const send: Broadcast = deps.broadcast ?? (() => undefined)
   // Only files the person picked or dropped may be read back for a thumbnail.
   const previewPaths = new Set<string>()
@@ -415,6 +418,9 @@ export function registerIpc(deps: IpcDeps): () => void {
     const page = await store.phoneChatPage(before, typeof rawLimit === 'number' ? rawLimit : 20)
     return { rows: page.rows.map((row) => trimHelperRow(lightRow('chat_item', row))), more: page.more }
   })
+
+  // The @-mention picker's projects: small, and only "same" when the caller's copy is current (a phone on mobile data).
+  handle(DEVICE_CHANNELS.mentions, async (_event, rawSince) => mentionList({ store }, typeof rawSince === 'string' && rawSince.length <= 64 ? rawSince : undefined))
 
   handle(CHANNELS.data.get, async (_event, rawEntity, rawId) => {
     return store.get(entityArg(rawEntity), requireString(rawId, 'id', MAX_STRING))

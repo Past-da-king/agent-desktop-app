@@ -44,6 +44,7 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'data.page',
   'device.prefs',
   'apps.connectLink',
+  'chat.mentions',
   'data.get',
   'data.upsert',
   'data.remove',
