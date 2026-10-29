@@ -88,6 +88,8 @@ export async function routeMention(
  * straight through to `runner` (a Proxy, as devices/offload-wire.ts wraps the same runner).
  */
 export function withMentions<T extends object>(runner: T, deps: MentionDeps): T {
+  // A caller with no chat side (a test of other IPC groups) keeps none.
+  if (typeof runner !== 'object' || runner === null) return runner
   return new Proxy(runner, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver) as unknown
