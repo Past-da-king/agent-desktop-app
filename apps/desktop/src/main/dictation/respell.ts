@@ -33,9 +33,12 @@ export function soundsLike(heard: string, name: string): boolean {
   const b = soundKey(name)
   if (b.length < 5 || a.length < 4) return false
   if (a === b) return true
-  const allowed = b.length >= 8 ? 2 : 1
+  // A name of several words ("Strat Edge Slack") shares most of its letters with ordinary phrases ("Strat Edge sync"):
+  // one letter off at most. A long one-word name may be two off ("Londercorp").
+  const allowed = b.length >= 8 && !/\s/.test(name.trim()) ? 2 : 1
   if (editDistance(a, b, allowed) <= allowed) return true
   // Same consonants in the same order, and most of the letters agree ("Mo Kena" for Mokoena).
+  if (/\s/.test(name.trim())) return false
   const sa = skeleton(a)
   const sb = skeleton(b)
   return sa.length >= 4 && sa === sb && editDistance(a, b, Math.ceil(b.length * 0.35)) <= Math.ceil(b.length * 0.35)
@@ -57,7 +60,7 @@ function tokens(text: string): Token[] {
 
 /**
  * Respells mis-heard names. A window of one to three words is replaced by a name only when it sounds like that name,
- * starts with a capital letter (the recogniser heard a name, not an ordinary word such as "finances"), is not the
+ * is a name as heard (one word with a capital letter, or several words that together sound like it), is not the
  * name already, and is the same number of words or more (so a name never adds a word). Longer names are tried first.
  */
 export function respellNames(text: string, names: readonly string[]): { text: string; changed: Array<{ heard: string; name: string }> } {
@@ -78,7 +81,9 @@ export function respellNames(text: string, names: readonly string[]): { text: st
       // The words must be one stretch: nothing but spaces between them.
       const span = text.slice(first.start, last.end)
       if (!/^[\p{L}\p{N}'’-]+(?:[ \t]+[\p{L}\p{N}'’-]+)*$/u.test(span)) continue
-      if (!/^\p{Lu}/u.test(first.word)) continue
+      // One word must have been heard as a name (a capital letter); two or three lower-case words that together
+      // sound like one name ("cosmic print") are a name split up, not ordinary speech.
+      if (size === 1 && !/^\p{Lu}/u.test(first.word)) continue
       for (const name of candidates) {
         const nameWords = name.split(/\s+/).length
         if (nameWords > size) continue

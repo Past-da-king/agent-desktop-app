@@ -163,6 +163,11 @@ describe('names are spelled right after transcription, only for words that were 
     expect(respellNames('Email LonderCorp and Mo Kena about Impetics.', names).text).toBe('Email Initech and Mokoena about Impetix.')
     // An ordinary word, another form of a name, or a name already right: as said.
     expect(respellNames('Finances are tight, finance is late, Finance is fine.', names).text).toBe('Finances are tight, finance is late, Finance is fine.')
+    // Heard in lower case and split in two, it is still his name; one ordinary lower-case word is not.
+    expect(respellNames("I don't know why that thing saying cosmic print there.", names).text).toBe("I don't know why that thing saying Cosmiprint there.")
+    expect(respellNames('the impetics file', names).text).toBe('the impetics file')
+    // A name of several words is not made out of an ordinary phrase that shares its first words.
+    expect(respellNames('Can you do the Strat Edge sync tonight?', [...names, 'Strat Edge Slack']).text).toBe('Can you do the Strat Edge sync tonight?')
     // A name never brings in more words than were heard.
     expect(respellNames('Northwind sent it.', names).text).toBe('Northwind sent it.')
   })
@@ -176,6 +181,13 @@ describe('names are spelled right after transcription, only for words that were 
     expect(fixed.text.match(/Cosmiprint/g)?.length).toBe(2)
     expect(fixed.text).toContain('Yeah, yeah, yeah, Cosmic shows like')
     expect(fixed.changed).toEqual([{ heard: 'Cosmic print', name: 'Cosmiprint' }, { heard: 'Cosmic print', name: 'Cosmiprint' }])
+  })
+
+  it('his 17:50 dictation as 0.2.104 typed it: the injected name is gone and his own words are back', () => {
+    // The composer mic in a 0.2.104 test copy, his recording as the microphone (29 Oct 2026).
+    const typed = "Yeah, yeah, yeah, because it's like a wasting real estate with that tab saying calendar. Oh, and I really don't know why that thing saying cosmic print there."
+    const fixed = respellNames(stripInjectedNames(typed, names).text, names).text
+    expect(fixed).toBe("Yeah, yeah, yeah, because it's like a wasting real estate with that tab saying calendar. Oh, and I really don't know why that thing saying Cosmiprint there.")
   })
 
   it('no recogniser is biased with names any more: not the live session, not a replay, not the one-call transcription', () => {
