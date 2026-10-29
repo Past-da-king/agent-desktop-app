@@ -6,9 +6,11 @@
  * refused if it draws in colours, fonts or radii of its own or reaches for the network, and looked at in light and
  * dark at 1440 and 390 wide before he is shown it. Deleting asks him first.
  */
-import { bool, int, schema, str, strList, type JsonObject, type MiniAppCheck, type MiniAppRow, type Tool } from '@agent/core'
+import { MAIN_CHAT, bool, int, schema, str, strList, type JsonObject, type MiniAppCheck, type MiniAppRow, type Tool } from '@agent/core'
 
 import type { DataStore } from '../runtime/data'
+import type { DeviceCommands } from '../devices/commands'
+import { latestOrigin } from '../devices/origin'
 import { agentWriter } from '../memory/history'
 import { MINIAPP_ICON_NAMES } from '../../shared/miniapps'
 import { MiniAppStore, type MiniAppChange } from '../miniapps/store'
@@ -23,6 +25,16 @@ export interface MiniAppToolDeps {
   store: DataStore
   knownTools?: () => ReadonlySet<string>
   ui?: () => MiniAppUi | null
+  /**
+   * The person's other devices (Devices on): miniapp_open opens the app on the device he wrote from (his phone), as
+   * open_url does with a link. Absent: only this window.
+   */
+  devices?: { selfId: () => string; commands: () => DeviceCommands | null }
+}
+
+/** The link a chat card opens a mini-app with, on whichever device he taps it (the phone handles agent://miniapp/<id>). */
+export function miniAppLink(app: { id: string; name: string }): string {
+  return `[Open ${app.name.replace(/[[\]]/g, '')}](agent://miniapp/${app.id})`
 }
 
 export const MINIAPP_GUIDE = `# Making a mini-app
@@ -237,10 +249,28 @@ export function miniAppTools(deps: MiniAppToolDeps): Tool[] {
       },
     },
     {
-      spec: { name: 'miniapp_open', description: 'Show a mini-app to the user in the app window (desktop). It must have passed its look check.', schema: schema(['app'], { app: str('Its id or name') }) },
-      run: async (input) => {
+      spec: {
+        name: 'miniapp_open',
+        description:
+          'Show a mini-app to the user on the device he is using right now: his phone when he wrote from it (it opens there, and you put the card line it gives you in your reply), else this app window. It must have passed its look check.',
+        schema: schema(['app'], { app: str('Its id or name') }),
+      },
+      run: async (input, ctx) => {
         const found = await find(input)
         if (typeof found === 'string') return found
+        // He wrote from another device (his phone): open it there, and give him a card in the chat that opens it again.
+        const devices = deps.devices
+        const chat = ctx.chat ?? MAIN_CHAT
+        const origin = devices === undefined ? null : await latestOrigin(deps.store, chat)
+        const commands = devices?.commands() ?? null
+        if (devices !== undefined && origin !== null && origin.deviceId !== devices.selfId() && commands !== null) {
+          const blocked = await ready(found)
+          if (blocked !== null) return blocked
+          const card = `Put this line in your reply, on its own line, so he has a card that opens it: ${miniAppLink(found)}`
+          const outcome = await commands.send(origin.deviceId, { kind: 'open_url', url: `agent://miniapp/${found.id}` }, chat, `The user's ${origin.name}`, ctx.owner ?? '')
+          if (outcome.status === 'done') return `Opened "${found.name}" on the user's ${origin.name}. ${card}`
+          return `Could not open "${found.name}" on the user's ${origin.name} by itself${outcome.note === '' ? '' : ` (${outcome.note})`}. ${card}`
+        }
         const host = ui()
         if (host === null) return `"${found.name}" is on his Apps page; this device has no window to open it in.`
         const blocked = await ready(found)

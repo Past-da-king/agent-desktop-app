@@ -269,7 +269,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...(deps.recordings === undefined ? [] : recordingsTools(deps.recordings)), // recordings_list, recordings_get
     ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
     ...calendarTools(deps.calendar ?? (() => null)), // calendar_events: every connected calendar in one list
-    ...miniAppTools({ store: deps.store, knownTools: () => names, ...(deps.miniappUi === undefined ? {} : { ui: deps.miniappUi }) }), // miniapp_guide, miniapp_create, miniapp_update, miniapp_list, miniapp_get, miniapp_open, miniapp_pin, miniapp_unpin, miniapp_undo, miniapp_check, miniapp_delete
+    ...miniAppTools({ store: deps.store, knownTools: () => names, ...(deps.miniappUi === undefined ? {} : { ui: deps.miniappUi }), ...(deps.devices === undefined ? {} : { devices: deps.devices }) }), // miniapp_guide, miniapp_create, miniapp_update, miniapp_list, miniapp_get, miniapp_open, miniapp_pin, miniapp_unpin, miniapp_undo, miniapp_check, miniapp_delete
   ]
   names = new Set(list.map((tool) => tool.spec.name))
   return list

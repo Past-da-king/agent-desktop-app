@@ -373,4 +373,43 @@ describe('a row that skipped the checks', () => {
     expect(host.openSession('mabadrow0001', () => undefined, 'window')).toBeNull()
     await host.stop()
   })
+  it('miniapp_open opens the app on the phone he wrote from, and gives the reply a card that opens it', async () => {
+    const { miniAppTools, miniAppLink } = await import('../src/main/tools/miniapps')
+    const { testContext } = await import('./support')
+    const store = new Store(':memory:')
+    const sent: Array<{ target: string; url: string | undefined }> = []
+    const opened: string[] = []
+    let status: 'done' | 'failed' = 'done'
+    const tools = miniAppTools({
+      store,
+      knownTools: () => new Set(['task_list']),
+      ui: () => ({ open: async (app) => void opened.push(app.id), check: async (app) => ({ version: app.version, at: 1, ok: true, issues: [], shots: [] }) }),
+      devices: {
+        selfId: () => 'dev_pc',
+        commands: () => ({ send: async (target: string, input: { url?: string }) => { sent.push({ target, url: input.url }); return { status, note: status === 'done' ? '' : 'no' } } }) as never,
+      },
+    })
+    const tool = (name: string) => tools.find((t) => t.spec.name === name)!
+    const ctx = testContext()
+    expect(await tool('miniapp_create').run({ name: 'Week calendar', description: 'x', icon: 'tasks', files: draft().files, permissions: ['task_list'] } as unknown as JsonObject, ctx)).toMatch(/Saved/)
+    const id = (await store.list('miniapp'))[0]!.id
+    // He wrote from his phone.
+    const phone = { deviceId: 'dev_phone', name: "Ayanda's A35", kind: 'phone', platform: 'android', screenWidth: 461, canOpenLinks: true, canReceiveFiles: true }
+    await store.upsert('chat_item', { id: 'u1', kind: 'user', text: 'pull up my calendar app', meta: JSON.stringify({ origin: phone }), createdAt: Date.now() } as never)
+    const out = await tool('miniapp_open').run({ app: 'Week calendar' }, ctx)
+    expect(sent).toEqual([{ target: 'dev_phone', url: `agent://miniapp/${id}` }])
+    expect(opened).toEqual([])
+    expect(out).toMatch(/Opened "Week calendar" on the user's Ayanda's A35/)
+    expect(out).toContain(miniAppLink({ id, name: 'Week calendar' }))
+    expect(miniAppLink({ id, name: 'Week calendar' })).toBe(`[Open Week calendar](agent://miniapp/${id})`)
+    // An older phone that cannot open it: still a card for the reply.
+    status = 'failed'
+    expect(await tool('miniapp_open').run({ app: id }, ctx)).toMatch(/Could not open "Week calendar".*agent:\/\/miniapp\//)
+    // He wrote on this computer: the window opens it, nothing goes to a device.
+    await store.upsert('chat_item', { id: 'u2', kind: 'user', text: 'and here', meta: JSON.stringify({ origin: { ...phone, deviceId: 'dev_pc', kind: 'desktop', platform: 'windows' } }), createdAt: Date.now() + 1000 } as never)
+    sent.length = 0
+    expect(await tool('miniapp_open').run({ app: id }, ctx)).toMatch(/^Opened "Week calendar"\.$/)
+    expect(opened).toEqual([id])
+    expect(sent).toEqual([])
+  })
 })
