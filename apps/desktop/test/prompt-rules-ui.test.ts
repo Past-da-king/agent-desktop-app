@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../src/renderer/bridge', () => ({ agent: { data: { upsert: async () => ({}) } } }))
-vi.mock('../src/renderer/state/useData', () => ({ useEntity: () => [] }))
+vi.mock('../src/renderer/state/useData', () => ({ useEntity: () => [], useCalmEntity: () => [] }))
 
 import { PromptRulesList } from '../src/renderer/views/PromptRules'
 import { newRule, removedRule } from '../src/shared/prompt-rules'

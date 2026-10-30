@@ -13,7 +13,7 @@ import type { ChatItem, HelperCardsSnapshot } from '@agent/core'
 const rows: { chat_item: ChatItem[]; project: unknown[] } = { chat_item: [], project: [] }
 
 vi.mock('../src/renderer/bridge', () => ({ agent: { helpers: { stop: async () => undefined } } }))
-vi.mock('../src/renderer/state/useData', () => ({ useEntity: (entity: 'chat_item' | 'project') => rows[entity] }))
+vi.mock('../src/renderer/state/useData', () => ({ useEntity: (entity: 'chat_item' | 'project') => rows[entity], useCalmEntity: (entity: 'chat_item' | 'project') => rows[entity] }))
 
 import { waitFor } from '../../../packages/core/test/helpers'
 import { Store } from '../src/main/db'
