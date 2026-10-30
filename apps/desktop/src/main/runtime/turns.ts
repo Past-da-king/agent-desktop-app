@@ -38,6 +38,8 @@ export interface LeaseHook {
   settled?(): Promise<void>
   /** Will crash recovery send this lease's run back to work (it is this brain's, still running, attempts left)? */
   willResume?(id: string): Promise<boolean>
+  /** May this run still say something or act? False once another brain took the turn while this one was frozen. */
+  stillOurs?(id: string): Promise<boolean>
 }
 
 export interface TurnLeasesDeps {
@@ -77,6 +79,10 @@ export interface Failover {
 
 export class TurnLeases implements LeaseHook {
   private readonly beats = new Map<string, ReturnType<typeof setInterval>>()
+  /** When each running lease last wrote its heartbeat: a long gap means this process was frozen. */
+  private readonly lastBeat = new Map<string, number>()
+  /** Leases this brain began and another brain then took: their run says and does nothing more. */
+  private readonly taken = new Set<string>()
   /**
    * Leases this process began. Recovery never takes one of these for a crash leftover: a turn started at start-up
    * (a helper's end notice, an update note) before recovery ran was resumed as if cut off, and its note sent twice.
@@ -125,6 +131,7 @@ export class TurnLeases implements LeaseHook {
   begin(info: { kind: 'turn' | 'job'; chatId: string; messageId: string; prompt: string; id?: string }): string {
     const id = info.id ?? (info.kind === 'job' ? `job-${info.messageId}` : `lease-${randomUUID()}`)
     this.begun.add(id)
+    this.taken.delete(id)
     const keep = this.resuming.delete(id)
     const at = this.now()
     this.write(async () => {
@@ -140,11 +147,9 @@ export class TurnLeases implements LeaseHook {
       })
     })
     this.stopBeat(id)
-    let lastBeat = at
+    this.lastBeat.set(id, at)
     const beat = setInterval(() => {
-      const beatAt = this.now()
-      const gap = beatAt - lastBeat
-      lastBeat = beatAt
+      const gap = this.now() - (this.lastBeat.get(id) ?? at)
       this.write(async () => {
         // Back from a freeze long enough for a takeover: hear the other brains first. A heartbeat written now would
         // overwrite the claim of the brain that took this over, and both would run it (30 Oct 2026).
@@ -154,10 +159,14 @@ export class TurnLeases implements LeaseHook {
         // brain has already finished it.
         if (row === null || row.status !== 'running' || !this.isOwn(row.brainId)) {
           this.stopBeat(id)
-          if (row !== null && !this.isOwn(row.brainId)) this.deps.lost?.(row)
+          if (row !== null && !this.isOwn(row.brainId)) {
+            this.taken.add(id)
+            this.deps.lost?.(row)
+          }
           return
         }
         await this.deps.store.upsert('turn_lease', { id, heartbeatAt: this.now() })
+        this.lastBeat.set(id, this.now())
       })
     }, this.deps.heartbeatMs ?? HEARTBEAT_MS)
     beat.unref?.()
@@ -172,6 +181,22 @@ export class TurnLeases implements LeaseHook {
       if (row === null || !this.isOwn(row.brainId)) return
       await this.deps.store.upsert('turn_lease', { id, status, heartbeatAt: this.now() })
     })
+  }
+
+  /**
+   * May this run say something or act now? Free, unless it has been long enough since the last heartbeat for another
+   * brain to have taken the turn. An answer that sat in the socket while this process was frozen is read the moment it
+   * thaws, before any timer: it must not go in the chat beside the other brain's (30 Oct 2026).
+   */
+  async stillOurs(id: string): Promise<boolean> {
+    if (this.taken.has(id)) return false
+    const last = this.lastBeat.get(id)
+    if (last === undefined || this.now() - last < (this.deps.staleMs ?? STALE_MS)) return true
+    await this.catchUp()
+    const row = await this.deps.store.get('turn_lease', id)
+    if (row === null || this.isOwn(row.brainId)) return true
+    this.taken.add(id)
+    return false
   }
 
   async willResume(id: string): Promise<boolean> {
@@ -313,6 +338,7 @@ export class TurnLeases implements LeaseHook {
     const beat = this.beats.get(id)
     if (beat !== undefined) clearInterval(beat)
     this.beats.delete(id)
+    this.lastBeat.delete(id)
   }
 }
 

@@ -191,6 +191,52 @@ describe('a brain back from a freeze', () => {
     expect(await store.get('turn_lease', id)).toMatchObject({ brainId: 'dev_b', status: 'done' })
   })
 
+  it('an answer read straight after the freeze waits to hear the others, and is dropped if the turn was taken', async () => {
+    const now = { t: 6_000_000 }
+    const store = new Store(':memory:')
+    cleanups.push(() => store.close())
+    let id = ''
+    const leases = leaseFor(store, now, [], async () => {
+      await store.upsert('turn_lease', { id, brainId: 'dev_b', attempt: 2 })
+    })
+    id = leases.begin({ kind: 'turn', chatId: 'main', messageId: 'm1', prompt: 'x' })
+    await leases.settled()
+    expect(await leases.stillOurs(id)).toBe(true)
+    now.t += 60_000
+    expect(await leases.stillOurs(id)).toBe(false)
+  })
+
+  it('a run frozen mid-answer puts nothing in the chat once the turn was taken', async () => {
+    const now = { t: 6_500_000 }
+    const store = new Store(':memory:')
+    cleanups.push(() => store.close())
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const leases = leaseFor(store, now, [], async () => {
+      const [row] = await store.list('turn_lease')
+      if (row !== undefined) await store.upsert('turn_lease', { id: row.id, brainId: 'dev_b', attempt: 2 })
+    })
+    // The model's answer is held back while the process is "frozen".
+    const fake = await startFakeAi(() => ({ text: 'Too late.' }))
+    cleanups.push(() => fake.close())
+    const inner = makeRunner(store, fake, leases)
+    const gated: LeaseHook = leases
+    expect(gated.stillOurs).toBeDefined()
+    now.t += 1
+    const stillOurs = leases.stillOurs.bind(leases)
+    leases.stillOurs = async (id) => {
+      await held
+      return stillOurs(id)
+    }
+    void inner.send('Plan the trip')
+    await waitFor(async () => (await store.list('turn_lease')).length === 1, 2000)
+    now.t += 60_000
+    release()
+    await waitFor(async () => (await store.list('turn_lease'))[0]?.brainId === 'dev_b', 5000)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect((await store.list('chat_item')).filter((row) => row.kind === 'agent')).toHaveLength(0)
+  })
+
   it('a short pause asks nobody and carries on', async () => {
     const now = { t: 9_000_000 }
     const store = new Store(':memory:')

@@ -213,6 +213,20 @@ single sync service (`syncUrl`) is unchanged and runs beside it; what it brings 
   revoked, by `priority`). It probes `/v1/health` (3 s timeout) in order and connects to the first `ready` one;
   re-probes every 15 s and on any failure, and moves back up when a higher brain returns, between turns only. The UI
   always shows "Answered by <name>". Only when every brain fails: "No agents available" with Retry.
+- **A message and a brain that stops answering (`chat.sendOnce`, 30 Oct 2026)**: an open socket says nothing about the
+  computer behind it (a frozen one keeps the connection and answers nobody; the socket falls over only after a ping
+  cycle, 40 s), and `chat.send` answers only when the whole turn has ended. So the phone sends
+  `chat.sendOnce({ sendId, sentAt, fresh, text, attachments, chat?, replyIn? })`, which answers `{ accepted: true }` as
+  soon as the user row and the lease are stored. No word in 6 s: the phone leaves that brain, passes it over for 30 s
+  and sends the same `sendId` to the next one. It keeps trying for 2 minutes with his words safe, then says so. The row
+  is `send-<sendId>` and the lease `lease-send-<sendId>` on every brain, so two brains can only write the same rows; a
+  `sendId` already held answers `{ accepted: true, duplicate: true }`. A frame that sat in the socket during a freeze
+  is dropped if its caller has gone, and answered `{ accepted: false, stale: true }` if it is over 15 s old; a caller
+  still there repeats it with `fresh`. A brain too old for the call says not available: the phone uses `chat.send`.
+  The old brain never runs a frame it cannot read, so a new phone is safe with an old frozen computer.
+- **Back from a freeze**: a brain that has not written a heartbeat for longer than the takeover time first does one
+  replication pass (5 s at most) before it writes a heartbeat, says anything in the chat or starts a tool
+  (`TurnLeases.stillOurs`). If another brain has the lease, it stops its run, even when that brain has finished.
 - **Turn lease**: when a brain starts a turn it writes a `turn_lease` row (entity `turn` is already the model
   transcript) `{ id, kind: "turn|job", chatId, messageId, brainId, status: "running|done|failed|interrupted",
   attempt, heartbeatAt, startedAt, prompt }` and updates `heartbeatAt` every 10 s. Helper jobs do the same with

@@ -231,6 +231,8 @@ interface ChatLine {
   chat: string
   running: boolean
   controller: AbortController | null
+  /** The lease of the turn running now. */
+  leaseId: string | null
   /** On a plan: the SDK turn in flight, so a joined message can pause it and resume the same session. */
   turn: AbortController | null
   /** True after a turn was paused for a joined message, so the next prompt says so. */
@@ -425,6 +427,7 @@ export class Runner {
         chat,
         running: false,
         controller: null,
+        leaseId: null,
         turn: null,
         paused: false,
         steer: [],
@@ -1211,6 +1214,7 @@ export class Runner {
       const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
       const fixedLease = leaseId ?? once?.leaseId
       lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
+      line.leaseId = lease
       // The lease is stored before anyone hears the turn started, so a brain that dies right after can be taken over.
       await this.devices?.leases?.settled?.()
       once?.accepted()
@@ -1224,6 +1228,7 @@ export class Runner {
     } finally {
       this.git?.drop(`chat:${line.chat}`)
       if (lease !== null && !this.disposing) this.devices?.leases?.end(lease, error === undefined ? 'done' : 'failed')
+      line.leaseId = null
       if (line.controller === controller) line.controller = null
       line.turn = null
       line.paused = false
@@ -1769,6 +1774,15 @@ export class Runner {
   // ---- rendering into chat rows -----------------------------------------------------------
 
   private async render(event: AgentEvent, chat: string = MAIN_CHAT): Promise<void> {
+    // Frozen long enough for another brain to take this turn: it says and does nothing more until that is settled.
+    if (event.type === 'said' || event.type === 'tool_started') {
+      const line = this.line(chat)
+      const lease = line.leaseId
+      if (lease !== null && (await this.devices?.leases?.stillOurs?.(lease)) === false) {
+        line.controller?.abort()
+        return
+      }
+    }
     switch (event.type) {
       case 'thinking':
         this.emitFor(chat, { type: 'thinking', step: event.step })

@@ -238,7 +238,7 @@ describe('the wire allowlist', () => {
     ipc.handle(CHANNELS.settings.setApiKey, async () => 'leaked')
     ipc.handle(CHANNELS.data.upsert, async () => 'row')
     expect(await callAllowed(registry, new Map(), session, 'chat.send', ['hi', [], ''])).toBe('sent')
-    expect(seen[0]).toEqual({ deviceId: 'dev_p', origin })
+    expect(seen[0]).toMatchObject({ deviceId: 'dev_p', origin })
     expect(seen[1]).toEqual(['hi', [], ''])
     await expect(callAllowed(registry, new Map(), session, 'settings.setApiKey', ['k'])).rejects.toThrow(NOT_AVAILABLE)
     await expect(callAllowed(registry, new Map(), session, 'nope.nothing', [])).rejects.toThrow(NOT_AVAILABLE)
