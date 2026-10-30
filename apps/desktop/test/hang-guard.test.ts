@@ -79,6 +79,29 @@ describe('the store on the main thread', () => {
     expect(why).not.toBe('')
   })
 
+  it('keeps whole lists of the small tables in memory, always as they are after every write and rollback', async () => {
+    const { store } = fileStore()
+    await store.upsert('task', { id: 't1', title: 'one', status: 'todo' } as never)
+    expect((await store.list('task')).map((t) => t.title)).toEqual(['one'])
+    await store.upsert('task', { id: 't1', title: 'one changed', status: 'todo' } as never)
+    expect((await store.list('task')).map((t) => t.title)).toEqual(['one changed'])
+    // A row handed out is a copy: changing it changes nothing held.
+    ;(await store.list('task'))[0]!.title = 'scribbled'
+    expect((await store.list('task'))[0]!.title).toBe('one changed')
+    await store.applyRemote([{ entity: 'task', id: 't2', deleted: false, stamp: `${Date.now() + 60_000}-0-other-device`, payload: { title: 'two', status: 'todo' } as JsonObject }, { entity: 'task', id: 't3', deleted: false, stamp: `${Date.now() + 60_000}-1-other-device`, payload: { title: 'three', status: 'todo' } as JsonObject }] as never)
+    expect((await store.list('task')).length).toBe(3)
+    await expect(
+      store.batch(async () => {
+        await store.upsert('task', { id: 't4', title: 'rolled back', status: 'todo' } as never)
+        expect((await store.list('task')).length).toBe(4)
+        throw new Error('undo')
+      }),
+    ).rejects.toThrow('undo')
+    expect((await store.list('task')).map((t) => t.id).sort()).toEqual(['t1', 't2', 't3'])
+    await store.remove('task', 't1')
+    expect((await store.list('task')).map((t) => t.id).sort()).toEqual(['t2', 't3'])
+  })
+
   it('applies a pulled page as one transaction (all or nothing), not two commits per change', async () => {
     const { store } = fileStore()
     const page = [0, 1, 2].map((n) => ({ entity: 'task', id: `remote-${n}`, deleted: false, stamp: `${1_700_000_000_000 + n}-0-other-device`, payload: { title: `r${n}`, status: 'todo' } as JsonObject }))
@@ -189,6 +212,27 @@ describe('helpers when this computer is short of memory or disk', () => {
     await m.delegate(Array.from({ length: 6 }, (_, i) => ({ label: `Job ${i + 1}`, brief: `Do job ${i + 1}.` })))
     await waitFor(() => delivered.length === 6, 8_000)
     expect(peak).toBe(6)
+  })
+
+  it('finds a finished step by the row its start wrote, without reading the steps', async () => {
+    const quick: Tool = { spec: { name: 'quick_tool', description: 'Answers at once.', schema: { type: 'object', properties: {} } }, run: async () => 'done' }
+    fake = await startFakeAi((body) => {
+      const results = (JSON.stringify(body).match(/"role":"tool"/g) ?? []).length
+      return results < 3 ? { toolCalls: [{ name: 'quick_tool', input: {} }] } : { text: 'Finished.' }
+    })
+    const { manager: m, delivered, store } = manager(undefined, [quick])
+    const kinds: string[] = []
+    const original = store.listWhere.bind(store)
+    store.listWhere = (async (entity: never, where: { kind?: string }) => {
+      kinds.push(String(where.kind ?? ''))
+      return original(entity, where as never)
+    }) as typeof store.listWhere
+    await m.delegate([{ label: 'Steps', brief: 'Take three steps.' }])
+    await waitFor(() => delivered.length === 1, 8_000)
+    expect(kinds.filter((k) => k === 'activity')).toEqual([])
+    const steps = (await store.list('chat_item')).filter((row) => row.kind === 'activity')
+    expect(steps).toHaveLength(3)
+    expect(steps.every((row) => meta(row)['status'] !== 'running')).toBe(true)
   })
 
   it('reads only the cards still working when it reaps (not every helper card ever)', async () => {

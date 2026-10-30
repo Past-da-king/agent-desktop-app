@@ -389,6 +389,8 @@ export const REAP_AFTER_MS = 3 * MINUTE_MS
 const LEASE_DEAD_MS = 3 * MINUTE_MS
 /** How a card still working looks inside its stored row (meta is a JSON string inside the row's JSON). */
 const WORKING_IN_META = '\\"state\\":\\"working\\"'
+/** How a step still running looks inside its stored row. */
+const RUNNING_STEP_IN_META = '\\"status\\":\\"running\\"'
 /** What a lost run's card and notice say. */
 const LOST_REASON = 'its run was lost: no device was running it any more'
 /**
@@ -452,6 +454,8 @@ export class HelperManager implements HelperHost {
   private readonly activityIds = new Map<number, string>()
   /** When each tool call started, for how long a run took. */
   private readonly runStarts = new Map<string, number>()
+  /** The activity row tool_started wrote, by helper and call id, so tool_finished never searches for it. */
+  private readonly stepRows = new Map<string, string>()
   /** Desk runs the router is waiting on (runDesk), by helper id. */
   private readonly deskWaiters = new Map<string, (outcome: DeskOutcome) => void>()
   private deskToolset: Tool[] | null = null
@@ -2154,6 +2158,8 @@ export class HelperManager implements HelperHost {
             ...chatTag(run.chat),
           }),
         })
+        if (this.stepRows.size > 5_000) this.stepRows.clear()
+        this.stepRows.set(`${run.id}:${event.call.id}`, row.id)
         await this.updateMeta(run.id, { summary })
         this.emit({ type: 'chat_changed' })
         return
@@ -2168,7 +2174,7 @@ export class HelperManager implements HelperHost {
         const summary = isError
           ? clip(redactSecrets(event.result.split('\n')[0] ?? event.result), 160)
           : describeCall(event.call)
-        const existing = await this.findRunningActivity(run.id, event.call.name)
+        const existing = await this.findRunningActivity(run.id, event.call.name, `${run.id}:${event.call.id}`)
         const started = this.runStarts.get(event.call.id) ?? Date.now()
         this.runStarts.delete(event.call.id)
         const record = await finishRun(event.call, event.result, isError, started)
@@ -2195,9 +2201,16 @@ export class HelperManager implements HelperHost {
     }
   }
 
-  private async findRunningActivity(helperId: string, tool: string): Promise<string | null> {
+  private async findRunningActivity(helperId: string, tool: string, callId = ''): Promise<string | null> {
+    // The row tool_started wrote for this call: no read at all. Reading every step since the run began (with each
+    // step's whole output) on every finished call was a main-thread hot spot with a dozen helpers (30 Oct 2026).
+    const known = callId === '' ? undefined : this.stepRows.get(callId)
+    if (known !== undefined) {
+      this.stepRows.delete(callId)
+      return known
+    }
     const since = this.runs.get(helperId)?.startedAt ?? 0
-    const rows = await listWhere(this.store, 'chat_item', { kind: 'activity', since: since > 0 ? since - 1 : 0 })
+    const rows = await listWhere(this.store, 'chat_item', { kind: 'activity', since: since > 0 ? since - 1 : 0, contains: RUNNING_STEP_IN_META })
     for (let i = rows.length - 1; i >= 0; i--) {
       const row = rows[i]
       if (row === undefined || row.kind !== 'activity') continue

@@ -1342,26 +1342,30 @@ export class Runner {
    * turn, and for a branched chat with no transcript of its own, the conversation it was branched from.
    */
   private async withContextNotes(line: ChatLine, text: string, presence = ''): Promise<string> {
-    // Only the kinds read below: a chat's activity steps are nearly all of its bytes (seconds to read on every message).
-    const rows = await listWhere(this.store, 'chat_item', { chat: line.chat, kinds: ['user', 'agent', 'report', 'notice', 'helper'] })
+    // Only the rows these notes use, each found inside the database by its flag: reading every message of the main
+    // chat on every turn took up to 3.7 s on the main thread with a dozen helpers working (30 Oct 2026).
+    const chat = line.chat
+    const flagged = async (kind: string, flag: string): Promise<ChatItem[]> => listWhere(this.store, 'chat_item', { chat, kind, contains: `\\"${flag}\\":true` })
     const notes: string[] = []
 
-    const carry = await this.carriedSummary(rows)
+    const carry = await this.carriedSummary(await flagged('notice', 'divider'), chat)
     if (carry !== '') notes.push(`[The user started fresh in this chat. Where things stood before (for you to keep in mind; do not repeat it back):]\n${carry}\n[End of where things stood.]`)
 
-    const handoff = rows.find((row) => row.kind === 'notice' && parseMeta(row.meta)['handoff'] === true)
+    const handoff = (await flagged('notice', 'handoff')).find((row) => parseMeta(row.meta)['handoff'] === true)
     if (handoff !== undefined) {
-      const history = handoffText(rows.filter((row) => row.createdAt <= handoff.createdAt))
+      const before = await listWhere(this.store, 'chat_item', { chat, kinds: ['user', 'agent', 'report', 'notice', 'helper'], before: handoff.createdAt + 1 })
+      const history = handoffText(before.filter((row) => row.createdAt <= handoff.createdAt))
       if (history !== '') notes.push(`[This chat was branched from an earlier conversation. Here it is up to the branch point, so you have its context:]\n${history}\n[End of the earlier conversation.]`)
       await this.patchMeta(handoff.id, { handoff: false })
     }
 
-    for (const row of rows) {
+    for (const row of await flagged('helper', 'side')) {
       if (row.kind !== 'helper') continue
       const meta = parseMeta(row.meta)
       if (meta['side'] !== true || meta['told'] === true) continue
       if (meta['state'] !== 'done' && meta['state'] !== 'failed') continue
-      const asked = rows.find((other) => other.id === meta['ask'])?.text ?? ''
+      const askId = typeof meta['ask'] === 'string' ? meta['ask'] : ''
+      const asked = askId === '' ? '' : ((await this.store.get('chat_item', askId))?.text ?? '')
       const result = typeof meta['result'] === 'string' ? meta['result'] : ''
       notes.push(
         `[Done alongside while you were busy (the user already saw its summary; do not redo it): they asked "${clip(asked, 300)}". ${meta['state'] === 'done' ? 'Result' : 'It failed'}: ${clip(result, 1500)}]`,
@@ -1378,7 +1382,7 @@ export class Runner {
    * compressChat), handed over once, on the first turn after it. The summary may still be on its way: it is waited
    * for a little, and if it never comes the last messages before the divider stand in for it.
    */
-  private async carriedSummary(rows: ChatItem[]): Promise<string> {
+  private async carriedSummary(rows: ChatItem[], chat: string): Promise<string> {
     const divider = rows.filter((row) => row.kind === 'notice' && parseMeta(row.meta)['divider'] === true).sort((a, b) => b.createdAt - a.createdAt)[0]
     if (divider === undefined) return ''
     let meta = parseMeta(divider.meta)
@@ -1389,8 +1393,10 @@ export class Runner {
     }
     let carry = typeof meta['carry'] === 'string' ? meta['carry'].trim() : ''
     if (carry === '') {
-      carry = rows
+      const lastWords = await listWhere(this.store, 'chat_item', { chat, kinds: ['user', 'agent'], before: divider.createdAt, limit: 40, newestFirst: true })
+      carry = lastWords
         .filter((row) => row.createdAt < divider.createdAt && (row.kind === 'user' || row.kind === 'agent') && row.text.trim() !== '')
+        .sort((a, b) => a.createdAt - b.createdAt)
         .slice(-10)
         .map((row) => `${row.kind === 'user' ? 'User' : 'You'}: ${clip(row.text.trim(), 600)}`)
         .join('\n')

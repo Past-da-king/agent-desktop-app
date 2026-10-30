@@ -93,6 +93,14 @@ const MAX_VERSIONS = 300
 
 const UPDATED_AT_ENTITIES: ReadonlySet<EntityName> = new Set(['memory', 'task', 'prompt_rule'])
 
+/**
+ * Whole lists of these are kept in memory (as stored, parsed afresh on every read) until a write to the entity.
+ * Every turn and every helper start lists memory, goals, tasks, projects and rules; their rows sit scattered through
+ * a 450 MB file, and on a starved disk one list of 521 memory pages took 0.2 to 1 s on the main thread (30 Oct
+ * 2026). Chat rows and turns are far too big and are never held.
+ */
+const LIST_CACHED: ReadonlySet<EntityName> = new Set(ENTITY_NAMES.filter((each) => each !== 'chat_item' && each !== 'turn'))
+
 export class Store implements SyncStore {
   readonly deviceId: string
   private readonly db: DatabaseSync
@@ -104,6 +112,10 @@ export class Store implements SyncStore {
   private checkpointer: Checkpointer | null = null
   /** While a batch runs, changes are collected here and announced once at the end. */
   private batching: StoreChange[] | null = null
+  /** Whole lists of the small entities as stored (LIST_CACHED), dropped on any write to the entity. */
+  private readonly listCache = new Map<EntityName, Array<Record<string, SQLOutputValue>>>()
+  /** Inside an open transaction nothing is cached (it may still roll back). */
+  private inTransaction = false
 
   constructor(file: string, clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
@@ -189,18 +201,32 @@ export class Store implements SyncStore {
    * holds the event loop (the window, the devices link, timers) for more than a slice.
    */
   private async readEntitySliced(entity: EntityName): Promise<StoredRow[]> {
+    const held = this.listCache.get(entity)
+    if (held !== undefined) return held.map(rowFromSql)
+    const writesBefore = this.writes
     const slice = this.db.prepare('SELECT cid, stamp, deleted, payload FROM rows WHERE entity = ? AND cid > ? ORDER BY cid LIMIT ?')
-    const out: StoredRow[] = []
+    const raw: Array<Record<string, SQLOutputValue>> = []
     let after = ''
     for (;;) {
-      const rows = slice.all(entity, after, LIST_SLICE_ROWS).map(rowFromSql)
-      for (const row of rows) out.push(row)
+      const rows = slice.all(entity, after, LIST_SLICE_ROWS)
+      for (const row of rows) raw.push(row)
       const last = rows[rows.length - 1]
       if (rows.length < LIST_SLICE_ROWS || last === undefined) break
-      after = last.cid
+      after = stringField(last['cid'])
       await yieldNow()
     }
-    return out
+    // Kept only when nothing was written while it was read (between slices) and no transaction is open.
+    if (LIST_CACHED.has(entity) && !this.inTransaction && this.batching === null && this.writes === writesBefore) this.listCache.set(entity, raw)
+    return raw.map(rowFromSql)
+  }
+
+  /** Writes so far (a list read across slices is cached only if none happened meanwhile). */
+  private writes = 0
+
+  private dropList(entity: EntityName | null): void {
+    this.writes++
+    if (entity === null) this.listCache.clear()
+    else this.listCache.delete(entity)
   }
 
   /**
@@ -391,6 +417,7 @@ export class Store implements SyncStore {
 
   /** Wipe the synced rows and the watermarks. The device id is kept so HLC stamps stay stable. */
   async clearAll(): Promise<void> {
+    this.dropList(null)
     this.db.exec('DELETE FROM rows')
     this.db.exec('DELETE FROM memory_versions')
     this.db.exec('DELETE FROM change_log')
@@ -407,14 +434,17 @@ export class Store implements SyncStore {
     const touched: StoreChange[] = []
     this.batching = touched
     this.db.exec('BEGIN')
+    this.inTransaction = true
     try {
       const result = await work()
       this.db.exec('COMMIT')
       return result
     } catch (error) {
       this.db.exec('ROLLBACK')
+      this.dropList(null)
       throw error
     } finally {
+      this.inTransaction = false
       this.batching = null
       this.announce(touched)
     }
@@ -577,12 +607,16 @@ export class Store implements SyncStore {
     // main thread (30 Oct 2026). Inside a batch() the batch's transaction already covers it.
     if (this.batching !== null || changes.length < 2) return this.applyRemoteRows(changes, via)
     this.db.exec('BEGIN')
+    this.inTransaction = true
     try {
       const touched = this.applyRemoteRows(changes, via, true)
       this.db.exec('COMMIT')
+      this.inTransaction = false
       this.announce(touched)
     } catch (error) {
       this.db.exec('ROLLBACK')
+      this.inTransaction = false
+      this.dropList(null)
       throw error
     }
   }
@@ -718,6 +752,7 @@ export class Store implements SyncStore {
   }
 
   private logChange(entity: EntityName, cid: string, via: string): void {
+    this.dropList(entity)
     this.db.prepare('INSERT OR REPLACE INTO change_log(entity, cid, via) VALUES(?, ?, ?)').run(entity, cid, via)
   }
 

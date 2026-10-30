@@ -49,6 +49,35 @@ export function terms(query: string): Set<string> {
  * with a small bonus for a longer exact substring, for a pinned page, and for being recent.
  * Ties go to the most recently updated page.
  */
+/**
+ * A page's words, worked out once per version: ranking every page's body for every turn and every helper start took
+ * up to 1.8 s on the main thread with eleven helpers (30 Oct 2026).
+ */
+interface PageTerms {
+  key: string
+  title: Set<string>
+  topics: Set<string>
+  body: Set<string>
+  text: string
+}
+const pageTerms = new Map<string, PageTerms>()
+
+function termsOf(row: MemoryRow): PageTerms {
+  const key = `${row.updatedAt}|${row.title.length}|${row.body.length}|${row.topics.length}|${(row.aliases ?? '').length}`
+  const held = pageTerms.get(row.id)
+  if (held !== undefined && held.key === key) return held
+  if (pageTerms.size > 20_000) pageTerms.clear()
+  const made: PageTerms = {
+    key,
+    title: terms(`${row.title} ${row.aliases ?? ''}`),
+    topics: terms(row.topics),
+    body: terms(row.body),
+    text: `${row.title} ${row.aliases ?? ''} ${row.body}`.toLowerCase(),
+  }
+  pageTerms.set(row.id, made)
+  return made
+}
+
 export function rank(query: string, rows: MemoryRow[], limit: number): MemoryRow[] {
   const wanted = terms(query)
   if (wanted.size === 0) {
@@ -59,18 +88,13 @@ export function rank(query: string, rows: MemoryRow[], limit: number): MemoryRow
   const scored: Array<{ row: MemoryRow; score: number }> = []
   for (const row of rows) {
     // Other names it answers to count like its title ("Londercorp" finds Initech).
-    const title = terms(`${row.title} ${row.aliases ?? ''}`)
-    const topics = terms(row.topics)
-    const body = terms(row.body)
+    const { title, topics, body, text } = termsOf(row)
     let score = 0
     for (const term of wanted) {
       if (title.has(term)) score += 3
       if (topics.has(term)) score += 2
       if (body.has(term)) score += 1
-      if (term.length > 3) {
-        const text = `${row.title} ${row.aliases ?? ''} ${row.body}`.toLowerCase()
-        if (text.includes(term)) score += 0.5
-      }
+      if (term.length > 3 && text.includes(term)) score += 0.5
     }
     if (row.pinned) score += 0.5
     score += 0.3 / (1 + Math.max(0, now - row.updatedAt) / DAY_MS)
