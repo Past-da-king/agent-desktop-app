@@ -102,6 +102,25 @@ describe('the store on the main thread', () => {
     expect((await store.list('task')).map((t) => t.id).sort()).toEqual(['t2', 't3'])
   })
 
+  it('a long chain of store calls gives the event loop a turn (the window and timers are never held for long)', async () => {
+    const { store } = fileStore()
+    let ticks = 0
+    const timer = setInterval(() => ticks++, 1)
+    let longest = 0
+    let last = performance.now()
+    const beat = setInterval(() => {
+      const now = performance.now()
+      longest = Math.max(longest, now - last)
+      last = now
+    }, 1)
+    const started = performance.now()
+    for (let i = 0; performance.now() - started < 600; i++) await store.upsert('chat_item', { kind: 'activity', text: `step ${i}`, meta: JSON.stringify({ helper: 'h', status: 'done' }) } as never)
+    clearInterval(timer)
+    clearInterval(beat)
+    expect(ticks).toBeGreaterThan(5)
+    expect(longest).toBeLessThan(200)
+  })
+
   it('applies a pulled page as one transaction (all or nothing), not two commits per change', async () => {
     const { store } = fileStore()
     const page = [0, 1, 2].map((n) => ({ entity: 'task', id: `remote-${n}`, deleted: false, stamp: `${1_700_000_000_000 + n}-0-other-device`, payload: { title: `r${n}`, status: 'todo' } as JsonObject }))
@@ -233,6 +252,38 @@ describe('helpers when this computer is short of memory or disk', () => {
     const steps = (await store.list('chat_item')).filter((row) => row.kind === 'activity')
     expect(steps).toHaveLength(3)
     expect(steps.every((row) => meta(row)['status'] !== 'running')).toBe(true)
+  })
+
+  it('helpers_status shows a working helper and its last steps without reading old steps', async () => {
+    let calls = 0
+    let gate = false
+    const stepTool: Tool = {
+      spec: { name: 'step_tool', description: 'One step.', schema: { type: 'object', properties: {} } },
+      run: async () => {
+        calls++
+        if (calls >= 3) await waitFor(() => gate, 10_000)
+        return 'done'
+      },
+    }
+    fake = await startFakeAi((body) => ((JSON.stringify(body).match(/"role":"tool"/g) ?? []).length < 3 ? { toolCalls: [{ name: 'step_tool', input: {} }] } : { text: 'Finished.' }))
+    const { manager: m, delivered, store } = manager(undefined, [stepTool])
+    for (let i = 0; i < 12; i++) await store.upsert('chat_item', { kind: 'helper', text: `old ${i}`, createdAt: 1_000 + i, meta: JSON.stringify({ state: 'done', label: `Old ${i}`, result: 'r' }) } as never)
+    for (let i = 0; i < 50; i++) await store.upsert('chat_item', { kind: 'activity', text: `old step ${i}`, createdAt: 2_000 + i, meta: JSON.stringify({ helper: 'x', status: 'done' }) } as never)
+    await m.delegate([{ label: 'Busy one', brief: 'Take steps.' }])
+    await waitFor(() => calls >= 3, 8_000)
+    const reads: Array<{ kind?: string; since?: number }> = []
+    const original = store.listWhere.bind(store)
+    store.listWhere = (async (entity: never, where: { kind?: string; since?: number }) => {
+      reads.push(where)
+      return original(entity, where as never)
+    }) as typeof store.listWhere
+    const text = await m.status()
+    gate = true
+    await waitFor(() => delivered.length === 1, 8_000)
+    expect(text).toContain('Busy one [working')
+    expect(text).toMatch(/Recent steps: .*step/i)
+    expect(text.split('\n').filter((line) => line.startsWith('#') && line.includes('[done')).length).toBeLessThanOrEqual(9)
+    expect(reads.filter((r) => r.kind === 'activity')).toEqual([])
   })
 
   it('reads only the cards still working when it reaps (not every helper card ever)', async () => {

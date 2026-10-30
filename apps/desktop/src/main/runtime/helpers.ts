@@ -456,6 +456,8 @@ export class HelperManager implements HelperHost {
   private readonly runStarts = new Map<string, number>()
   /** The activity row tool_started wrote, by helper and call id, so tool_finished never searches for it. */
   private readonly stepRows = new Map<string, string>()
+  /** The last few steps of each helper running here, for helpers_status. */
+  private readonly recentSteps = new Map<string, string[]>()
   /** Desk runs the router is waiting on (runDesk), by helper id. */
   private readonly deskWaiters = new Map<string, (outcome: DeskOutcome) => void>()
   private deskToolset: Tool[] | null = null
@@ -945,15 +947,31 @@ export class HelperManager implements HelperHost {
     // Routine runs and background scripts first: running now, whatever their card says or how old it is.
     const nowAt = this.now()
     const live = liveRuns.list().map((run) => `#${run.id} ${run.label} [working, ${run.kind}, ${Math.max(0, Math.floor((nowAt - run.startedAt) / 60_000))}m]\nNow: ${run.line || 'working'}\nStop it with helper_stop and this id.`)
-    const all = await listWhere(this.store, 'chat_item', { kind: 'helper' })
+    // Only the cards still working and the ten newest others. Reading every card and then every step since the
+    // oldest of them (days of steps with their outputs) held the main thread for 10 s on 30 Oct 2026.
+    const workingRows = await listWhere(this.store, 'chat_item', { kind: 'helper', contains: WORKING_IN_META })
+    const newest = await listWhere(this.store, 'chat_item', { kind: 'helper', newestFirst: true, limit: 10 + workingRows.length })
     // Every working card, then the newest others: a working one is never pushed out by newer finished ones.
-    const working = all.filter((row) => parseMeta(row.meta)['state'] === 'working' && !liveRuns.has(row.id))
-    const rest = all.filter((row) => parseMeta(row.meta)['state'] !== 'working' && !liveRuns.has(row.id)).slice(-Math.max(0, 10 - working.length))
+    const working = workingRows.filter((row) => parseMeta(row.meta)['state'] === 'working' && !liveRuns.has(row.id))
+    const rest = newest
+      .filter((row) => parseMeta(row.meta)['state'] !== 'working' && !liveRuns.has(row.id))
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .slice(-Math.max(0, 10 - working.length))
     const helpers = [...rest, ...working]
     if (helpers.length === 0) return live.length === 0 ? 'No helpers have run yet.' : live.join('\n\n')
 
-    const since = Math.min(...helpers.map((row) => row.createdAt)) - 1
-    const activities = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, since) })
+    // The last steps of each working helper: kept in memory for the ones running here, read narrowly for the others.
+    const stepsOf = new Map<string, string[]>()
+    for (const row of working) {
+      const held = this.recentSteps.get(row.id)
+      if (held !== undefined) {
+        stepsOf.set(row.id, held)
+        continue
+      }
+      const startedAt = numberField(parseMeta(row.meta)['startedAt']) || row.createdAt
+      const recent = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(startedAt - 1, nowAt - 2 * 3_600_000), contains: `\\"helper\\":\\"${row.id}\\"`, newestFirst: true, limit: 5 })
+      stepsOf.set(row.id, recent.reverse().map((activity) => activity.text))
+    }
     const nowMs = this.now()
     const lines = helpers
       .sort((a, b) => {
@@ -967,11 +985,7 @@ export class HelperManager implements HelperHost {
         const startedAt = numberField(meta['startedAt']) || row.createdAt
         const endedAt = numberField(meta['endedAt'])
         const minutes = Math.max(0, Math.floor(((endedAt > 0 ? endedAt : nowMs) - startedAt) / 60_000))
-        const steps = activities
-          .filter((activity) => stringField(parseMeta(activity.meta)['helper']) === row.id)
-          .slice(-5)
-          .map((activity) => activity.text)
-          .join('; ')
+        const steps = (stepsOf.get(row.id) ?? []).slice(-5).join('; ')
         const head = `#${row.id} ${stringField(meta['label'])} [${state}${meta['queued'] === true ? ', queued' : ''}, ${minutes}m]\nBrief: ${clip(row.text, 240)}`
         if (state !== 'working') {
           return `${head}\nResult: ${clip(stringField(meta['result']), 500)}`
@@ -1438,6 +1452,7 @@ export class HelperManager implements HelperHost {
    * its slot and card are freed here, so a slot is never held by a helper that is no longer running.
    */
   private release(run: HelperRun, error?: unknown): void {
+    this.recentSteps.delete(run.id)
     if (this.runs.get(run.id) !== run) return
     this.runs.delete(run.id)
     this.active.delete(run.id)
@@ -2160,6 +2175,9 @@ export class HelperManager implements HelperHost {
         })
         if (this.stepRows.size > 5_000) this.stepRows.clear()
         this.stepRows.set(`${run.id}:${event.call.id}`, row.id)
+        const recent = this.recentSteps.get(run.id) ?? []
+        recent.push(summary)
+        this.recentSteps.set(run.id, recent.slice(-5))
         await this.updateMeta(run.id, { summary })
         this.emit({ type: 'chat_changed' })
         return

@@ -87,6 +87,9 @@ const CREATED_SQL = "json_extract(payload, '$.createdAt')"
  */
 const LIST_SLICE_ROWS = 1000
 
+/** Longest stretch of store calls before the event loop gets a turn (Store.turn). */
+const STORE_SLICE_MS = 30
+
 export const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule', 'wakeup', 'miniapp']
 
 /** Versions kept per memory page; the oldest go first. */
@@ -198,6 +201,7 @@ export class Store implements SyncStore {
 
   async list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
     this.assertEntity(entity)
+    await this.turn()
     const rows = (await this.readEntitySliced(entity)).filter((row) => !row.deleted)
     return sortedRows(rows, false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
   }
@@ -228,6 +232,47 @@ export class Store implements SyncStore {
 
   /** Writes so far (a list read across slices is cached only if none happened meanwhile). */
   private writes = 0
+
+  /**
+   * Store work chained without a break (a dozen helpers each writing a step, every await resolving at once) held the
+   * main thread for 0.6 s and more at a time, so the window's calls waited (30 Oct 2026). Once a stretch of store
+   * calls passes STORE_SLICE_MS the next one first gives the event loop a turn. Never inside a transaction.
+   */
+  private sliceStart = 0
+  private sliceArmed = false
+
+  private async turn(): Promise<void> {
+    if (this.batching !== null || this.inTransaction) return
+    const now = performance.now()
+    if (!this.sliceArmed) {
+      this.sliceArmed = true
+      this.sliceStart = now
+      setImmediate(() => {
+        this.sliceArmed = false
+      })
+      return
+    }
+    if (now - this.sliceStart < STORE_SLICE_MS) return
+    await yieldNow()
+  }
+
+  /** One commit for a row and its change-log entry (two commits before), unless a transaction is already open. */
+  private oneCommit<T>(work: () => T): T {
+    if (this.batching !== null || this.inTransaction) return work()
+    this.db.exec('BEGIN')
+    this.inTransaction = true
+    try {
+      const out = work()
+      this.db.exec('COMMIT')
+      return out
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      this.dropList(null)
+      throw error
+    } finally {
+      this.inTransaction = false
+    }
+  }
 
   private dropList(entity: EntityName | null): void {
     this.writes++
@@ -337,6 +382,7 @@ export class Store implements SyncStore {
    */
   async listWhere<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>> {
     this.assertEntity(entity)
+    await this.turn()
     if (WHERE_FROM_LIST.has(entity) && !this.inTransaction && this.batching === null) return filterRows(await this.list(entity), where)
     const query = listWhereSql(entity, where)
     if (query === null) return []
@@ -357,6 +403,7 @@ export class Store implements SyncStore {
 
   async get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null> {
     this.assertEntity(entity)
+    await this.turn()
     const row = this.readRow(entity, id)
     if (row === null || row.deleted) return null
     return { id: row.cid, ...row.payload } as EntityMap[E]
@@ -373,6 +420,7 @@ export class Store implements SyncStore {
 
   async upsert<E extends EntityName>(entity: E, input: RowInput<E>): Promise<EntityMap[E]> {
     this.assertEntity(entity)
+    await this.turn()
     const raw = input as Record<string, unknown>
     const suppliedId = raw.id
     const id = typeof suppliedId === 'string' && suppliedId !== '' ? suppliedId : randomUUID()
@@ -389,20 +437,23 @@ export class Store implements SyncStore {
     if (existing === null && typeof payload.createdAt !== 'number') payload.createdAt = timestamp
     if (UPDATED_AT_ENTITIES.has(entity)) payload.updatedAt = timestamp
 
-    if (entity === 'memory') this.keepVersion(id, existing === null || existing.deleted ? null : existing.payload, payload, currentWriter())
-    const stamp = encodeStamp(this.hlc.now())
-    this.db
-      .prepare(
-        `INSERT INTO rows(entity, cid, stamp, deleted, payload, local)
-         VALUES(?, ?, ?, 0, ?, 1)
-         ON CONFLICT(entity, cid) DO UPDATE SET
-           stamp = excluded.stamp,
-           deleted = 0,
-           payload = excluded.payload,
-           local = 1`,
-      )
-      .run(entity, id, stamp, JSON.stringify(payload))
-    this.logChange(entity, id, '')
+    const writer = currentWriter()
+    this.oneCommit(() => {
+      if (entity === 'memory') this.keepVersion(id, existing === null || existing.deleted ? null : existing.payload, payload, writer)
+      const stamp = encodeStamp(this.hlc.now())
+      this.db
+        .prepare(
+          `INSERT INTO rows(entity, cid, stamp, deleted, payload, local)
+           VALUES(?, ?, ?, 0, ?, 1)
+           ON CONFLICT(entity, cid) DO UPDATE SET
+             stamp = excluded.stamp,
+             deleted = 0,
+             payload = excluded.payload,
+             local = 1`,
+        )
+        .run(entity, id, stamp, JSON.stringify(payload))
+      this.logChange(entity, id, '')
+    })
 
     const saved = { id, ...payload } as EntityMap[E]
     this.emit({ entity, row: saved })
@@ -411,14 +462,18 @@ export class Store implements SyncStore {
 
   async remove(entity: EntityName, id: string): Promise<void> {
     this.assertEntity(entity)
+    await this.turn()
     const existing = this.readRow(entity, id)
     if (existing === null) return
-    if (entity === 'memory' && !existing.deleted) this.keepVersion(id, existing.payload, null, currentWriter())
-    const stamp = encodeStamp(this.hlc.now())
-    this.db
-      .prepare('UPDATE rows SET stamp = ?, deleted = 1, local = 1 WHERE entity = ? AND cid = ?')
-      .run(stamp, entity, id)
-    this.logChange(entity, id, '')
+    const writer = currentWriter()
+    this.oneCommit(() => {
+      if (entity === 'memory' && !existing.deleted) this.keepVersion(id, existing.payload, null, writer)
+      const stamp = encodeStamp(this.hlc.now())
+      this.db
+        .prepare('UPDATE rows SET stamp = ?, deleted = 1, local = 1 WHERE entity = ? AND cid = ?')
+        .run(stamp, entity, id)
+      this.logChange(entity, id, '')
+    })
     this.emit({ entity, id, deleted: true })
   }
 
@@ -610,9 +665,10 @@ export class Store implements SyncStore {
    * so the change log never hands a change back to the peer it came from.
    */
   async applyRemote(changes: Change[], via = ''): Promise<void> {
+    await this.turn()
     // One transaction for the whole page, not two commits per change: a pull of 200 changes was 400 commits on the
     // main thread (30 Oct 2026). Inside a batch() the batch's transaction already covers it.
-    if (this.batching !== null || changes.length < 2) return this.applyRemoteRows(changes, via)
+    if (this.batching !== null || this.inTransaction || changes.length < 2) return this.applyRemoteRows(changes, via)
     this.db.exec('BEGIN')
     this.inTransaction = true
     try {
