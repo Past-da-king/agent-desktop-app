@@ -72,13 +72,13 @@ function helperSteerTool(host: HelperHost): Tool {
     spec: {
       name: 'helper_steer',
       description:
-        'Send a helper more information or a correction while it works ("the user means the 7pm show, not 9pm"). It reads it before its next step and keeps going. On a helper that already finished it sends it back to work.',
+        'Send a helper more information or a correction while it works ("the user means the 7pm show, not 9pm"). It reads it before its next step and keeps going. The answer says what happened: delivered (read before step N), queued (a step in flight finishes first; helpers_status says when it was read), or not delivered and why. On a helper that already ended it does not reach that run: the answer says so, and the helper is sent back to work with it.',
       schema: schema(['id', 'message'], {
         id: str('Helper id, from delegate or helpers_status'),
         message: str('What it needs to know, as an instruction to it'),
       }),
     },
-    run: async (input) => host.steer(text(input['id']), text(input['message'])),
+    run: async (input) => host.steer(text(input['id']), text(input['message']), { wait: true }),
   }
 }
 
@@ -102,7 +102,7 @@ function helpersStatusTool(host: HelperHost): Tool {
     spec: {
       name: 'helpers_status',
       description:
-        'See every helper: running ones with their latest steps, and recently finished ones with their results.',
+        'See every helper: running ones with their latest steps, recently finished ones with their results, and for each the messages sent to it with what happened to them (delivered, queued, not delivered and why).',
       schema: schema([], {}),
     },
     run: async () => host.status(),

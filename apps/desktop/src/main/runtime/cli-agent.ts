@@ -16,8 +16,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import type { AgentEvent, JsonObject } from '@agent/core'
-import type { CodexOptions, ThreadOptions } from '@openai/codex-sdk'
+import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { CodexOptions, Input, ThreadOptions } from '@openai/codex-sdk'
 
+import type { TurnMessage, TurnMessages } from './note-tools'
 import { SDK_TOOLS } from './sdk-permissions'
 import { markReleased } from '../tools/run-capture'
 
@@ -138,6 +140,8 @@ export interface CliTurn {
   permission?: (name: string, input: Record<string, unknown>) => Promise<{ allow: true } | { allow: false; message: string }>
   /** The engine named its conversation: told at once, so it is kept even if the app stops mid-turn. */
   onSession?: (sessionId: string) => void
+  /** Messages for the model that arrive mid-turn. Each reaches it as a message of its own, between steps. */
+  messages?: TurnMessages
 }
 
 /** Tells the turn its session id when it is new (never throws: keeping it is best effort). */
@@ -229,29 +233,52 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
   const onAbort = (): void => abortController.abort()
   turn.signal.addEventListener('abort', onAbort, { once: true })
 
-  // Pictures go in the same message as the text, the way the phone app sends them.
+  // Messages that arrive mid-turn go in as streamed input, the engine's own way of taking a message while it works:
+  // it puts each in the conversation at its next boundary, and tells us when (--replay-user-messages).
+  const mail = turn.messages
+  const withEngine: TurnMessage[] = []
+  let inputOpen = true
+  let wake: (() => void) | null = null
+  const rouse = (): void => {
+    wake?.()
+    wake = null
+  }
+  const closeInput = (): void => {
+    inputOpen = false
+    rouse()
+  }
+  const offBell = mail?.bell.on(rouse)
+  turn.signal.addEventListener('abort', closeInput, { once: true })
+
+  const streamed = (content: string | Array<Record<string, unknown>>) =>
+    ({ type: 'user' as const, parent_tool_use_id: null, session_id: '', message: { role: 'user' as const, content } }) as SDKUserMessage
   const prompt =
-    turn.images.length === 0
+    turn.images.length === 0 && mail === undefined
       ? turn.prompt
-      : (async function* () {
-          yield {
-            type: 'user' as const,
-            parent_tool_use_id: null,
-            session_id: '',
-            message: {
-              role: 'user' as const,
-              content: [
-                ...turn.images.map((path) => ({
-                  type: 'image' as const,
-                  source: {
-                    type: 'base64' as const,
-                    media_type: path.toLowerCase().endsWith('.png') ? ('image/png' as const) : ('image/jpeg' as const),
-                    data: readFileSync(path).toString('base64'),
-                  },
-                })),
-                { type: 'text' as const, text: turn.prompt },
-              ],
-            },
+      : (async function* (): AsyncGenerator<SDKUserMessage> {
+          // Pictures go in the same message as the text, the way the phone app sends them.
+          yield streamed(
+            turn.images.length === 0
+              ? turn.prompt
+              : [
+                  ...turn.images.map((path) => ({
+                    type: 'image' as const,
+                    source: {
+                      type: 'base64' as const,
+                      media_type: path.toLowerCase().endsWith('.png') ? ('image/png' as const) : ('image/jpeg' as const),
+                      data: readFileSync(path).toString('base64'),
+                    },
+                  })),
+                  { type: 'text' as const, text: turn.prompt },
+                ],
+          )
+          while (inputOpen && mail !== undefined) {
+            const notes = mail.take()
+            for (const note of notes) {
+              withEngine.push(note)
+              yield streamed(note.text)
+            }
+            if (notes.length === 0 && inputOpen) await new Promise<void>((resolve) => (wake = resolve))
           }
         })()
 
@@ -273,6 +300,8 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         env: engineEnv(),
         ...(turn.program === null ? {} : { pathToClaudeCodeExecutable: turn.program }),
         abortController,
+        // The engine says when it took a streamed message into the conversation: that is "the helper read it".
+        ...(mail === undefined ? {} : { extraArgs: { 'replay-user-messages': null } }),
         // Nothing from the person's own Claude Code setup (CLAUDE.md, hooks, plugins) leaks into the agent.
         settingSources: [],
         // Only the app's own MCP server: none of the person's other MCP servers or claude.ai connectors.
@@ -325,6 +354,13 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         sessionNamed(turn, sessionId, m['session_id'])
         sessionId = m['session_id']
       }
+      if (m['type'] === 'user' && m['isReplay'] === true) {
+        // The engine took a streamed message in. The turn's own first prompt comes back this way too: it matches nothing.
+        const said = textOf((m['message'] as { content?: unknown } | undefined)?.content).trim()
+        const at = withEngine.findIndex((note) => note.text.trim() === said)
+        if (at >= 0) mail?.read(withEngine.splice(at, 1).map((note) => note.id))
+        continue
+      }
       if (m['type'] === 'assistant' || m['type'] === 'user') {
         const message = m['message'] as { content?: unknown } | undefined
         const blocks = Array.isArray(message?.content) ? (message?.content as Array<Record<string, unknown>>) : []
@@ -358,10 +394,15 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         }
       } else if (m['type'] === 'result') {
         finalText = typeof m['result'] === 'string' ? m['result'] : ''
+        failure = undefined
         if (m['is_error'] === true || (typeof m['subtype'] === 'string' && m['subtype'] !== 'success')) {
           const errors = Array.isArray(m['errors']) ? (m['errors'] as unknown[]).map(String).join('\n') : ''
           failure = finalText || errors || String(m['subtype'] ?? 'error')
         }
+        // A message the engine has not taken yet starts its next turn, in this same run. Nothing left: the input
+        // closes and the engine ends. One that arrives after this is the helper manager's (its next run).
+        if (failure !== undefined || (withEngine.length === 0 && mail?.waiting() !== true)) closeInput()
+        else rouse()
       }
     }
   } catch (error) {
@@ -371,6 +412,11 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
     throw error
   } finally {
     turn.signal.removeEventListener('abort', onAbort)
+    turn.signal.removeEventListener('abort', closeInput)
+    offBell?.()
+    closeInput()
+    // Never reached the model: the messages go back to wait for the next turn, or to be told as unread.
+    if (withEngine.length > 0) mail?.putBack(withEngine.splice(0).map((note) => note.id))
   }
 
   if (turn.signal.aborted) return { sessionId, text: lastSaid }
@@ -381,6 +427,10 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
 
 // ---- Codex, through the Codex SDK -----------------------------------------------------------
 
+/** The engine's steps that act: a turn is never ended under one of these. */
+const CODEX_STEPS = new Set(['command_execution', 'file_change', 'mcp_tool_call', 'web_search', 'collab_tool_call'])
+const CODEX_PAUSE_GRACE_MS = 150
+
 async function runCodex(turn: CliTurn): Promise<CliResult> {
   const { Codex } = await import('@openai/codex-sdk')
   const settings = codexSettings(turn)
@@ -390,9 +440,9 @@ async function runCodex(turn: CliTurn): Promise<CliResult> {
     config: settings.config,
   })
   const options = settings.thread
-  const thread = turn.sessionId === null ? codex.startThread(options) : codex.resumeThread(turn.sessionId, options)
+  let thread = turn.sessionId === null ? codex.startThread(options) : codex.resumeThread(turn.sessionId, options)
   const text = `${turn.system}\n\n${CLI_RULES}\n${codexRules(turn)}\n\n---\n\n${turn.prompt}`
-  const input =
+  let input: Input =
     turn.images.length === 0
       ? text
       : [{ type: 'text' as const, text }, ...turn.images.map((path) => ({ type: 'local_image' as const, path }))]
@@ -400,64 +450,119 @@ async function runCodex(turn: CliTurn): Promise<CliResult> {
   let sessionId = turn.sessionId
   let lastSaid = ''
   let failure: string | undefined
-  const { events } = await thread.runStreamed(input, { signal: turn.signal })
+  // Codex takes no input while a turn runs (`codex exec`), so a message mid-turn is a new turn in the same thread: the
+  // running one is ended at a safe moment (no tool of its own or of ours in flight), then resumed with the message as a
+  // real user message. Everything before that moment is already in the thread, tool results too (proven on 0.163).
+  const mail = turn.messages
+  let sending: TurnMessage[] = []
   try {
-    for await (const event of events) {
-      const e = event as unknown as Record<string, unknown>
-      const item = (e['item'] ?? {}) as Record<string, unknown>
-      if (e['type'] === 'thread.started' && typeof e['thread_id'] === 'string') {
-        sessionNamed(turn, sessionId, e['thread_id'])
-        sessionId = e['thread_id']
+    for (;;) {
+      const pause = new AbortController()
+      const stop = (): void => pause.abort()
+      if (turn.signal.aborted) pause.abort()
+      else turn.signal.addEventListener('abort', stop, { once: true })
+      const inFlight = new Set<string>()
+      let pausing = false
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const pauseWhenSafe = (): void => {
+        if (mail === undefined || pausing || timer !== null) return
+        // A moment's grace: a step the engine just began is seen before anything is ended under it.
+        timer = setTimeout(() => {
+          timer = null
+          if (sessionId !== null && inFlight.size === 0 && mail.waiting() && !turn.signal.aborted) {
+            pausing = true
+            pause.abort()
+          }
+        }, CODEX_PAUSE_GRACE_MS)
       }
-      else if (e['type'] === 'item.completed' && item['type'] === 'agent_message') {
-        const said = String(item['text'] ?? '').trim()
-        if (said !== '') {
-          lastSaid = said
-          await turn.onEvent({ type: 'said', text: said })
+      const offBell = mail?.bell.on(pauseWhenSafe)
+      if (mail?.waiting() === true) pauseWhenSafe()
+      try {
+        const { events } = await thread.runStreamed(input, { signal: pause.signal })
+        for await (const event of events) {
+          const e = event as unknown as Record<string, unknown>
+          const item = (e['item'] ?? {}) as Record<string, unknown>
+          const type = String(item['type'] ?? '')
+          if (CODEX_STEPS.has(type) && e['type'] === 'item.started') inFlight.add(String(item['id'] ?? ''))
+          if (CODEX_STEPS.has(type) && e['type'] === 'item.completed') {
+            inFlight.delete(String(item['id'] ?? ''))
+            if (mail?.waiting() === true) pauseWhenSafe()
+          }
+          // The model answered in a turn that started with the message: it read it.
+          if (sending.length > 0 && (e['type'] === 'turn.completed' || (type !== '' && type !== 'error'))) {
+            mail?.read(sending.map((note) => note.id))
+            sending = []
+          }
+          if (e['type'] === 'thread.started' && typeof e['thread_id'] === 'string') {
+            sessionNamed(turn, sessionId, e['thread_id'])
+            sessionId = e['thread_id']
+            if (mail?.waiting() === true) pauseWhenSafe()
+          }
+          else if (e['type'] === 'item.completed' && item['type'] === 'agent_message') {
+            const said = String(item['text'] ?? '').trim()
+            if (said !== '') {
+              lastSaid = said
+              await turn.onEvent({ type: 'said', text: said })
+            }
+          } else if (e['type'] === 'item.started' && item['type'] === 'web_search') {
+            const id = String(item['id'] ?? 'search')
+            await turn.onEvent({ type: 'tool_started', call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } } })
+          } else if (e['type'] === 'item.completed' && item['type'] === 'web_search') {
+            const id = String(item['id'] ?? 'search')
+            await turn.onEvent({
+              type: 'tool_finished',
+              call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } },
+              result: '',
+              isError: false,
+            })
+          } else if (item['type'] === 'command_execution' && (e['type'] === 'item.started' || e['type'] === 'item.completed')) {
+            // Codex's own shell (Run without asking): shown in the chat like Claude's own commands.
+            const call = { t: 'call' as const, id: String(item['id'] ?? 'command'), name: process.platform === 'win32' ? 'PowerShell' : 'Bash', input: { command: String(item['command'] ?? '') } }
+            if (e['type'] === 'item.started') await turn.onEvent({ type: 'tool_started', call })
+            else {
+              const code = typeof item['exit_code'] === 'number' ? item['exit_code'] : null
+              await turn.onEvent({
+                type: 'tool_finished',
+                call,
+                result: String(item['aggregated_output'] ?? '').slice(-4000),
+                isError: item['status'] === 'failed' || (code !== null && code !== 0),
+              })
+            }
+          } else if (e['type'] === 'item.completed' && item['type'] === 'file_change') {
+            const changes = Array.isArray(item['changes']) ? (item['changes'] as Array<{ path?: unknown; kind?: unknown }>) : []
+            const call = { t: 'call' as const, id: String(item['id'] ?? 'patch'), name: 'Edit', input: { file_path: changes.map((c) => String(c.path ?? '')).join(', ') } }
+            await turn.onEvent({ type: 'tool_started', call })
+            await turn.onEvent({
+              type: 'tool_finished',
+              call,
+              result: changes.map((c) => `${String(c.kind ?? 'update')} ${String(c.path ?? '')}`).join('\n'),
+              isError: item['status'] === 'failed',
+            })
+          } else if (e['type'] === 'turn.failed' || e['type'] === 'error') {
+            const err = e['error'] as { message?: string } | undefined
+            failure = err?.message ?? String(e['message'] ?? 'Codex failed')
+          }
         }
-      } else if (e['type'] === 'item.started' && item['type'] === 'web_search') {
-        const id = String(item['id'] ?? 'search')
-        await turn.onEvent({ type: 'tool_started', call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } } })
-      } else if (e['type'] === 'item.completed' && item['type'] === 'web_search') {
-        const id = String(item['id'] ?? 'search')
-        await turn.onEvent({
-          type: 'tool_finished',
-          call: { t: 'call', id, name: 'WebSearch', input: { query: String(item['query'] ?? '') } },
-          result: '',
-          isError: false,
-        })
-      } else if (item['type'] === 'command_execution' && (e['type'] === 'item.started' || e['type'] === 'item.completed')) {
-        // Codex's own shell (Run without asking): shown in the chat like Claude's own commands.
-        const call = { t: 'call' as const, id: String(item['id'] ?? 'command'), name: process.platform === 'win32' ? 'PowerShell' : 'Bash', input: { command: String(item['command'] ?? '') } }
-        if (e['type'] === 'item.started') await turn.onEvent({ type: 'tool_started', call })
-        else {
-          const code = typeof item['exit_code'] === 'number' ? item['exit_code'] : null
-          await turn.onEvent({
-            type: 'tool_finished',
-            call,
-            result: String(item['aggregated_output'] ?? '').slice(-4000),
-            isError: item['status'] === 'failed' || (code !== null && code !== 0),
-          })
-        }
-      } else if (e['type'] === 'item.completed' && item['type'] === 'file_change') {
-        const changes = Array.isArray(item['changes']) ? (item['changes'] as Array<{ path?: unknown; kind?: unknown }>) : []
-        const call = { t: 'call' as const, id: String(item['id'] ?? 'patch'), name: 'Edit', input: { file_path: changes.map((c) => String(c.path ?? '')).join(', ') } }
-        await turn.onEvent({ type: 'tool_started', call })
-        await turn.onEvent({
-          type: 'tool_finished',
-          call,
-          result: changes.map((c) => `${String(c.kind ?? 'update')} ${String(c.path ?? '')}`).join('\n'),
-          isError: item['status'] === 'failed',
-        })
-      } else if (e['type'] === 'turn.failed' || e['type'] === 'error') {
-        const err = e['error'] as { message?: string } | undefined
-        failure = err?.message ?? String(e['message'] ?? 'Codex failed')
+      } catch (error) {
+        // As for Claude: a paused or stopped turn keeps its thread id so the next turn carries on in it.
+        if (turn.signal.aborted) return { sessionId, text: lastSaid }
+        if (!pausing) throw error
+      } finally {
+        offBell?.()
+        if (timer !== null) clearTimeout(timer)
+        turn.signal.removeEventListener('abort', stop)
       }
+      if (turn.signal.aborted) return { sessionId, text: lastSaid }
+      if (!pausing || sessionId === null || mail === undefined) break
+      failure = undefined
+      sending = mail.take()
+      if (sending.length === 0) break
+      thread = codex.resumeThread(sessionId, options)
+      input = sending.map((note) => note.text).join('\n\n')
     }
-  } catch (error) {
-    // As for Claude: a paused or stopped turn keeps its thread id so the next turn carries on in it.
-    if (turn.signal.aborted) return { sessionId, text: lastSaid }
-    throw error
+  } finally {
+    // Sent, but the model never answered with it in the thread: it waits again.
+    if (sending.length > 0) mail?.putBack(sending.map((note) => note.id))
   }
 
   if (turn.signal.aborted) return { sessionId, text: lastSaid }

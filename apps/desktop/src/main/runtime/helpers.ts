@@ -9,7 +9,7 @@
  * One deliberate difference from the phone: ids are the chat row's string id (a cid) rather than an
  * integer, because every row in this app is identified by a cid.
  */
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 
 import {
   AgentLoop,
@@ -52,7 +52,7 @@ import { helperTools } from '../tools/helpers'
 import { runEnded } from '../browser/run-tabs'
 import { promptRulesFor } from './prompt-rules'
 import { isInterruptible } from './read-only'
-import { withNoteTools } from './note-tools'
+import { withNoteTools, type TurnMessages } from './note-tools'
 import {
   describeCall,
   friendlyError,
@@ -118,11 +118,42 @@ export interface AlongsideJob {
   userItem: string
 }
 
+/** Who a message sent to a running helper is from: the helper is told, in the message's mark. */
+export type SteerFrom = 'creator' | 'helper' | 'device' | 'desk'
+
+export interface SteerOptions {
+  from?: SteerFrom
+  /** Wait a few seconds for the helper to read it, so the answer can say it did (helper_steer). */
+  wait?: boolean
+  /** Its id, when another brain sent it here and watches its card. */
+  steerId?: string
+}
+
+/** One message sent to a helper, as its card keeps it: what happened to it. Written only by the brain running it. */
+export interface SteerRecord {
+  id: string
+  at: number
+  text: string
+  state: 'queued' | 'delivered' | 'not_delivered'
+  /** delivered: the step it was read before, counted in that run. */
+  step?: number
+  /** not_delivered: why, in plain words. */
+  reason?: string
+}
+
+/** A message waiting for a running helper. `handed`: with the engine, which has not said it read it yet. */
+interface InboxNote {
+  id: string
+  text: string
+  from: SteerFrom
+  handed: boolean
+}
+
 export interface HelperHost {
   delegate(tasks: HelperTask[], together?: boolean, origin?: HelperOrigin): Promise<string>
   /** Start a separate run for a different job sent while a chat was busy. The helper id, or null when none can start. */
   alongside?(job: AlongsideJob): Promise<string | null>
-  steer(id: string, message: string): Promise<string>
+  steer(id: string, message: string, options?: SteerOptions): Promise<string>
   push(id: string, message: string): Promise<string>
   status(): Promise<string>
   /** `by`: who stopped it, in plain words, for the notice its creator gets ("the person, from its card"). */
@@ -213,6 +244,8 @@ export interface HelperManagerDeps {
   reapEveryMs?: number
   /** How long a card must show no sign of life (no run, no fresh lease) before it is ended as lost. Default 3 min. */
   reapAfterMs?: number
+  /** How long helper_steer waits for a message to be read before it answers Queued. */
+  steerWaitMs?: number
   emit?: (event: ChatEvent) => void
   notify?: (title: string, body: string) => void
   /** On the person's own plan, every helper is its own Claude Agent SDK / Codex SDK session. */
@@ -297,6 +330,14 @@ interface HelperRun {
   inTool?: ToolInFlight
   /** The site its browser was last on, for the quiet heads-up. */
   site?: string
+  /** This run's code in its system prompt and in every real message sent to it. Tool output cannot know it. */
+  mark?: string
+  /** Steps taken in this run, so a message can say which one it was read before. */
+  steps?: number
+  /** Messages it starts this run with (sent back with them): read when the run starts. */
+  pushSteers?: string[]
+  /** Steps held back for a message the engine has not taken yet: a limit, so a lost message never blocks a run. */
+  holds?: number
 }
 
 type ShellPolicy = 'always' | 'ask' | 'never'
@@ -453,7 +494,10 @@ export class HelperManager implements HelperHost {
   private readonly remote = new Map<string, RemoteRun>()
   private readonly queue: string[] = []
   private readonly active = new Set<string>()
-  private readonly inbox = new Map<string, string[]>()
+  private readonly inbox = new Map<string, InboxNote[]>()
+  /** What happened to the messages sent to each helper this brain runs (kept on its card as meta.steers). */
+  private readonly steerLogs = new Map<string, SteerRecord[]>()
+  private readonly metaFlushes = new Map<string, Promise<void>>()
   /** Rung when a message for a running helper arrives: a read in flight is cut off so it reads the message now. */
   private readonly bells = new Map<string, NoteBell>()
   private readonly batches = new Map<string, Batch>()
@@ -477,6 +521,7 @@ export class HelperManager implements HelperHost {
   private readonly stopGraceMs: number
   private readonly reapEveryMs: number
   private readonly reapAfterMs: number
+  private readonly steerWaitMs: number
   private reapTimer: ReturnType<typeof setInterval> | null = null
   /** Stops sent to the brain running a helper, each ended here if that brain does not end it in time. */
   private readonly pendingStops = new Map<string, ReturnType<typeof setTimeout>>()
@@ -534,6 +579,7 @@ export class HelperManager implements HelperHost {
     this.stopGraceMs = deps.stopGraceMs ?? STOP_GRACE_MS
     this.reapEveryMs = deps.reapEveryMs ?? MINUTE_MS
     this.reapAfterMs = deps.reapAfterMs ?? REAP_AFTER_MS
+    this.steerWaitMs = deps.steerWaitMs ?? STEER_WAIT_MS
   }
 
   /**
@@ -705,29 +751,111 @@ export class HelperManager implements HelperHost {
     return bell
   }
 
-  async steer(id: string, message: string): Promise<string> {
+  async steer(id: string, message: string, options: SteerOptions = {}): Promise<string> {
+    const steerId = options.steerId ?? randomUUID()
+    const from = options.from ?? 'creator'
     const run = this.runs.get(id)
     if (run === undefined) {
       const elsewhere = await this.runningElsewhere(id)
       if (elsewhere !== '') {
-        await this.link()?.send(elsewhere, 'steer', id, { text: message })
+        await this.link()?.send(elsewhere, 'steer', id, { text: message, item: steerId, info: from })
         await this.addActivity(id, await this.labelOf(id), `Told it: ${clip(message, 140)}`)
-        return `Helper #${id} gets your message before its next step and keeps going.`
+        return this.steerAnswer(id, steerId, options.wait === true)
       }
-      return this.push(id, message)
+      return this.steerEnded(id, message, steerId, from)
     }
-    // A plan session gets the note with its next tool call (planNotes): it is never stopped for it. Stopping it used
-    // to make the engine tell the model "the user doesn't want to take this action, STOP", and when the stop took
-    // more than 5 s the note was dropped, the run ended with its card still working, and the orphan watch then
-    // ended a live helper as lost (25 Oct 2026). A note still unread when its turn ends carries on in a new turn.
-    const notes = this.inbox.get(id) ?? []
-    notes.push(message)
-    this.inbox.set(id, notes)
-    // Not after the step in flight: a read is cut off for it, a change finishes and the note rides with its result.
+    // A plan session gets the note as a message of its own at its next boundary (TurnMessages, cli-agent.ts): it is
+    // never stopped for it. Stopping it used to make the engine tell the model "the user doesn't want to take this
+    // action, STOP", and when the stop took more than 5 s the note was dropped, the run ended with its card still
+    // working, and the orphan watch then ended a live helper as lost (25 Oct 2026). A note still unread when its turn
+    // ends carries on in a new turn.
+    this.addNote(id, { id: steerId, text: message, from, handed: false })
+    await this.noteSteer(id, { id: steerId, at: this.now(), text: clip(message, 100), state: 'queued' })
+    // Not after the step in flight: a read is cut off for it, a change finishes and the note comes right after.
     this.bellOf(id).ring()
     await this.recordMessage(id, message)
     await this.addActivity(id, run.label, `Told it: ${clip(message, 140)}`)
-    return `Helper #${id} gets your message before its next step and keeps going.`
+    return this.steerAnswer(id, steerId, options.wait === true)
+  }
+
+  private addNote(id: string, note: InboxNote): void {
+    const notes = this.inbox.get(id) ?? []
+    notes.push(note)
+    this.inbox.set(id, notes)
+  }
+
+  /** A message to a helper with no run anywhere: the run it was meant for is over. It is sent back to work with it. */
+  private async steerEnded(id: string, message: string, steerId: string, from: SteerFrom): Promise<string> {
+    const row = await this.store.get('chat_item', id)
+    if (row === null || row.kind !== 'helper') return `No helper #${id}, so your message was not delivered.`
+    const state = stringField(parseMeta(row.meta)['state']) || 'ended'
+    await this.noteSteer(id, { id: steerId, at: this.now(), text: clip(message, 100), state: 'queued' })
+    const said = await this.push(id, message, { steerIds: [steerId], from })
+    if (said.includes('is back on it')) return `Helper #${id} had already ended (${state}), so your message did not reach that run. It starts its next run with it. ${said}`
+    await this.noteSteer(id, { id: steerId, at: this.now(), text: clip(message, 100), state: 'not_delivered', reason: said })
+    return `Not delivered to helper #${id} (it had already ended, ${state}): ${said}`
+  }
+
+  /** What the sender is told: read, not read and why, or still on its way. With `wait` it gives the helper a moment. */
+  private async steerAnswer(id: string, steerId: string, wait: boolean): Promise<string> {
+    const on = `Helper #${id} gets your message before its next step and keeps going.`
+    if (!wait) return on
+    const until = Date.now() + this.steerWaitMs
+    for (;;) {
+      const record = await this.steerRecord(id, steerId)
+      if (record?.state === 'delivered') return `Delivered: helper #${id} read your message before step ${record.step ?? 1} and keeps going.`
+      if (record?.state === 'not_delivered') return `Not delivered to helper #${id}: ${record.reason ?? 'its run ended first'}.`
+      if (Date.now() >= until) break
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    return `Queued: helper #${id} has not read it yet (a step in flight finishes first). It gets your message before its next step and keeps going; helpers_status says when it was read.`
+  }
+
+  private async steerRecord(id: string, steerId: string): Promise<SteerRecord | undefined> {
+    const held = this.steerLogs.get(id)?.find((each) => each.id === steerId)
+    if (held !== undefined) return held
+    // Sent to another brain: its card says, once the row has come back.
+    const row = await this.store.get('chat_item', id).catch(() => null)
+    return row === null ? undefined : steerRecords(parseMeta(row.meta)).find((each) => each.id === steerId)
+  }
+
+  /** Writes what happened to one message on the helper's card. */
+  private async noteSteer(id: string, record: SteerRecord): Promise<void> {
+    let log = this.steerLogs.get(id)
+    if (log === undefined) {
+      const row = await this.store.get('chat_item', id).catch(() => null)
+      log = this.steerLogs.get(id) ?? (row === null ? [] : steerRecords(parseMeta(row.meta)))
+      this.steerLogs.set(id, log)
+    }
+    const at = log.findIndex((each) => each.id === record.id)
+    if (at >= 0) log[at] = { ...record, at: log[at]!.at, text: log[at]!.text }
+    else log.push(record)
+    log.splice(0, Math.max(0, log.length - STEERS_KEPT))
+    await this.updateMeta(id, { steers: [...log] })
+  }
+
+  /** The model has these messages now. */
+  private steersRead(run: HelperRun, ids: string[]): void {
+    const step = (run.steps ?? 0) + 1
+    for (const id of ids) {
+      const known = this.steerLogs.get(run.id)?.find((each) => each.id === id)
+      if (known !== undefined) void this.noteSteer(run.id, { ...known, state: 'delivered', step }).catch(() => undefined)
+    }
+  }
+
+  /** These messages will never reach the model: the card says why, and the sender can see it. */
+  private async steersLost(id: string, notes: InboxNote[], reason: string): Promise<void> {
+    for (const note of notes) {
+      const known = this.steerLogs.get(id)?.find((each) => each.id === note.id)
+      if (known !== undefined) await this.noteSteer(id, { ...known, state: 'not_delivered', reason }).catch(() => undefined)
+    }
+  }
+
+  /** Empties a helper's inbox because its run is over. What it never read says why. */
+  private async dropInbox(id: string, reason: string): Promise<void> {
+    const notes = this.inbox.get(id) ?? []
+    this.inbox.delete(id)
+    await this.steersLost(id, notes, reason)
   }
 
   /**
@@ -740,12 +868,12 @@ export class HelperManager implements HelperHost {
     if (row === null || row.kind !== 'helper') return 'unknown'
     const label = stringField(parseMeta(row.meta)['label']) || 'Helper'
     if (this.runs.has(id)) {
-      await this.steer(id, text)
+      await this.steer(id, text, { from: 'device' })
       return 'delivered'
     }
     const elsewhere = await this.runningElsewhere(id)
     if (elsewhere !== '') {
-      await this.link()?.send(elsewhere, 'steer', id, { text })
+      await this.link()?.send(elsewhere, 'steer', id, { text, item: randomUUID(), info: 'device' })
       await this.addActivity(id, label, `Late device result: ${clip(text, 140)}`)
       return 'delivered'
     }
@@ -753,7 +881,7 @@ export class HelperManager implements HelperHost {
     return 'dropped'
   }
 
-  async push(id: string, message: string): Promise<string> {
+  async push(id: string, message: string, options: { steerIds?: string[]; from?: SteerFrom } = {}): Promise<string> {
     if (this.runs.has(id)) return `Helper #${id} is still working. Wait for its result.`
     const row = await this.store.get('chat_item', id)
     if (row === null || row.kind !== 'helper') return `No helper #${id}.`
@@ -775,7 +903,7 @@ export class HelperManager implements HelperHost {
         if (holder.running && link.up(there)) return `Helper #${id} is still working. Wait for its result.`
         if (link.up(there) && meta['side'] !== true && meta['desk'] !== true) {
           this.remote.set(id, { id, label: stringField(meta['label']) || 'Helper', brief: row.text, chat: stringField(meta['chat']) || MAIN_CHAT, profile: stringField(meta['profile']), startedAt: this.now(), device: there, sentAt: this.now(), pick: (meta['pick'] as AiPick) ?? { account: '', model: '' }, profileId: stringField(meta['profileId']), model: stringField(meta['model']) })
-          await link.send(there, 'push', id, { text: message })
+          await link.send(there, 'push', id, { text: message, ...(options.steerIds?.[0] === undefined ? {} : { item: options.steerIds[0] }), info: options.from ?? 'creator' })
           await this.addActivity(id, stringField(meta['label']) || 'Helper', `Sent back: ${clip(message, 140)}`)
           return `Helper #${id} is back on it. Its new result will arrive as a message.`
         }
@@ -802,7 +930,9 @@ export class HelperManager implements HelperHost {
     // A new run: its own key, so its end is told once, whatever the last run's notice was.
     const token = this.freshToken()
     const parentHelper = stringField(meta['parentHelper'])
-    const fresh = { token, lastStepAt: this.now(), ...(parentHelper === '' ? {} : { parentHelper }) }
+    const mark = newMark()
+    const fresh = { token, mark, lastStepAt: this.now(), ...(parentHelper === '' ? {} : { parentHelper }), ...(options.steerIds === undefined ? {} : { pushSteers: options.steerIds }) }
+    const marked = steerFrame(mark, options.from ?? 'creator', message)
     if (brain.kind === 'plan') {
       // Kept, so a session that cannot be continued is rebuilt with every message it was sent (rebuiltBrief).
       await this.recordMessage(id, message)
@@ -822,7 +952,7 @@ export class HelperManager implements HelperHost {
         startedAt: this.now(),
         controller: null,
         initialHistory: null,
-        pushMessage: message,
+        pushMessage: marked,
         ...fresh,
         ...desk,
       })
@@ -833,8 +963,8 @@ export class HelperManager implements HelperHost {
     }
     const history = await this.loadHistory(id)
     if (history.length === 0) history.push(userMsg(row.text))
-    history.push(userMsg(message))
-    await this.appendTurn(id, userMsg(message))
+    history.push(userMsg(marked))
+    await this.appendTurn(id, userMsg(marked))
 
     await this.updateMeta(id, {
       state: 'working',
@@ -880,12 +1010,10 @@ export class HelperManager implements HelperHost {
       const done = this.waitDesk(id)
       if (this.runs.has(id)) {
         // Still on the last batch (a push from the main agent, say): it reads this before its next step.
-        const notes = this.inbox.get(id) ?? []
-        notes.push(message)
-        this.inbox.set(id, notes)
+        this.addNote(id, { id: randomUUID(), text: message, from: 'desk', handed: false })
         this.bellOf(id).ring()
       } else {
-        const said = await this.push(id, message)
+        const said = await this.push(id, message, { from: 'desk' })
         if (!this.runs.has(id)) {
           this.deskWaiters.delete(id)
           return { deskId: id, state: 'failed', result: said }
@@ -997,7 +1125,8 @@ export class HelperManager implements HelperHost {
         const steps = (stepsOf.get(row.id) ?? []).slice(-5).join('; ')
         // Held by the low-memory guard or the queue: it is not working, and nothing is going on to report.
         const held = helperHold({ state: helperState(state), queued: meta['queued'] === true, summary: stringField(meta['summary']) })
-        const head = `#${row.id} ${stringField(meta['label'])} [${held?.kind ?? state}, ${minutes}m]\nBrief: ${clip(row.text, 240)}`
+        const told = steerLines(meta)
+        const head = `#${row.id} ${stringField(meta['label'])} [${held?.kind ?? state}, ${minutes}m]\nBrief: ${clip(row.text, 240)}${told === '' ? '' : `\n${told}`}`
         if (held !== null) return `${head}\n${held.line}`
         if (state !== 'working') {
           return `${head}\nResult: ${clip(stringField(meta['result']), 500)}`
@@ -1088,8 +1217,8 @@ export class HelperManager implements HelperHost {
   private async endNotStarted(run: HelperRun): Promise<void> {
     this.runs.delete(run.id)
     this.active.delete(run.id)
-    this.inbox.delete(run.id)
     const reason = run.stopBy === undefined ? 'it was stopped before it started' : `stopped by ${run.stopBy} before it started`
+    await this.dropInbox(run.id, reason)
     await this.ended({ id: run.id, state: 'stopped', result: '', reason, key: run.token, run })
   }
 
@@ -1380,6 +1509,7 @@ export class HelperManager implements HelperHost {
     // Runs taken up on this start stay (clearing them left their cards stuck on "Waiting its turn"); only
     // bookkeeping for runs that are not here any more goes.
     for (const id of [...this.inbox.keys()]) if (!this.runs.has(id)) this.inbox.delete(id)
+    for (const id of [...this.steerLogs.keys()]) if (!this.runs.has(id)) this.steerLogs.delete(id)
     for (const id of waiting) {
       const row = await this.store.get('chat_item', id)
       await this.adopt(id, row === null ? '' : this.originOf(parseMeta(row.meta)))
@@ -1461,7 +1591,7 @@ export class HelperManager implements HelperHost {
     if (this.runs.get(run.id) !== run) return
     this.runs.delete(run.id)
     this.active.delete(run.id)
-    this.inbox.delete(run.id)
+    void this.dropInbox(run.id, run.quiet === true ? 'its run was handed to another device before it read this' : 'its run broke off before it read this').catch(() => undefined)
     this.leases?.end(`job-${run.id}`, 'failed')
     if (run.quiet === true) {
       this.pump()
@@ -1487,6 +1617,7 @@ export class HelperManager implements HelperHost {
 
     const controller = new AbortController()
     run.controller = controller
+    this.steersRead(run, run.pushSteers ?? [])
     const starting = run.initialHistory
     const history: Msg[] = starting ?? [userMsg(run.brief, run.images ?? [])]
     if (starting === null) await this.appendTurn(run.id, history[0] as Msg)
@@ -1507,10 +1638,13 @@ export class HelperManager implements HelperHost {
       const out = await loop.run(system, history, this.context(run, controller.signal), {
         onEvent: (event) => this.onEvent(run, event),
         onAppend: (message) => this.appendTurn(run.id, message),
+        // Between steps, as a user message of its own (the loop puts it after any tool results, never inside one).
         incoming: () => {
-          const notes = this.inbox.get(run.id)
-          return notes === undefined ? [] : notes.splice(0)
+          const notes = this.inbox.get(run.id)?.splice(0) ?? []
+          this.steersRead(run, notes.map((note) => note.id))
+          return notes.map((note) => steerFrame(this.markOf(run), note.from, note.text))
         },
+        notePrefix: '',
         hasIncoming: () => (this.inbox.get(run.id)?.length ?? 0) > 0,
         bell: this.bellOf(run.id),
         signal: controller.signal,
@@ -1566,7 +1700,7 @@ export class HelperManager implements HelperHost {
       this.leases?.end(`job-${run.id}`, 'failed')
       this.runs.delete(run.id)
       this.active.delete(run.id)
-      this.inbox.delete(run.id)
+      await this.dropInbox(run.id, 'its run went back to the computer that placed it before it read this')
       await this.updateMeta(run.id, { summary: 'Waiting its turn', queued: true, runOn: run.origin })
       await link.send(away, 'bounce', run.id, { text: clip(result, 300) })
       this.pump()
@@ -1581,16 +1715,25 @@ export class HelperManager implements HelperHost {
     this.active.delete(run.id)
     this.inbox.delete(run.id)
     // A message sent to it that it never got to read (its turn ended first): it carries on with it, never dropped.
+    let unreadLine = ''
     if (state === 'done' && run.quiet !== true && unread.length > 0 && !this.closing) {
-      const said = await this.push(run.id, unread.join('\n\n'))
+      const said = await this.push(run.id, unread.map((note) => note.text).join('\n\n'), { steerIds: unread.map((note) => note.id), from: unread[0]!.from })
       if (said.includes('is back on it')) return
+      await this.steersLost(run.id, unread, said)
+      unreadLine = said
+    } else if (unread.length > 0) {
+      const why = run.quiet === true ? 'its run was handed to another device before it read this' : this.closing ? 'the app closed before it read this' : `it ${state === 'stopped' ? 'was stopped' : state === 'failed' ? 'failed' : 'ended'} before it read this`
+      await this.steersLost(run.id, unread, why)
+      unreadLine = why
     }
     // Stopped only to be handed on (another brain took it, or it goes straight back with a note): not an end.
     if (run.quiet === true) {
       this.pump()
       return
     }
-    await this.ended({ id: run.id, state, result, reason: this.reasonFor(run, state, result), key: run.token, run })
+    const ending = this.reasonFor(run, state, result)
+    const reason = unreadLine === '' ? ending : `${ending === '' ? '' : `${ending}. `}${unread.length === 1 ? 'A message' : `${unread.length} messages`} sent to it never reached it: ${unreadLine}`
+    await this.ended({ id: run.id, state, result, reason, key: run.token, run })
     this.pump()
   }
 
@@ -1890,16 +2033,18 @@ export class HelperManager implements HelperHost {
       case 'start':
         return this.adopt(id, msg.from)
       case 'steer':
-        if (this.runs.has(id)) await this.steer(id, msg.text)
+        if (this.runs.has(id)) await this.steer(id, msg.text, { from: steerFromOf(msg.info), ...(msg.item === '' ? {} : { steerId: msg.item }) })
+        else if (msg.item !== '') await this.noteSteer(id, { id: msg.item, at: this.now(), text: clip(msg.text, 100), state: 'not_delivered', reason: 'its run on this device had already ended' })
         return true
       case 'push': {
         if (this.runs.has(id)) {
-          await this.steer(id, msg.text)
+          await this.steer(id, msg.text, { from: steerFromOf(msg.info), ...(msg.item === '' ? {} : { steerId: msg.item }) })
           return true
         }
         const row = await this.store.get('chat_item', id)
         if (row === null) return false
-        await this.push(id, msg.text)
+        if (msg.item !== '') await this.noteSteer(id, { id: msg.item, at: this.now(), text: clip(msg.text, 100), state: 'queued' })
+        await this.push(id, msg.text, { from: steerFromOf(msg.info), ...(msg.item === '' ? {} : { steerIds: [msg.item] }) })
         return true
       }
       case 'stop':
@@ -2104,7 +2249,7 @@ export class HelperManager implements HelperHost {
       if (parentHelper !== '') {
         const parent = await this.store.get('chat_item', parentHelper).catch(() => null)
         if (parent !== null && parent.kind === 'helper') {
-          if (this.runs.has(parentHelper) || this.remote.has(parentHelper)) await this.steer(parentHelper, note)
+          if (this.runs.has(parentHelper) || this.remote.has(parentHelper)) await this.steer(parentHelper, note, { from: 'helper' })
           else await this.push(parentHelper, note)
           return
         }
@@ -2157,6 +2302,7 @@ export class HelperManager implements HelperHost {
         return
       }
       case 'tool_started': {
+        run.steps = (run.steps ?? 0) + 1
         // A changing call names a repo: it is looked at before the change (reads and waits never are).
         if (this.git !== null && !isInterruptible(event.call.name, (event.call.input ?? {}) as Record<string, unknown>)) await this.git.touch(`helper:${run.id}`, event.call.input).catch(() => undefined)
         const summary = describeCall(event.call)
@@ -2462,7 +2608,18 @@ export class HelperManager implements HelperHost {
     }
   }
 
-  private async flushMeta(id: string): Promise<void> {
+  /** One at a time per card: each reads the row and writes it back, so two together lost one's patch. */
+  private flushMeta(id: string): Promise<void> {
+    const turn = (this.metaFlushes.get(id) ?? Promise.resolve()).catch(() => undefined).then(() => this.writeMeta(id))
+    this.metaFlushes.set(id, turn)
+    const done = (): void => {
+      if (this.metaFlushes.get(id) === turn) this.metaFlushes.delete(id)
+    }
+    turn.then(done, done)
+    return turn
+  }
+
+  private async writeMeta(id: string): Promise<void> {
     const pending = this.pendingMeta.get(id)
     if (pending === undefined) return
     this.pendingMeta.delete(id)
@@ -2591,7 +2748,7 @@ export class HelperManager implements HelperHost {
       tasks,
       latestUserText: run.brief,
       role: 'helper',
-      helper: { label: run.label, brief: run.brief },
+      helper: { label: run.label, brief: run.brief, mark: this.markOf(run) },
       profile: this.profiles?.find(run.profileId) ?? this.generalProfile(),
       ...(project === undefined
         ? {}
@@ -2632,6 +2789,7 @@ export class HelperManager implements HelperHost {
     const controller = new AbortController()
     run.controller = controller
     if (run.pushMessage === undefined) cli.forget(`helper:${run.id}`)
+    this.steersRead(run, run.pushSteers ?? [])
     await this.updateMeta(run.id, { state: 'working', summary: 'Thinking', queued: false })
     await this.gitBegin(run)
 
@@ -2640,13 +2798,12 @@ export class HelperManager implements HelperHost {
     try {
       // Started from a project chat: it works in that project's folder, as the chat's own agent does.
       const folder = run.chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), run.chat)
-      const takeNotes = (): string[] => this.inbox.get(run.id)?.splice(0) ?? []
+      const messages = this.turnMessages(run)
       const outcome = await cli.turn({
         cli: brain.cli,
         thread: `helper:${run.id}`,
         tools: withNoteTools(run.tools ?? this.workerTools, {
-          take: takeNotes,
-          frame: noteText,
+          hold: () => messages.hold(),
           bell: this.bellOf(run.id),
           interruptible: (name, input) => isInterruptible(name, input),
         }),
@@ -2657,11 +2814,8 @@ export class HelperManager implements HelperHost {
         // Sent back but its session cannot be continued (cut off by a restart before it was saved, lost, on another
         // computer): it starts again from its full brief, its earlier steps and every message it was sent.
         ...(run.pushMessage === undefined ? {} : { freshPrompt: await this.rebuiltBrief(run.id, run.brief, run.pushMessage) }),
-        // A message sent to it mid-turn arrives with its next tool call, of the engine's own tools too.
-        pendingNote: () => {
-          const notes = takeNotes()
-          return notes.length === 0 ? null : notes.join('\n\n')
-        },
+        // A message sent to it mid-turn reaches it as a message of its own, read before its next step.
+        messages,
         ...(run.pushMessage === undefined && (run.images ?? []).length > 0 ? { images: run.images } : {}),
         ...(brain.model === '' ? {} : { model: brain.model }),
         ...(folder === '' ? {} : { folder }),
@@ -2692,6 +2846,43 @@ export class HelperManager implements HelperHost {
       result = controller.signal.aborted ? 'Stopped before it finished.' : friendlyError(error)
     }
     await this.finish(run, state, result)
+  }
+
+  /** This run's code: in its system prompt and in every real message it is sent. */
+  private markOf(run: HelperRun): string {
+    run.mark ??= newMark()
+    return run.mark
+  }
+
+  /** How the engine gets the messages sent to this run, and how the app learns they were read. */
+  private turnMessages(run: HelperRun): TurnMessages {
+    const notes = (): InboxNote[] => this.inbox.get(run.id) ?? []
+    return {
+      take: () =>
+        notes()
+          .filter((note) => !note.handed)
+          .map((note) => {
+            note.handed = true
+            return { id: note.id, text: steerFrame(this.markOf(run), note.from, note.text) }
+          }),
+      waiting: () => notes().some((note) => !note.handed),
+      hold: () => {
+        if (notes().length === 0) return false
+        run.holds = (run.holds ?? 0) + 1
+        return run.holds <= MAX_HELD_STEPS
+      },
+      read: (ids) => {
+        const left = notes().filter((note) => !ids.includes(note.id))
+        if (left.length === 0) this.inbox.delete(run.id)
+        else this.inbox.set(run.id, left)
+        run.holds = 0
+        this.steersRead(run, ids)
+      },
+      putBack: (ids) => {
+        for (const note of notes()) if (ids.includes(note.id)) note.handed = false
+      },
+      bell: this.bellOf(run.id),
+    }
   }
 
   /** What runtime/brains.ts needs to say which AI a helper thinks with. */
@@ -2731,9 +2922,46 @@ function chatTag(chat: string): { chat?: string } {
 /** The turn thread that keeps the messages a helper was sent (pushes, steers), for a rebuilt session. */
 const NOTES_THREAD = 'helper-notes:'
 
-/** How a message sent mid-turn reaches a plan helper: after a tool's own answer, or as the reason a tool waited. */
-export function noteText(notes: string): string {
-  return `[New message from the agent that started you. Read it now and follow it: ${notes}]`
+const STEERS_KEPT = 8
+/** How long helper_steer waits for the helper to read a message before it answers Queued. */
+const STEER_WAIT_MS = 5_000
+/** Steps held back for one unread message. The engine takes it at the first boundary; this only guards a lost one. */
+const MAX_HELD_STEPS = 5
+
+const STEER_SENDERS: Record<SteerFrom, string> = {
+  creator: 'the agent that started you',
+  helper: 'a helper you started, reporting back',
+  device: 'the app, with a device result that came late',
+  desk: 'the app, with new events for your desk',
+}
+
+/** A code for one run. It is in the run's system prompt and its real messages, and nowhere a tool could read it. */
+function newMark(): string {
+  return randomBytes(4).toString('hex')
+}
+
+/** How a real message to a running helper reads. Only the app writes these, and only as a message of its own. */
+export function steerFrame(mark: string, from: SteerFrom, text: string): string {
+  return `[Message to you from ${STEER_SENDERS[from]}, delivered by the app | mark ${mark}]\n${text}`
+}
+
+function steerFromOf(value: string | undefined): SteerFrom {
+  return value === 'helper' || value === 'device' || value === 'desk' ? value : 'creator'
+}
+
+function steerRecords(meta: Record<string, unknown>): SteerRecord[] {
+  return Array.isArray(meta['steers']) ? (meta['steers'] as SteerRecord[]) : []
+}
+
+/** The messages sent to a helper and what happened to each, for helpers_status. */
+function steerLines(meta: Record<string, unknown>): string {
+  const lines = steerRecords(meta)
+    .slice(-3)
+    .map((record) => {
+      const state = record.state === 'delivered' ? `delivered, read before step ${record.step ?? 1}` : record.state === 'queued' ? 'queued, not read yet' : `not delivered: ${record.reason ?? 'its run ended first'}`
+      return `- "${record.text}": ${state}`
+    })
+  return lines.length === 0 ? '' : `Messages sent to it:\n${lines.join('\n')}`
 }
 
 /** A device named on purpose ('here', or a brain by name), not left to the app ('' or 'best'). */

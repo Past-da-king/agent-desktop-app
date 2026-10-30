@@ -295,7 +295,8 @@ describe('helpers on another brain', () => {
     })
     const id = idOf(await pc.helpers.delegate([{ label: 'Tickets', brief: 'Find cinema tickets for tonight' }]))
     await waitFor(() => step.started() === 1, 8000)
-    expect(await pc.helpers.status()).toContain('[working')
+    // The card reaches this computer by replication, a moment after the step started over there.
+    await waitFor(async () => (await pc.helpers.status()).includes('[working'), 3000)
     expect(await pc.helpers.steer(id, 'The person means the 7pm show')).toContain('gets your message')
     // The note reaches the server's run before its next step.
     await waitFor(async () => (await srv.db.list('job')).some((row) => row.kind === 'msg' && row.op === 'steer' && row.status === 'done'), 5000)

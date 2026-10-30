@@ -134,14 +134,19 @@ describe('a steer never stops a plan helper', () => {
 
     expect(await manager.steer(id, 'NOTE-ONE: do the reaper first')).toContain('keeps going')
     expect(first.req.signal.aborted).toBe(false)
-    // Its next tool answer carries the note.
-    const answer = await first.req.tools.find((tool) => tool.spec.name === 'ping')!.run({}, testContext())
-    expect(answer).toContain('pong')
-    expect(answer).toContain('NOTE-ONE: do the reaper first')
-    // One of the engine's own tools (a command) hears it before it runs.
+    // It is held for the engine, which takes it as a message of its own: a tool result never carries it.
+    const mail = first.req.messages!
+    expect(await first.req.tools.find((tool) => tool.spec.name === 'ping')!.run({}, testContext())).not.toContain('NOTE-ONE')
+    const taken = mail.take()
+    expect(taken.map((note) => note.text).join('')).toContain('NOTE-ONE: do the reaper first')
+    mail.read(taken.map((note) => note.id))
+    expect(await first.req.tools.find((tool) => tool.spec.name === 'ping')!.run({}, testContext())).toBe('pong')
+    // Another one the engine took, but the turn ended before it read it, comes back to wait.
     await manager.steer(id, 'NOTE-TWO: save your progress')
-    expect(first.req.pendingNote?.()).toContain('NOTE-TWO: save your progress')
-    expect(first.req.pendingNote?.() ?? null).toBeNull()
+    const second = mail.take()
+    expect(second[0]?.text).toContain('NOTE-TWO: save your progress')
+    expect(mail.take()).toEqual([])
+    mail.read(second.map((note) => note.id))
 
     // A note that arrives after its last step: the turn ends, and it carries on with the note instead of ending.
     await manager.steer(id, 'NOTE-THREE: and close your tabs')

@@ -117,8 +117,10 @@ describe('a queued device result goes only to the run that asked, once', () => {
     const out = await hub.call('Office PC', 'files_list', { path: 'C:\\temp\\hb' }, 'main', testContext({ owner: `helper:${id}` }))
     expect(out.state).toBe('waiting')
     await comeBack()
-    // The result reaches the helper with its next tool answer, and nowhere else.
-    await waitFor(async () => (await turns[0]!.req.tools.find((t) => t.spec.name === 'ping')!.run({}, testContext())).includes('LISTING of C:\\temp\\hb'), 3_000)
+    // The result reaches the helper as a message of its own before its next step, and nowhere else.
+    const read = await waitFor(() => turns[0]!.req.messages!.take().find((note) => note.text.includes('LISTING of C:\\temp\\hb')) ?? null, 3_000)
+    expect(read.text).toContain('a device result that came late')
+    turns[0]!.req.messages!.read([read.id])
     expect(chatNotes).toEqual([])
 
     // The PC drops off again. It finishes; a second call it made comes back only afterwards: dropped, with a line on

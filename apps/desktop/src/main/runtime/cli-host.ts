@@ -14,6 +14,7 @@ import type { AgentEvent, JsonObject, Settings, Tool, ToolContext } from '@agent
 
 import { planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
 import { startToolServer, type ToolServer } from './mcp-server'
+import { HELD_STEP, type TurnMessages } from './note-tools'
 import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
 import { usableFolder } from './work-folder'
 
@@ -46,8 +47,8 @@ export interface CliTurnRequest {
    * pushed helper's full brief, earlier steps and messages, so it never comes back knowing only its label.
    */
   freshPrompt?: string
-  /** A message for the model that arrived mid-turn: handed over at its next tool call (one of the engine's own too). */
-  pendingNote?: () => string | null
+  /** Messages for the model that arrive mid-turn: each is delivered as a message of its own, read before the next step. */
+  messages?: TurnMessages
   images?: string[]
   model?: string
   /** The project folder the work is in (a project chat and the helpers it starts); absent for everything else. */
@@ -249,7 +250,7 @@ export class CliHost {
         approve: (summary, details) => request.context.approve(summary, details, 'computer'),
         alsoAllowed: [dir],
       })
-      const pendingNote = request.pendingNote
+      const messages = request.messages
       const run = (sessionId: string | null) =>
         runCliTurn({
           cli: request.cli,
@@ -278,12 +279,10 @@ export class CliHost {
           access: settings().shell === 'always' ? 'free' : 'asked',
           signal: request.signal,
           onEvent: request.onEvent,
+          ...(messages === undefined ? {} : { messages }),
           permission: async (name, input) => {
-            // A message that arrived mid-turn is handed over before the next step runs (the step waits for it).
-            const note = pendingNote?.() ?? null
-            if (note !== null && note.trim() !== '') {
-              return { allow: false as const, message: `Not run yet: a new message from the agent that started you arrived first. Read it and follow it, then run this step again if it still makes sense. The message: ${note}` }
-            }
+            // A message is on its way: this step waits for the model to read it. The message itself never travels here.
+            if (messages?.hold() === true) return { allow: false as const, message: HELD_STEP }
             return permission(name, input)
           },
         })
