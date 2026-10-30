@@ -120,6 +120,7 @@ import { routeLate } from './devices/device-tools'
 import { startPresence, type PresenceHandle } from './presence/start'
 import { getWakeups, setWakeups, WakeupService } from './wakeups/service'
 import { RingWindow } from './wakeups/ring-window'
+import { wakeIdleState } from './wakeups/idle'
 import { MiniAppStore } from './miniapps/store'
 import { MiniAppHost, setMiniAppHost } from './miniapps/host'
 import { guardMiniAppFrames, registerMiniAppScheme, rendererFonts, serveMiniAppsIn } from './miniapps/protocol'
@@ -1189,6 +1190,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
       selfId: () => devicesState.sync?.selfId() ?? '',
       selfName: () => settings.get().deviceName,
       selfRings: () => settings.get().wakeupsRingHere,
+      pauseUntil: () => settings.get().wakeupsPauseHereUntil,
+      idleRule: () => settings.get().wakeupsPhoneOnlyWhenIdle,
+      idleState: wakeIdleState(settings),
       devices: async () => (await wakeStore.list('device')).filter((d) => !d.revoked).map((d) => ({ id: d.id, name: d.name, kind: d.kind })),
       settings: () => ({ snoozeMinutes: settings.get().wakeupSnoozeMinutes, quietHours: settings.get().wakeupQuietHours }),
       idleSeconds: () => {
@@ -1221,6 +1225,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
       reachable: (id) => getDevicesHost()?.wakeReachable?.(id) ?? false,
     })
     settings.onChange(() => wakeupService?.kick())
+    // Locked or back: look at once rather than at the next poll.
+    for (const event of ['lock-screen', 'unlock-screen', 'resume'] as const) powerMonitor.on(event as 'resume', () => wakeupService?.kick())
   }
   const tools = buildToolset({
     git: { kv: gitKv, hook: () => gitHook },

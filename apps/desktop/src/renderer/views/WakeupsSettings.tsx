@@ -2,7 +2,8 @@
  * Settings > Wake-ups (docs/plans/wake-ups.md): whether this computer rings, snooze length, quiet hours, loudness, a
  * test button per severity, what is ringing now (answering here is his own hands, like the ringing screen), each
  * linked phone's permission checklist as the phone reported it, and the Wake-ups log: every wake, who fired it, why,
- * and what happened. Agents cannot change any of this (settings_set treats these keys as read-only).
+ * and what happened. Agents may set only Ring on this computer and the pause (settings_set; the rest is read-only to
+ * them), and neither can silence a wake that is already ringing.
  */
 import type { WakeDeviceStatus, WakeupRow } from '@agent/core'
 import { useEffect, useMemo, useState } from 'react'
@@ -15,10 +16,24 @@ import { Button } from '../ui/Button'
 import { Icon } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
 import { Switch } from '../ui/Switch'
-import { foldWakes, SEVERITY_LOOK, shownTitle, type WakeSeverity, type WakeView } from '../../shared/wakeups'
+import { dayClockLabel, foldWakes, hereNotes, pausedUntil, SEVERITY_LOOK, shownTitle, type WakeSeverity, type WakeView } from '../../shared/wakeups'
 
 const QUIET_PRESETS = ['', '22:00-07:00', '23:00-06:00', '21:00-06:00', '00:00-07:00']
 const SNOOZES = [1, 2, 5, 10, 15, 30]
+const IDLE_MINUTES = [1, 2, 5, 10, 15, 30, 60]
+
+/** What a datetime-local field holds, for a time. */
+function fieldValue(at: number): string {
+  const d = new Date(at)
+  const two = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}:${two(d.getMinutes())}`
+}
+
+/** The pause offered first: tomorrow at 08:00. */
+function tomorrowMorning(now: number): number {
+  const d = new Date(now)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 8, 0, 0, 0).getTime()
+}
 
 export function WakeupsSettings(): JSX.Element {
   const settings = useSettings((state) => state.settings)
@@ -28,6 +43,7 @@ export function WakeupsSettings(): JSX.Element {
   const [where, setWhere] = useState<'here' | 'all'>('here')
   const [devices, setDevices] = useState<WakeDeviceStatus[]>([])
   const [selfId, setSelfId] = useState('')
+  const [pauseField, setPauseField] = useState(() => fieldValue(tomorrowMorning(Date.now())))
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 5_000)
@@ -65,6 +81,12 @@ export function WakeupsSettings(): JSX.Element {
       .catch((cause: unknown) => toast(cause instanceof Error ? cause.message : 'The test did not ring.'))
   }
   const quiet = settings?.wakeupQuietHours ?? ''
+  const ringHere = settings?.wakeupsRingHere ?? true
+  const paused = pausedUntil(settings?.wakeupsPauseHereUntil ?? '', now)
+  const pauseAt = Date.parse(pauseField)
+  const pauseValid = Number.isFinite(pauseAt) && pauseAt > now
+  const idleRule = settings?.wakeupsPhoneOnlyWhenIdle ?? true
+  const idleMinutes = settings?.wakeupsIdleMinutes ?? 5
 
   return (
     <section className="wake">
@@ -84,7 +106,61 @@ export function WakeupsSettings(): JSX.Element {
             <b>Ring on this computer</b>
             <span>A loud alarm and a full-screen screen on every display</span>
           </div>
-          <Switch on={settings?.wakeupsRingHere ?? true} onToggle={(next) => void save({ wakeupsRingHere: next })} label="Ring on this computer" />
+          <Switch on={ringHere} onToggle={(next) => void save({ wakeupsRingHere: next })} label="Ring on this computer" />
+        </div>
+
+        <div className={`rowc wake-pause${ringHere ? '' : ' off'}`}>
+          <div className="ri">
+            <Icon name="clock" size={22} />
+          </div>
+          <div className="rt">
+            <b>{paused === null ? 'Pause ringing on this computer' : `Paused until ${dayClockLabel(paused)}`}</b>
+            <span>
+              {paused === null
+                ? 'Until a date and time. Your phone keeps ringing.'
+                : 'Your phone keeps ringing. Resumes by itself. If your phone does not confirm within 30 s, this computer rings anyway.'}
+            </span>
+          </div>
+          {paused === null ? (
+            <div className="wake-pause-set">
+              <input
+                className="input"
+                type="datetime-local"
+                aria-label="Pause ringing until"
+                disabled={!ringHere}
+                value={pauseField}
+                min={fieldValue(now)}
+                onChange={(event) => setPauseField(event.target.value)}
+              />
+              <Button size="sm" variant="tonal" disabled={!ringHere || !pauseValid} onClick={() => void save({ wakeupsPauseHereUntil: pauseField })}>
+                Pause
+              </Button>
+            </div>
+          ) : (
+            <Button size="sm" onClick={() => void save({ wakeupsPauseHereUntil: '' })}>
+              Resume
+            </Button>
+          )}
+        </div>
+
+        <div className={`rowc${ringHere ? '' : ' off'}`}>
+          <div className="ri">
+            <Icon name="moon" size={22} />
+          </div>
+          <div className="rt">
+            <b>Only the phone when this computer is idle or locked</b>
+            <span>If no phone confirms within 30 s, this computer rings anyway. It joins when you come back.</span>
+          </div>
+          <div className="wake-idle-set">
+            <select className="rule-sel" aria-label="Idle after" disabled={!idleRule} value={IDLE_MINUTES.includes(idleMinutes) ? idleMinutes : 5} onChange={(event) => void save({ wakeupsIdleMinutes: Number(event.target.value) })}>
+              {IDLE_MINUTES.map((m) => (
+                <option key={m} value={m}>
+                  {m} min
+                </option>
+              ))}
+            </select>
+            <Switch on={idleRule} onToggle={(next) => void save({ wakeupsPhoneOnlyWhenIdle: next })} label="Only the phone when this computer is idle or locked" />
+          </div>
         </div>
 
         <div className="rowc">
@@ -250,6 +326,7 @@ function WakeRow({ view, now, selfId, children }: { view: WakeView; now: number;
             ? 'Withdrawn before it rang'
             : `Ringing since ${clock(view.ringAt)}`
   const where = view.targets.length === 0 ? 'every device' : view.targets.includes(selfId) ? 'this computer' : 'your other device'
+  const notes = hereNotes(view, selfId)
   return (
     <div className="wake-row">
       <span className="wake-bar" style={{ background: look.bg }} />
@@ -267,6 +344,7 @@ function WakeRow({ view, now, selfId, children }: { view: WakeView; now: number;
           {view.repeats > 0 ? ` · merged ${view.repeats} repeat${view.repeats === 1 ? '' : 's'}` : ''}
           {view.snoozes > 0 ? ` · snoozed ${view.snoozes}x` : ''}
         </div>
+        {notes !== '' ? <div className="small muted wake-note">{notes}</div> : null}
         {children}
       </div>
     </div>

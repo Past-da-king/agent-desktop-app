@@ -126,8 +126,22 @@ export interface Settings {
    * default), 'week' or 'always'. Transcripts are always kept.
    */
   recordingAudioKeep: 'today' | 'week' | 'always'
-  /** Wake-ups: this computer rings (full-screen alarm) for wake-ups sent to it. Only he changes these, in Settings. */
+  /**
+   * Wake-ups: this computer rings (full-screen alarm) for wake-ups sent to it. Agents may change this one and
+   * wakeupsPauseHereUntil; the others only he changes, in Settings. Off stops new rings here; a wake already ringing
+   * here rings on until he answers it, whoever switched it off.
+   */
   wakeupsRingHere: boolean
+  /**
+   * Wake-ups: this computer does not ring until this time (ISO; '' not paused), so an empty room stays quiet while the
+   * phone keeps ringing. It resumes by itself when the time passes. Kept per machine (not in the shared settings). If
+   * no phone confirms a wake within 30 s, this computer rings anyway.
+   */
+  wakeupsPauseHereUntil: string
+  /** Wake-ups: when this computer is idle or locked, wake-ups ring only on the phone (same 30 s fallback). */
+  wakeupsPhoneOnlyWhenIdle: boolean
+  /** Wake-ups: minutes without input before this computer counts as idle (1 to 240). */
+  wakeupsIdleMinutes: number
   /** Wake-ups: minutes a snooze lasts (1 to 120). */
   wakeupSnoozeMinutes: number
   /** Wake-ups: quiet hours "22:00-07:00" local, '' none. Only a heads-up is silent in them; urgent and critical ring. */
@@ -228,6 +242,9 @@ export const DEFAULT_SETTINGS: Settings = {
   speakReplies: false,
   recordingAudioKeep: 'today',
   wakeupsRingHere: true,
+  wakeupsPauseHereUntil: '',
+  wakeupsPhoneOnlyWhenIdle: true,
+  wakeupsIdleMinutes: 5,
   wakeupSnoozeMinutes: 5,
   wakeupQuietHours: '',
   wakeupVolume: 1,
@@ -449,12 +466,13 @@ export interface PromptRuleVersion {
 
 /**
  * Wake-ups (29 Oct 2026, docs/plans/wake-ups.md): something needs the person NOW, so his devices ring until he answers.
- * One entity, four kinds of row, each written by one writer so last-writer-wins never undoes an answer (the model is
+ * One entity, five kinds of row, each written by one writer so last-writer-wins never undoes an answer (the model is
  * apps/desktop/src/shared/wakeups.ts): 'wake' (the wake, written by the wake_me tool), 'ack' (id <wake>:ack, he
- * answered), 'snooze' (id <wake>:snooze:<n>, rings again at until), 'seen' (id <wake>:seen:<device>, a device has it).
+ * answered), 'snooze' (id <wake>:snooze:<n>, rings again at until), 'seen' (id <wake>:seen:<device>, a device has it),
+ * 'away' (id <wake>:away:<device>, that computer is holding its ring back: paused, idle or locked).
  */
 export interface WakeupRow extends RowBase {
-  kind: 'wake' | 'ack' | 'snooze' | 'seen'
+  kind: 'wake' | 'ack' | 'snooze' | 'seen' | 'away'
   /** ack, snooze, seen: the wake they answer. '' on a wake. */
   wake: string
   severity: 'critical' | 'urgent' | 'heads_up'
@@ -478,11 +496,15 @@ export interface WakeupRow extends RowBase {
   /** ack and snooze: the device, and its name. */
   by: string
   byName: string
-  /** snooze: which snooze, and when it rings again. */
+  /** snooze: which snooze, and when it rings again. away: when a pause ends. */
   n: number
   until: number
-  /** seen: the device that has it. */
+  /** seen, away: the device that has it, or that holds its ring back. */
   device: string
+  /** seen: why a computer rang although it was paused, idle or locked ('' a plain ring). Older rows have none. */
+  why?: string
+  /** away: paused, idle or locked. */
+  reason?: string
 }
 
 /**

@@ -50,3 +50,18 @@ One general trigger: when something needs him NOW, his devices ring until he ans
 ## Test plan
 - Unit: Connect-shaped parser fixtures; `wake_me` policy (severity to devices, escalation after 60 s, quiet hours, dedupe, rate limit, no ack tool); ack and snooze convergence across two nodes; meeting planner (moved, cancelled, declined, all-day, overlap).
 - End to end on his real phone (phone build via `adb install -r` only after his yes) with a desktop test copy in its own temp folder and user-data dir, `AGENT_FAKE_CALENDAR=<file>`, paired as an extra computer: fire each severity from a test agent; a fake meeting at now + 16 min; cases: locked and screen off; unlocked in another app (overlay); DND on; ringer silent and alarm volume 0; app swiped away; forced Doze (`adb shell dumpsys deviceidle force-idle`); mobile data; PC off with the server relaying; phone unreachable (sender rings the PC, logs it); ack on PC stops the phone within 5 s and the reverse; snooze; dedupe of two identical fires. Proof (screen recordings, logcat tag `WakeUp`) in `Downloads\agent\proof-wakeups\`.
+
+## Pause and idle on a computer (30 Oct 2026, 0.2.113)
+
+He goes home for the weekend and the PC must not beep in an empty room; the phone keeps ringing.
+
+- Settings, per machine (not in the shared bundle): `wakeupsRingHere`, `wakeupsPauseHereUntil` (ISO, '' none; both free for settings_set), `wakeupsPhoneOnlyWhenIdle` (default on), `wakeupsIdleMinutes` (default 5; both read-only to agents, like snooze, quiet hours and volume).
+- `shared/wakeups.ts decideHere`: a computer that is paused, idle or locked holds back. It writes a row `<wake>:away:<device>`, which takes it out of the wake's targets (`effectiveTargets`), so the wake is for the other devices at once. The phone reads only `targets` and `seen` in its snapshot, so it needs no change.
+- Never unheard: no phone linked, rings here at once; no phone says `seen` within 30 s, rings here then. Only a phone's or tablet's `seen` counts, because another computer may be in the same empty room. A `seen` from before a snooze is not proof of the next ring; the snapshot leaves it out, so the phone says it again.
+- Off is off: with Ring on this computer off, no new ring starts, not even as the last resort.
+- A ring in progress is never silenced: going idle, a pause and the switch going off (by an agent too) only stop new rings. This is what lets agents set these two keys while no agent can silence a wake. A ring in progress survives a restart (`seen` for this ring).
+- He comes back to an active computer while a wake rings: it joins (a 5 s poll runs only while a wake rings elsewhere; lock, unlock and resume also look at once). The phone keeps ringing: a computer that came back does not return to the targets.
+- His own test button rings where he asked, paused or not.
+- Log: `hereNotes`, "not ringing here: paused until Mon 2 Nov 08:00", "not ringing here: PC idle", "rang here: no phone confirmed in 30 s", "joined here: he came back". Shown in Settings > Wake-ups and wake_list; also in main.log.
+- Proof copies: `AGENT_WAKEUP_PROOF_IDLE=<file>` (only with `AGENT_WAKEUP_PROOF=1`) holds active, idle or locked in place of the real state.
+- A server on an older version sends the phone the raw targets: a wake targeted at a paused computer then reaches the phone at 30 s, the same moment this computer falls back. It stays safe, but deploy the server with the same version.

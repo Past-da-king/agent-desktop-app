@@ -192,7 +192,7 @@ describe('wake-ups across nodes', () => {
     const all = buildToolset({ store: new Store(':memory:') } as never).map((t) => t.spec.name)
     expect(all).toContain('wake_me')
     expect(all.filter((n) => /wake/.test(n) && /(ack|answer|snooze|silence|stop|dismiss)/.test(n))).toEqual([])
-    for (const key of ['wakeupsRingHere', 'wakeupSnoozeMinutes', 'wakeupQuietHours', 'wakeupVolume']) expect(SETTINGS_READ_ONLY.has(key)).toBe(true)
+    for (const key of ['wakeupSnoozeMinutes', 'wakeupQuietHours', 'wakeupVolume']) expect(SETTINGS_READ_ONLY.has(key)).toBe(true)
   })
 
   it('wake_me through the tool: rings now, books later, explains a refusal', async () => {

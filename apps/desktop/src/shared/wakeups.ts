@@ -9,6 +9,8 @@
  *   kind 'ack'     id `<wake>:ack`, written by the device he answered on ("I'm on it"). Terminal.
  *   kind 'snooze'  id `<wake>:snooze:<n>`, the n-th snooze, with the time it rings again
  *   kind 'seen'    id `<wake>:seen:<device>`, a device has it and is ringing (delivery proof)
+ *   kind 'away'    id `<wake>:away:<device>`, that computer holds its ring back (paused, idle or locked); the wake is
+ *                  then for the other devices, at once
  * The state is folded from them: acked, withdrawn, snoozed (until), ringing (from `at`), or pending (before `at`).
  *
  * It never stops by itself: no timeout. A wake that was already ringing when its source went away (a cancelled
@@ -25,6 +27,11 @@ export type WakeState = 'pending' | 'ringing' | 'snoozed' | 'acked' | 'withdrawn
 export const SEVERITIES: readonly WakeSeverity[] = ['critical', 'urgent', 'heads_up']
 export const DEVICE_CHOICES: readonly WakeDevices[] = ['auto', 'here', 'all']
 
+/**
+ * A `seen` or `away` row counts for the ring now going if it is no older than this before it started. Clocks differ a
+ * little between nodes; the shortest snooze is a minute, so a row from the ring before never counts.
+ */
+export const ROW_SKEW_MS = 30_000
 /** Urgent rings where he is first; every other device joins after this long without an answer. */
 export const ESCALATE_AFTER_MS = 60_000
 /** A device a wake was sent to that has not said it has it after this long: every device rings. */
@@ -86,8 +93,22 @@ export interface WakeView {
   snoozes: number
   /** Devices that said they have it (ringing), with when. */
   seen: Record<string, number>
+  /** Why a computer rang although it was paused, idle or locked, per device. */
+  rangWhy: Record<string, RangWhy>
+  /** Computers holding their ring back, per device: why, until when (a pause), and when they said so. */
+  away: Record<string, AwayMark>
   /** Times a repeat fire merged into it (dedupe). */
   repeats: number
+}
+
+export type AwayReason = 'paused' | 'idle' | 'locked'
+export type RangWhy = 'no_phone' | 'no_confirm' | 'came_back'
+
+export interface AwayMark {
+  reason: AwayReason
+  /** paused: when the pause ends. */
+  until: number
+  at: number
 }
 
 /** A device that can ring: a computer with the app, or a phone. Servers never ring. */
@@ -136,7 +157,17 @@ export function foldOne(wake: WakeupRow, related: readonly WakeupRow[], now: num
   const snoozes = related.filter((row) => row.kind === 'snooze').sort((a, b) => num(a.n) - num(b.n) || num(a.until) - num(b.until))
   const last = snoozes[snoozes.length - 1]
   const seen: Record<string, number> = {}
-  for (const row of related) if (row.kind === 'seen' && str(row.device) !== '') seen[row.device] = num(row.at)
+  const rangWhy: Record<string, RangWhy> = {}
+  const away: Record<string, AwayMark> = {}
+  for (const row of related) {
+    if (str(row.device) === '') continue
+    if (row.kind === 'seen') {
+      seen[row.device] = num(row.at)
+      if (row.why === 'no_phone' || row.why === 'no_confirm' || row.why === 'came_back') rangWhy[row.device] = row.why
+    } else if (row.kind === 'away' && (row.reason === 'paused' || row.reason === 'idle' || row.reason === 'locked')) {
+      away[row.device] = { reason: row.reason, until: num(row.until), at: num(row.at) }
+    }
+  }
   const at = num(wake.at)
   const ringAt = last !== undefined ? Math.max(at, num(last.until)) : at
   let state: WakeState
@@ -166,6 +197,8 @@ export function foldOne(wake: WakeupRow, related: readonly WakeupRow[], now: num
     ackedBy: ack === null ? '' : str(ack.byName) || str(ack.by),
     snoozes: snoozes.length,
     seen,
+    rangWhy,
+    away,
     repeats: num(wake.repeats),
   }
 }
@@ -195,16 +228,144 @@ export interface RingDecision {
 export function ringsHere(view: WakeView, selfId: string, now: number, options: { quiet?: boolean } = {}): RingDecision {
   const no = (why: string): RingDecision => ({ ring: false, sound: false, why })
   if (view.state !== 'ringing') return no(view.state)
-  const targeted = view.targets.length === 0 || view.targets.includes(selfId)
+  const targets = effectiveTargets(view)
+  const targeted = targets.length === 0 || targets.includes(selfId)
   const sound = !(view.severity === 'heads_up' && options.quiet === true)
   if (view.severity === 'critical') return { ring: true, sound: true, why: 'critical rings every device' }
-  if (targeted) return { ring: true, sound, why: view.targets.length === 0 ? 'sent to every device' : 'sent here' }
+  if (targeted) return { ring: true, sound, why: targets.length === 0 ? 'sent to every device' : 'sent here' }
   const since = now - view.ringAt
-  if (since >= DELIVERY_WAIT_MS && view.targets.some((id) => view.seen[id] === undefined)) {
+  if (since >= DELIVERY_WAIT_MS && targets.some((id) => !seenThisRing(view, id))) {
     return { ring: true, sound, why: 'the device it was sent to did not get it' }
   }
   if (view.severity === 'urgent' && since >= ESCALATE_AFTER_MS) return { ring: true, sound: true, why: 'no answer after 60 s' }
   return no('sent to another device')
+}
+
+/** This device said it has the wake for the ring going now (a `seen` from before a snooze is not proof of this one). */
+export function seenThisRing(view: Pick<WakeView, 'seen' | 'ringAt'>, deviceId: string): boolean {
+  const at = view.seen[deviceId]
+  return at !== undefined && at >= view.ringAt - ROW_SKEW_MS
+}
+
+/**
+ * Who a wake is for now: its targets, less the computers holding their ring back for this ring. Empty means every
+ * device, so a wake sent to a paused computer reaches the phone at once, and the phone (which only knows targets) needs
+ * no change. It stays that way if the computer comes back, or the phone would stop ringing when the computer joined.
+ */
+export function effectiveTargets(view: Pick<WakeView, 'targets' | 'away' | 'ringAt'>): string[] {
+  return view.targets.filter((id) => {
+    const mark = view.away[id]
+    return mark === undefined || mark.at < view.ringAt - ROW_SKEW_MS
+  })
+}
+
+// ---- this computer: paused, idle, locked ---------------------------------------------------------------------------
+
+export type IdleState = 'active' | 'idle' | 'locked' | 'unknown'
+
+/** What this computer knows about itself, from its own Settings and its own clock. */
+export interface HereState {
+  /** The Ring on this computer switch. */
+  ringHere: boolean
+  /** wakeupsPauseHereUntil as a time, null when not paused now. */
+  pausedUntil: number | null
+  /** The screen is locked or nobody has touched it for the idle threshold. Unknown counts as active: it rings. */
+  idle: IdleState
+  /** wakeupsPhoneOnlyWhenIdle. */
+  idleRule: boolean
+  /** When he last came back to this computer (it was paused, idle or locked and no longer is), null: not seen. */
+  cameBackAt: number | null
+}
+
+/** The pause as a time, or null when there is none, it cannot be read, or it has passed (it resumes by itself). */
+export function pausedUntil(spec: string, now: number): number | null {
+  if (spec.trim() === '') return null
+  const at = Date.parse(spec)
+  return Number.isFinite(at) && at > now ? at : null
+}
+
+export function awayReason(here: Pick<HereState, 'pausedUntil' | 'idle' | 'idleRule'>): AwayReason | null {
+  if (here.pausedUntil !== null) return 'paused'
+  if (here.idleRule && (here.idle === 'idle' || here.idle === 'locked')) return here.idle
+  return null
+}
+
+export interface HereDecision extends RingDecision {
+  /** Not ringing here for this reason: say so (an `away` row and the log). */
+  held?: AwayReason
+  /** Ringing here although away, and why. */
+  rang?: RangWhy
+}
+
+/**
+ * Whether this computer rings now: ringsHere, plus his Settings. The rules that must hold:
+ * - A wake already ringing here rings on until he answers: going idle, a pause, or the switch going off (by anyone,
+ *   an agent included) only decide whether a new ring starts, so nothing here can silence a ring.
+ * - Off is off: with the switch off no new ring starts, even as a last resort. That is his choice.
+ * - Paused, idle or locked: the phone rings instead. If no phone is linked this computer rings at once; if no phone
+ *   confirms within DELIVERY_WAIT_MS it rings then. Only a phone's confirmation counts: another computer may be in the
+ *   same empty room.
+ * - He comes back to this computer while the wake rings: it joins.
+ * - A test from his own button rings exactly where he asked.
+ * `phones`: the linked phones and tablets, not this device.
+ */
+export function decideHere(view: WakeView, selfId: string, now: number, options: { quiet?: boolean; here: HereState; phones: readonly string[] }): HereDecision {
+  const base = ringsHere(view, selfId, now, { quiet: options.quiet })
+  if (view.state !== 'ringing') return base
+  const sound = !(view.severity === 'heads_up' && options.quiet === true)
+  if (seenThisRing(view, selfId)) return { ring: true, sound, why: 'already ringing here, until he answers' }
+  const { here } = options
+  if (!here.ringHere) return { ring: false, sound: false, why: 'Ring on this computer is off' }
+  if (view.source.kind === 'test') return base
+  const reason = awayReason(here)
+  if (reason === null) {
+    if (base.ring) return base
+    if (here.cameBackAt !== null && here.cameBackAt >= view.ringAt) return { ring: true, sound, why: 'he came back to this computer', rang: 'came_back' }
+    return base
+  }
+  if (!base.ring) return base
+  if (options.phones.length === 0) return { ring: true, sound: base.sound, why: `${reason}, but no phone is linked`, rang: 'no_phone' }
+  const hold: HereDecision = { ring: false, sound: false, why: `${reason}: a phone has it`, held: reason }
+  if (options.phones.some((id) => seenThisRing(view, id))) return hold
+  if (now - view.ringAt >= DELIVERY_WAIT_MS) return { ring: true, sound: base.sound, why: `${reason}, but no phone confirmed in 30 s`, rang: 'no_confirm' }
+  return hold
+}
+
+/** What the log says about a computer's ring: why it held back, and why it rang after all. '' when there is nothing. */
+export function hereNote(view: Pick<WakeView, 'away' | 'rangWhy'>, deviceId: string, selfId: string): string {
+  const where = deviceId === selfId ? 'here' : 'on another computer'
+  const mark = view.away[deviceId]
+  const rang = view.rangWhy[deviceId]
+  const parts: string[] = []
+  if (mark !== undefined) {
+    const what = mark.reason === 'paused' ? `paused until ${dayClockLabel(mark.until)}` : mark.reason === 'locked' ? 'PC locked' : 'PC idle'
+    parts.push(`not ringing ${where}: ${what}`)
+  }
+  if (rang !== undefined) {
+    const what = rang === 'no_phone' ? 'no phone linked' : rang === 'no_confirm' ? 'no phone confirmed in 30 s' : 'he came back'
+    parts.push(`${rang === 'came_back' ? 'joined' : 'rang'} ${where}: ${what}`)
+  }
+  return parts.join('; ')
+}
+
+/** Every computer's note for a wake, for the log. */
+export function hereNotes(view: Pick<WakeView, 'away' | 'rangWhy'>, selfId: string): string {
+  const devices = [...new Set([...Object.keys(view.away), ...Object.keys(view.rangWhy)])]
+  return devices
+    .map((id) => hereNote(view, id, selfId))
+    .filter((line) => line !== '')
+    .join('; ')
+}
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** "Mon 2 Nov 08:00", local time. */
+export function dayClockLabel(at: number): string {
+  const d = new Date(at)
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]} ${hh}:${mm}`
 }
 
 /** The next moment a wake's decision can change (a timer for it), or null when nothing is due. */
@@ -364,8 +525,12 @@ export function snoozeRow(view: WakeView, by: { id: string; name: string }, now:
   return { id: `${view.id}:snooze:${n}`, kind: 'snooze', wake: view.id, n, until: now + length, by: by.id, byName: by.name, at: now }
 }
 
-export function seenRow(wakeId: string, deviceId: string, now: number): Partial<WakeupRow> & { id: string } {
-  return { id: `${wakeId}:seen:${deviceId}`, kind: 'seen', wake: wakeId, device: deviceId, at: now }
+export function seenRow(wakeId: string, deviceId: string, now: number, why: RangWhy | '' = ''): Partial<WakeupRow> & { id: string } {
+  return { id: `${wakeId}:seen:${deviceId}`, kind: 'seen', wake: wakeId, device: deviceId, at: now, why }
+}
+
+export function awayRow(wakeId: string, deviceId: string, reason: AwayReason, until: number, now: number): Partial<WakeupRow> & { id: string } {
+  return { id: `${wakeId}:away:${deviceId}`, kind: 'away', wake: wakeId, device: deviceId, reason, until, at: now }
 }
 
 // ---- quiet hours ---------------------------------------------------------------------------------------------------
@@ -396,7 +561,7 @@ export function liveWakes(views: readonly WakeView[], now: number): WakeView[] {
 }
 
 /** One line of the Wake-ups log. */
-export function logLine(view: WakeView, clock: (at: number) => string): string {
+export function logLine(view: WakeView, clock: (at: number) => string, selfId = ''): string {
   const state =
     view.state === 'acked'
       ? `answered ${clock(view.ackedAt ?? 0)}${view.ackedBy === '' ? '' : ` on ${view.ackedBy}`}`
@@ -405,7 +570,8 @@ export function logLine(view: WakeView, clock: (at: number) => string): string {
         : view.state === 'snoozed'
           ? `snoozed until ${clock(view.ringAt)}`
           : view.state
-  return `${SEVERITY_LOOK[view.severity].label}: ${shownTitle(view)} (${state}; from ${view.firedBy || 'an agent'}, ${view.source.kind})`
+  const notes = hereNotes(view, selfId)
+  return `${SEVERITY_LOOK[view.severity].label}: ${shownTitle(view)} (${state}; from ${view.firedBy || 'an agent'}, ${view.source.kind}${notes === '' ? '' : `; ${notes}`})`
 }
 
 function rank(severity: WakeSeverity): number {

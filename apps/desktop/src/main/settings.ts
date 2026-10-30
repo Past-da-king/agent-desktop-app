@@ -179,6 +179,19 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     if (typeof value !== 'number' || !Number.isFinite(value)) return INVALID
     return Math.min(120, Math.max(1, Math.round(value)))
   }
+  if (key === 'wakeupsIdleMinutes') {
+    const number = typeof value === 'string' ? Number(value.trim()) : value
+    if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
+    return Math.min(240, Math.max(1, Math.round(number)))
+  }
+  if (key === 'wakeupsPauseHereUntil') {
+    // '' is not paused. Any time Date can read is kept as a local ISO time with its offset, so it reads back as meant.
+    if (typeof value !== 'string') return INVALID
+    const clean = value.trim()
+    if (clean === '') return ''
+    const at = Date.parse(clean)
+    return Number.isFinite(at) ? localIso(at) : INVALID
+  }
   if (key === 'gitMaxFileMb') {
     const number = typeof value === 'string' ? Number(value.trim()) : value
     if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
@@ -233,6 +246,15 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     return clamp(value)
   }
   return INVALID
+}
+
+/** "2026-11-02T08:00:00+02:00": this computer's local time, with its offset. */
+function localIso(at: number): string {
+  const d = new Date(at)
+  const two = (n: number): string => String(Math.abs(n)).padStart(2, '0')
+  const offset = -d.getTimezoneOffset()
+  const sign = offset < 0 ? '-' : '+'
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}${sign}${two(Math.trunc(offset / 60))}:${two(offset % 60)}`
 }
 
 /** One stored account, cleaned; null when it is not one. */

@@ -72,8 +72,21 @@ const SHARE_GROUPS = ['browser', 'files', 'notifications', 'approval', 'shell'] 
 const ROLES = ['brain', 'hands', 'screen'] as const
 
 /** Settings that only describe state (a key is saved, signed in): never set by hand. */
-// Wake-up settings too: no agent may switch a wake-up's ring off (only he changes them, in Settings > Wake-ups).
-export const SETTINGS_READ_ONLY: ReadonlySet<string> = new Set(['hasKey', 'hasVoiceKey', 'signedIn', 'syncEmail', 'onboarded', 'wakeupsRingHere', 'wakeupSnoozeMinutes', 'wakeupQuietHours', 'wakeupVolume'])
+// Most wake-up settings too (only he changes them, in Settings > Wake-ups). An agent may set wakeupsRingHere and
+// wakeupsPauseHereUntil ("he is going home, keep this PC quiet"): they only decide whether a new ring starts here. A wake
+// already ringing rings on until he answers (shared/wakeups.ts decideHere), so no agent can silence one.
+export const SETTINGS_READ_ONLY: ReadonlySet<string> = new Set([
+  'hasKey',
+  'hasVoiceKey',
+  'signedIn',
+  'syncEmail',
+  'onboarded',
+  'wakeupSnoozeMinutes',
+  'wakeupQuietHours',
+  'wakeupVolume',
+  'wakeupsPhoneOnlyWhenIdle',
+  'wakeupsIdleMinutes',
+])
 
 /**
  * Settings that change what the agent may do on this computer, what it thinks with, or where data goes: changed only

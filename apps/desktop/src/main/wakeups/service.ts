@@ -11,20 +11,30 @@ import { listWhere, type DataStore } from '../runtime/data'
 import { isOrigin } from '../devices/origin'
 import {
   ackRow,
+  awayReason,
+  awayRow,
   chooseTargets,
+  dayClockLabel,
+  decideHere,
   DEFAULT_SNOOZE_MINUTES,
+  effectiveTargets,
   foldWakes,
   inQuietHours,
   KEEP_MS,
   liveWakes,
   nextChange,
   planFire,
+  pausedUntil,
   planWithdraw,
-  ringsHere,
+  ROW_SKEW_MS,
   seenRow,
+  seenThisRing,
   shownTitle,
   snoozeRow,
+  type AwayReason,
   type FireInput,
+  type HereState,
+  type IdleState,
   type Ringer,
   type WakeView,
 } from '../../shared/wakeups'
@@ -84,6 +94,14 @@ export interface WakeupServiceDeps {
   settings: () => { snoozeMinutes: number; quietHours: string }
   /** Seconds since the last keyboard or mouse input on this computer, or null. */
   idleSeconds?: () => number | null
+  /** wakeupsPauseHereUntil: this computer does not start ringing until then ('' not paused). */
+  pauseUntil?: () => string
+  /** wakeupsPhoneOnlyWhenIdle. */
+  idleRule?: () => boolean
+  /** Idle or locked right now (powerMonitor.getSystemIdleState). None: counts as active, it rings. */
+  idleState?: () => IdleState
+  /** How often to look whether he came back while a wake rings elsewhere (default 5 s). */
+  pollMs?: number
   ringer?: WakeRinger
   /** Sends the live wakes to the linked devices. */
   broadcast?: (snapshot: WakeSnapshot) => void
@@ -105,6 +123,9 @@ export class WakeupService {
   private again = false
   private lastShown = ''
   private lastSent = ''
+  private poll: ReturnType<typeof setInterval> | null = null
+  private wasAway = false
+  private cameBackAt: number | null = null
   private readonly now: () => number
   private readonly log: (line: string, detail?: Record<string, unknown>) => void
   /** Wake ids this node already reported as fired / answered (the event store also dedupes). */
@@ -131,6 +152,7 @@ export class WakeupService {
     this.offChange = null
     if (this.timer !== null) clearTimeout(this.timer)
     this.timer = null
+    this.setPoll(false)
     this.deps.ringer?.show([])
   }
 
@@ -144,7 +166,13 @@ export class WakeupService {
     const now = this.now()
     const rows = await this.deps.store.list('wakeup')
     const ringers = await this.ringers()
-    const targets = chooseTargets(input.devices, ringers, { selfId: this.selfId(), selfRings: this.deps.selfRings(), activeDevice: await this.activeDevice(now) })
+    const self = this.selfId()
+    // Ringing now on a computer that will hold back: go straight to the others. A booked one is decided when it rings.
+    const here = this.readHere(now)
+    const away = this.deps.selfRings() ? awayReason(here) : null
+    const skipSelf = away !== null && (input.at === null || input.at <= now)
+    const active = await this.activeDevice(now)
+    const targets = chooseTargets(input.devices, ringers, { selfId: self, selfRings: this.deps.selfRings() && !skipSelf, activeDevice: skipSelf && active === self ? null : active })
     const plan = planFire(input, rows, now, { firedBy, firedOn: this.selfId(), targets })
     if (plan.kind === 'refuse') {
       this.log('wakeups: refused', { firedBy, title: input.title, why: plan.message })
@@ -163,7 +191,8 @@ export class WakeupService {
     this.log('wakeups: fired', { id: saved.id, severity: input.severity, firedBy, at: saved.at, where })
     this.kick()
     const when = view !== undefined && view.state === 'pending' ? `rings at ${new Date(saved.at).toISOString()}` : 'ringing now'
-    return { ok: true, id: saved.id, message: `Wake-up ${saved.id.slice(0, 8)} ${when} on ${where}. It rings until he answers on any device.` }
+    const note = skipSelf && away !== null ? ` ${await this.awayNote(away, here)}` : ''
+    return { ok: true, id: saved.id, message: `Wake-up ${saved.id.slice(0, 8)} ${when} on ${where}. It rings until he answers on any device.${note}` }
   }
 
   /** A test wake from his own button (Settings, the phone): rings exactly the devices given (empty: every device). */
@@ -227,7 +256,7 @@ export class WakeupService {
   /** A device has it (it is ringing there): the delivery proof the 30 s fallback waits for. */
   async seen(id: string, deviceId: string): Promise<void> {
     const view = await this.view(id)
-    if (view === null || view.seen[deviceId] !== undefined) return
+    if (view === null || seenThisRing(view, deviceId)) return
     await this.deps.store.upsert('wakeup', seenRow(view.id, deviceId, this.now()))
   }
 
@@ -235,6 +264,9 @@ export class WakeupService {
   async snapshot(): Promise<WakeSnapshot> {
     const now = this.now()
     const views = liveWakes(foldWakes(await this.deps.store.list('wakeup'), now), now)
+    const self = this.selfId()
+    // A wake not ringing yet is already not for a computer that is away now, so a phone that loses its link has it right.
+    const selfAway = this.deps.selfRings() && awayReason(this.readHere(now)) !== null
     return {
       now,
       from: this.selfId(),
@@ -250,8 +282,9 @@ export class WakeupService {
         ringAt: v.ringAt,
         state: v.state,
         cancelled: v.cancelled,
-        targets: v.targets,
-        seen: v.seen,
+        targets: effectiveTargets(v).filter((id) => !(selfAway && v.state !== 'ringing' && id === self)),
+        // Only this ring's proof: the phone says `seen` again for a ring after a snooze when it is not listed here.
+        seen: Object.fromEntries(Object.entries(v.seen).filter(([id]) => seenThisRing(v, id))),
         firedBy: v.firedBy,
       })),
     }
@@ -287,28 +320,36 @@ export class WakeupService {
     const views = foldWakes(await this.deps.store.list('wakeup'), now)
     const self = this.selfId()
     const quiet = inQuietHours(this.deps.settings().quietHours, (this.deps.minuteOfDay ?? localMinute)(now))
+    const here = this.trackHere(now)
+    const phones = (await this.deps.devices()).filter((d) => (d.kind === 'phone' || d.kind === 'tablet') && d.id !== self).map((d) => d.id)
 
     // Ring here.
     const items: RingItem[] = []
-    if (this.deps.selfRings()) {
-      for (const view of views) {
-        const decision = ringsHere(view, self, now, { quiet })
-        if (!decision.ring) continue
-        items.push({
-          id: view.id,
-          severity: view.severity,
-          title: shownTitle(view),
-          whatToDo: view.whatToDo,
-          link: view.source.link,
-          sourceKind: view.source.kind,
-          firedBy: view.firedBy,
-          ringAt: view.ringAt,
-          sound: decision.sound,
-          cancelled: view.cancelled,
-        })
-        if (view.seen[self] === undefined) await this.deps.store.upsert('wakeup', seenRow(view.id, self, now))
+    let elsewhere = false
+    for (const view of views) {
+      const decision = decideHere(view, self, now, { quiet, here, phones })
+      if (decision.held !== undefined) await this.markAway(view, self, decision.held, here, now)
+      if (!decision.ring) {
+        if (view.state === 'ringing') elsewhere = true
+        continue
       }
+      if (decision.rang !== undefined && !seenThisRing(view, self)) this.log('wakeups: ringing here anyway', { id: view.id, why: decision.why })
+      items.push({
+        id: view.id,
+        severity: view.severity,
+        title: shownTitle(view),
+        whatToDo: view.whatToDo,
+        link: view.source.link,
+        sourceKind: view.source.kind,
+        firedBy: view.firedBy,
+        ringAt: view.ringAt,
+        sound: decision.sound,
+        cancelled: view.cancelled,
+      })
+      if (!seenThisRing(view, self)) await this.deps.store.upsert('wakeup', seenRow(view.id, self, now, decision.rang ?? ''))
     }
+    // While a wake rings elsewhere, watch for him coming back to this computer.
+    this.setPoll(elsewhere && this.deps.selfRings())
     const shown = JSON.stringify(items)
     if (shown !== this.lastShown) {
       this.lastShown = shown
@@ -343,6 +384,8 @@ export class WakeupService {
     if (this.timer !== null) clearTimeout(this.timer)
     this.timer = null
     const due = views.map((v) => nextChange(v, now)).filter((t): t is number => t !== null)
+    // A pause ends by itself, on time.
+    if (here.pausedUntil !== null) due.push(here.pausedUntil)
     if (due.length > 0 && this.running) {
       const wait = Math.max(50, Math.min(...due) - now + 20)
       this.timer = setTimeout(() => this.kick(), Math.min(wait, 2_147_000_000))
@@ -367,6 +410,60 @@ export class WakeupService {
         acked_on: view.ackedBy,
       },
     })
+  }
+
+  /** This computer's own state now. Reads only; trackHere also notes him coming back. */
+  private readHere(now: number): HereState {
+    return {
+      ringHere: this.deps.selfRings(),
+      pausedUntil: pausedUntil(this.deps.pauseUntil?.() ?? '', now),
+      idle: this.deps.idleState?.() ?? 'unknown',
+      idleRule: this.deps.idleRule?.() ?? false,
+      cameBackAt: this.cameBackAt,
+    }
+  }
+
+  private trackHere(now: number): HereState {
+    const here = this.readHere(now)
+    const away = awayReason(here) !== null
+    if (this.wasAway && !away) {
+      this.cameBackAt = now
+      here.cameBackAt = now
+      this.log('wakeups: this computer is active again')
+    }
+    this.wasAway = away
+    return here
+  }
+
+  private setPoll(on: boolean): void {
+    if (!on || !this.running) {
+      if (this.poll !== null) clearInterval(this.poll)
+      this.poll = null
+      return
+    }
+    if (this.poll !== null) return
+    this.poll = setInterval(() => {
+      if ((awayReason(this.readHere(this.now())) !== null) !== this.wasAway) this.kick()
+    }, this.deps.pollMs ?? 5_000)
+    this.poll.unref?.()
+  }
+
+  /** Say once per ring why this computer holds back (a new reason replaces the old one): the log, and the phone's cue. */
+  private async markAway(view: WakeView, self: string, reason: AwayReason, here: HereState, now: number): Promise<void> {
+    const mark = view.away[self]
+    const until = reason === 'paused' ? (here.pausedUntil ?? 0) : 0
+    if (mark !== undefined && mark.at >= view.ringAt - ROW_SKEW_MS && mark.reason === reason && mark.until === until) return
+    await this.deps.store.upsert('wakeup', awayRow(view.id, self, reason, until, now))
+    this.log('wakeups: not ringing here', { id: view.id, reason, until: until === 0 ? undefined : new Date(until).toISOString() })
+  }
+
+  private async awayNote(away: AwayReason, here: HereState): Promise<string> {
+    const self = this.selfId()
+    const what = away === 'paused' ? `paused until ${dayClockLabel(here.pausedUntil ?? 0)}` : away === 'locked' ? 'locked' : 'idle'
+    const phone = (await this.deps.devices()).some((d) => (d.kind === 'phone' || d.kind === 'tablet') && d.id !== self)
+    return phone
+      ? `This computer is ${what}, so it does not ring unless no phone confirms within 30 s.`
+      : `This computer is ${what}, but no phone is linked, so it rings anyway.`
   }
 
   private async view(id: string): Promise<WakeView | null> {

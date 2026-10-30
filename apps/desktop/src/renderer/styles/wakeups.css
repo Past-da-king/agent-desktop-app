@@ -2,6 +2,10 @@
 .wake-card{padding:14px 18px 16px}
 .wake-lead{margin:0 0 6px}
 .wake-vol{width:160px;accent-color:var(--primary)}
+.wake-pause-set,.wake-idle-set{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.wake-pause-set .input{width:auto;height:34px;padding:0 12px}
+.rowc.off{opacity:.55}
+.wake-note{margin-top:2px}
 .wake-test{display:flex;flex-direction:column;gap:10px;padding:14px 0 6px;border-top:1px solid var(--outline-v);margin-top:6px}
 .wake-test .rt{display:flex;flex-direction:column;gap:2px}
 .wake-test .rt span{font-size:13px;color:var(--on-sv)}
