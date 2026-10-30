@@ -154,7 +154,11 @@ export interface BrowserControl {
   googleAccounts?(partition: string): Promise<string[]>
 }
 
+import { phoneDictationNote, type Recordings } from './recordings/store'
+
 export interface IpcDeps {
+  /** His recordings on disk; a linked phone's dictations land here too. */
+  recordings?: Recordings
   store: Store
   /** The AI accounts (main/accounts.ts). Absent in a build without them: the old single choice only. */
   accounts?: AccountStore
@@ -405,6 +409,16 @@ export function registerIpc(deps: IpcDeps): () => void {
     const wire = wireOf(event)
     if (wire === null) return null
     return feedState.setPrefs(wire.deviceId, rawPrefs)
+  })
+
+  // A dictation saved on the phone: its words reach recordings_list here (the audio stays there).
+  handle(DEVICE_CHANNELS.recordingNote, async (event, raw) => {
+    const wire = wireOf(event)
+    if (wire === null) throw new Error('Only a linked device sends that.')
+    if (deps.recordings === undefined) return null
+    const note = phoneDictationNote(raw, wire.deviceId, wire.origin.name)
+    if (note === null) throw new Error('Not a dictation.')
+    return deps.recordings.fromDevice(note)
   })
 
   // The rows that changed after a change-log seq, shaped for a phone; a reset when the gap is too wide to be small.

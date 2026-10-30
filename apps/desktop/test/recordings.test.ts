@@ -10,7 +10,8 @@ import { DEFAULT_SETTINGS, type DictationCommand } from '@agent/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DictationController, type DictationDeps, type TranscriberLike } from '../src/main/dictation/controller'
-import { Recordings, dayKey, type RecordingManifest, type RecoveredNotice, type TranscriptFile } from '../src/main/recordings/store'
+import { RPC_ALLOWED, RPC_CHANNELS } from '../src/shared/rpc-methods'
+import { Recordings, dayKey, phoneDictationNote, type RecordingManifest, type RecoveredNotice, type TranscriptFile } from '../src/main/recordings/store'
 import { recoveredNoticeText, startRecordingsUpkeep, untilNextNight } from '../src/main/recordings/upkeep'
 import { buildSystemPrompt, RECORDINGS_LINE } from '../src/main/runtime/prompt'
 import { READ_ONLY_TOOLS } from '../src/main/runtime/read-only'
@@ -550,5 +551,53 @@ describe('recordings that pass through the voice service', () => {
     expect(existsSync(join(dir, 'audio.wav'))).toBe(true)
     await until(() => recordings.activeIds().length === 0)
     expect(recordings.activeIds()).toEqual([])
+  })
+})
+
+describe('a dictation saved on a linked phone (30 Oct 2026)', () => {
+  let root: string
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'rec-phone-')) })
+  afterEach(() => { rmSync(root, { recursive: true, force: true }) })
+
+  const note = (text: string, state = 'done') => phoneDictationNote({ id: '20261030-105630', startedAt: Date.parse('2026-10-30T08:56:30Z'), durationMs: 150_000, text, state, chat: 'main' }, 'dev_phone', "Ayanda's A35")
+
+  it('shows in recordings_list as from the phone, with its words and no audio', async () => {
+    const store = new Recordings({ root })
+    const id = await store.fromDevice(note('everything I said on the phone')!)
+    const [row] = await store.list()
+    expect(row?.id).toBe(id)
+    expect(row?.source).toBe('phone')
+    expect(row?.target).toBe("Ayanda's A35")
+    expect(row?.durationSeconds).toBe(150)
+    expect(row?.audioExists).toBe(false)
+    expect(row?.transcriptState).toBe('complete')
+    expect((await store.get(id))?.transcript).toBe('everything I said on the phone')
+    expect(await store.list({ query: 'said on the phone' })).toHaveLength(1)
+  })
+
+  it('sent again it updates the same row, and never leaves fewer words', async () => {
+    const store = new Recordings({ root })
+    const id = await store.fromDevice(note('short', 'interrupted')!)
+    expect((await store.get(id))?.transcriptState).toBe('partial')
+    await store.fromDevice(note('short and then much longer')!)
+    await store.fromDevice(note('short')!)
+    expect(await store.list()).toHaveLength(1)
+    expect((await store.get(id))?.transcript).toBe('short and then much longer')
+  })
+
+  it('a recovery pass leaves it alone', async () => {
+    const store = new Recordings({ root })
+    const id = await store.fromDevice(note('words')!)
+    await new Recordings({ root }).recover({})
+    expect((await store.get(id))?.status).toBe('finished')
+    expect((await store.get(id))?.transcript).toBe('words')
+  })
+
+  it('refuses what is not a note, and a linked device may call it', () => {
+    expect(phoneDictationNote({ id: '../../evil', startedAt: 1, durationMs: 1, text: 'x' }, 'd', 'n')).toBeNull()
+    expect(phoneDictationNote({ id: '20261030-105630', startedAt: 1, durationMs: 1 }, 'd', 'n')).toBeNull()
+    expect(phoneDictationNote('nope', 'd', 'n')).toBeNull()
+    expect(RPC_ALLOWED.has('recordings.fromDevice')).toBe(true)
+    expect(RPC_CHANNELS['recordings.fromDevice']).toBeDefined()
   })
 })

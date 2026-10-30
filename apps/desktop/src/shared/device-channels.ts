@@ -10,6 +10,8 @@ export const DEVICE_CHANNELS = {
   connectApp: 'agent:apps.connectLink',
   /** The @-mention picker's project list, or "same" when the phone's copy is current (main/runtime/mentions.ts). */
   mentions: 'agent:chat.mentions',
+  /** A dictation saved on the phone: its words and times, for recordings_list. The audio stays on the phone. */
+  recordingNote: 'agent:recordings.fromDevice',
 } as const
 
 /** The same, by dotted RPC name. */
@@ -19,4 +21,5 @@ export const DEVICE_RPC_CHANNELS: Readonly<Record<string, string>> = {
   'data.page': DEVICE_CHANNELS.page,
   'apps.connectLink': DEVICE_CHANNELS.connectApp,
   'chat.mentions': DEVICE_CHANNELS.mentions,
+  'recordings.fromDevice': DEVICE_CHANNELS.recordingNote,
 }

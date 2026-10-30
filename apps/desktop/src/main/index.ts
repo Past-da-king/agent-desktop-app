@@ -1613,6 +1613,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   })
 
   disposeIpc = registerIpc({
+    ...(recordingsStore === null ? {} : { recordings: recordingsStore }),
     store,
     settings,
     secrets,

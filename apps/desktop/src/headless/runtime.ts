@@ -653,6 +653,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   })
 
   const disposeIpc = registerIpc({
+    recordings,
     store,
     settings,
     secrets,

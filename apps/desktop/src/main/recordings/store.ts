@@ -15,14 +15,14 @@
  * once. Running it again does nothing more. `cleanup` deletes audio from before today (the default; a setting) and
  * keeps transcripts and manifests; audio whose words were never had is kept until they are.
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 
 export const SAMPLE_RATE = 16_000
 export const BYTES_PER_SECOND = SAMPLE_RATE * 2
 
-export type RecordingSource = 'mic' | 'shortcut' | 'linked' | 'call'
+export type RecordingSource = 'mic' | 'shortcut' | 'linked' | 'call' | 'phone'
 export type RecordingStatus = 'recording' | 'finished' | 'recovered'
 /** live: words arriving; complete: the final words; partial: some words, the rest could not be had; failed: none. */
 export type TranscriptState = 'none' | 'live' | 'complete' | 'partial' | 'failed'
@@ -34,6 +34,7 @@ export const SOURCE_LABELS: Readonly<Record<RecordingSource, string>> = {
   shortcut: 'dictation shortcut',
   linked: 'microphone on a linked device',
   call: 'voice call',
+  phone: 'phone',
 }
 
 export interface RecordingManifest {
@@ -113,6 +114,33 @@ export interface RecordingsOptions {
   flushMs?: number
   /** A recording whose sender stopped sending this long ago (a linked device went away) is ended. Default 2 min. */
   idleMs?: number
+}
+
+/** What a linked phone tells about one dictation (RPC recordings.fromDevice). */
+export interface PhoneDictationNote {
+  /** The phone's own name for it: yyyymmdd-hhmmss. */
+  stamp: string
+  deviceId: string
+  deviceName: string
+  startedAt: number
+  durationMs: number
+  text: string
+  /** done, kept (some words missing), interrupted (the app ended while it recorded), cancelled. */
+  state: string
+  chat: string | null
+}
+
+/** A note off the wire, checked. Null: not a note. */
+export function phoneDictationNote(raw: unknown, deviceId: string, deviceName: string): PhoneDictationNote | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const r = raw as Record<string, unknown>
+  const stamp = typeof r['id'] === 'string' && /^\d{8}-\d{6}$/.test(r['id']) ? r['id'] : null
+  const startedAt = typeof r['startedAt'] === 'number' && Number.isFinite(r['startedAt']) && r['startedAt'] > 0 ? r['startedAt'] : null
+  const durationMs = typeof r['durationMs'] === 'number' && Number.isFinite(r['durationMs']) && r['durationMs'] >= 0 ? r['durationMs'] : null
+  if (stamp === null || startedAt === null || durationMs === null || typeof r['text'] !== 'string' || r['text'].length > 200_000) return null
+  const state = typeof r['state'] === 'string' && ['done', 'kept', 'interrupted', 'cancelled'].includes(r['state']) ? r['state'] : 'kept'
+  const chat = typeof r['chat'] === 'string' && /^[\w:-]{1,100}$/.test(r['chat']) ? r['chat'] : null
+  return { stamp, deviceId, deviceName, startedAt, durationMs, text: r['text'], state, chat }
 }
 
 export interface RecordingSummary {
@@ -290,6 +318,43 @@ export class Recordings {
       for (const id of ids) out.push({ day, id, dir: join(this.root, day, id) })
     }
     return out
+  }
+
+  /**
+   * A dictation made on a linked phone: its words and times, sent again whenever its words change. The audio stays on
+   * the phone. Never leaves fewer words than it already holds. Returns the recording's id here.
+   */
+  async fromDevice(note: PhoneDictationNote): Promise<string> {
+    const id = `${note.stamp}-${createHash('sha1').update(note.deviceId).digest('hex').slice(0, 4)}`
+    const dir = this.dirOf(id)
+    if (dir === null) throw new Error('recording id')
+    const now = this.now()
+    const before = await readJson<TranscriptFile>(join(dir, 'transcript.json'))
+    const text = before !== null && before.text.length > note.text.length ? before.text : note.text
+    const transcript: TranscriptState = note.state === 'done' ? 'complete' : 'partial'
+    const manifest: RecordingManifest = {
+      v: 1,
+      id,
+      status: 'finished',
+      source: 'phone',
+      chat: note.chat,
+      target: note.deviceName,
+      startedAt: note.startedAt,
+      updatedAt: now,
+      endedAt: note.startedAt + note.durationMs,
+      ended: note.state === 'interrupted' ? 'crashed' : note.state === 'cancelled' ? 'cancelled' : 'done',
+      bytes: Math.round((note.durationMs / 1000) * BYTES_PER_SECOND),
+      chunks: 0,
+      durationMs: note.durationMs,
+      audio: 'none',
+      transcript,
+    }
+    const file: TranscriptFile = { text, interim: '', segments: [], state: transcript, updatedAt: now }
+    await fsp.mkdir(dir, { recursive: true })
+    await writeAtomic(join(dir, 'transcript.json'), JSON.stringify(file))
+    await writeAtomic(join(dir, 'transcript.txt'), text)
+    await writeAtomic(join(dir, 'manifest.json'), JSON.stringify(manifest))
+    return id
   }
 
   private dirOf(id: string): string | null {
