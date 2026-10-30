@@ -29,6 +29,7 @@ import {
 } from '@agent/core'
 
 import { phoneKeepsChatRow } from '../shared/device-feed'
+import { filterRows } from '../shared/list-where'
 import { isLiveHelper, isOpenCard } from '../shared/device-list'
 import { changedFields, currentWriter, versionFields, type MemoryWriter } from './memory/history'
 import { redactDeep } from './vault/redact'
@@ -100,6 +101,11 @@ const UPDATED_AT_ENTITIES: ReadonlySet<EntityName> = new Set(['memory', 'task', 
  * 2026). Chat rows and turns are far too big and are never held.
  */
 const LIST_CACHED: ReadonlySet<EntityName> = new Set(ENTITY_NAMES.filter((each) => each !== 'chat_item' && each !== 'turn'))
+/**
+ * Filtered reads of these are answered from the held list (the scheduler, the offload scan and the job beats read
+ * them every few seconds). Device commands and turn leases are written too often to hold and have their own index.
+ */
+const WHERE_FROM_LIST: ReadonlySet<EntityName> = new Set(['memory', 'goal', 'task', 'trigger', 'project', 'device', 'job', 'prompt_rule', 'wakeup', 'miniapp'])
 
 export class Store implements SyncStore {
   readonly deviceId: string
@@ -331,6 +337,7 @@ export class Store implements SyncStore {
    */
   async listWhere<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>> {
     this.assertEntity(entity)
+    if (WHERE_FROM_LIST.has(entity) && !this.inTransaction && this.batching === null) return filterRows(await this.list(entity), where)
     const query = listWhereSql(entity, where)
     if (query === null) return []
     const rows = this.db.prepare(query.sql).all(...query.args).map(rowFromSql)
