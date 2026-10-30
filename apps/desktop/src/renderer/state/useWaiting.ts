@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { chat } from '../bridge'
 import { cardsForIds, openCards } from '../lib/cards'
-import { useEntity } from './useData'
+import { useCalmEntity, useEntity } from './useData'
 
 /**
  * The cards that are genuinely waiting, straight from `chat.state()`, so a card re-armed after a
@@ -11,7 +11,7 @@ import { useEntity } from './useData'
  * the main process cannot answer.
  */
 export function useWaiting(forChat = false): ChatItem[] {
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   const [ids, setIds] = useState<string[] | null>(null)
 
   useEffect(() => {

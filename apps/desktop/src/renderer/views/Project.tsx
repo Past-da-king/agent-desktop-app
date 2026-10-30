@@ -9,7 +9,7 @@ import { PlaceChip } from '../ui/PlaceChip'
 import { chatList, chatOf, chatStatus, STATUS_LABEL } from '../lib/chats'
 import { short, timeAgo } from '../lib/format'
 import { useChats } from '../state/useChats'
-import { useEntity, useEntityLoaded } from '../state/useData'
+import { useCalmEntity, useEntity, useEntityLoaded } from '../state/useData'
 import { useUi } from '../state/useUi'
 import { toast } from '../state/useToast'
 import { Button } from '../ui/Button'
@@ -140,7 +140,7 @@ function HiddenProjects({ projects }: { projects: ProjectRow[] }): JSX.Element {
 export function Project({ id }: { id: string }): JSX.Element {
   const projects = useEntity('project')
   const loaded = useEntityLoaded('project')
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   const jobs = useEntity('job')
   const devices = useEntity('device')
   const places = useMemo(() => chatPlaces(jobs, devices), [jobs, devices])

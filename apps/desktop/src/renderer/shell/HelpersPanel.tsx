@@ -10,7 +10,7 @@ import { helperCards, helperIdOf, helperOwner, helperView, isHelper, type Helper
 import { metaText, parseMeta } from '../lib/meta'
 import { cardsForChat, helperParentChat } from '../../shared/helper-cards'
 import { useChats } from '../state/useChats'
-import { useEntity } from '../state/useData'
+import { useCalmEntity, useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -79,7 +79,7 @@ function useStop(): { stopping: string | null; stop: (id: string) => void } {
  * until he closes it, the helpers it started under it, and every other helper while it works.
  */
 export function usePanelCards(): HelperCard[] {
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   const projects = useEntity('project')
   const runs = useChats((state) => state.runs)
   return useMemo(() => helperCards(items, projects, { running: (chat) => runs[chat]?.running === true, now: Date.now() }), [items, projects, runs])
@@ -223,7 +223,7 @@ export function HelperCardList({
 
 /** The main chat's card while the main chat works or waits on the person, else null. */
 export function useMainCard(): MainCard | null {
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   const running = useChats((state) => state.runs[MAIN_CHAT]?.running === true)
   const waiting = useWaiting()
   const agentName = useSettings((store) => store.settings?.agentName.trim()) || 'Your agent'
@@ -267,7 +267,7 @@ export function useCurrentChat(): string {
 export function HelperStage(): JSX.Element | null {
   const id = usePanel((store) => store.helper)
   const close = usePanel((store) => store.closeHelper)
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   const projects = useEntity('project')
 
   useEffect(() => {

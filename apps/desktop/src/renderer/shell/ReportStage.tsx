@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 
 import { reportText } from '../lib/report'
 import { ReportBody } from '../openui/ReportBody'
-import { useEntity } from '../state/useData'
+import { useCalmEntity, useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { CopyButton } from '../ui/CopyButton'
 import { Icon } from '../ui/Icon'
@@ -14,7 +14,7 @@ import { Icon } from '../ui/Icon'
 export function ReportStage(): JSX.Element | null {
   const id = usePanel((store) => store.report)
   const close = usePanel((store) => store.closeReport)
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   const row = id === null ? undefined : items.find((item) => item.id === id && item.kind === 'report')
 
   useEffect(() => {

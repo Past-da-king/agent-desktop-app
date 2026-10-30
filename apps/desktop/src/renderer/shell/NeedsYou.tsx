@@ -7,7 +7,7 @@ import { openChat } from '../lib/chat-actions'
 import { chatOf } from '../lib/chats'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { sourceOfChat, type ChatSource } from '../lib/source'
-import { useEntity } from '../state/useData'
+import { useCalmEntity, useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
@@ -96,7 +96,7 @@ export function WaitingCard({ item, source, onOpen }: { item: ChatItem; source: 
  */
 export function NeedsYou(): JSX.Element | null {
   const waiting = useWaiting()
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   const projects = useEntity('project')
   const agentName = useSettings((store) => store.settings?.agentName.trim()) || 'Your agent'
   const closeOverlay = useUi((store) => store.closeOverlay)

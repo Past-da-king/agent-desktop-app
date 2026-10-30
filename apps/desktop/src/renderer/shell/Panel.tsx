@@ -6,7 +6,7 @@ import { skyHopDemo } from '../bridge/seed'
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, browserTucked, displayUrl, openedMode } from '../lib/panel'
 import { cardTarget, openTarget } from '../lib/card-open'
 import { parseMeta, metaStrings } from '../lib/meta'
-import { useEntity } from '../state/useData'
+import { useCalmEntity, useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -61,7 +61,7 @@ function ViewSwitch({ state, disabled }: { state: BrowserState | null; disabled:
 
 /** Answers the open handoff card if there is one, so the agent's waiting browser_handoff returns. */
 function useHandBack(): () => void {
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   return () => {
     const pending = [...items]
       .reverse()

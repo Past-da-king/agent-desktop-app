@@ -11,7 +11,7 @@ import { startChatTracking, useAnyRunning, useChats } from '../state/useChats'
 import { ProjectDialog } from '../views/ProjectDialog'
 import { AllProjects } from './AllProjects'
 import { ProjectTile } from '../ui/ProjectTile'
-import { useEntity } from '../state/useData'
+import { useCalmEntity, useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useRoute, useUi } from '../state/useUi'
 import { Avatar } from '../ui/bits'
@@ -35,7 +35,7 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
   const navigate = useUi((state) => state.navigate)
   const railCollapsed = useUi((state) => state.railCollapsed)
   const toggleRail = useUi((state) => state.toggleRail)
-  const items = useEntity('chat_item')
+  const items = useCalmEntity('chat_item')
   const goals = useEntity('goal')
   const projects = useEntity('project')
   const open = useChats((state) => state.open)

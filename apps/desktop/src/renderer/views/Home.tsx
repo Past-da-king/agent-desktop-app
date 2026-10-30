@@ -7,7 +7,7 @@ import { dueLabel, greeting, nextRun, scheduleLabel, short, timeAgo, todayEyebro
 import { workingHelpers } from '../lib/helpers'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { dueSoon, openUserTasks } from '../lib/tasks'
-import { useEntity, useEntityLoaded } from '../state/useData'
+import { useCalmEntity, useEntity, useEntityLoaded } from '../state/useData'
 import { useRunInfo, lastAgentWork } from '../state/useRun'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
@@ -182,7 +182,7 @@ export function Home(): JSX.Element {
   const setTaskTab = useUi((state) => state.setTaskTab)
   const [editingTask, setEditingTask] = useState<TaskRow | null>(null)
 
-  const chatItems = useEntity('chat_item')
+  const chatItems = useCalmEntity('chat_item')
   const tasks = useEntity('task')
   const goals = useEntity('goal')
   const triggers = useEntity('trigger')

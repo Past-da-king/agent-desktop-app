@@ -1,5 +1,5 @@
 import type { DataChange, EntityMap, EntityName } from '@agent/core'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 
 import { agent } from '../bridge'
@@ -178,6 +178,44 @@ export function useEntity<E extends EntityName>(entity: E): Array<EntityMap[E]> 
     if (!loaded) void useData.getState().load(entity)
   }, [entity, loaded])
 
+  return rows
+}
+
+/** How often a calm view follows its rows at most (useCalmEntity). */
+export const CALM_MS = 400
+
+/**
+ * The rows of an entity for a view off to the side (the helpers panel, the rail, Needs you, Home, a project page):
+ * it follows changes at most once per `ms`, and the last change always shows. Each of these walks every chat row
+ * to work out its cards; with a dozen helpers writing steps that happened dozens of times a second and the window
+ * stopped answering (30 Oct 2026). The open chat keeps useEntity and follows every change.
+ */
+export function useCalmEntity<E extends EntityName>(entity: E, ms = CALM_MS): Array<EntityMap[E]> {
+  const [rows, setRows] = useState(() => useData.getState().rows[entity])
+  const loaded = useData((state) => state.loaded[entity])
+  useEffect(() => {
+    if (!loaded) void useData.getState().load(entity)
+  }, [entity, loaded])
+  useEffect(() => {
+    let last = 0
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const push = (): void => {
+      timer = null
+      last = Date.now()
+      setRows(useData.getState().rows[entity])
+    }
+    push()
+    const off = useData.subscribe((state, prev) => {
+      if (state.rows[entity] === prev.rows[entity] || timer !== null) return
+      const wait = ms - (Date.now() - last)
+      if (wait <= 0) push()
+      else timer = setTimeout(push, wait)
+    })
+    return () => {
+      off()
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [entity, ms])
   return rows
 }
 
