@@ -2,6 +2,8 @@
  * Puts dictation anywhere together for the app: the pill window, the live transcriber with the person's Gemini
  * key, the clean-up model and the paste helper. `index.ts` only creates it and hands it the shortcut manager.
  */
+import { randomBytes } from 'node:crypto'
+
 import { BrowserWindow, ClipboardItem, app, clipboard, type WebContents } from 'electron'
 
 import type { DictationView } from '@agent/core'
@@ -13,7 +15,7 @@ import type { SocketFactory, SocketLike } from '../voice/live'
 import { LIVE_URL } from '../voice/gemini'
 import type { VoiceService } from '../voice/service'
 import { applyAliases, EMPTY_VOCABULARY, vocabularyBrief, type Vocabulary } from '../memory/vocabulary'
-import type { Recordings } from '../recordings/store'
+import type { RecordingHandle, Recordings } from '../recordings/store'
 import { CLEANUP_MODELS, cleanUp } from './cleanup'
 import { DictationController, type BatchResult } from './controller'
 import { transcribeInChunks } from './chunks'
@@ -22,7 +24,7 @@ import { respellNames } from './respell'
 import { electronClipboard, keySenderFor, typeText, type KeySender, type TypeOutcome } from './paste'
 import { PillWindow, type PillOptions } from './pill'
 import { dictationTarget, type DictationSurface } from './target'
-import { insertBounded } from './insert'
+import { BoxDelivery, dictationRoute, type BoxTarget } from './box'
 import { EVENTS } from '../../shared/channels'
 import { safeSend } from '../alive'
 import { LiveTranscriber, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, languageHint, replayRecording } from './transcriber'
@@ -35,6 +37,12 @@ export interface DictationSetup {
   toggleFrom(sender: WebContents, mode: 'plain' | 'clean', chat?: string | null): void
   /** A whole saved recording to text, the way a dictation's fallback does it (bounded by `signal`). */
   transcribe(pcm: Buffer, signal: AbortSignal): Promise<BatchResult>
+  /** The dictation going into the window `sender` belongs to, for a window that just reloaded. */
+  currentFor(sender: unknown): DictationView | null
+  /** A window says whether the words it was sent are really there. */
+  boxResult(sender: unknown, id: string, ok: boolean): void
+  /** The list of dictations to offer back changed: every window of the app reads it again. */
+  undeliveredChanged(): void
   dispose(): void
 }
 
@@ -53,7 +61,7 @@ export interface DictationSetupDeps {
   /** More words the person says that should be spelled right: project names, their own name. */
   extraWords?: () => Promise<string[]>
   /** Every dictation written to disk as it happens (recordings/store.ts). */
-  recordings?: Pick<Recordings, 'begin'>
+  recordings?: Pick<Recordings, 'begin' | 'setDelivery'>
 }
 
 /** Node's own WebSocket (Node 22+, so Electron's main process has it). */
@@ -104,6 +112,10 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
   let recordAs: { source: 'mic' | 'shortcut'; chat: string | null } = { source: 'shortcut', chat: null }
   // Into one of those windows ('app': its strip shows the words, never the pill), or into another app ('pill').
   let surface: DictationSurface = 'pill'
+  // This dictation on disk, for its delivery; null when nothing is written.
+  let recording: RecordingHandle | null = null
+  // Words on their way into a window, until it says they are there.
+  const box = new BoxDelivery(EVENTS.dictationBoxText)
   const focusedOwn = (): BrowserWindow | null => {
     const focused = BrowserWindow.getFocusedWindow()
     return focused !== null && !focused.isDestroyed() && !pill.isPill(focused.webContents.id) ? focused : null
@@ -124,10 +136,18 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
   }
   void refreshWords()
 
+  const withChat = (view: DictationView): DictationView => ({ ...view, chat: recordAs.source === 'mic' ? recordAs.chat : null })
+  const undeliveredChanged = (): void => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed() && !pill.isPill(window.webContents.id)) safeSend(window, EVENTS.dictationUndelivered, null)
+    }
+  }
   const sendDraft = (view: DictationView): void => {
     const target = draftTarget
-    safeSend(target, EVENTS.dictationDraft, view)
+    safeSend(target, EVENTS.dictationDraft, withChat(view))
     if (view.phase === 'hidden') draftTarget = null
+    // A dictation that ended without its words landing may have left something to offer back.
+    if (view.phase === 'error' || view.phase === 'notice') undeliveredChanged()
   }
   const pillWithDraft = {
     show: () => pill.show(),
@@ -160,8 +180,11 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
       void refreshWords()
     },
     surface: () => surface,
-    record: (where) =>
-      deps.recordings?.begin({ source: recordAs.source, chat: recordAs.chat, target: where === 'app' ? 'this app' : 'another app' }) ?? null,
+    record: (where) => {
+      recording =
+        deps.recordings?.begin({ source: recordAs.source, chat: recordAs.chat, target: where === 'app' ? 'this app' : 'another app', ...(where === 'app' ? { delivery: 'pending' as const } : {}) }) ?? null
+      return recording
+    },
     hasKey: () => key() !== null,
     transcriber: (handlers) =>
       new LiveTranscriber({
@@ -256,26 +279,49 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     })
   }
 
-  async function typeInto(text: string): Promise<TypeOutcome | 'inserted'> {
-    // Into one of the app's own windows (the quick chat box, the composer): no clipboard needed.
-    const target = ownTarget !== null && !ownTarget.isDestroyed() && ownTarget.isVisible() ? ownTarget : focusedOwn()
+  /**
+   * The words into a window, confirmed by that window. Never `insertText` into whatever has the focus: that reports
+   * success with no field in front, or with the cursor in the wrong one (30 Oct 2026: 1,980 characters "inserted").
+   */
+  async function intoWindow(target: BrowserWindow | null, into: 'box' | 'here', chat: string | null, text: string): Promise<'inserted' | 'unconfirmed'> {
+    const id = recording?.id ?? `d-${randomBytes(4).toString('hex')}`
+    const contents = target !== null && !target.isDestroyed() ? target.webContents : null
+    const result = contents === null ? 'gone' : await box.deliver(contents as unknown as BoxTarget, { id, into, chat, text })
+    if (result === 'confirmed') {
+      await confirmed(contents, recording)
+      return 'inserted'
+    }
+    deps.log('Dictation words not confirmed by the window', { result, into, characters: text.length })
+    return 'unconfirmed'
+  }
+
+  async function confirmed(contents: WebContents | null, handle: RecordingHandle | null): Promise<void> {
+    try {
+      // What the window just stored goes to disk before the recording stops being offered back.
+      await contents?.session.flushStorageData()
+    } catch {
+      // Chromium writes it itself a moment later.
+    }
+    await handle?.delivered('confirmed')
+  }
+
+  async function typeInto(text: string): Promise<TypeOutcome | 'inserted' | 'unconfirmed'> {
+    const own = ownTarget !== null && !ownTarget.isDestroyed() && ownTarget.isVisible() ? ownTarget : focusedOwn()
+    const route = dictationRoute({ source: recordAs.source, chat: recordAs.chat, ownWindow: own !== null })
+    if (route.to === 'box') {
+      // The message box's microphone: that chat's draft, whatever is on screen and wherever the cursor is.
+      return intoWindow(ownTarget, 'box', route.chat, text)
+    }
     ownTarget = null
-    if (target !== null) {
-      if (!target.isFocused()) target.focus()
-      // Bounded: a renderer that crashes mid-insert must never leave dictation stuck in typing.
-      const result = await insertBounded(target.webContents, text)
-      if (result === 'inserted') return 'inserted'
-      deps.log('Dictation insert did not land, copied instead', { result, characters: text.length })
-      try {
-        clipboard.writeText(text)
-      } catch {
-        // The words are still kept with the recording on disk.
-      }
-      return 'copied'
+    if (route.to === 'here' && own !== null) {
+      if (!own.isFocused()) own.focus()
+      return intoWindow(own, 'here', null, text)
     }
     const started = Date.now()
     const outcome = await typeText(text, { clipboard: board, keys })
     deps.log('Dictation paste', { outcome, ms: Date.now() - started })
+    // The shortcut started in this app and he moved to another: the words went there.
+    if (outcome === 'pasted') await recording?.delivered('confirmed')
     return outcome
   }
 
@@ -292,6 +338,20 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
       controller.toggle(mode)
     },
     transcribe: (pcm, signal) => batch(pcm, signal),
+    currentFor: (sender) => {
+      if (draftTarget === null || draftTarget.isDestroyed() || draftTarget.webContents !== sender) return null
+      const view = controller.currentView()
+      return view.phase === 'hidden' ? null : withChat(view)
+    },
+    boxResult: (sender, id, ok) => {
+      if (box.answer(id, ok) || !ok) return
+      // The answer came after the limit: the words are there after all, so they stop being offered back.
+      deps.log('Dictation words confirmed late', { id })
+      void confirmed(sender as WebContents, null)
+        .then(() => deps.recordings?.setDelivery(id, 'confirmed'))
+        .then(undeliveredChanged)
+    },
+    undeliveredChanged,
     dispose: () => {
       controller.dispose()
       pill.destroy()

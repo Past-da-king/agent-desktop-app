@@ -231,6 +231,11 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'dictation.toggle': no('Start or stop dictating', MICROPHONE),
   'dictation.cancel': no('Cancel dictating', MICROPHONE),
   'dictation.retry': no('Try the last dictation again', MICROPHONE),
+  'dictation.current': no('The dictation going into this window', WINDOW_PLUMBING),
+  'dictation.boxResult': no('A window confirms the words of a dictation landed', WINDOW_PLUMBING),
+  'dictation.undelivered': no('Dictations the message box offers back (recordings_list has them all)', WINDOW_PLUMBING),
+  'dictation.settle': no('A recording offered back was inserted or put away', WINDOW_PLUMBING),
+  'dictation.flushDrafts': no('Message box drafts go to disk now', WINDOW_PLUMBING),
   // About
   'app.info': free('This app: version, folders (Settings > About)'),
   'app.openLogsFolder': free('Open the logs folder (Settings > About)'),

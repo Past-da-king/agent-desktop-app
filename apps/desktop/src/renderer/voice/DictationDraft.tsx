@@ -1,13 +1,9 @@
-import type { DictationView } from '@agent/core'
-import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
 import { clock, useTicker } from '../dictation/clock'
+import { dictationHere, useDictationDraft } from './dictationBox'
 
-/** True on the computer itself, where dictation runs through the main process (live words, limits, Retry). */
-export function dictationHere(): boolean {
-  return agent.platform !== 'web' && agent.remote === undefined
-}
+export { dictationHere, useDictationDraft }
 
 const MAX_SHOWN = 420
 /** The quick chat box has one line for it. */
@@ -21,22 +17,14 @@ export function lastWords(text: string, max: number): string {
   return `…${space > 0 && space < 24 ? cut.slice(space + 1) : cut}`
 }
 
-/** The dictation going into this window, or null when there is none. */
-export function useDictationDraft(): DictationView | null {
-  const [view, setView] = useState<DictationView | null>(null)
-  useEffect(() => {
-    if (!dictationHere()) return
-    return agent.dictation.onDraft((next) => setView(next.phase === 'hidden' ? null : next))
-  }, [])
-  return view
-}
-
 /**
  * The words of a dictation into this window while they are said, above the message box, the way the phone
  * shows them: settled words, then the guess still being heard in a lighter tone. While the words are worked out
  * it counts the seconds; when they could not be had it says why and offers Retry with the kept recording.
+ * With `chat`, a dictation for that chat's box shows its words in the box itself, so here only its state and clock;
+ * one for another chat says so.
  */
-export function DictationDraft({ compact = false }: { compact?: boolean } = {}): JSX.Element | null {
+export function DictationDraft({ compact = false, chat }: { compact?: boolean; chat?: string } = {}): JSX.Element | null {
   const view = useDictationDraft()
   const active = view !== null && view.since !== undefined && ['starting', 'listening', 'finishing', 'cleaning'].includes(view.phase)
   const now = useTicker(active)
@@ -47,9 +35,14 @@ export function DictationDraft({ compact = false }: { compact?: boolean } = {}):
   const said = lastWords(view.text.trim(), Math.max(0, (compact ? MAX_SHOWN_COMPACT : MAX_SHOWN) - guess.length))
   const listening = view.phase === 'listening' || view.phase === 'starting'
   const working = view.phase === 'finishing' || view.phase === 'cleaning'
+  const forABox = chat !== undefined && typeof view.chat === 'string'
 
   let body: JSX.Element
-  if (listening || working) {
+  if (forABox && view.chat !== chat && (listening || working)) {
+    body = <span className="dd-hint">Recording for another chat. The words go to that chat's message box.</span>
+  } else if (forABox && (listening || working)) {
+    body = <span className="dd-hint">{view.phase === 'starting' ? 'Getting the microphone ready' : listening ? 'Listening' : 'Transcribing'}</span>
+  } else if (listening || working) {
     const empty = said === '' && guess === ''
     body = (
       <span className="dd-words">

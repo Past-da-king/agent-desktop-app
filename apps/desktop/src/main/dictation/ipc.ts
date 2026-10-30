@@ -2,7 +2,7 @@
  * The hotkeys and dictation halves of `AgentApi` over IPC, kept apart from main/ipc.ts so they do not touch
  * the shared handlers. Arguments are checked: the renderer is untrusted.
  */
-import type { HotkeyStatus } from '@agent/core'
+import type { DictationView, HotkeyStatus, UndeliveredDictation } from '@agent/core'
 
 import { CHANNELS } from '../../shared/channels'
 import type { IpcMainLike } from '../ipc'
@@ -21,6 +21,14 @@ export interface DictationIpcDeps {
   toggle: (sender: unknown, mode: 'plain' | 'clean', chat: string | null) => void
   cancel: () => void
   retry: () => void
+  /** The dictation going into the window `sender` belongs to, for a window that just reloaded. */
+  current: (sender: unknown) => DictationView | null
+  /** A window's answer about words it was sent. */
+  boxResult: (sender: unknown, id: string, ok: boolean) => void
+  undelivered: () => Promise<UndeliveredDictation[]>
+  settle: (id: string, how: 'confirmed' | 'dismissed') => Promise<void>
+  /** What the window `sender` stored goes to disk now. */
+  flushDrafts: (sender: unknown) => void
 }
 
 export function registerDictationIpc(deps: DictationIpcDeps, ipcMain: IpcMainLike & Partial<IpcMainOnLike>): void {
@@ -47,6 +55,19 @@ export function registerDictationIpc(deps: DictationIpcDeps, ipcMain: IpcMainLik
   })
   ipcMain.handle(CHANNELS.dictation.retry, async () => {
     deps.retry()
+  })
+  ipcMain.handle(CHANNELS.dictation.current, async (event) => deps.current((event as { sender?: unknown } | null)?.sender ?? null))
+  ipcMain.handle(CHANNELS.dictation.boxResult, async (event, id, ok) => {
+    if (typeof id !== 'string' || id.length > 100) throw new Error('id must be a string')
+    deps.boxResult((event as { sender?: unknown } | null)?.sender ?? null, id, ok === true)
+  })
+  ipcMain.handle(CHANNELS.dictation.undelivered, async () => deps.undelivered())
+  ipcMain.handle(CHANNELS.dictation.flushDrafts, async (event) => {
+    deps.flushDrafts((event as { sender?: unknown } | null)?.sender ?? null)
+  })
+  ipcMain.handle(CHANNELS.dictation.settle, async (_event, id, how) => {
+    if (typeof id !== 'string' || id.length > 100) throw new Error('id must be a string')
+    await deps.settle(id, how === 'confirmed' ? 'confirmed' : 'dismissed')
   })
 
   // Audio chunks are fire and forget (ipcRenderer.send), about ten a second.

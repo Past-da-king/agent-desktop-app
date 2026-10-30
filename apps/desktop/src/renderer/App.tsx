@@ -44,6 +44,7 @@ import { Palette } from './shell/Palette'
 import { QuickAsk } from './shell/QuickAsk'
 import { QuickWindow } from './shell/QuickWindow'
 import { DictationPill } from './dictation/DictationPill'
+import { startDictationBox } from './voice/dictationBox'
 import { Shell } from './shell/Shell'
 import { TitleBar } from './shell/TitleBar'
 import { TipLayer } from './ui/TipLayer'
@@ -213,6 +214,8 @@ export function App(): JSX.Element {
 
   // The small windows know what they are from their address, before settings have loaded.
   const own = parseHash(window.location.hash)?.page
+  // Words of a dictation land here whatever is on screen; the pill's window only holds the microphone.
+  useEffect(() => (own === 'dictation' ? undefined : startDictationBox(own !== 'quick-window')), [own])
   if (route.page === 'dictation' || own === 'dictation') {
     return <DictationPill />
   }

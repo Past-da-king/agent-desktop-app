@@ -28,6 +28,7 @@ export type RecordingStatus = 'recording' | 'finished' | 'recovered'
 export type TranscriptState = 'none' | 'live' | 'complete' | 'partial' | 'failed'
 /** today: audio until the end of the day it was made; week: seven days; always: never deleted. */
 export type AudioKeep = 'today' | 'week' | 'always'
+export type DeliveryState = 'pending' | 'confirmed' | 'dismissed'
 
 export const SOURCE_LABELS: Readonly<Record<RecordingSource, string>> = {
   mic: 'message box microphone',
@@ -63,6 +64,11 @@ export interface RecordingManifest {
   transcribeTries?: number
   /** The quiet notice about a recovered recording went out. */
   noticed?: boolean
+  /**
+   * For a dictation into this app's message box: pending until the window confirmed the words are in the draft.
+   * A finished one still pending is offered back by the box, also after a restart. Left out: not that kind.
+   */
+  delivery?: DeliveryState
 }
 
 export interface TranscriptFile {
@@ -87,8 +93,10 @@ export interface RecordingHandle {
   stop(ended?: RecordingManifest['ended']): Promise<void>
   /** The final words. */
   final(text: string): Promise<void>
-  /** The words could not be had (the audio is kept). */
-  failed(error: string): Promise<void>
+  /** The words could not be had (the audio is kept). `cancelled`: he stopped it, so it is not offered back. */
+  failed(error: string, cancelled?: boolean): Promise<void>
+  /** The window confirmed the words are in the box, or it was put away. */
+  delivered(state: Exclude<DeliveryState, 'pending'>): Promise<void>
   /** Every write so far is on disk. */
   flushed(): Promise<void>
 }
@@ -175,6 +183,8 @@ const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 /** A batch transcription takes at most this much audio per call; longer recordings go in pieces. */
 const PIECE_BYTES = BYTES_PER_SECOND * 60 * 4
 const MAX_TRIES = 3
+/** How far back a dictation that never reached its box is still offered back; it stays in Recordings for good. */
+const UNDELIVERED_DAYS = 30
 
 /** Local calendar day of `ms`, yyyy-mm-dd. */
 export function dayKey(ms: number): string {
@@ -261,7 +271,7 @@ export class Recordings {
   }
 
   /** Starts a recording on disk. Never throws: a recording that cannot be written still lets the microphone work. */
-  begin(info: { source: RecordingSource; chat?: string | null; target?: string }): RecordingHandle {
+  begin(info: { source: RecordingSource; chat?: string | null; target?: string; delivery?: 'pending' }): RecordingHandle {
     const startedAt = this.now()
     const date = new Date(startedAt)
     const id = `${dayKey(startedAt).replace(/-/g, '')}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}-${randomBytes(2).toString('hex')}`
@@ -280,6 +290,7 @@ export class Recordings {
       durationMs: 0,
       audio: 'chunks',
       transcript: 'none',
+      ...(info.delivery === undefined ? {} : { delivery: info.delivery }),
     }
     const recorder = new Recorder({ dir, manifest, now: this.now, log: this.log, flushMs: this.flushMs, idleMs: this.idleMs, done: () => this.live.delete(id) })
     this.live.set(id, recorder)
@@ -509,6 +520,41 @@ export class Recordings {
       manifest = { ...manifest, noticed: true, updatedAt: this.now() }
       await writeAtomic(manifestPath, JSON.stringify(manifest, null, 1))
     }
+  }
+
+  // ---- words that never reached the message box --------------------------------------------------------------
+
+  /**
+   * Finished dictations whose words the window never confirmed, newest first: what the message box offers back.
+   * One still on its way (recording, or waiting for its words) is not listed, nor one he cancelled, nor one with no
+   * words (yet: upkeep may still get them from the audio).
+   */
+  async undelivered(withinDays = UNDELIVERED_DAYS): Promise<Array<{ id: string; chat: string | null; text: string; startedAt: number; durationMs: number }>> {
+    const oldest = dayKey(this.now() - withinDays * 86_400_000)
+    const out: Array<{ id: string; chat: string | null; text: string; startedAt: number; durationMs: number }> = []
+    for (const folder of await this.folders()) {
+      if (folder.day < oldest) break
+      if (this.live.has(folder.id)) continue
+      const manifest = await readJson<RecordingManifest>(join(folder.dir, 'manifest.json'))
+      if (manifest === null || manifest.delivery !== 'pending' || manifest.status === 'recording' || manifest.ended === 'cancelled') continue
+      const transcript = await readJson<TranscriptFile>(join(folder.dir, 'transcript.json'))
+      const text = (transcript?.text ?? '').trim()
+      if (text === '') continue
+      out.push({ id: folder.id, chat: manifest.chat, text, startedAt: manifest.startedAt, durationMs: manifest.durationMs })
+    }
+    return out
+  }
+
+  /** Marks a recording's words as in a box, or put away. A recording that is gone needs nothing. */
+  async setDelivery(id: string, state: Exclude<DeliveryState, 'pending'>): Promise<void> {
+    const open = this.live.get(id)
+    if (open !== undefined) return open.delivered(state)
+    const dir = this.dirOf(id)
+    if (dir === null) return
+    const path = join(dir, 'manifest.json')
+    const manifest = await readJson<RecordingManifest>(path)
+    if (manifest === null || manifest.delivery === state) return
+    await writeAtomic(path, JSON.stringify({ ...manifest, delivery: state, updatedAt: this.now() }, null, 1))
   }
 
   // ---- retention ---------------------------------------------------------------------------------------------
@@ -744,7 +790,7 @@ class Recorder implements RecordingHandle {
       state: 'complete',
       updatedAt: this.now(),
     }
-    this.manifest = { ...this.manifest, transcript: 'complete', updatedAt: this.now() }
+    this.manifest = { ...this.manifest, transcript: 'complete', updatedAt: this.now(), ...(this.manifest.delivery === 'dismissed' ? { delivery: 'pending' as const } : {}) }
     delete this.manifest.transcriptError
     await this.run(async () => {
       await writeTranscript(this.dir, this.transcript)
@@ -753,11 +799,24 @@ class Recorder implements RecordingHandle {
     this.done()
   }
 
-  async failed(error: string): Promise<void> {
+  async delivered(state: Exclude<DeliveryState, 'pending'>): Promise<void> {
+    if (this.manifest.delivery === undefined) return
+    this.manifest = { ...this.manifest, delivery: state, updatedAt: this.now() }
+    await this.run(() => this.writeManifest())
+  }
+
+  async failed(error: string, cancelled = false): Promise<void> {
     if (this.stopped === null) await this.stop('failed')
     const state: TranscriptState = this.transcript.text.trim() === '' ? 'failed' : 'partial'
     this.transcript = { ...this.transcript, interim: '', state, updatedAt: this.now() }
-    this.manifest = { ...this.manifest, transcript: state, transcriptError: error.slice(0, 300), updatedAt: this.now() }
+    this.manifest = {
+      ...this.manifest,
+      transcript: state,
+      transcriptError: error.slice(0, 300),
+      updatedAt: this.now(),
+      // Cancelled on purpose: not offered back. A Retry that finds the words makes it pending again.
+      ...(cancelled && this.manifest.delivery !== undefined ? { delivery: 'dismissed' as const } : {}),
+    }
     await this.run(async () => {
       await writeTranscript(this.dir, this.transcript)
       await this.writeManifest()

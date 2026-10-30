@@ -14,6 +14,9 @@
  * Finishing never waits for ever: it has a hard limit that grows with the recording, the pill counts the seconds,
  * and when the words cannot be had (an error, the limit, Esc) the recording is kept so Retry can send it again.
  *
+ * The message box's microphone never types at a cursor: its words go to the draft of the chat it belongs to, and count
+ * as added only when that window confirmed it (box.ts). Only the shortcut types into another app.
+ *
  * The pill is only for dictating into OTHER apps. A dictation into one of the app's own windows (its message box
  * microphone, or the shortcut while that window is in front) shows only that window's strip: the pill never
  * shows for it, not while listening, finishing, failing or retrying (see target.ts for the rule).
@@ -59,8 +62,11 @@ export interface DictationDeps {
   cleanUp: (text: string) => Promise<string>
   /** Puts names memory knows were mis-heard right (memory/vocabulary.ts), on every dictation. */
   fixNames?: (text: string) => Promise<string>
-  /** Types the words where the cursor is. 'inserted' means straight into one of the app's own windows. */
-  type: (text: string) => Promise<TypeOutcome | 'inserted'>
+  /**
+   * Puts the words where they go. 'inserted' only when the window confirmed they are there; 'unconfirmed' when it did
+   * not, and the recording is offered back by the message box.
+   */
+  type: (text: string) => Promise<TypeOutcome | 'inserted' | 'unconfirmed'>
   /** Hides a held Alt from the app in front (Windows); called on every shortcut press. */
   mask: () => void
   pill: PillLike
@@ -102,7 +108,7 @@ export interface RecordingSink {
   words(text: string, interim?: string): void
   stop(ended?: 'done' | 'cancelled' | 'failed'): Promise<void>
   final(text: string): Promise<void>
-  failed(error: string): Promise<void>
+  failed(error: string, cancelled?: boolean): Promise<void>
 }
 
 type State = 'idle' | 'starting' | 'listening' | 'finishing' | 'cleaning' | 'typing'
@@ -270,7 +276,7 @@ export class DictationController {
       }
       this.log('Dictation cancelled while finishing', { ms: since })
       this.keep(session)
-      void session.rec?.failed('Cancelled while the words were coming.')
+      void session.rec?.failed('Cancelled while the words were coming.', true)
       session.abort?.abort(new Error('Cancelled.'))
       session.transcriber.close()
       this.finishSession(session)
@@ -601,7 +607,7 @@ export class DictationController {
     // The words are kept with the recording before they are typed.
     void session.rec?.final(text)
     // Typing is not cancelled half way; Esc after this point is too late.
-    let outcome: TypeOutcome | 'inserted' | 'stuck' = 'copied'
+    let outcome: TypeOutcome | 'inserted' | 'unconfirmed' | 'stuck' = 'copied'
     let typeTimer: ReturnType<typeof setTimeout> | null = null
     try {
       outcome = await Promise.race([
@@ -621,6 +627,12 @@ export class DictationController {
       this.log('Dictation typing never finished', { characters: text.length, ms: this.now() - session.phaseSince })
       this.end(session)
       this.flash('error', 'Could not type it. The words are kept in Recordings.', RETRY_SHOW_MS)
+      return
+    }
+    if (outcome === 'unconfirmed') {
+      this.log('Dictation not confirmed, offered back by the message box', { characters: text.length, ms: this.now() - session.phaseSince })
+      this.end(session)
+      this.flash('notice', 'The words did not reach the message box.', 4000)
       return
     }
     this.log('Dictation typed', { outcome, characters: text.length, clean: session.clean, ms: this.now() - session.phaseSince })

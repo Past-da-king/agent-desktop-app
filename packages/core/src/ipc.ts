@@ -1107,6 +1107,27 @@ export interface DictationView {
   limitMs?: number
   /** The recording was kept: clicking the pill, or Retry in the message box, transcribes it again. */
   canRetry?: boolean
+  /** The chat whose message box microphone started it: the words go to that chat's box. Null: the shortcut. */
+  chat?: string | null
+}
+
+/** A dictation's final words, on their way into a window. The window answers with `dictation.boxResult`. */
+export interface DictationBoxText {
+  /** The recording, or a one-off id when none is written. */
+  id: string
+  /** box: that chat's draft, whatever is on screen. here: the field in front in this window (the shortcut). */
+  into: 'box' | 'here'
+  chat: string | null
+  text: string
+}
+
+/** A finished dictation whose words never reached a message box. */
+export interface UndeliveredDictation {
+  id: string
+  chat: string | null
+  text: string
+  startedAt: number
+  durationMs: number
 }
 
 /** What the main process asks of the pill window's microphone. */
@@ -1967,8 +1988,8 @@ export interface AgentApi {
     onCommand(cb: (command: DictationCommand) => void): Unsubscribe
     onView(cb: (view: DictationView) => void): Unsubscribe
     /**
-     * The message box's microphone: start a dictation into this window, or stop the one that is running. The
-     * words show in the box while they are said and are typed at its cursor at the end.
+     * The message box's microphone: start a dictation for this chat's box, or stop the one that is running. The
+     * words show in the box while they are said and go into that chat's draft at the end, wherever the cursor is.
      */
     toggle(mode: 'plain' | 'clean', chat?: string): Promise<void>
     /** Esc: stop listening or stop waiting for the words, and type nothing. */
@@ -1977,6 +1998,19 @@ export interface AgentApi {
     retry(): Promise<void>
     /** The dictation going into this window: its words while they are said, its counter, its errors. */
     onDraft(cb: (view: DictationView) => void): Unsubscribe
+    /** The dictation going into this window right now (a window that just reloaded), or null. */
+    current(): Promise<DictationView | null>
+    /** Final words for this window. It puts them in place, reads them back and answers with `boxResult`. */
+    onBoxText(cb: (message: DictationBoxText) => void): Unsubscribe
+    /** Whether the words of `onBoxText` are really there. */
+    boxResult(id: string, ok: boolean): Promise<void>
+    /** Finished dictations whose words never reached a message box, newest first, also from before a restart. */
+    undelivered(): Promise<UndeliveredDictation[]>
+    onUndelivered(cb: () => void): Unsubscribe
+    /** One of those was put in a box (confirmed) or put away (dismissed). */
+    settle(id: string, how: 'confirmed' | 'dismissed'): Promise<void>
+    /** The drafts of the message boxes go to disk now, not when the browser engine gets round to it. */
+    flushDrafts(): Promise<void>
   }
   /** New Chat filing, past chats and the memory import. */
   memory: MemoryApi

@@ -618,3 +618,45 @@ describe('DictationController: the pill only for dictating into other apps', () 
     expect(h.pill.at(-1)).toBe('show')
   })
 })
+
+describe('words that did not reach the window', () => {
+  it('are never reported as typed: the log and the message say so, and the dictation ends', async () => {
+    vi.useFakeTimers()
+    try {
+      const logs: string[] = []
+      const views: DictationView[] = []
+      const transcriber: TranscriberLike = {
+        start: () => Promise.resolve(),
+        audio: () => undefined,
+        finish: () => Promise.resolve('words he said'),
+        flush: () => undefined,
+        close: () => undefined,
+        text: () => 'words he said',
+      }
+      const controller = new DictationController({
+        hasKey: () => true,
+        transcriber: () => transcriber,
+        batch: () => Promise.resolve({ ok: false, error: 'unused' }),
+        cleanUp: (text) => Promise.resolve(text),
+        type: () => Promise.resolve('unconfirmed'),
+        mask: () => undefined,
+        pill: { show: () => undefined, hide: () => undefined, view: (view) => void views.push(view), command: () => undefined },
+        hold: () => null,
+        keys: () => ({ dictate: '', cleanSwitch: null }),
+        format: (accelerator) => accelerator,
+        log: (message) => void logs.push(message),
+      })
+      controller.toggle('plain')
+      await vi.advanceTimersByTimeAsync(0)
+      controller.micState(1, true, '')
+      controller.toggle('plain')
+      await vi.advanceTimersByTimeAsync(10)
+      expect(controller.phase).toBe('idle')
+      expect(logs).toContain('Dictation not confirmed, offered back by the message box')
+      expect(logs).not.toContain('Dictation typed')
+      expect(views.at(-1)?.message).toBe('The words did not reach the message box.')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

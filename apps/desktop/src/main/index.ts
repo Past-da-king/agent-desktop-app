@@ -1726,6 +1726,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
       },
       log: (message, fields) => logger.info(message, fields),
     })
+    // Recordings the last run left behind have their words now: the message box offers back any never added.
+    void recordingsUpkeep.done.then(() => dictation?.undeliveredChanged())
   }
   registerDictationIpc(
     {
@@ -1742,6 +1744,15 @@ async function startServices(win: BrowserWindow): Promise<void> {
       },
       cancel: () => dictation?.controller.cancel(),
       retry: () => void dictation?.controller.retry(),
+      current: (sender) => dictation?.currentFor(sender) ?? null,
+      boxResult: (sender, id, ok) => dictation?.boxResult(sender, id, ok),
+      undelivered: async () => (await recordingsStore?.undelivered()) ?? [],
+      flushDrafts: (sender) => (sender as Electron.WebContents | null)?.session?.flushStorageData(),
+      settle: async (id, how) => {
+        await recordingsStore?.setDelivery(id, how)
+        logger.info('Dictation offered back: settled', { id, how })
+        dictation?.undeliveredChanged()
+      },
     },
     ipcMain,
   )

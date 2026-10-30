@@ -476,6 +476,13 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       cancel: async () => undefined,
       retry: async () => undefined,
       onDraft: noop,
+      current: async () => null,
+      onBoxText: noop,
+      boxResult: async () => undefined,
+      undelivered: async () => [],
+      onUndelivered: noop,
+      settle: async () => undefined,
+      flushDrafts: async () => undefined,
     },
 
     memory: {

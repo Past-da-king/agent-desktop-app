@@ -1,12 +1,14 @@
-import { attachmentProblem, type Attachment } from '@agent/core'
-import { memo, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, type CSSProperties, type ClipboardEvent } from 'react'
+import { MAIN_CHAT, attachmentProblem, type Attachment } from '@agent/core'
+import { memo, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, forwardRef, type CSSProperties, type ClipboardEvent } from 'react'
 
 import { agent, chat } from '../bridge'
+import { draftFromBox, joinDraft } from '../../shared/box-draft'
 import { chipFromPick, chipFromTyping, chipOf, mentionAtCaret, mentionDone, mentionProjects, rankMentions, withChip, type MentionProject } from '../../shared/mentions'
 import { toneStyle } from '../lib/profiles'
 import { ProjectTile } from '../ui/ProjectTile'
 import { useEntity } from '../state/useData'
 import { useChatRunning } from '../state/useChats'
+import { useDrafts } from '../state/useDrafts'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
@@ -14,8 +16,12 @@ import { IconButton, Kbd } from '../ui/bits'
 import { Icon } from '../ui/Icon'
 import { DictateButton } from '../voice/DictateButton'
 import { DictationDraft } from '../voice/DictationDraft'
+import { isEditable, useDictationDraft } from '../voice/dictationBox'
+import { RecoverChips } from '../voice/RecoverChips'
 import { AttachmentChip } from './AttachmentChip'
 import { MentionPicker } from './MentionPicker'
+
+const NO_FILES: Attachment[] = []
 
 /** Pasted text longer than this goes along as a text file instead of filling the composer (and the message limit). */
 const LONG_PASTE_CHARS = 12_000
@@ -71,8 +77,18 @@ export const Composer = memo(
     const hasVoiceKey = useSettings((state) => state.settings?.hasVoiceKey === true)
     const focusToken = useUi((state) => state.composerFocus)
     const running = useChatRunning(chatId)
-    const [text, setText] = useState('')
-    const [attachments, setAttachments] = useState<Attachment[]>([])
+    // The draft lives per chat outside this box, on disk at every change: a dictation can reach it from anywhere.
+    const text = useDrafts((state) => state.texts[chatId] ?? '')
+    const attachments = useDrafts((state) => state.files[chatId] ?? NO_FILES)
+    const addedToDraft = useDrafts((state) => state.added[chatId] ?? 0)
+    const setText = (next: string): void => useDrafts.getState().setText(chatId, next)
+    const setAttachments = (next: Attachment[] | ((current: Attachment[]) => Attachment[])): void => {
+      const store = useDrafts.getState()
+      store.setFiles(chatId, typeof next === 'function' ? next(store.files[chatId] ?? NO_FILES) : next)
+    }
+    const dictation = useDictationDraft()
+    const dictatingHere = dictation !== null && dictation.chat === chatId && ['starting', 'listening', 'finishing', 'cleaning'].includes(dictation.phase)
+    const live = dictatingHere ? [dictation.text.trim(), dictation.interim.trim()].filter((part) => part !== '').join(' ') : ''
     const [attachProblem, setAttachProblem] = useState('')
     const [reading, setReading] = useState(false)
     const composer = useRef<HTMLTextAreaElement>(null)
@@ -85,7 +101,9 @@ export const Composer = memo(
     // The message stays '@Name words' (what the computer routes); the box shows the project as a chip in front.
     const chip = chipOf(text, projects)
     const words = chip === null ? text : chip.rest
-    const typing = mentionAtCaret(words, caret)
+    // The words still being heard show in the box after his text; they join the draft when they are final.
+    const shown = joinDraft(words, live)
+    const typing = live === '' ? mentionAtCaret(words, caret) : null
     const picks: MentionProject[] = typing === null || typing.start === dismissedAt || mentionDone(typing.query, projects) ? [] : rankMentions(typing.query, projects, 6)
     const picking = picks.length > 0
     const active = Math.min(pickIndex, Math.max(0, picks.length - 1))
@@ -124,18 +142,97 @@ export const Composer = memo(
       if (!area) return
       area.style.height = '48px'
       area.style.height = `${Math.min(area.scrollHeight, 140)}px`
-    }, [text])
+    }, [shown])
+
+    // Another chat's box: the cursor at the end of its own draft, nothing of the last chat's '@' list.
+    useEffect(() => {
+      const end = useDrafts.getState().texts[chatId]?.length ?? 0
+      setCaret(end)
+      setDismissedAt(-1)
+      composer.current?.setSelectionRange(end, end)
+    }, [chatId])
+
+    /** The cursor into the box, unless he is typing in another field or selecting text to copy. */
+    const takeCursor = (): void => {
+      const area = composer.current
+      if (area === null || document.activeElement === area) return
+      if (isEditable(document.activeElement)) return
+      const selection = window.getSelection()
+      if (selection !== null && !selection.isCollapsed) return
+      area.focus()
+      area.setSelectionRange(area.value.length, area.value.length)
+    }
+
+    // While a dictation for this box runs the cursor stays in it, and comes back when it ends or the words land.
+    const dictatingNow = useRef(dictatingHere)
+    dictatingNow.current = dictatingHere
+    useEffect(() => {
+      if (!dictatingHere) return
+      takeCursor()
+      const onWindowFocus = (): void => takeCursor()
+      window.addEventListener('focus', onWindowFocus)
+      return () => {
+        window.removeEventListener('focus', onWindowFocus)
+        takeCursor()
+      }
+    }, [dictatingHere, chatId])
+    const seenAdded = useRef(addedToDraft)
+    useEffect(() => {
+      if (seenAdded.current === addedToDraft) return
+      seenAdded.current = addedToDraft
+      takeCursor()
+    }, [addedToDraft])
+
+    // Each new live word is drawn by replacing the box's text: the cursor stays where he has it, or at the end.
+    const beforeLive = useRef({ shown, start: shown.length, end: shown.length })
+    useLayoutEffect(() => {
+      const area = composer.current
+      const was = beforeLive.current
+      if (area !== null && was.shown !== shown && live !== '') {
+        const atEnd = was.end >= was.shown.length
+        if (atEnd) {
+          area.setSelectionRange(shown.length, shown.length)
+          area.scrollTop = area.scrollHeight
+        } else {
+          area.setSelectionRange(was.start, was.end)
+        }
+      }
+      beforeLive.current = { shown, start: area?.selectionStart ?? shown.length, end: area?.selectionEnd ?? shown.length }
+    }, [shown, live])
+    const noteCursor = (area: HTMLTextAreaElement): void => {
+      beforeLive.current = { shown: area.value, start: area.selectionStart, end: area.selectionEnd }
+    }
 
     const send = (): void => {
       const value = text.trim()
       if (value === '' && attachments.length === 0) return
+      const sentFrom = chatId
+      const sent = attachments
       onSend()
-      setText('')
+      // The box empties at once; the words stay on disk until the message was accepted.
+      useDrafts.getState().sending(sentFrom)
       setCaret(0)
       setDismissedAt(-1)
-      setAttachments([])
       setAttachProblem('')
-      void chat.send(value, attachments, chatId)
+      // chat.send only settles when the whole turn ends, so the first sign the chat has it counts as accepted.
+      let settled = false
+      const off = chat.onEvent((event) => {
+        if (settled || (event.chat ?? MAIN_CHAT) !== sentFrom) return
+        if (event.type === 'run_started' || event.type === 'chat_changed') accepted()
+      })
+      const accepted = (): void => {
+        if (settled) return
+        settled = true
+        off()
+        useDrafts.getState().accepted(sentFrom)
+      }
+      chat.send(value, sent, sentFrom).then(accepted, () => {
+        if (settled) return
+        settled = true
+        off()
+        useDrafts.getState().refused(sentFrom)
+        toast('That message did not go. It is back in the box.')
+      })
     }
 
     const accept = (incoming: Attachment[]): void => {
@@ -255,7 +352,8 @@ export const Composer = memo(
             ) : null}
           </div>
         ) : null}
-        <DictationDraft />
+        <RecoverChips chat={chatId} />
+        <DictationDraft chat={chatId} />
         {picking ? <MentionPicker items={picks} active={active} onPick={pick} onHover={setPickIndex} /> : null}
         <div className="compose-in">
           <IconButton
@@ -280,10 +378,16 @@ export const Composer = memo(
             rows={1}
             placeholder={running ? 'Add to this, or ask for something else' : 'Ask anything, or @ a project'}
             aria-label="Message"
-            value={words}
+            data-composer={chatId}
+            value={shown}
+            onBlur={() => {
+              // A click on nothing in particular while it records does not take the cursor out of the box.
+              if (dictatingNow.current) setTimeout(() => dictatingNow.current && takeCursor(), 0)
+            }}
             onChange={(event) => {
-              const typed = event.target.value
-              const at = event.target.selectionStart
+              noteCursor(event.target)
+              const typed = draftFromBox(event.target.value, words, live)
+              const at = Math.min(event.target.selectionStart, typed.length)
               // A whole '@name' and a space becomes the chip at once ("@acme " -> [Acme]).
               const made = chipFromTyping(typed, at, projects)
               if (made !== null) {
@@ -298,7 +402,10 @@ export const Composer = memo(
               // Escape closes the list for that one '@' word; once it is gone, the next '@' opens it again.
               if (dismissedAt >= 0 && mentionAtCaret(typed, at)?.start !== dismissedAt) setDismissedAt(-1)
             }}
-            onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+            onSelect={(event) => {
+              noteCursor(event.currentTarget)
+              setCaret(event.currentTarget.selectionStart)
+            }}
             onPaste={onPaste}
             aria-autocomplete="list"
             aria-expanded={picking}
@@ -335,8 +442,8 @@ export const Composer = memo(
             hasKey={hasVoiceKey}
             chat={chatId}
             focusBox={() => composer.current?.focus()}
-            onText={(words) => {
-              setText((current) => (current.trim() === '' ? words : `${current.replace(/\s+$/, '')} ${words}`))
+            onText={(heard) => {
+              useDrafts.getState().addWords(chatId, heard)
               composer.current?.focus()
             }}
             onProblem={(message, action) => {

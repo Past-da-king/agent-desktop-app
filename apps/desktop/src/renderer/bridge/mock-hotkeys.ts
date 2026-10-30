@@ -91,6 +91,27 @@ export function mockHotkeys(settings: () => Settings): Pick<AgentApi, 'hotkeys' 
       onDraft(): Unsubscribe {
         return () => undefined
       },
+      async current() {
+        return null
+      },
+      onBoxText(): Unsubscribe {
+        return () => undefined
+      },
+      async boxResult() {
+        return undefined
+      },
+      async undelivered() {
+        return []
+      },
+      onUndelivered(): Unsubscribe {
+        return () => undefined
+      },
+      async settle() {
+        return undefined
+      },
+      async flushDrafts() {
+        return undefined
+      },
       onView(callback): Unsubscribe {
         const view = pill === null ? undefined : PILLS[pill]
         const timer = view === undefined ? null : setTimeout(() => callback(view), 50)

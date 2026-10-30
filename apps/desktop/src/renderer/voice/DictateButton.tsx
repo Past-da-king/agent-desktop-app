@@ -5,7 +5,7 @@ import { useUi } from '../state/useUi'
 import { Icon } from '../ui/Icon'
 import { clock, useTicker } from '../dictation/clock'
 import { MicError, startCapture, type Capture } from './audio'
-import { dictationHere, useDictationDraft } from './DictationDraft'
+import { dictationHere, isEditable, useDictationDraft } from './dictationBox'
 import { concatBytes } from './pcm'
 import { useCall } from './useCall'
 import './voice.css'
@@ -60,6 +60,9 @@ function LiveDictateButton({
     if (!listening) return
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Enter' && !event.shiftKey) {
+        // He is typing in another field (a search box): Enter is his, the recording goes on.
+        const active = document.activeElement
+        if (isEditable(active) && active.dataset['composer'] === undefined) return
         event.preventDefault()
         event.stopPropagation()
         void agent.dictation.toggle('plain')

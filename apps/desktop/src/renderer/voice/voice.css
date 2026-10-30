@@ -141,6 +141,9 @@
 .dd-time.working{color:var(--primary)}
 .dd-btn{flex:none;height:30px;padding:0 12px;border-radius:999px;background:transparent;color:inherit;font:600 13px/1 var(--font);border:1px solid color-mix(in srgb,currentColor 30%,transparent)}
 .dd-btn.primary{background:var(--primary);color:var(--on-primary);border-color:transparent}
+.recover-chip{align-items:center}
+.recover-chip .dd-words{max-height:44px;overflow:hidden}
+@media (max-width:560px){.recover-chip{flex-wrap:wrap}.recover-chip .dd-words{flex:1 0 100%}}
 .dictate-mic.working{animation:orb-wait 1.2s ease-in-out infinite;opacity:1}
 
 /* ---------- settings ---------- */

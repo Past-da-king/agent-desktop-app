@@ -156,6 +156,11 @@ export const CHANNELS = {
     toggle: 'agent:dictation.toggle',
     cancel: 'agent:dictation.cancel',
     retry: 'agent:dictation.retry',
+    current: 'agent:dictation.current',
+    boxResult: 'agent:dictation.boxResult',
+    undelivered: 'agent:dictation.undelivered',
+    settle: 'agent:dictation.settle',
+    flushDrafts: 'agent:dictation.flushDrafts',
   },
   app: {
     info: 'agent:app.info',
@@ -182,4 +187,6 @@ export const EVENTS = {
   dictationCommand: 'agent:evt:dictation.command',
   dictationView: 'agent:evt:dictation.view',
   dictationDraft: 'agent:evt:dictation.draft',
+  dictationBoxText: 'agent:evt:dictation.boxText',
+  dictationUndelivered: 'agent:evt:dictation.undelivered',
 } as const

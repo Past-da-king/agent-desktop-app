@@ -12,7 +12,9 @@ import type {
   ChatSendOptions,
   CallEvent,
   CallSummary,
+  DictationBoxText,
   DictationCommand,
+  UndeliveredDictation,
   DictationView,
   BrowserBounds,
   AiAccount,
@@ -281,6 +283,13 @@ const api: AgentApi = {
     cancel: () => call<void>(CHANNELS.dictation.cancel),
     retry: () => call<void>(CHANNELS.dictation.retry),
     onDraft: (callback) => on<DictationView>(EVENTS.dictationDraft, callback),
+    current: () => call<DictationView | null>(CHANNELS.dictation.current),
+    onBoxText: (callback) => on<DictationBoxText>(EVENTS.dictationBoxText, callback),
+    boxResult: (id, ok) => call<void>(CHANNELS.dictation.boxResult, id, ok),
+    undelivered: () => call<UndeliveredDictation[]>(CHANNELS.dictation.undelivered),
+    onUndelivered: (callback) => on<null>(EVENTS.dictationUndelivered, () => callback()),
+    settle: (id, how) => call<void>(CHANNELS.dictation.settle, id, how),
+    flushDrafts: () => call<void>(CHANNELS.dictation.flushDrafts),
   },
 
   app: {
