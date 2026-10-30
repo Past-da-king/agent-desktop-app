@@ -357,20 +357,26 @@ function foundRow(lookup: ToolLookup, program: ProgramRef | null, version?: stri
 
 /** Everything the computer has, in three groups. Read-only, parallel and never throwing. */
 export async function scanEnvironment(deps: ScanDeps): Promise<EnvironmentReport> {
+  // The event loop gets a turn between lookups and between version checks: folder listings and process starts are
+  // synchronous, and one run of them held the main thread for 2 s with little free memory (30 Oct 2026).
+  const breathe = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
   const shellLookups = deps.platform === 'win32' ? SHELL_LOOKUPS.win32 : SHELL_LOOKUPS.posix
   const shells: Array<{ lookup: ToolLookup; program: ProgramRef | null }> = []
   for (const lookup of shellLookups) {
     shells.push({ lookup, program: findLookup(lookup, deps) })
+    await breathe()
   }
 
-  const runtimes = RUNTIME_LOOKUPS.map((lookup) => ({
-    lookup,
-    program: lookup.id === 'python' ? resolvePython(deps) : findLookup(lookup, deps),
-  }))
-  const aiTools = AI_LOOKUPS.map((lookup) => ({
-    lookup,
-    program: findLookup({ ...lookup, candidates: (d) => installCandidates(d, lookup.id) }, deps),
-  }))
+  const runtimes: Array<{ lookup: ToolLookup; program: ProgramRef | null }> = []
+  for (const lookup of RUNTIME_LOOKUPS) {
+    runtimes.push({ lookup, program: lookup.id === 'python' ? resolvePython(deps) : findLookup(lookup, deps) })
+    await breathe()
+  }
+  const aiTools: Array<{ lookup: ToolLookup; program: ProgramRef | null }> = []
+  for (const lookup of AI_LOOKUPS) {
+    aiTools.push({ lookup, program: findLookup({ ...lookup, candidates: (d) => installCandidates(d, lookup.id) }, deps) })
+    await breathe()
+  }
 
   const jobs: Array<Promise<Found>> = []
   for (const entry of [...shells, ...runtimes, ...aiTools]) {
@@ -380,6 +386,7 @@ export async function scanEnvironment(deps: ScanDeps): Promise<EnvironmentReport
     }
     const program = entry.program
     jobs.push(readVersion(program, deps).then((version) => foundRow(entry.lookup, program, version)))
+    await breathe()
   }
   const rows = await Promise.all(jobs)
   const shellCount = shells.length

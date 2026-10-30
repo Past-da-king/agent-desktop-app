@@ -1013,10 +1013,15 @@ export function lightChange(change: DataChange): DataChange {
  * light in one go (each run's meta parsed) held the main thread for seconds on every reload (28 Oct 2026).
  */
 async function lightRowsSliced<T>(entity: EntityName, rows: T[]): Promise<T[]> {
+  // By time, not by count: with little free memory 1,000 rows took over a second (30 Oct 2026).
   const out: T[] = []
-  for (let at = 0; at < rows.length; at += 1000) {
-    for (const row of rows.slice(at, at + 1000)) out.push(lightRow(entity, row))
-    if (at + 1000 < rows.length) await new Promise<void>((resolve) => setImmediate(resolve))
+  let sliceStart = performance.now()
+  for (let at = 0; at < rows.length; at += 1) {
+    out.push(lightRow(entity, rows[at] as T))
+    if (at % 32 === 31 && performance.now() - sliceStart >= 6) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      sliceStart = performance.now()
+    }
   }
   return out
 }
