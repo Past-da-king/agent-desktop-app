@@ -178,6 +178,14 @@ export interface Settings {
   helperQuietMinutes: number
   /** How many routine desks work at once; 0 = no limit (the default). */
   routinesAtOnce: number
+  /** No new helper starts on this computer while its free memory is under this many GB (one at a time still does); 0 = no check. */
+  helperMinFreeRamGb: number
+  /** No new helper starts on this computer while the data drive has less than this many GB free; 0 = no check. */
+  helperMinFreeDiskGb: number
+  /** Above this CPU use (percent), work that does not need this computer goes to a linked server; 0 = no check. */
+  helperBusyCpu: number
+  /** The main thread blocked this long (ms) is written to main.log with its call stacks; 0 = off. */
+  watchdogMs: number
 }
 
 /** The node row's `cap` for "no limit": older brains read cap <= 0 as "takes no work", so no limit is a big number. */
@@ -239,6 +247,10 @@ export const DEFAULT_SETTINGS: Settings = {
   helperMaxSteps: 0,
   helperQuietMinutes: 10,
   routinesAtOnce: 0,
+  helperMinFreeRamGb: 1.5,
+  helperMinFreeDiskGb: 5,
+  helperBusyCpu: 90,
+  watchdogMs: 1000,
 }
 
 export interface ModelOption {

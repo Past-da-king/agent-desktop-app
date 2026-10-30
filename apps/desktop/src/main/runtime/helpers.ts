@@ -157,6 +157,17 @@ export interface HelperLive {
   remote?: boolean
 }
 
+/** What the helper queue needs to know about this computer (runtime/resources.ts). */
+export interface HelperResources {
+  /** Why no new helper should start here now (memory or disk short), or ''. */
+  short(): string
+  /** Why this computer is busy for placing new work, or ''. */
+  busy(): string
+  /** How many helpers this computer runs comfortably (from its cores and memory); more go to a server when one is free. Never a cap. */
+  comfortable(): number
+  onSample(listener: () => void): () => void
+}
+
 export interface HelperManagerDeps {
   store: DataStore
   settings: SettingsView
@@ -177,6 +188,12 @@ export interface HelperManagerDeps {
    * which is no limit unless the person sets one (rule of 23 Oct 2026: never a ceiling of our own).
    */
   maxConcurrent?: number | (() => number)
+  /**
+   * What this computer has to spare (runtime/resources.ts). While memory or disk is short no new helper starts here
+   * (one at a time still does, so work never stops); while it is busy, a job that does not need it goes to a linked
+   * server. Unset (tests, headless): no checks.
+   */
+  resources?: HelperResources
   /** How many steps one helper may take. Unset: Settings > Steps per helper, no limit unless the person sets one. */
   maxSteps?: number | (() => number)
   /**
@@ -370,6 +387,8 @@ export const STOP_GRACE_MS = 30_000
 export const REAP_AFTER_MS = 3 * MINUTE_MS
 /** Another brain's job lease with no heartbeat for this long is dead (it beats every 10 s; failover takes 45 s). */
 const LEASE_DEAD_MS = 3 * MINUTE_MS
+/** How a card still working looks inside its stored row (meta is a JSON string inside the row's JSON). */
+const WORKING_IN_META = '\\"state\\":\\"working\\"'
 /** What a lost run's card and notice say. */
 const LOST_REASON = 'its run was lost: no device was running it any more'
 /**
@@ -413,6 +432,10 @@ export class HelperManager implements HelperHost {
   private readonly notifyUser: (title: string, body: string) => void
   private readonly leases: LeaseHook | undefined
   private offload: OffloadLink | null
+  private readonly resources: HelperResources | null
+  private offSample: (() => void) | null = null
+  /** The waiting line each queued card shows now, so it is written only when it changes. */
+  private readonly waitShown = new Map<string, string>()
 
   private readonly runs = new Map<string, HelperRun>()
   /** Helpers this brain placed on another brain that still work there (s12). */
@@ -476,6 +499,12 @@ export class HelperManager implements HelperHost {
     this.notifyUser = deps.notify ?? (() => undefined)
     this.leases = deps.leases
     this.offload = deps.offload ?? null
+    this.resources = deps.resources ?? null
+    // A new sample may free a helper held back for memory or disk.
+    this.offSample =
+      this.resources?.onSample(() => {
+        if (this.queue.length > 0 && !this.closing) this.pump()
+      }) ?? null
     const quiet = deps.quietMinutes
     this.quietMinutes =
       typeof quiet === 'function'
@@ -498,6 +527,8 @@ export class HelperManager implements HelperHost {
    */
   shutdown(): void {
     this.closing = true
+    this.offSample?.()
+    this.offSample = null
     if (this.quietTimer !== null) clearInterval(this.quietTimer)
     this.quietTimer = null
     if (this.reapTimer !== null) clearInterval(this.reapTimer)
@@ -592,7 +623,7 @@ export class HelperManager implements HelperHost {
       const placed =
         link === null
           ? null
-          : await link.place({ text: `${label}\n${task.brief}`, account: use.pick.account, ...(task.device === undefined ? {} : { device: task.device }), ...(projectFolder === '' ? {} : { localFolder: true }) })
+          : await link.place({ text: `${label}\n${task.brief}`, account: use.pick.account, ...(task.device === undefined ? {} : { device: task.device }), ...(projectFolder === '' ? {} : { localFolder: true }), busy: this.localBusy() })
       // Placed on another brain: it carries this computer's choice for commands and files, which the person made here.
       const where =
         link === null
@@ -1087,7 +1118,9 @@ export class HelperManager implements HelperHost {
   async reap(): Promise<number> {
     if (this.closing) return 0
     const now = this.now()
-    const rows = await listWhere(this.store, 'chat_item', { kind: 'helper' }).catch(() => [])
+    // Only cards still marked working: reading all of them (hundreds, MB of JSON) every minute took up to 2 s on a
+    // starved disk (30 Oct 2026). The state sits inside the card's meta string, so it is matched there.
+    const rows = await listWhere(this.store, 'chat_item', { kind: 'helper', contains: WORKING_IN_META }).catch(() => [])
     const link = this.link()
     let ended = 0
     // Helpers with a step in the last ORPHAN_ANY_MS, read once per pass and only when a card is that old.
@@ -1342,9 +1375,34 @@ export class HelperManager implements HelperHost {
     return { running: this.active.size, limit: this.maxConcurrent(), waiting: this.queue.length }
   }
 
+  /** Why this computer should not take more work now ('' when it may): short of memory or disk, CPU high, or many helpers already running. */
+  private localBusy(): string {
+    if (this.resources === null) return ''
+    const why = this.resources.busy()
+    if (why !== '') return why
+    const here = this.active.size + this.queue.length
+    return here >= this.resources.comfortable() ? `${here} helpers already work on this computer` : ''
+  }
+
+  /** Each queued card says why it waits; written only when the line changes. */
+  private showWaiting(line: string): void {
+    for (const id of this.queue) {
+      if (!this.runs.has(id) || this.waitShown.get(id) === line) continue
+      this.waitShown.set(id, line)
+      void this.updateMeta(id, { summary: line, queued: true }).catch(() => undefined)
+    }
+  }
+
   private pump(): void {
     const limit = this.maxConcurrent()
-    while (this.active.size < limit && this.queue.length > 0) {
+    // Short of memory or disk: nothing new starts here (one at a time still does, so work never stalls for good).
+    const short = this.resources?.short() ?? ''
+    if (short !== '' && this.active.size > 0 && this.queue.length > 0) {
+      this.showWaiting(`Paused: ${short}`)
+      this.watchQuiet()
+      return
+    }
+    while (this.active.size < (short !== '' ? 1 : limit) && this.queue.length > 0) {
       const id = this.queue.shift()
       if (id === undefined) return
       const run = this.runs.get(id)
@@ -1365,7 +1423,9 @@ export class HelperManager implements HelperHost {
           runEnded(`helper:${run.id}`)
           this.release(run, broke)
         })
+      this.waitShown.delete(id)
     }
+    if (this.queue.length > 0) this.showWaiting(short !== '' ? `Paused: ${short}` : 'Queued: waiting for a free slot')
     this.watchQuiet()
   }
 

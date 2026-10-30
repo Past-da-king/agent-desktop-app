@@ -215,6 +215,15 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     return number <= 0 ? 0 : Math.min(NO_LIMIT_CAP, Math.round(number))
   }
 
+  // Thresholds for this computer's spare memory, disk and CPU (runtime/resources.ts); 0 or blank = no check.
+  if (key === 'helperMinFreeRamGb' || key === 'helperMinFreeDiskGb' || key === 'helperBusyCpu' || key === 'watchdogMs') {
+    if (value === null || value === '') return 0
+    const number = typeof value === 'string' ? Number(value.trim()) : value
+    if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
+    const top = key === 'helperBusyCpu' ? 100 : key === 'watchdogMs' ? 60_000 : 1_000
+    return number <= 0 ? 0 : Math.min(top, Math.round(number * 10) / 10)
+  }
+
   const expected = DEFAULT_SETTINGS[key]
   if (typeof expected === 'boolean') return typeof value === 'boolean' ? value : INVALID
   if (typeof expected === 'string') {

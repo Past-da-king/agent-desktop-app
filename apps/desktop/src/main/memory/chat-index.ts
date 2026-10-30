@@ -58,6 +58,8 @@ export class ChatIndex {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
     this.db = new DatabaseSync(file)
     this.db.exec('PRAGMA journal_mode = WAL')
+    // Main-thread writes: sync only at checkpoints, not on every commit (30 Oct 2026 hangs, see db.ts).
+    this.db.exec('PRAGMA synchronous = NORMAL')
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS msg(rid INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT UNIQUE NOT NULL, chat_id TEXT NOT NULL,
         at INTEGER NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL, hash TEXT NOT NULL);

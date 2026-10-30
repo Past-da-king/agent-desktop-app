@@ -32,6 +32,7 @@ import { phoneKeepsChatRow } from '../shared/device-feed'
 import { isLiveHelper, isOpenCard } from '../shared/device-list'
 import { changedFields, currentWriter, versionFields, type MemoryWriter } from './memory/history'
 import { redactDeep } from './vault/redact'
+import { startCheckpointWorker, type Checkpointer } from './db-checkpoint'
 
 interface StoredRow {
   cid: string
@@ -99,6 +100,8 @@ export class Store implements SyncStore {
   private readonly now: () => number
   private readonly listeners = new Set<StoreChangeListener>()
   private closed = false
+  private readonly file: string
+  private checkpointer: Checkpointer | null = null
   /** While a batch runs, changes are collected here and announced once at the end. */
   private batching: StoreChange[] | null = null
 
@@ -107,6 +110,14 @@ export class Store implements SyncStore {
     this.now = clock
     this.db = new DatabaseSync(file)
     this.db.exec('PRAGMA journal_mode = WAL')
+    // Writes run on the main thread. FULL synced the log on every commit, and one write on a busy disk took up to
+    // 1.4 s (30 Oct 2026 hangs). NORMAL in WAL mode syncs only at checkpoints: never corrupt, at worst the last
+    // moments before a power cut are lost. A larger page cache keeps the indexes in memory when the system is short
+    // of it and the file cache is gone.
+    this.db.exec('PRAGMA synchronous = NORMAL')
+    this.db.exec('PRAGMA cache_size = -32768')
+    this.db.exec('PRAGMA journal_size_limit = 67108864')
+    this.file = file
     const hadLog = this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'change_log'").get() !== undefined
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS rows(
@@ -427,7 +438,45 @@ export class Store implements SyncStore {
   close(): void {
     if (this.closed) return
     this.closed = true
+    this.checkpointer?.stop()
+    this.checkpointer = null
     this.db.close()
+  }
+
+  /**
+   * Checkpoints move to a worker thread (db-checkpoint.ts): the main connection stops checkpointing inside its own
+   * writes. If the worker cannot run, the main connection checkpoints again as before.
+   */
+  startCheckpointer(options: { everyMs?: number; log?: (line: string, detail?: Record<string, unknown>) => void } = {}): boolean {
+    if (this.closed || this.checkpointer !== null || this.file === ':memory:' || this.file === '') return false
+    this.db.exec('PRAGMA wal_autocheckpoint = 0')
+    let slowLogged = 0
+    this.checkpointer = startCheckpointWorker(this.file, {
+      everyMs: options.everyMs,
+      onReport: (report) => {
+        if (report.ok && (report.ms ?? 0) > 1_000 && Date.now() - slowLogged > 60_000) {
+          slowLogged = Date.now()
+          options.log?.('Slow checkpoint (off the main thread)', { ms: report.ms, pages: report.log })
+        }
+      },
+      onFail: (why) => {
+        this.checkpointer = null
+        if (this.closed) return
+        try {
+          this.db.exec('PRAGMA wal_autocheckpoint = 1000')
+        } catch {
+          // closed meanwhile
+        }
+        options.log?.('Checkpoint worker stopped; checkpoints run inline again', { why })
+      },
+    })
+    return true
+  }
+
+  /** The connection's settings that matter for speed (tests and diagnostics). */
+  pragmas(): { synchronous: number; autocheckpoint: number; cacheSize: number } {
+    const one = (name: string): number => numberField(Object.values(this.db.prepare(`PRAGMA ${name}`).get() ?? {})[0])
+    return { synchronous: one('synchronous'), autocheckpoint: one('wal_autocheckpoint'), cacheSize: one('cache_size') }
   }
 
   // ---- memory versions ----
@@ -524,6 +573,23 @@ export class Store implements SyncStore {
    * so the change log never hands a change back to the peer it came from.
    */
   async applyRemote(changes: Change[], via = ''): Promise<void> {
+    // One transaction for the whole page, not two commits per change: a pull of 200 changes was 400 commits on the
+    // main thread (30 Oct 2026). Inside a batch() the batch's transaction already covers it.
+    if (this.batching !== null || changes.length < 2) return this.applyRemoteRows(changes, via)
+    this.db.exec('BEGIN')
+    try {
+      const touched = this.applyRemoteRows(changes, via, true)
+      this.db.exec('COMMIT')
+      this.announce(touched)
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  private applyRemoteRows(changes: Change[], via: string): void
+  private applyRemoteRows(changes: Change[], via: string, hold: true): StoreChange[]
+  private applyRemoteRows(changes: Change[], via: string, hold = false): StoreChange[] | void {
     const touched: StoreChange[] = []
     /** Helper cards (chat_item ids) whose end is kept over an incoming stale "working" write. */
     const keep: string[] = []
@@ -574,6 +640,7 @@ export class Store implements SyncStore {
       this.db.prepare('UPDATE rows SET stamp = ?, local = 1 WHERE entity = ? AND cid = ?').run(encodeStamp(this.hlc.now()), 'chat_item', id)
       this.logChange('chat_item', id, '')
     }
+    if (hold) return touched
     this.announce(touched)
   }
 

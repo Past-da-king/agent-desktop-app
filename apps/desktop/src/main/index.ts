@@ -134,6 +134,11 @@ import { gitStatusReport } from './git/report'
 import { GIT_CHANNELS } from '../shared/git-channels'
 import { WAKEUP_RPC } from '../shared/wakeups-channels'
 import { getDevicesHost } from './devices/service'
+import { copyVerdict, defaultInstalledExe, isInstalledCopy } from './install-guard'
+import { startWatchdog, type Watchdog } from './watchdog'
+import { autoHelperCap, busyReason, DEFAULT_LIMITS, ResourceMonitor, shortOf, type ResourceLimits } from './runtime/resources'
+import { existsSync as fileExists } from 'node:fs'
+import { spawn as spawnProcess } from 'node:child_process'
 
 // Every IPC handler is also kept by channel, so a paired device can call it over the wire (devices/rpc.ts).
 const ipcMain = recordHandlers(electronIpcMain)
@@ -146,6 +151,33 @@ app.setName(APP_NAME)
 // single-instance lock. Unset in normal use.
 const userDataOverride = process.env['AGENT_USER_DATA']?.trim() ?? ''
 if (userDataOverride !== '') app.setPath('userData', userDataOverride)
+// A test or unpacked copy never opens the person's own data folder (install-guard.ts): it hands over to the installed
+// app, or says why, before anything is read or locked.
+const copyFacts = {
+  platform: process.platform,
+  packaged: app.isPackaged,
+  exe: app.getPath('exe'),
+  productName: APP_NAME,
+  userDataOverride,
+  userDataSwitch: app.commandLine.hasSwitch('user-data-dir'),
+  allowDefault: process.env['AGENT_ALLOW_DEFAULT_DATA'] === '1',
+  installedExe: defaultInstalledExe(process.env, APP_NAME),
+  exists: (path: string) => fileExists(path),
+}
+const copyCheck = copyVerdict(copyFacts)
+const refuseToStart = !copyCheck.ok
+if (refuseToStart) {
+  if (copyCheck.handTo !== '') {
+    try {
+      spawnProcess(copyCheck.handTo, process.argv.slice(1), { detached: true, stdio: 'ignore' }).unref()
+    } catch {
+      // nothing to hand over to after all: the box below says why
+    }
+  } else {
+    dialog.showErrorBox(APP_NAME, `${copyCheck.why}\n\nStart the installed ${APP_NAME}, or give this copy its own data folder (AGENT_USER_DATA).`)
+  }
+  app.exit(0)
+}
 // Set once, before any window or notification exists, so Windows shows toasts under the app's name.
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
@@ -644,6 +676,8 @@ function showMainWindow(): void {
 }
 
 function applyLoginItem(settings: Settings): void {
+  // Only the installed app registers itself: a test copy would point "launch at login" at its own folder.
+  if (!isInstalledCopy(copyFacts)) return
   try {
     // A packaged Windows app registers its own .exe; in development there is no installed program.
     app.setLoginItemSettings({
@@ -760,13 +794,43 @@ const dialogs: DialogLike = {
   pickFolder: pickOneFolder,
 }
 
+let watchdog: Watchdog | null = null
+let resourceMonitor: ResourceMonitor | null = null
+
+/** The helper queue's view of this computer: thresholds from Settings, read live. */
+function helperResources(settings: { get(): Settings }): import('./runtime/helpers').HelperResources {
+  const limits = (): ResourceLimits => {
+    const s = settings.get()
+    const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d)
+    return { minFreeRamGb: num(s.helperMinFreeRamGb, DEFAULT_LIMITS.minFreeRamGb), minFreeDiskGb: num(s.helperMinFreeDiskGb, DEFAULT_LIMITS.minFreeDiskGb), busyCpuPercent: num(s.helperBusyCpu, DEFAULT_LIMITS.busyCpuPercent) }
+  }
+  return {
+    short: () => shortOf(resourceMonitor?.now() ?? null, limits()),
+    busy: () => busyReason(resourceMonitor?.now() ?? null, limits()),
+    comfortable: () => (resourceMonitor === null ? Number.POSITIVE_INFINITY : autoHelperCap(resourceMonitor.cores(), resourceMonitor.totalRamGb())),
+    onSample: (listener) => resourceMonitor?.onSample(listener) ?? (() => undefined),
+  }
+}
+
 async function startServices(win: BrowserWindow): Promise<void> {
   const dir = app.getPath('userData')
   mkdirSync(dir, { recursive: true })
 
   store = new Store(join(dir, 'agent.db'))
+  // Checkpoints off the main thread (db-checkpoint.ts): a checkpoint inside an ordinary write took up to 2 s.
+  store.startCheckpointer({ log: (line, detail) => logger.info(line, detail) })
   const settings = new SettingsStore(join(dir, 'settings.json'))
   settingsStore = settings
+  // The main thread blocked for a second or more goes to main.log with its stacks (watchdog.ts).
+  const watchMs = settings.get().watchdogMs
+  watchdog = startWatchdog({
+    blockedMs: typeof watchMs === 'number' ? watchMs : 1000,
+    onBlocked: (report) => logger.warn('Main thread blocked', { ms: report.ms, at: new Date(report.at).toISOString(), stacks: report.stacks, ...(report.note === undefined ? {} : { note: report.note }) }),
+    onError: (why) => logger.warn('Watchdog problem', { why }),
+  })
+  // What this computer has to spare, for starting helpers (runtime/resources.ts).
+  resourceMonitor = new ResourceMonitor(dir)
+  resourceMonitor.start()
   const secrets = new Secrets(join(dir, 'secrets'), safeStorage)
   // The Vault (vault/store.ts): from here on no vault value is written into a row, a log or a tool result.
   const vault = new VaultStore(secrets)
@@ -1063,6 +1127,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     profiles: apps.profiles,
     learnedNames,
     git: gitHook,
+    resources: helperResources(settings),
   }))
   // Every browser tab names the run that owns it, in plain words (browser.state, the panel).
   setOwnerLabeller((owner) => {
@@ -1755,7 +1820,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
 // Agents browse with the panel hidden and the window minimised: their pages must keep running (browser/keep-awake.ts).
 keepPagesAwake(app.commandLine)
 
-if (!app.requestSingleInstanceLock()) {
+if (refuseToStart) {
+  // handed over or explained above; app.exit is on its way
+} else if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -1845,6 +1912,10 @@ if (!app.requestSingleInstanceLock()) {
     account = null
     store?.close()
     store = null
+    resourceMonitor?.stop()
+    resourceMonitor = null
+    watchdog?.stop()
+    watchdog = null
   })
 
   app.on('window-all-closed', () => {

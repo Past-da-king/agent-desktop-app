@@ -70,6 +70,8 @@ export class WorkerStore {
     mkdirSync(root, { recursive: true })
     this.db = new DatabaseSync(join(root, 'workers.db'))
     this.db.exec('PRAGMA journal_mode = WAL')
+    // Main-thread writes: sync only at checkpoints, not on every commit (30 Oct 2026 hangs, see db.ts).
+    this.db.exec('PRAGMA synchronous = NORMAL')
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS worker_state(id TEXT PRIMARY KEY, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS worker_events(

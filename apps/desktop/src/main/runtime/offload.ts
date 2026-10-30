@@ -60,6 +60,11 @@ export interface PlaceRequest {
   localFolder?: boolean
   /** This computer's own names (device name, host name): a brief that names one needs this computer. Filled in by place(). */
   selfNames?: string[]
+  /**
+   * Why this computer is busy now ('' or unset when it is not): short of memory or disk, CPU high, or more helpers
+   * than it runs comfortably. A job asked to run "here" that does not need this computer then goes to a free server.
+   */
+  busy?: string
 }
 
 /** Does the text name this device (its whole name, not part of a word)? Names under 3 characters never count. */
@@ -133,7 +138,17 @@ export function choosePlacement(req: PlaceRequest, candidates: PlaceCandidate[],
   const named = (req.device ?? '').trim()
   const want = named === '' ? mode.trim() : named
   const lower = want.toLowerCase()
-  if (HERE.has(lower)) return here('asked to run here')
+  const needsHere = req.localFolder === true || NEEDS_HERE.test(req.text) || (req.selfNames ?? []).some((each) => namesDevice(req.text, each))
+  if (HERE.has(lower)) {
+    // Asked for "here" on this one job (not the person's setting), the computer is busy, and nothing in the job needs
+    // it: a free server takes it, so this computer keeps working (30 Oct 2026, hangs under eleven helpers).
+    const busy = (req.busy ?? '').trim()
+    if (named !== '' && busy !== '' && !needsHere && selfKind !== 'server') {
+      const server = candidates.filter((each) => each.kind === 'server' && fits(each, req.account)).sort((a, b) => load(a) - load(b))[0]
+      if (server !== undefined) return { device: server.id, name: server.name, why: `${busy}, and it does not need this computer` }
+    }
+    return here('asked to run here')
+  }
 
   if (!BEST.has(lower)) {
     const found = matchDevice(candidates, want)
@@ -145,7 +160,6 @@ export function choosePlacement(req: PlaceRequest, candidates: PlaceCandidate[],
     return { device: found.id, name: found.name, why: 'asked for' }
   }
 
-  const needsHere = req.localFolder === true || NEEDS_HERE.test(req.text) || (req.selfNames ?? []).some((each) => namesDevice(req.text, each))
   if (needsHere) {
     if (selfKind !== 'server') return here('it needs this computer')
     const computer = candidates.filter((each) => each.kind !== 'server' && fits(each, req.account)).sort((a, b) => load(a) - load(b))[0]
