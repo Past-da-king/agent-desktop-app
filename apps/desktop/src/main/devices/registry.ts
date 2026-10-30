@@ -16,7 +16,8 @@ export interface IpcRecorderTarget {
 /** The stand-in event a wire call hands the handler: no window, and who sent it. */
 export interface WireEvent {
   sender: null
-  wire: { deviceId: string; origin: MessageOrigin }
+  /** isOpen: is the caller's socket still there? A frame that waited out a frozen main thread may have lost its caller. */
+  wire: { deviceId: string; origin: MessageOrigin; isOpen?: () => boolean }
 }
 
 export class HandlerRegistry {

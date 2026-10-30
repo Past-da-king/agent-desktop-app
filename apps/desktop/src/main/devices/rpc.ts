@@ -121,7 +121,7 @@ function guardData(method: string, args: unknown[]): void {
 export async function callAllowed(
   registry: HandlerRegistry,
   added: ReadonlyMap<string, RpcMethod>,
-  session: { deviceId: string; origin(): MessageOrigin | null },
+  session: { deviceId: string; origin(): MessageOrigin | null; readonly open?: boolean },
   method: string,
   args: unknown[],
 ): Promise<unknown> {
@@ -134,6 +134,6 @@ export async function callAllowed(
   if (handler === null) throw new Error(NOT_AVAILABLE)
   const origin = session.origin()
   if (origin === null) throw new Error('Say hello first.')
-  const event: WireEvent = { sender: null, wire: { deviceId: session.deviceId, origin } }
+  const event: WireEvent = { sender: null, wire: { deviceId: session.deviceId, origin, isOpen: () => session.open !== false } }
   return handler(event, ...args)
 }

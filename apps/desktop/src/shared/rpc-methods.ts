@@ -50,6 +50,7 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'data.upsert',
   'data.remove',
   'chat.send',
+  'chat.sendOnce',
   'chat.stop',
   'chat.state',
   'chat.states',

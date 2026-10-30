@@ -21,6 +21,8 @@ import { chatTag } from './chat-lines'
 export const HEARTBEAT_MS = 10_000
 export const STALE_MS = 45_000
 export const MAX_ATTEMPTS = 3
+/** How long a brain back from a freeze waits to hear the others before it carries on. */
+export const CATCH_UP_MS = 5_000
 
 export const RESUME_NOTE =
   '[System note: your previous run of this request was interrupted (the app stopped or the computer running it went away) before you finished. Carry on from where the transcript ends. Do not repeat side effects already done (messages sent, files written, things bought or booked); check first if unsure. Do not apologise at length.]'
@@ -69,6 +71,8 @@ export interface Failover {
   health: NonNullable<TurnLeasesDeps['health']>
   brains: NonNullable<TurnLeasesDeps['brains']>
   ready?: TurnLeasesDeps['ready']
+  /** One replication pass with the other brains now. */
+  catchUp?: () => Promise<void>
 }
 
 export class TurnLeases implements LeaseHook {
@@ -97,6 +101,13 @@ export class TurnLeases implements LeaseHook {
   setFailover(failover: Failover | null): void {
     this.failover = failover
     if (failover?.ready !== undefined) this.readyGate = failover.ready
+  }
+
+  /** One replication pass with the others, bounded: a brain that cannot reach them keeps what it has. */
+  private async catchUp(): Promise<void> {
+    const pass = this.failover?.catchUp
+    if (pass === undefined) return
+    await Promise.race([pass().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, CATCH_UP_MS))])
   }
 
   private isOwn(brainId: string): boolean {
@@ -129,13 +140,21 @@ export class TurnLeases implements LeaseHook {
       })
     })
     this.stopBeat(id)
+    let lastBeat = at
     const beat = setInterval(() => {
+      const beatAt = this.now()
+      const gap = beatAt - lastBeat
+      lastBeat = beatAt
       this.write(async () => {
+        // Back from a freeze long enough for a takeover: hear the other brains first. A heartbeat written now would
+        // overwrite the claim of the brain that took this over, and both would run it (30 Oct 2026).
+        if (gap >= (this.deps.staleMs ?? STALE_MS)) await this.catchUp()
         const row = await this.deps.store.get('turn_lease', id)
-        // Taken over by another brain (we were thought dead): stop claiming it, and stop our run of it.
+        // Taken over by another brain (we were thought dead): stop claiming it, and stop our run of it, even when that
+        // brain has already finished it.
         if (row === null || row.status !== 'running' || !this.isOwn(row.brainId)) {
           this.stopBeat(id)
-          if (row !== null && row.status === 'running') this.deps.lost?.(row)
+          if (row !== null && !this.isOwn(row.brainId)) this.deps.lost?.(row)
           return
         }
         await this.deps.store.upsert('turn_lease', { id, heartbeatAt: this.now() })

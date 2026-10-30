@@ -2,6 +2,7 @@
  * Every `AgentApi` method over real IPC. Handlers validate their arguments, because the renderer
  * is untrusted: it may never make the main process read an arbitrary path or write a huge string.
  */
+import { makeSendOnce } from './runtime/send-once'
 import {
   PROVIDERS,
   ProviderException,
@@ -477,6 +478,28 @@ export function registerIpc(deps: IpcDeps): () => void {
     if (origin !== undefined) await chat.send(text, attachments, target, origin)
     else if (target === undefined) await chat.send(text, attachments)
     else await chat.send(text, attachments, target)
+  })
+
+  // A phone's message with its own id (docs/devices-protocol.md s8): answered as soon as it is safely held, never run twice.
+  const sendOnceGate = makeSendOnce({ exists: async (rowId) => (await store.get('chat_item', rowId)) !== null })
+  handle(CHANNELS.chat.sendOnce, async (event, rawInput) => {
+    const input = typeof rawInput === 'object' && rawInput !== null ? (rawInput as Record<string, unknown>) : {}
+    const text = requireString(input['text'], 'message', MAX_MESSAGE)
+    const attachments = requireAttachments(input['attachments'] ?? [])
+    const target = optionalChat(input['chat'])
+    const replyIn = optionalChat(input['replyIn'])
+    const origin = messageOrigin(event)
+    return sendOnceGate(
+      { sendId: input['sendId'], sentAt: input['sentAt'], fresh: input['fresh'] === true, isOpen: wireOf(event)?.isOpen },
+      async () => {
+        if (replyIn !== undefined && target !== undefined && deps.chat !== undefined) {
+          const raw = deps.chat
+          const routed = await replyToProjectChat(mentionDeps, text, attachments, target, replyIn, (words, files, to) => (origin !== undefined ? raw.send(words, files, to, origin) : raw.send(words, files, to)))
+          if (routed) return
+        }
+        await chat.send(text, attachments, target, origin)
+      },
+    )
   })
 
   handle(CHANNELS.chat.stop, async (_event, rawChat) => {

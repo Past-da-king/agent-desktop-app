@@ -41,6 +41,7 @@ export const CHANNELS = {
   },
   chat: {
     send: 'agent:chat.send',
+    sendOnce: 'agent:chat.sendOnce',
     stop: 'agent:chat.stop',
     state: 'agent:chat.state',
     answer: 'agent:chat.answer',

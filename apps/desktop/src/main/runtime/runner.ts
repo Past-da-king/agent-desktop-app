@@ -5,6 +5,7 @@
  * show, suspends tools on question and approval cards, and keeps going across a restart: an activity
  * left running becomes "Interrupted", and a card answered later starts a fresh turn with the answer.
  */
+import { sendScope } from './send-once'
 import {
   AgentLoop,
   MAIN_CHAT,
@@ -1204,10 +1205,15 @@ export class Runner {
     let error: string | undefined
     let lease: string | null = null
     try {
+      const scope = user !== null ? sendScope.getStore() : undefined
+      const once = scope !== undefined && !scope.rowUsed ? scope : undefined
+      if (once !== undefined) once.viaBegin = true
       const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
-      lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(leaseId === undefined ? {} : { id: leaseId }) }) ?? null
+      const fixedLease = leaseId ?? once?.leaseId
+      lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
       // The lease is stored before anyone hears the turn started, so a brain that dies right after can be taken over.
       await this.devices?.leases?.settled?.()
+      once?.accepted()
       this.emitFor(line.chat, { type: 'run_started' })
       // His own message (not another agent's, not a card answer) carries where he is right now.
       const presence = userRow !== null && parseMeta(userRow.meta)['via'] === undefined ? await this.presenceNote(line.chat, userRow.meta) : ''
@@ -1834,8 +1840,13 @@ export class Runner {
   }
 
   private async addUserItem(chat: string, text: string, meta: string): Promise<ChatItem> {
-    const row = await this.store.upsert('chat_item', { kind: 'user', text, meta })
+    const scope = sendScope.getStore()
+    const claim = scope !== undefined && !scope.rowUsed
+    if (claim) scope.rowUsed = true
+    const row = await this.store.upsert('chat_item', { ...(claim ? { id: scope.rowId } : {}), kind: 'user', text, meta })
     this.emitFor(chat, { type: 'chat_changed' })
+    // Joining running work has no lease of its own: stored is accepted. A new turn says so once its lease is stored.
+    if (claim && !scope.viaBegin) scope.accepted()
     return row
   }
 

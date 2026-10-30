@@ -165,6 +165,7 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
     brains: () => rankedBrains(store),
     // Before resuming our own leases, catch up once, so a turn a peer took while we were down is seen as theirs.
     ready: () => withTimeout(replicator.syncOnce(), 10_000),
+    catchUp: () => replicator.syncOnce(),
   })
   deps.leases?.watch()
 
