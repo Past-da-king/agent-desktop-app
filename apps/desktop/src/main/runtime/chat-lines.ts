@@ -127,7 +127,7 @@ export async function branchChat(store: DataStore, itemId: string, now: () => nu
   const from = chatOf(point)
   // The store lists rows in the order they were written (time, then a clock that never ties), so the cut is
   // by position: two rows written in the same millisecond still fall on the right side of it.
-  const all = (await listWhere(store, 'chat_item', { chat: from })).filter((row) => chatOf(row) === from)
+  const all = (await listWhere(store, 'chat_item', { chat: from, all: true })).filter((row) => chatOf(row) === from)
   const cut = all.findIndex((row) => row.id === point.id)
   const history = all.slice(0, cut + 1).filter((row) => row.id === point.id || copyable(row))
   const parentTitle = chatTitle(all)

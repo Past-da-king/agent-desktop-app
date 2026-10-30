@@ -121,7 +121,7 @@ export class MemoryService {
    */
   private async chatWithDividers(...chats: string[]): Promise<ChatItem[]> {
     const lists = await Promise.all([
-      ...chats.map((chat) => listWhere(this.deps.store, 'chat_item', { chat })),
+      ...chats.map((chat) => listWhere(this.deps.store, 'chat_item', { chat, all: true })),
       listWhere(this.deps.store, 'chat_item', { kind: 'notice' }),
     ])
     const byId = new Map<string, ChatItem>()
@@ -277,7 +277,8 @@ export class MemoryService {
   // ---- past chats ----
 
   async searchChats(query: string, limit = 5, excludeCurrent = true): Promise<PastChatHit[]> {
-    const items = await this.deps.store.list('chat_item')
+    // What was said, without the steps (nine tenths of the bytes): a search must not page in every output there is.
+    const items = await listWhere(this.deps.store, 'chat_item', { exceptKinds: ['activity'], all: true })
     this.deps.index.refresh(items)
     const segments = chatSegments(items)
     const current = segments[segments.length - 1]

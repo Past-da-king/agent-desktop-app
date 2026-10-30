@@ -29,17 +29,33 @@ import {
 } from '@agent/core'
 
 import { phoneKeepsChatRow } from '../shared/device-feed'
+import { lightRow } from '../shared/light-row'
 import { filterRows } from '../shared/list-where'
 import { isLiveHelper, isOpenCard } from '../shared/device-list'
 import { changedFields, currentWriter, versionFields, type MemoryWriter } from './memory/history'
 import { redactDeep } from './vault/redact'
 import { startCheckpointWorker, type Checkpointer } from './db-checkpoint'
+import { DbReader, type RawRow } from './db-reader'
 
 interface StoredRow {
   cid: string
   stamp: string
   deleted: boolean
   payload: Record<string, unknown>
+  /** An old step made light (archiveSlice): the payload here is its full body, kept in `bodies`. */
+  archived?: boolean
+}
+
+/** One read the store made: what it asked, how much came back, how long it took and on which thread. */
+export interface ReadNote {
+  at: number
+  what: string
+  caller: string
+  rows: number
+  bytes: number
+  ms: number
+  thread: 'worker' | 'main'
+  capped?: boolean
 }
 
 /** A change as listeners hear it: the row as it is now, a deleted id, or a reset (read the list again). */
@@ -110,6 +126,29 @@ const LIST_CACHED: ReadonlySet<EntityName> = new Set(ENTITY_NAMES.filter((each) 
  */
 const WHERE_FROM_LIST: ReadonlySet<EntityName> = new Set(['memory', 'goal', 'task', 'trigger', 'project', 'device', 'job', 'prompt_rule', 'wakeup', 'miniapp'])
 
+/**
+ * Most chat rows one listWhere returns unless it says `all`: the newest ones. An unbounded read of every step (72,773
+ * rows, 279 MB) held the main thread for 54 s on 30 Oct 2026. A read that hits this says so in main.log.
+ */
+export const LIST_WHERE_CAP = 10_000
+/** Past this many rows a list keeps the order SQLite gave it: sorting it again would itself hold the main thread. */
+const SORT_ROWS_MAX = 5_000
+/** Up to this many rows are parsed in one go, without an async step. */
+const PARSE_AT_ONCE = 200
+/** Longest stretch of parsing or mapping rows on the main thread before the event loop gets a turn. */
+const READ_SLICE_MS = 6
+/** Reads kept for the watchdog's report and for tests. */
+const READS_KEPT = 40
+/** A read at least this long is kept for the watchdog. */
+const READ_NOTE_MS = 30
+/** A read at least this long goes to main.log (at most every 10 s), whichever thread it ran on. */
+const READ_LOG_MS = 1_000
+
+/** A step with an output or input this long is worth moving out of its row. */
+const ARCHIVE_MIN_BYTES = 4_000
+const ARCHIVE_AGE_MS = 3 * 24 * 3_600_000
+const ARCHIVE_SLICE_ROWS = 25
+
 export class Store implements SyncStore {
   readonly deviceId: string
   private readonly db: DatabaseSync
@@ -125,6 +164,12 @@ export class Store implements SyncStore {
   private readonly listCache = new Map<EntityName, Array<Record<string, SQLOutputValue>>>()
   /** Inside an open transaction nothing is cached (it may still roll back). */
   private inTransaction = false
+  /** Reads of the big tables run here, off the main thread (db-reader.ts), once startReader has run. */
+  private reader: DbReader | null = null
+  private readonly readNotes: ReadNote[] = []
+  private readLog: ((line: string, detail?: Record<string, unknown>) => void) | null = null
+  private readLoggedAt = 0
+  private archiveTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(file: string, clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
@@ -163,6 +208,8 @@ export class Store implements SyncStore {
       CREATE INDEX IF NOT EXISTS rows_chat_kind_at ON rows(entity, ${CHAT_KEY}, ${KIND_SQL}, ${CREATED_SQL});
       -- Device commands and turn leases are polled by status every few seconds; read the open ones, not the history.
       CREATE INDEX IF NOT EXISTS rows_status_at ON rows(entity, ${STATUS_SQL}, ${CREATED_SQL});
+      -- Full bodies of old finished steps whose row was made light (archiveSlice): never read by a list.
+      CREATE TABLE IF NOT EXISTS bodies(entity TEXT NOT NULL, cid TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(entity, cid));
       CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_versions(
         memory_id TEXT NOT NULL,
@@ -203,7 +250,8 @@ export class Store implements SyncStore {
     this.assertEntity(entity)
     await this.turn()
     const rows = (await this.readEntitySliced(entity)).filter((row) => !row.deleted)
-    return sortedRows(rows, false).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+    const ordered = rows.length > SORT_ROWS_MAX ? rows : sortedRows(rows, false)
+    return rowsOut<EntityMap[E]>(ordered)
   }
 
   /**
@@ -212,8 +260,26 @@ export class Store implements SyncStore {
    */
   private async readEntitySliced(entity: EntityName): Promise<StoredRow[]> {
     const held = this.listCache.get(entity)
-    if (held !== undefined) return held.map(rowFromSql)
+    if (held !== undefined) return held.length <= PARSE_AT_ONCE ? held.map(rowFromSql) : parseSliced(held)
     const writesBefore = this.writes
+    if (this.canUseReader()) {
+      const big = !LIST_CACHED.has(entity)
+      // The big tables come in store order from the created-at index, so they need no sort of 80,000 rows here.
+      const sql = big
+        ? `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_created WHERE entity = ? ORDER BY ${CREATED_SQL}, stamp`
+        : 'SELECT cid, stamp, deleted, payload FROM rows WHERE entity = ?'
+      const raw: Array<Record<string, SQLOutputValue>> = []
+      const parsed: StoredRow[] = []
+      const done = await this.readInWorker(sql, [entity], `list ${entity}`, null, (row) => {
+        if (big) parsed.push(storedFromRaw(row))
+        else raw.push({ cid: row[0], stamp: row[1], deleted: row[2], payload: row[3] })
+      })
+      if (done) {
+        if (big) return parsed
+        if (!this.inTransaction && this.batching === null && this.writes === writesBefore) this.listCache.set(entity, raw)
+        return raw.length <= PARSE_AT_ONCE ? raw.map(rowFromSql) : parseSliced(raw)
+      }
+    }
     const slice = this.db.prepare('SELECT cid, stamp, deleted, payload FROM rows WHERE entity = ? AND cid > ? ORDER BY cid LIMIT ?')
     const raw: Array<Record<string, SQLOutputValue>> = []
     let after = ''
@@ -227,7 +293,62 @@ export class Store implements SyncStore {
     }
     // Kept only when nothing was written while it was read (between slices) and no transaction is open.
     if (LIST_CACHED.has(entity) && !this.inTransaction && this.batching === null && this.writes === writesBefore) this.listCache.set(entity, raw)
-    return raw.map(rowFromSql)
+    return raw.length <= PARSE_AT_ONCE ? raw.map(rowFromSql) : parseSliced(raw)
+  }
+
+  /** The worker may read only what is committed; anything inside an open transaction reads on this connection. */
+  private canUseReader(): boolean {
+    return this.reader !== null && this.reader.usable && !this.inTransaction && this.batching === null
+  }
+
+  /**
+   * A query in a worker, its rows handed over a small chunk at a time. False when no worker could do it (the caller
+   * reads on this connection instead), so a failed worker costs a slow read, never a lost one.
+   */
+  private async readInWorker(sql: string, args: Array<string | number>, what: string, asked: { stack?: string } | null, onRow: (row: RawRow) => void, capped?: (rows: number) => boolean): Promise<boolean> {
+    const reader = this.reader
+    if (reader === null || !reader.usable) return false
+    try {
+      const stats = await reader.read(sql, args, (rows) => {
+        for (const row of rows) onRow(row)
+      })
+      this.noteRead({ at: Date.now(), what, caller: '', rows: stats.rows, bytes: stats.bytes, ms: Math.round(stats.ms), thread: 'worker', ...(capped?.(stats.rows) === true ? { capped: true } : {}) }, asked)
+      return true
+    } catch (error) {
+      if (this.closed) throw error
+      this.readLog?.('A read in the worker failed; reading on the main connection', { what, why: error instanceof Error ? error.message : String(error) })
+      return false
+    }
+  }
+
+  /** Keeps a slow read for the watchdog's report, and says so in main.log when it is very slow or hit the cap. */
+  private noteRead(note: ReadNote, asked: { stack?: string } | null = null): void {
+    if (note.ms >= READ_NOTE_MS || note.capped === true) {
+      note.caller = callerOf(asked?.stack)
+      this.readNotes.push(note)
+      if (this.readNotes.length > READS_KEPT) this.readNotes.shift()
+    }
+    if ((note.ms >= READ_LOG_MS || note.capped === true) && Date.now() - this.readLoggedAt > 10_000) {
+      this.readLoggedAt = Date.now()
+      this.readLog?.(note.thread === 'worker' ? 'Slow read (off the main thread)' : 'Slow read on the main thread', { ...note })
+    }
+  }
+
+  /** The slow reads since `since` (epoch ms), newest last: what the watchdog puts beside its stacks. */
+  recentReads(since = 0): ReadNote[] {
+    return this.readNotes.filter((note) => note.at >= since)
+  }
+
+  /** Starts the read workers (db-reader.ts). Without them, as in tests, reads stay on this connection. */
+  startReader(options: { log?: (line: string, detail?: Record<string, unknown>) => void; size?: number } = {}): boolean {
+    this.readLog = options.log ?? null
+    if (this.closed || this.reader !== null || this.file === ':memory:' || this.file === '') return false
+    this.reader = new DbReader({
+      file: this.file,
+      ...(options.size === undefined ? {} : { size: options.size }),
+      onFail: (why) => options.log?.('Read workers stopped; reads run on the main connection again', { why }),
+    })
+    return true
   }
 
   /** Writes so far (a list read across slices is cached only if none happened meanwhile). */
@@ -295,14 +416,12 @@ export class Store implements SyncStore {
       if (typeof chat === 'string' && chat !== '') counts.set(chat, 0)
     }
     const picked = new Map<string, StoredRow>()
-    const slice = this.db.prepare(
-      `SELECT cid, stamp, deleted, payload FROM rows WHERE entity = 'chat_item' AND deleted = 0 AND json_extract(payload, '$.createdAt') <= ? ORDER BY json_extract(payload, '$.createdAt') DESC, stamp DESC LIMIT ?`,
-    )
+    const sliceSql = `SELECT cid, stamp, deleted, payload FROM rows WHERE entity = 'chat_item' AND deleted = 0 AND json_extract(payload, '$.createdAt') <= ? ORDER BY json_extract(payload, '$.createdAt') DESC, stamp DESC LIMIT ?`
     let at = Number.MAX_SAFE_INTEGER
     let scanned = 0
     const done = new Set<string>()
     for (;;) {
-      const rows = slice.all(at, SLICE_ROWS).map(rowFromSql)
+      const rows = await this.readQuery(sliceSql, [at, SLICE_ROWS], 'device chat list')
       let fresh = 0
       for (const row of rows) {
         if (done.has(row.cid)) continue
@@ -323,19 +442,19 @@ export class Store implements SyncStore {
     // A chat that has gone quiet is not in the recent walk: its own rows come by the chat index (small by nature).
     for (const [chat, n] of counts) {
       if (n >= want || chat === 'main') continue
-      const own = this.db
-        .prepare(
-          `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_chat_kind_at WHERE entity = 'chat_item' AND deleted = 0 AND ${CHAT_KEY} = ? ORDER BY ${CREATED_SQL} DESC, stamp DESC LIMIT ?`,
-        )
-        .all(chat, want)
-        .map(rowFromSql)
+      const own = await this.readQuery(
+        `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_chat_kind_at WHERE entity = 'chat_item' AND deleted = 0 AND ${CHAT_KEY} = ? ORDER BY ${CREATED_SQL} DESC, stamp DESC LIMIT ?`,
+        [chat, want],
+        'device chat list (quiet chat)',
+      )
       for (const row of sortedRows(own, true).slice(0, want)) picked.set(row.cid, row)
       await yieldNow()
     }
-    const waiting = this.db
-      .prepare(`SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_kind_at WHERE entity = 'chat_item' AND deleted = 0 AND ${KIND_SQL} IN ('question', 'approval', 'helper')`)
-      .all()
-      .map(rowFromSql)
+    const waiting = await this.readQuery(
+      `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_kind_at WHERE entity = 'chat_item' AND deleted = 0 AND ${KIND_SQL} IN ('question', 'approval', 'helper')`,
+      [],
+      'device chat list (cards)',
+    )
     for (const row of waiting) {
       if (picked.has(row.cid)) continue
       if (isOpenCard(row.payload) || isLiveHelper(row.payload, now)) picked.set(row.cid, row)
@@ -350,15 +469,13 @@ export class Store implements SyncStore {
    */
   async phoneChatPage(before: number | undefined, limit: number): Promise<{ rows: Array<EntityMap['chat_item']>; more: boolean }> {
     const want = Math.max(1, Math.min(200, Math.floor(limit)))
-    const slice = this.db.prepare(
-      `SELECT cid, stamp, deleted, payload FROM rows WHERE entity = 'chat_item' AND deleted = 0 AND json_extract(payload, '$.createdAt') < ? ORDER BY json_extract(payload, '$.createdAt') DESC, stamp DESC LIMIT ?`,
-    )
+    const sliceSql = `SELECT cid, stamp, deleted, payload FROM rows WHERE entity = 'chat_item' AND deleted = 0 AND json_extract(payload, '$.createdAt') < ? ORDER BY json_extract(payload, '$.createdAt') DESC, stamp DESC LIMIT ?`
     let at = before === undefined ? Number.MAX_SAFE_INTEGER : before
     const out: StoredRow[] = []
     let scanned = 0
     let more = false
     for (;;) {
-      const rows = slice.all(at, SLICE_ROWS).map(rowFromSql)
+      const rows = await this.readQuery(sliceSql, [at, SLICE_ROWS], 'phone chat page')
       for (const row of rows) {
         if (!phoneKeepsChatRow(row.payload as { kind?: unknown; meta?: unknown })) continue
         if (out.length >= want) {
@@ -382,12 +499,49 @@ export class Store implements SyncStore {
    */
   async listWhere<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>> {
     this.assertEntity(entity)
+    // Who asked, kept for the log: a stack taken here is the caller's (after an await it would not be). Formatted
+    // only if the read turns out slow.
+    const asked: { stack?: string } = {}
+    Error.captureStackTrace(asked, this.listWhere)
     await this.turn()
     if (WHERE_FROM_LIST.has(entity) && !this.inTransaction && this.batching === null) return filterRows(await this.list(entity), where)
     const query = listWhereSql(entity, where)
     if (query === null) return []
-    const rows = this.db.prepare(query.sql).all(...query.args).map(rowFromSql)
-    return sortedRows(rows, where.newestFirst === true).map((row) => ({ id: row.cid, ...row.payload }) as EntityMap[E])
+    const capped = entity === 'chat_item' && where.limit === undefined && where.all !== true
+    const what = `listWhere ${entity} ${JSON.stringify(where)}`
+    const rows: StoredRow[] = []
+    const inWorker =
+      this.canUseReader() &&
+      (await this.readInWorker(
+        query.sql,
+        query.args,
+        what,
+        asked,
+        (row) => {
+          rows.push(storedFromRaw(row))
+        },
+        (n) => capped && n >= LIST_WHERE_CAP,
+      ))
+    if (!inWorker) {
+      const started = performance.now()
+      const raw = this.db.prepare(query.sql).all(...query.args)
+      for (const row of raw) rows.push(rowFromSql(row))
+      this.noteRead({ at: Date.now(), what, caller: '', rows: rows.length, bytes: 0, ms: Math.round(performance.now() - started), thread: 'main', ...(capped && rows.length >= LIST_WHERE_CAP ? { capped: true } : {}) }, asked)
+    }
+    const ordered = rows.length > SORT_ROWS_MAX && query.ordered === (where.newestFirst === true) ? rows : sortedRows(rows, where.newestFirst === true)
+    return rowsOut<EntityMap[E]>(ordered)
+  }
+
+  /** A query's rows, in the worker when it can, else on this connection. */
+  private async readQuery(sql: string, args: Array<string | number>, what: string): Promise<StoredRow[]> {
+    if (this.canUseReader()) {
+      const rows: StoredRow[] = []
+      if (await this.readInWorker(sql, args, what, null, (row) => rows.push(storedFromRaw(row)))) return rows
+    }
+    const started = performance.now()
+    const rows = this.db.prepare(sql).all(...args).map(rowFromSql)
+    this.noteRead({ at: Date.now(), what, caller: '', rows: rows.length, bytes: 0, ms: Math.round(performance.now() - started), thread: 'main' })
+    return rows
   }
 
   /** How SQLite runs a listWhere (EXPLAIN QUERY PLAN lines), so a test can hold every shape to an index. */
@@ -452,6 +606,7 @@ export class Store implements SyncStore {
              local = 1`,
         )
         .run(entity, id, stamp, JSON.stringify(payload))
+      if (existing?.archived === true) this.dropBody(entity, id)
       this.logChange(entity, id, '')
     })
 
@@ -472,6 +627,7 @@ export class Store implements SyncStore {
       this.db
         .prepare('UPDATE rows SET stamp = ?, deleted = 1, local = 1 WHERE entity = ? AND cid = ?')
         .run(stamp, entity, id)
+      if (existing.archived === true) this.dropBody(entity, id)
       this.logChange(entity, id, '')
     })
     this.emit({ entity, id, deleted: true })
@@ -481,6 +637,7 @@ export class Store implements SyncStore {
   async clearAll(): Promise<void> {
     this.dropList(null)
     this.db.exec('DELETE FROM rows')
+    this.db.exec('DELETE FROM bodies')
     this.db.exec('DELETE FROM memory_versions')
     this.db.exec('DELETE FROM change_log')
     this.db.prepare("DELETE FROM kv WHERE k IN ('push_mark', 'cursor')").run()
@@ -532,6 +689,10 @@ export class Store implements SyncStore {
     this.closed = true
     this.checkpointer?.stop()
     this.checkpointer = null
+    this.reader?.stop()
+    this.reader = null
+    if (this.archiveTimer !== null) clearTimeout(this.archiveTimer)
+    this.archiveTimer = null
     this.db.close()
   }
 
@@ -569,6 +730,103 @@ export class Store implements SyncStore {
   pragmas(): { synchronous: number; autocheckpoint: number; cacheSize: number } {
     const one = (name: string): number => numberField(Object.values(this.db.prepare(`PRAGMA ${name}`).get() ?? {})[0])
     return { synchronous: one('synchronous'), autocheckpoint: one('wal_autocheckpoint'), cacheSize: one('cache_size') }
+  }
+
+  // ---- old step bodies ----
+
+  /**
+   * Old finished steps made light in place: a step's run record holds up to 50 KB of command output and input, and
+   * 72,000 of them make the chat table 280 MB, so every read that walks steps pages all of it in. A step older than
+   * `before` keeps its light row (what the window lists anyway, shared/light-row.ts) and its full body moves to the
+   * `bodies` table, which no list touches; get() still finds it, so opening an old step shows its whole output and a
+   * change merges onto all of it. The row's stamp and the change log are untouched: nothing is sent, and a device that
+   * pulls the row later still gets it whole (changesAfter). Does a few rows per call, found off the main thread.
+   */
+  async archiveSlice(before: number, afterAt = 0, rows = ARCHIVE_SLICE_ROWS): Promise<{ changed: number; next: number; more: boolean }> {
+    if (this.closed || this.inTransaction || this.batching !== null) return { changed: 0, next: afterAt, more: true }
+    const picked = await this.readQuery(
+      `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_kind_at WHERE entity = 'chat_item' AND ${KIND_SQL} = 'activity' AND ${CREATED_SQL} > ? AND ${CREATED_SQL} < ? AND deleted = 0 AND octet_length(payload) > ? ORDER BY ${CREATED_SQL} LIMIT ?`,
+      [afterAt, before, ARCHIVE_MIN_BYTES, rows],
+      'archive slice',
+    )
+    if (picked.length === 0) return { changed: 0, next: before, more: false }
+    const last = picked[picked.length - 1]
+    const next = last === undefined ? before : numberField(last.payload.createdAt)
+    if (this.closed || this.inTransaction || this.batching !== null) return { changed: 0, next: afterAt, more: true }
+    const keep = this.db.prepare('INSERT OR REPLACE INTO bodies(entity, cid, payload) VALUES(?, ?, ?)')
+    const slim = this.db.prepare('UPDATE rows SET payload = ? WHERE entity = ? AND cid = ? AND stamp = ?')
+    let changed = 0
+    this.db.exec('BEGIN')
+    this.inTransaction = true
+    try {
+      for (const row of picked) {
+        const light = lightRow('chat_item', row.payload)
+        // Nothing to cut (its bytes are in text a list needs), or a step still running: left as it is.
+        if (light === row.payload || parseMetaText(row.payload['meta'])['status'] === 'running') continue
+        const lightText = JSON.stringify(light)
+        const full = JSON.stringify(row.payload)
+        if (full.length - lightText.length < ARCHIVE_MIN_BYTES / 2) continue
+        // Only if the row is still what was read (a change since then wins, and it stays whole).
+        if (this.db.prepare('SELECT 1 AS x FROM rows WHERE entity = ? AND cid = ? AND stamp = ?').get('chat_item', row.cid, row.stamp) === undefined) continue
+        keep.run('chat_item', row.cid, full)
+        slim.run(lightText, 'chat_item', row.cid, row.stamp)
+        changed += 1
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    } finally {
+      this.inTransaction = false
+    }
+    return { changed, next, more: true }
+  }
+
+  /**
+   * Moves old step bodies out, a little at a time, for as long as it takes: it starts after `delayMs`, leaves five
+   * times as long as each slice took before the next, and holds off while the computer is short of memory or disk
+   * (`busy`). Then once more every 6 hours for the steps that have grown old since.
+   */
+  startArchiver(options: { delayMs?: number; busy?: () => boolean; log?: (line: string, detail?: Record<string, unknown>) => void; ageMs?: number; minGapMs?: number } = {}): void {
+    if (this.archiveTimer !== null || this.closed || this.file === ':memory:') return
+    let after = 0
+    let total = 0
+    const schedule = (ms: number): void => {
+      if (this.closed) return
+      this.archiveTimer = setTimeout(() => void pass(), ms)
+      this.archiveTimer.unref?.()
+    }
+    const pass = async (): Promise<void> => {
+      if (this.closed) return
+      if (options.busy?.() === true) return schedule(30_000)
+      const started = performance.now()
+      try {
+        const out = await this.archiveSlice(Date.now() - (options.ageMs ?? ARCHIVE_AGE_MS), after)
+        total += out.changed
+        after = out.next
+        if (!out.more) {
+          if (total > 0) options.log?.('Old chat steps made light', { rows: total })
+          after = 0
+          total = 0
+          return schedule(6 * 3_600_000)
+        }
+      } catch (error) {
+        if (this.closed) return
+        options.log?.('Making old chat steps light failed', { why: error instanceof Error ? error.message : String(error) })
+        return schedule(600_000)
+      }
+      schedule(Math.max(options.minGapMs ?? 200, Math.round((performance.now() - started) * 5)))
+    }
+    schedule(options.delayMs ?? 90_000)
+  }
+
+  /** How many old steps have their body moved out (tests and diagnostics). */
+  bodiesKept(): number {
+    return numberField(this.db.prepare('SELECT count(*) AS n FROM bodies').get()?.['n'])
+  }
+
+  private dropBody(entity: EntityName, id: string): void {
+    this.db.prepare('DELETE FROM bodies WHERE entity = ? AND cid = ?').run(entity, id)
   }
 
   // ---- memory versions ----
@@ -639,7 +897,7 @@ export class Store implements SyncStore {
     const after = afterStamp === null ? null : decodeStamp(afterStamp)
     const changes: Change[] = []
     const statement = this.db.prepare(
-      'SELECT cid, stamp, deleted, payload FROM rows WHERE entity = ? AND local = 1',
+      'SELECT r.cid AS cid, r.stamp AS stamp, r.deleted AS deleted, COALESCE(b.payload, r.payload) AS payload FROM rows r LEFT JOIN bodies b ON b.entity = r.entity AND b.cid = r.cid WHERE r.entity = ? AND r.local = 1',
     )
     for (const entity of ENTITY_NAMES) {
       for (const row of statement.all(entity)) {
@@ -727,6 +985,7 @@ export class Store implements SyncStore {
              local = 0`,
         )
         .run(change.entity, change.id, change.stamp, change.deleted ? 1 : 0, JSON.stringify(payload))
+      if (existing?.archived === true) this.dropBody(change.entity, change.id)
       this.logChange(change.entity, change.id, via)
       touched.push(change.deleted ? { entity: change.entity, id: change.id, deleted: true } : { entity: change.entity, row: { id: change.id, ...payload } as EntityMap[EntityName] })
     }
@@ -781,8 +1040,8 @@ export class Store implements SyncStore {
     if (only !== null && only.length === 0) return { changes: [], cursor: after }
     const entries = this.db
       .prepare(
-        `SELECT l.seq AS seq, l.entity AS entity, l.cid AS cid, l.via AS via, r.stamp AS stamp, r.deleted AS deleted, r.payload AS payload
-         FROM change_log l LEFT JOIN rows r ON r.entity = l.entity AND r.cid = l.cid
+        `SELECT l.seq AS seq, l.entity AS entity, l.cid AS cid, l.via AS via, r.stamp AS stamp, r.deleted AS deleted, COALESCE(b.payload, r.payload) AS payload
+         FROM change_log l LEFT JOIN rows r ON r.entity = l.entity AND r.cid = l.cid LEFT JOIN bodies b ON b.entity = l.entity AND b.cid = l.cid
          WHERE l.seq > ?${only === null ? '' : ` AND l.entity IN (${only.map(() => '?').join(', ')})`} ORDER BY l.seq LIMIT ?`,
       )
       .all(after, ...(only ?? []), Math.max(1, Math.floor(limit)))
@@ -855,7 +1114,14 @@ export class Store implements SyncStore {
     const row = this.db
       .prepare('SELECT cid, stamp, deleted, payload FROM rows WHERE entity = ? AND cid = ?')
       .get(entity, id)
-    return row === undefined ? null : rowFromSql(row)
+    if (row === undefined) return null
+    const stored = rowFromSql(row)
+    // An old step made light (archiveSlice): its full body, so get() shows the whole output and a change merges onto
+    // all of it. Only a row that says it was cut is looked up.
+    if (entity !== 'chat_item' || typeof stored.payload['meta'] !== 'string' || !stored.payload['meta'].includes('"more":true')) return stored
+    const body = this.db.prepare('SELECT payload FROM bodies WHERE entity = ? AND cid = ?').get(entity, id)
+    if (body === undefined) return stored
+    return { ...stored, payload: parsePayload(body['payload']), archived: true }
   }
 
   private kv(key: string): string | null {
@@ -876,7 +1142,7 @@ export class Store implements SyncStore {
 }
 
 /** The SQL of a listWhere, or null when nothing can match (an empty kinds list, a kind outside it). */
-function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args: Array<string | number> } | null {
+function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args: Array<string | number>; ordered: boolean } | null {
   const clauses = ['entity = ?', 'deleted = 0']
   const args: Array<string | number> = [entity]
   if (where.thread !== undefined) {
@@ -932,13 +1198,77 @@ function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args
           : where.statuses !== undefined
             ? 'rows_status_at'
             : 'rows_created'
-  const order = where.newestFirst === true ? 'DESC' : 'ASC'
+  // A chat-row read with no limit gets the newest LIST_WHERE_CAP (the caller's order is restored after), unless it
+  // says it needs them all: those bytes are what took 54 s.
+  const capped = entity === 'chat_item' && where.limit === undefined && where.all !== true
+  const newestFirst = where.newestFirst === true || capped
+  const order = newestFirst ? 'DESC' : 'ASC'
   let sql = `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY ${index} WHERE ${clauses.join(' AND ')} ORDER BY ${CREATED_SQL} ${order}, stamp ${order}`
   if (where.limit !== undefined && where.limit > 0) {
     sql += ' LIMIT ?'
     args.push(Math.floor(where.limit))
+  } else if (capped) {
+    sql += ' LIMIT ?'
+    args.push(LIST_WHERE_CAP)
   }
-  return { sql, args }
+  return { sql, args, ordered: newestFirst }
+}
+
+/** A row from a read worker. */
+function storedFromRaw(row: RawRow): StoredRow {
+  return { cid: row[0], stamp: row[1], deleted: row[2] === 1, payload: parsePayload(row[3]) }
+}
+
+/** Rows parsed in slices, with a turn for the event loop between them. */
+async function parseSliced(raw: Array<Record<string, SQLOutputValue>>): Promise<StoredRow[]> {
+  const out: StoredRow[] = []
+  let sliceStart = performance.now()
+  for (let i = 0; i < raw.length; i++) {
+    out.push(rowFromSql(raw[i] as Record<string, SQLOutputValue>))
+    if (i % 32 === 31 && performance.now() - sliceStart >= READ_SLICE_MS) {
+      await yieldNow()
+      sliceStart = performance.now()
+    }
+  }
+  return out
+}
+
+/** Rows as callers get them, in slices when there are many. */
+function rowsOut<T>(rows: StoredRow[]): Promise<T[]> | T[] {
+  if (rows.length <= 2_000) return rows.map((row) => ({ id: row.cid, ...row.payload }) as T)
+  return (async () => {
+    const out: T[] = []
+    let sliceStart = performance.now()
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] as StoredRow
+      out.push({ id: row.cid, ...row.payload } as T)
+      if (i % 256 === 255 && performance.now() - sliceStart >= READ_SLICE_MS) {
+        await yieldNow()
+        sliceStart = performance.now()
+      }
+    }
+    return out
+  })()
+}
+
+/** The nearest frames of a captured stack, for the log. */
+function callerOf(stack: string | undefined): string {
+  if (stack === undefined) return ''
+  const lines = stack.split('\n').slice(1, 6).map((line) => line.trim().replace(/^at /, ''))
+  return lines
+    .slice(0, 3)
+    .map((line) => line.replace(/\(.*[\\/]/, '(').replace(/^async /, ''))
+    .join(' < ')
+}
+
+function parseMetaText(meta: unknown): Record<string, unknown> {
+  if (typeof meta !== 'string') return {}
+  try {
+    const value: unknown = JSON.parse(meta)
+    return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
 }
 
 /** One change per row (the last one), in the order they happened. */

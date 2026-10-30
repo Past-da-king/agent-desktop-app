@@ -38,6 +38,7 @@ import {
 
 import { siteFromCall, siteOf, stuckPhrase, urlFromResult, type ToolInFlight } from './stuck-tool'
 import { listWhere, type DataStore } from './data'
+import { helperHold, helperState } from '../../shared/helper-cards'
 import { liveRuns } from './live-runs'
 import type { CliHost } from './cli-host'
 import { projectFolderOf } from './work-folder'
@@ -381,6 +382,14 @@ const OUT_OF_STEPS = /^I stopped after (\d+) steps without finishing/
 const MINUTE_MS = 60_000
 /** Default minutes with no new step before a helper's creator gets a heads-up (Settings can change it; 0 = never). */
 export const QUIET_MINUTES_DEFAULT = 10
+/** A helper's own steps read back when it is rebuilt from its rows; only the newest 120 are shown. */
+const BRIEF_STEPS_READ = 200
+const DAY_MS = 24 * 60 * MINUTE_MS
+
+/** How a helper's own steps name it, inside their stored JSON. */
+function helperMark(id: string): string {
+  return `\\"helper\\":\\"${id}\\"`
+}
 /** A stop routed to the brain running a helper: after this long with its card still working, it is ended here. */
 export const STOP_GRACE_MS = 30_000
 /** A card working with no run and no live lease for this long is a ghost: it is ended as lost. */
@@ -986,7 +995,10 @@ export class HelperManager implements HelperHost {
         const endedAt = numberField(meta['endedAt'])
         const minutes = Math.max(0, Math.floor(((endedAt > 0 ? endedAt : nowMs) - startedAt) / 60_000))
         const steps = (stepsOf.get(row.id) ?? []).slice(-5).join('; ')
-        const head = `#${row.id} ${stringField(meta['label'])} [${state}${meta['queued'] === true ? ', queued' : ''}, ${minutes}m]\nBrief: ${clip(row.text, 240)}`
+        // Held by the low-memory guard or the queue: it is not working, and nothing is going on to report.
+        const held = helperHold({ state: helperState(state), queued: meta['queued'] === true, summary: stringField(meta['summary']) })
+        const head = `#${row.id} ${stringField(meta['label'])} [${held?.kind ?? state}, ${minutes}m]\nBrief: ${clip(row.text, 240)}`
+        if (held !== null) return `${head}\n${held.line}`
         if (state !== 'working') {
           return `${head}\nResult: ${clip(stringField(meta['result']), 500)}`
         }
@@ -1141,15 +1153,8 @@ export class HelperManager implements HelperHost {
     const rows = await listWhere(this.store, 'chat_item', { kind: 'helper', contains: WORKING_IN_META }).catch(() => [])
     const link = this.link()
     let ended = 0
-    // Helpers with a step in the last ORPHAN_ANY_MS, read once per pass and only when a card is that old.
-    let stepped: Set<string> | null = null
-    const steppedLately = async (id: string): Promise<boolean> => {
-      if (stepped === null) {
-        const recent = await listWhere(this.store, 'chat_item', { kind: 'activity', since: now - ORPHAN_ANY_MS }).catch(() => [])
-        stepped = new Set(recent.map((step) => stringField(parseMeta(step.meta)['helper'])).filter((each) => each !== ''))
-      }
-      return stepped.has(id)
-    }
+    // Whether this helper took a step in the last ORPHAN_ANY_MS: its own newest step, only when a card is that old.
+    const steppedLately = async (id: string): Promise<boolean> => (await listWhere(this.store, 'chat_item', { kind: 'activity', since: now - ORPHAN_ANY_MS, contains: helperMark(id), newestFirst: true, limit: 1 }).catch(() => [])).length > 0
     for (const row of rows) {
       if (row.kind !== 'helper' || this.runs.has(row.id) || this.queue.includes(row.id)) continue
       const meta = parseMeta(row.meta)
@@ -1845,7 +1850,8 @@ export class HelperManager implements HelperHost {
       const token = stringField(meta['runToken']) || String(run.startedAt)
       const key = `quiet:${run.id}:${token}`
       if (this.noticed.has(key) || meta['quietWarned'] === token) continue
-      const steps = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, run.startedAt - 1) }).catch(() => [])
+      // Its newest step only (every step of every helper since it started, read once a minute, was days of outputs).
+      const steps = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, run.startedAt - 1), contains: helperMark(run.id), newestFirst: true, limit: 1 }).catch(() => [])
       let last = run.startedAt
       let what = ''
       let running: { name: string; since: number } | null = null
@@ -2227,8 +2233,9 @@ export class HelperManager implements HelperHost {
       this.stepRows.delete(callId)
       return known
     }
-    const since = this.runs.get(helperId)?.startedAt ?? 0
-    const rows = await listWhere(this.store, 'chat_item', { kind: 'activity', since: since > 0 ? since - 1 : 0, contains: RUNNING_STEP_IN_META })
+    // A run in hand starts the search at its start; with none, the last day (never all the steps there are).
+    const since = this.runs.get(helperId)?.startedAt ?? this.now() - DAY_MS
+    const rows = await listWhere(this.store, 'chat_item', { kind: 'activity', since: since - 1, contains: RUNNING_STEP_IN_META })
     for (let i = rows.length - 1; i >= 0; i--) {
       const row = rows[i]
       if (row === undefined || row.kind !== 'activity') continue
@@ -2507,7 +2514,11 @@ export class HelperManager implements HelperHost {
    * rows every brain has (the card, its activity steps, its kept messages), so it works on any computer.
    */
   private async rebuiltBrief(id: string, brief: string, now: string): Promise<string> {
-    const steps = (await listWhere(this.store, 'chat_item', { kind: 'activity' }).catch(() => []))
+    // Only its own newest steps, read from the end, never earlier than its card. This read used to be every step of
+    // every helper (72,773 rows, 279 MB), parsed here on each send-back: 54 s on the main thread on 30 Oct 2026.
+    const card = await this.store.get('chat_item', id).catch(() => null)
+    const own = await listWhere(this.store, 'chat_item', { kind: 'activity', since: Math.max(0, (card?.createdAt ?? 0) - 1), contains: helperMark(id), newestFirst: true, limit: BRIEF_STEPS_READ }).catch(() => [])
+    const steps = own
       .filter((step) => stringField(parseMeta(step.meta)['helper']) === id)
       // Messages it was sent are listed in full below.
       .filter((step) => !/^(Sent back|Told it): /.test(step.text))
@@ -2516,7 +2527,7 @@ export class HelperManager implements HelperHost {
     const kept = await this.keptNotes(id)
     const messages = kept.filter((each) => each.kind === 'message' && each.text !== now).map((each) => each.text)
     const results = kept.filter((each) => each.kind === 'result').map((each) => each.text)
-    const shown = steps.length > 120 ? [`- (${steps.length - 120} earlier steps left out)`, ...steps.slice(-120)] : steps
+    const shown = own.length >= BRIEF_STEPS_READ || steps.length > 120 ? ['- (earlier steps left out)', ...steps.slice(-120)] : steps
     return [
       '[You are being sent back to a job you already started. Your earlier conversation could not be continued, so here is all of it: your brief, what you already did, and the messages you were sent. Carry on from where you were; do not start over or redo finished steps.]',
       '',

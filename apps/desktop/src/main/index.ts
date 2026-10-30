@@ -138,6 +138,7 @@ import { getDevicesHost } from './devices/service'
 import { copyVerdict, defaultInstalledExe, isInstalledCopy } from './install-guard'
 import { startWatchdog, type Watchdog } from './watchdog'
 import { autoHelperCap, busyReason, DEFAULT_LIMITS, ResourceMonitor, shortOf, type ResourceLimits } from './runtime/resources'
+import { warmRecall } from './runtime/recall'
 import { existsSync as fileExists } from 'node:fs'
 import { spawn as spawnProcess } from 'node:child_process'
 
@@ -820,18 +821,36 @@ async function startServices(win: BrowserWindow): Promise<void> {
   store = new Store(join(dir, 'agent.db'))
   // Checkpoints off the main thread (db-checkpoint.ts): a checkpoint inside an ordinary write took up to 2 s.
   store.startCheckpointer({ log: (line, detail) => logger.info(line, detail) })
+  // Reads of the big tables run in worker threads (db-reader.ts): no read can hold the window or the links.
+  store.startReader({ log: (line, detail) => logger.warn(line, detail) })
   const settings = new SettingsStore(join(dir, 'settings.json'))
   settingsStore = settings
   // The main thread blocked for a second or more goes to main.log with its stacks (watchdog.ts).
   const watchMs = settings.get().watchdogMs
   watchdog = startWatchdog({
     blockedMs: typeof watchMs === 'number' ? watchMs : 1000,
-    onBlocked: (report) => logger.warn('Main thread blocked', { ms: report.ms, at: new Date(report.at).toISOString(), stacks: report.stacks, ...(report.note === undefined ? {} : { note: report.note }) }),
+    onBlocked: (report) => {
+      // The stacks say where; the reads beside them say which query, what it asked and how many rows it brought back.
+      const reads = store?.recentReads(report.at - 1_000).filter((read) => read.at <= report.at + report.ms + 1_000) ?? []
+      logger.warn('Main thread blocked', { ms: report.ms, at: new Date(report.at).toISOString(), stacks: report.stacks, ...(reads.length === 0 ? {} : { reads }), ...(report.note === undefined ? {} : { note: report.note }) })
+    },
     onError: (why) => logger.warn('Watchdog problem', { why }),
   })
   // What this computer has to spare, for starting helpers (runtime/resources.ts).
   resourceMonitor = new ResourceMonitor(dir)
   resourceMonitor.start()
+  // Old finished steps' long outputs move out of the chat rows, a little at a time, never while memory or disk is short.
+  // Every memory page's words are worked out in slices ahead of the first turn (runtime/recall.ts).
+  const warmStore = store
+  setTimeout(() => void warmStore.list('memory').then((pages) => warmRecall(pages)).catch(() => undefined), 20_000).unref?.()
+  store.startArchiver({
+    // It frees memory later but costs a little now, so it holds off only when things are truly tight.
+    busy: () => {
+      const now = resourceMonitor?.now() ?? null
+      return now !== null && (now.freeRamGb < 0.5 || (now.freeDiskGb >= 0 && now.freeDiskGb < 2))
+    },
+    log: (line, detail) => logger.info(line, detail),
+  })
   const secrets = new Secrets(join(dir, 'secrets'), safeStorage)
   // The Vault (vault/store.ts): from here on no vault value is written into a row, a log or a tool result.
   const vault = new VaultStore(secrets)

@@ -11,7 +11,7 @@ import { chatOf } from '../runtime/chat-lines'
 export async function adoptEarlierChats(store: DataStore, deleted: boolean): Promise<number> {
   if (deleted) return 0
   // Every chat has rows other than steps: those are enough to know its chats, by index (not the 240 MB of steps).
-  const rows = await listWhere(store, 'chat_item', { exceptKinds: ['activity'] })
+  const rows = await listWhere(store, 'chat_item', { exceptKinds: ['activity'], all: true })
   const projects = await store.list('project')
   const held = new Set(projects.flatMap((project) => project.chats))
   const firstSeen = new Map<string, number>()

@@ -8,7 +8,7 @@ import { openChat } from '../lib/chat-actions'
 import { chatOf, chatTitleOf, itemsOfChat } from '../lib/chats'
 import { helperCards, helperIdOf, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
 import { metaText, parseMeta } from '../lib/meta'
-import { cardsForChat, helperParentChat } from '../../shared/helper-cards'
+import { cardsForChat, helperHold, helperParentChat } from '../../shared/helper-cards'
 import { useChats } from '../state/useChats'
 import { useCalmEntity, useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -23,7 +23,9 @@ import { runFromMeta } from '../../shared/run-record'
 import { RunStep } from '../views/RunStep'
 
 function stateLabel(helper: HelperView): { label: string; tone: string; icon: IconName } {
-  if (helper.state === 'working') return helper.queued ? { label: 'Queued', tone: 'mute', icon: 'clock' } : { label: 'Working', tone: 'pri', icon: 'globe' }
+  const held = helperHold(helper)
+  if (held !== null) return held.kind === 'paused' ? { label: 'Paused', tone: 'warn', icon: 'clock' } : { label: 'Queued', tone: 'mute', icon: 'clock' }
+  if (helper.state === 'working') return { label: 'Working', tone: 'pri', icon: 'globe' }
   if (helper.state === 'done') return { label: 'Done', tone: 'ok', icon: 'check' }
   if (helper.state === 'failed') return { label: 'Failed', tone: 'warn', icon: 'x' }
   return { label: 'Stopped', tone: 'mute', icon: 'stop' }
@@ -121,9 +123,10 @@ export function HelperCardList({
 }): JSX.Element | null {
   const { stopping, stop } = useStop()
   if (cards.length === 0 && main === null) return null
-  const working = cards.filter((card) => card.state === 'working').length + (main === null ? 0 : 1)
+  const waitingHelpers = cards.filter((card) => helperHold(card) !== null).length
+  const working = cards.filter((card) => card.state === 'working').length - waitingHelpers + (main === null ? 0 : 1)
   const replied = cards.filter((card) => card.waiting).length
-  const counts = [working > 0 || replied === 0 ? `${working} working` : '', replied > 0 ? `${replied} replied` : ''].filter((part) => part !== '').join(', ')
+  const counts = [working > 0 || replied === 0 ? `${working} working` : '', waitingHelpers > 0 ? `${waitingHelpers} waiting` : '', replied > 0 ? `${replied} replied` : ''].filter((part) => part !== '').join(', ')
   return (
     <section className="hp" aria-label="Chats and helpers">
       <div className="hp-title">

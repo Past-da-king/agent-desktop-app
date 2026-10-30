@@ -58,6 +58,20 @@ export interface HelperView {
   where: string
 }
 
+/** What a card says while the queue holds it. */
+export const QUEUED_LINE = 'Queued: waiting for a free slot'
+
+/**
+ * A helper the low-memory guard or the queue is holding has not started: it is not working, whatever its row's state
+ * says while it waits. Null for anything that is actually running or has ended.
+ */
+export function helperHold(helper: { state: HelperState; queued: boolean; summary: string }): { kind: 'paused' | 'queued'; line: string } | null {
+  if (helper.state !== 'working' || !helper.queued) return null
+  const summary = helper.summary.trim()
+  if (summary.startsWith('Paused:')) return { kind: 'paused', line: summary }
+  return { kind: 'queued', line: summary.startsWith('Queued:') ? summary : QUEUED_LINE }
+}
+
 export function helperState(value: string): HelperState {
   if (value === 'done' || value === 'failed' || value === 'stopped') return value
   return 'working'
@@ -250,13 +264,16 @@ function stepText(step: ChatItem): string {
 
 /** The one line a helper card shows: the step running now, else its newest step, else its status line. */
 export function helperLine(helper: HelperView): string {
+  // Held: the reason, never an old step of an earlier run.
+  const held = helperHold(helper)
+  if (held !== null) return held.line
   const steps = helper.activity
   const running = [...steps].reverse().find((step) => metaText(metaOf(step), 'status') === 'running')
   const step = running ?? steps[steps.length - 1]
   const text = step === undefined ? '' : stepText(step)
   if (text.trim() !== '') return text
   if (helper.summary.trim() !== '') return helper.summary
-  return helper.queued ? 'Waiting its turn' : 'Starting'
+  return 'Starting'
 }
 
 /** A project chat's own lines (its agent's steps and replies; helpers' steps are on their own cards), oldest first. */

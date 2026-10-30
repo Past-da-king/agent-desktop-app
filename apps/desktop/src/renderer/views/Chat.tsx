@@ -6,6 +6,7 @@ import { agent, chat } from '../bridge'
 import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
+import { helperHold } from '../../shared/helper-cards'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
 import { branchFrom, openChat as openChatPage, startProjectChat } from '../lib/chat-actions'
 import { mentionNoticeOf, mentionReplyOf } from '../../shared/mentions'
@@ -562,7 +563,8 @@ function SideRunRow({ helper, asked }: { helper: HelperView; asked: string }): J
   const [stopping, setStopping] = useState(false)
   const live = helper.state === 'working'
   const done = helper.state === 'done'
-  const label = live ? (helper.queued ? 'Waiting its turn' : 'Working') : done ? 'Done' : helper.state === 'failed' ? 'Failed' : 'Stopped'
+  const held = helperHold(helper)
+  const label = held !== null ? held.line : live ? 'Working' : done ? 'Done' : helper.state === 'failed' ? 'Failed' : 'Stopped'
   const tone = live ? 'pri' : done ? 'ok' : 'warn'
   const result = helper.result.trim()
   const lines = result.split('\n').filter((line) => line.trim() !== '')
@@ -634,8 +636,9 @@ function HelperRow({ helper }: { helper: HelperView }): JSX.Element {
   const [open, setOpen] = useState(false)
   const [stopping, setStopping] = useState(false)
   const live = helper.state === 'working'
-  const tone = live ? (helper.queued ? 'mute' : 'pri') : helper.state === 'done' ? 'ok' : 'warn'
-  const label = live ? (helper.queued ? 'Queued' : 'Working') : helper.state === 'done' ? 'Done' : helper.state === 'failed' ? 'Failed' : 'Stopped'
+  const held = helperHold(helper)
+  const tone = held !== null ? (held.kind === 'paused' ? 'warn' : 'mute') : live ? 'pri' : helper.state === 'done' ? 'ok' : 'warn'
+  const label = held !== null ? (held.kind === 'paused' ? 'Paused' : 'Queued') : live ? 'Working' : helper.state === 'done' ? 'Done' : helper.state === 'failed' ? 'Failed' : 'Stopped'
   const icon: IconName = live ? 'globe' : helper.state === 'done' ? 'check' : helper.state === 'failed' ? 'x' : 'stop'
   const bodyId = `helper-steps-${helper.id.replace(/[^a-zA-Z0-9_-]/g, '')}`
 
@@ -666,7 +669,7 @@ function HelperRow({ helper }: { helper: HelperView }): JSX.Element {
           <span className="hn">
             <b>{helper.label}</b>
             <Pill tone={tone}>{label}</Pill>
-            <div>{helper.summary || (helper.queued ? 'Waiting its turn' : live ? 'Working' : 'Finished')}</div>
+            <div>{held !== null ? held.line : helper.summary || (live ? 'Working' : 'Finished')}</div>
           </span>
           <span className="hchev">
             <Icon name="chev" size={20} />

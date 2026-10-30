@@ -984,6 +984,11 @@ export interface ListWhere {
   before?: number
   limit?: number
   newestFirst?: boolean
+  /**
+   * Every matching chat row, past the store's cap of the newest 10,000 (Store.listWhere). Only for a read that truly
+   * needs all of them (a chat being branched or filed): it runs off the main thread, but it still costs memory.
+   */
+  all?: boolean
 }
 
 /** How one message goes (AgentApi chat.send). */

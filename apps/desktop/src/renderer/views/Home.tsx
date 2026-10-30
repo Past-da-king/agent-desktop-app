@@ -5,6 +5,7 @@ import { agent, chat } from '../bridge'
 import { startNewChat } from '../lib/chat-actions'
 import { dueLabel, greeting, nextRun, scheduleLabel, short, timeAgo, todayEyebrow } from '../lib/format'
 import { workingHelpers } from '../lib/helpers'
+import { helperHold } from '../../shared/helper-cards'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { dueSoon, openUserTasks } from '../lib/tasks'
 import { useCalmEntity, useEntity, useEntityLoaded } from '../state/useData'
@@ -229,12 +230,16 @@ export function Home(): JSX.Element {
       })
   }
 
+  // A helper held by the low-memory guard or the queue is not working yet.
+  const helpersWorking = helpers.filter((helper) => helperHold(helper) === null).length
   const heroSubtitle = run.running
     ? 'Working right now'
     : needs.length > 0
       ? `Waiting for you on ${needs.length === 1 ? 'one thing' : `${needs.length} things`}`
-      : helpers.length > 0
-        ? `${helpers.length === 1 ? 'A helper is' : `${helpers.length} helpers are`} working on it`
+      : helpersWorking > 0
+        ? `${helpersWorking === 1 ? 'A helper is' : `${helpersWorking} helpers are`} working on it`
+        : helpers.length > 0
+          ? `${helpers.length === 1 ? 'A helper is' : `${helpers.length} helpers are`} waiting to start`
         : openGoal
           ? `Working on ${openGoal.title}`
           : lastWork
@@ -315,9 +320,9 @@ export function Home(): JSX.Element {
                 <div className="now-helpers">
                   {helpers.map((helper) => (
                     <div className="now-helper" key={helper.id}>
-                      <Icon name="globe" size={16} />
+                      <Icon name={helperHold(helper) === null ? 'globe' : 'clock'} size={16} />
                       <b>{helper.label}</b>
-                      <span>{helper.summary || (helper.queued ? 'Waiting its turn' : 'Working')}</span>
+                      <span>{helperHold(helper)?.line ?? (helper.summary || 'Working')}</span>
                     </div>
                   ))}
                 </div>

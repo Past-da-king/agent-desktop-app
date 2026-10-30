@@ -43,8 +43,8 @@ export function autoHelperCap(cores: number, totalRamGb: number): number {
 /** Why no new helper should start here now, or '' when one may. */
 export function shortOf(sample: ResourceSample | null, limits: ResourceLimits): string {
   if (sample === null) return ''
-  if (limits.minFreeRamGb > 0 && sample.freeRamGb < limits.minFreeRamGb) return `this computer is low on memory (${sample.freeRamGb.toFixed(1)} GB free)`
-  if (limits.minFreeDiskGb > 0 && sample.freeDiskGb >= 0 && sample.freeDiskGb < limits.minFreeDiskGb) return `this computer is low on disk space (${sample.freeDiskGb.toFixed(1)} GB free)`
+  if (limits.minFreeRamGb > 0 && sample.freeRamGb < limits.minFreeRamGb) return `low on memory (${sample.freeRamGb.toFixed(1)} GB free)`
+  if (limits.minFreeDiskGb > 0 && sample.freeDiskGb >= 0 && sample.freeDiskGb < limits.minFreeDiskGb) return `low on disk space (${sample.freeDiskGb.toFixed(1)} GB free)`
   return ''
 }
 

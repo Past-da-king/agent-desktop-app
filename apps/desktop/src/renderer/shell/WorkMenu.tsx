@@ -6,6 +6,7 @@ import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { Icon } from '../ui/Icon'
+import { helperHold } from '../../shared/helper-cards'
 import { HelperCardList, useMainCard, usePanelCards, useScopedCards } from './HelpersPanel'
 import { NeedsYou } from './NeedsYou'
 import { usePanelShown } from './Panel'
@@ -25,8 +26,10 @@ export function WorkButton(): JSX.Element | null {
   const count = cards.length + (main === null ? 0 : 1)
   if (shown || (count === 0 && waiting.length === 0)) return null
   const replied = cards.filter((card) => card.waiting).length
-  const working = count - replied
-  const label = [working > 0 ? `${working} working` : '', replied > 0 ? `${replied} replied` : '', waiting.length > 0 ? `${waiting.length} waiting for you` : ''].filter((part) => part !== '').join(', ')
+  // Held by the low-memory guard or the queue: on the list, but not working.
+  const held = cards.filter((card) => helperHold(card) !== null).length
+  const working = count - replied - held
+  const label = [working > 0 ? `${working} working` : '', held > 0 ? `${held} waiting to start` : '', replied > 0 ? `${replied} replied` : '', waiting.length > 0 ? `${waiting.length} waiting for you` : ''].filter((part) => part !== '').join(', ')
   return (
     <div className="tb-work-wrap">
       <button
@@ -39,7 +42,7 @@ export function WorkButton(): JSX.Element | null {
       >
         <span className="tb-work-dot" aria-hidden="true" />
         <span className="tb-work-n">{count + waiting.length}</span>
-        <span className="tb-work-t">{waiting.length > 0 ? 'Needs you' : working > 0 ? 'Working' : 'Replied'}</span>
+        <span className="tb-work-t">{waiting.length > 0 ? 'Needs you' : working > 0 ? 'Working' : held > 0 ? 'Waiting' : 'Replied'}</span>
       </button>
       {open ? <WorkMenu /> : null}
     </div>

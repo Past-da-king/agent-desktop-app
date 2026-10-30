@@ -17,6 +17,7 @@ import { Chip } from '../ui/Chip'
 import { Icon, type IconName } from '../ui/Icon'
 import { BrowserHost } from './BrowserHost'
 import { HelperAvatar, HelperStage, HelpersPanel, useWorkingHelpers } from './HelpersPanel'
+import { helperHold } from '../../shared/helper-cards'
 import { ReportStage } from './ReportStage'
 import { NeedsYou } from './NeedsYou'
 import { BrowserPeople, personOfTab, usePeople } from './BrowserPeople'
@@ -655,7 +656,7 @@ function MiniStrip({ onOpen }: { onOpen: () => void }): JSX.Element {
           className="mini-helper"
           title={`${helper.label}: ${helper.line}`}
           data-card={helper.id}
-          aria-label={`Open ${helper.label}, ${helper.waiting ? 'your turn' : helper.state === 'working' ? 'working' : 'done'}`}
+          aria-label={`Open ${helper.label}, ${helper.waiting ? 'your turn' : (helperHold(helper)?.kind ?? (helper.state === 'working' ? 'working' : 'done'))}`}
           onClick={() => {
             // A project chat's face opens that chat in full; a helper's opens its own view in the side panel.
             const target = cardTarget(helper)

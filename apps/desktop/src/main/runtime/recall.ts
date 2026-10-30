@@ -34,6 +34,15 @@ const STOP_WORDS = new Set([
 
 const DAY_MS = 86_400_000
 
+/** Of a long message or brief, this much is looked at: a pasted log must not make recall scan every page for it. */
+const RECALL_TEXT_MAX = 8_000
+/** Terms looked for in each page. */
+const WANTED_MAX = 32
+/** Of those, how many are also searched for as text inside each page (the costly part). */
+const SUBSTRING_TERMS_MAX = 12
+const RECALL_CACHE_MAX = 64
+const RECALL_CACHE_MS = 5 * 60_000
+
 /** Lowercase search terms, without the words that match everything. */
 export function terms(query: string): Set<string> {
   const words = query
@@ -79,7 +88,8 @@ function termsOf(row: MemoryRow): PageTerms {
 }
 
 export function rank(query: string, rows: MemoryRow[], limit: number): MemoryRow[] {
-  const wanted = terms(query)
+  const wanted = new Set([...terms(query.slice(0, RECALL_TEXT_MAX))].slice(0, WANTED_MAX))
+  const scanned = new Set([...wanted].filter((term) => term.length > 3).slice(0, SUBSTRING_TERMS_MAX))
   if (wanted.size === 0) {
     return [...rows].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(0, limit))
   }
@@ -94,7 +104,7 @@ export function rank(query: string, rows: MemoryRow[], limit: number): MemoryRow
       if (title.has(term)) score += 3
       if (topics.has(term)) score += 2
       if (body.has(term)) score += 1
-      if (term.length > 3 && text.includes(term)) score += 0.5
+      if (scanned.has(term) && text.includes(term)) score += 0.5
     }
     if (row.pinned) score += 0.5
     score += 0.3 / (1 + Math.max(0, now - row.updatedAt) / DAY_MS)
@@ -159,10 +169,50 @@ function capital(word: string): string {
 
 /** The memories to put in front of the model for a message: pages it names first, then the best matches. Closed pages stay out. */
 export function recallFor(text: string, all: MemoryRow[], limit: number): MemoryRow[] {
+  // The same message against the same pages gives the same pages: every helper of a batch and every step of a turn
+  // asked again, 0.5 s a time on the main thread with little free memory (30 Oct 2026).
+  const asked = text.slice(0, RECALL_TEXT_MAX)
+  const key = `${limit}|${pagesVersion(all)}|${asked}`
+  const now = Date.now()
+  const held = recalled.get(key)
+  if (held !== undefined && now - held.at < RECALL_CACHE_MS) return [...held.rows]
   const rows = all.filter(isOpen)
-  const named = namedPages(text, rows, 5)
+  const named = namedPages(asked, rows, 5)
   const seen = new Set(named.map((row) => row.id))
-  return [...named, ...rank(text, rows.filter((row) => !seen.has(row.id)), limit)].slice(0, limit + named.length)
+  const out = [...named, ...rank(asked, rows.filter((row) => !seen.has(row.id)), limit)].slice(0, limit + named.length)
+  recalled.delete(key)
+  recalled.set(key, { at: now, rows: out })
+  if (recalled.size > RECALL_CACHE_MAX) {
+    const oldest = recalled.keys().next().value
+    if (oldest !== undefined) recalled.delete(oldest)
+  }
+  return [...out]
+}
+
+/** Answers kept by message and page versions, oldest first. */
+const recalled = new Map<string, { at: number; rows: MemoryRow[] }>()
+
+/** Changes whenever a page is written, added or removed. */
+function pagesVersion(all: MemoryRow[]): string {
+  let sum = 0
+  let newest = 0
+  for (const row of all) {
+    sum = (sum + row.updatedAt) % 1_000_000_007
+    if (row.updatedAt > newest) newest = row.updatedAt
+  }
+  return `${all.length}:${newest}:${sum}`
+}
+
+/** Works out every page's words ahead of the first turn, with a turn for the event loop between slices. */
+export async function warmRecall(rows: MemoryRow[], sliceMs = 8): Promise<void> {
+  let sliceStart = performance.now()
+  for (const row of rows) {
+    termsOf(row)
+    if (performance.now() - sliceStart >= sliceMs) {
+      await new Promise((resolve) => setImmediate(resolve))
+      sliceStart = performance.now()
+    }
+  }
 }
 
 /** One memory for the prompt: long pages are cut, with the id to read the rest. */

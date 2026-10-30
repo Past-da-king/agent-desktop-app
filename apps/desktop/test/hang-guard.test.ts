@@ -193,7 +193,7 @@ describe('helpers when this computer is short of memory or disk', () => {
       },
     }
     fake = await startFakeAi((body) => (hasToolResult(body) ? { text: 'Finished.' } : { toolCalls: [{ name: 'slow_tool', input: {} }] }))
-    const state = { short: 'this computer is low on memory (0.8 GB free)' }
+    const state = { short: 'low on memory (0.8 GB free)' }
     const res = resources(state)
     const { manager: m, delivered, store } = manager(res, [slowTool])
 
@@ -204,7 +204,13 @@ describe('helpers when this computer is short of memory or disk', () => {
     const cards = (await store.list('chat_item')).filter((row) => row.kind === 'helper')
     const waiting = cards.filter((row) => meta(row)['queued'] === true)
     expect(waiting).toHaveLength(3)
-    await waitFor(async () => (await store.list('chat_item')).filter((row) => row.kind === 'helper' && String(meta(row)['summary']).startsWith('Paused: this computer is low on memory')).length === 3, 3_000)
+    await waitFor(async () => (await store.list('chat_item')).filter((row) => row.kind === 'helper' && String(meta(row)['summary']).startsWith('Paused: low on memory (0.8 GB free)')).length === 3, 3_000)
+    // helpers_status: a held helper is paused, with no working state, no Now and no steps of its own.
+    const told = await m.status()
+    expect(told.match(/\[paused, \d+m\]/g)).toHaveLength(3)
+    expect(told.match(/\[working, /g)).toHaveLength(1)
+    expect(told.match(/Paused: low on memory \(0\.8 GB free\)/g)).toHaveLength(3)
+    expect(told.match(/\nNow: /g)).toHaveLength(1)
 
     state.short = ''
     res.fire()

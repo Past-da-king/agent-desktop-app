@@ -7,6 +7,7 @@
  * stdin, so a paste costs a line of text rather than a new process. No native module is needed.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawnOffThread } from '../spawn-off-thread'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -211,7 +212,14 @@ export class WindowsKeys implements KeySender {
 
   constructor(
     private readonly command: { file: string; args: string[] } = helperCommand(),
-    private readonly spawner: Spawner = (file, args) => spawn(file, args, { windowsHide: true, stdio: 'pipe' }),
+    // From a worker: starting PowerShell on a starved computer held the main thread for seconds.
+    private readonly spawner: Spawner = (file, args) => {
+      try {
+        return spawnOffThread(file, args)
+      } catch {
+        return spawn(file, args, { windowsHide: true, stdio: 'pipe' })
+      }
+    },
   ) {}
 
   warm(): void {
