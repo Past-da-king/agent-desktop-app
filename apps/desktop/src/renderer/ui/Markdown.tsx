@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from 'react'
 
 import { CopyButton } from './CopyButton'
+import { MediaBlock } from './MediaBlock'
 
 /** A fenced code block, with its language and a copy button. */
 function CodeBlock({ code, lang }: { code: string; lang: string }): JSX.Element {
@@ -141,6 +142,13 @@ export function Markdown({
     if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       flushAll()
       blocks.push(<hr className="md-hr" key={`hr-${blocks.length}`} />)
+      continue
+    }
+    // A picture on its own line: ![alt](agent-media://f/<token>) or ![alt](https://...), drawn by the media block.
+    const picture = /^\s*!\[([^\]]*)\]\(\s*([^)\s]+)\s*\)\s*$/.exec(line)
+    if (picture) {
+      flushAll()
+      blocks.push(<MediaBlock key={`pic-${blocks.length}`} kind="image" src={picture[2] ?? ''} name={picture[1] ?? ''} />)
       continue
     }
     const heading = /^(#{1,4})\s+(.*)$/.exec(line)

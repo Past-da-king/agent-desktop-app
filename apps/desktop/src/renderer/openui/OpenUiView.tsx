@@ -10,6 +10,7 @@
 import { Component, createContext, useContext, useMemo, useState, type ErrorInfo, type ReactNode } from 'react'
 
 import { Markdown } from '../ui/Markdown'
+import { ImageLightbox, MediaBlock, mediaSrcOk } from '../ui/MediaBlock'
 import { iconForAction, iconForText, navigates, type UiIcon } from './icon-words'
 import { IconChip, UiGlyph } from './icons'
 import {
@@ -148,6 +149,11 @@ function Comp({ n, cx }: { n: UiNode; cx: Cx }): JSX.Element | null {
     case 'Image': {
       const src = str(n, 'src')
       return src === null ? null : <Picture src={src} alt={str(n, 'alt')} className="oui-img" />
+    }
+    case 'Video': {
+      // A real player, with its own controls: the video plays here instead of opening in another program.
+      const src = str(n, 'src')
+      return src === null ? null : <MediaBlock kind="video" src={src} caption={str(n, 'caption') ?? undefined} />
     }
     case 'InlineHeader':
       return (
@@ -540,10 +546,15 @@ function FollowUps({ items }: { items: UiNode[] }): JSX.Element {
 
 // ---- Photos, stacks, lists, tags --------------------------------------------------------------
 
-/** A photo from a web or data URL, cropped to fill; a soft block while it loads or if it cannot. */
+/**
+ * A photo from a web, token (agent-media://f/<token>) or data URL, cropped to fill; a soft block while it loads or if
+ * it cannot. A click opens it large over the window, so a card's picture is seen without leaving the app.
+ */
 function Picture({ src, alt, className }: { src: string; alt: string | null; className: string }): JSX.Element {
   const [failed, setFailed] = useState(false)
-  const usable = /^(https:\/\/|data:image\/)/i.test(src.trim())
+  const [zoom, setZoom] = useState(false)
+  const clean = src.trim()
+  const usable = mediaSrcOk(clean) || /^data:image\//i.test(clean)
   if (!usable || failed) {
     return (
       <div className={`${className} oui-pic-none`} role={alt ? 'img' : undefined} aria-label={alt ?? undefined}>
@@ -551,7 +562,31 @@ function Picture({ src, alt, className }: { src: string; alt: string | null; cla
       </div>
     )
   }
-  return <img className={className} src={src} alt={alt ?? ''} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+  const name = alt !== null && alt.trim() !== '' ? alt.trim() : undefined
+  return (
+    <>
+      {/* The image itself behaves as the button: the same box and crop, so no card's layout moves. */}
+      <img
+        className={`${className} oui-zoom`}
+        src={clean}
+        alt={alt ?? ''}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        role="button"
+        tabIndex={0}
+        aria-label={name !== undefined ? `Enlarge ${name}` : 'Enlarge picture'}
+        onClick={() => setZoom(true)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            setZoom(true)
+          }
+        }}
+        onError={() => setFailed(true)}
+      />
+      {zoom ? <ImageLightbox src={clean} name={name} onClose={() => setZoom(false)} /> : null}
+    </>
+  )
 }
 
 /** Several cards, one per item: side by side to swipe through ("row"), or one under another. */

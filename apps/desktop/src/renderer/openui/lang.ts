@@ -315,6 +315,8 @@ export const LIBRARY: Record<string, string[]> = {
   Tag: ['text', 'icon', 'size', 'variant'],
   ImageBlock: ['src', 'alt'],
   Image: ['alt', 'src'],
+  // A real player for a video the agent shows (agent-media://f/<token> or https), with one line under it.
+  Video: ['src', 'caption'],
   InlineHeader: ['heading', 'description'],
   EntityList: ['rows', 'size', 'header', 'footer'],
   TextCallout: ['variant', 'title', 'description'],

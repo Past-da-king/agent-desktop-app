@@ -103,6 +103,36 @@
 .report-words{font-size:12px;color:var(--on-sv)}
 .report-title{font:500 19px/1.3 var(--font);overflow-wrap:anywhere}
 .report-preview{font-size:14px;line-height:1.6;color:var(--on-sv);overflow-wrap:anywhere}
+
+/* ---------- media: a picture, a video or a sound the agent shows ----------
+   The same shape as a card: the app's own surface, a rounded top step, one small line under it. Tokens only, so it
+   follows light and dark, and it stays whole in the narrow 390px layout. */
+.media-row{max-width:760px;width:100%}
+.mb{margin:0;display:flex;flex-direction:column;gap:8px;min-width:0;max-width:100%}
+.mb-video{display:block;width:100%;max-height:440px;border-radius:var(--r-md);background:var(--s-lowest)}
+.mb-audio-row{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:var(--r-md);background:var(--s-low);min-width:0}
+.mb-audio{display:block;width:100%;height:auto}
+.mb-name{font:500 13px/1.4 var(--font);color:var(--on-bg);overflow-wrap:anywhere}
+.mb-pic{display:block;max-width:100%;margin:0;padding:0;border:0;background:none;border-radius:var(--r-md);cursor:zoom-in;line-height:0}
+.mb-pic:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.mb-img{display:block;max-width:100%;max-height:320px;object-fit:contain;border-radius:var(--r-md);background:var(--s-low)}
+.mb-cap{font-size:13px;line-height:1.45;color:var(--on-sv);overflow-wrap:anywhere}
+/* A dead or refused file is a quiet line, never a broken player. */
+.mb-note{margin:0;display:inline-flex;align-items:center;max-width:100%;padding:10px 14px;border-radius:var(--r-md);background:var(--s-mid);color:var(--on-sv);font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+/* A picture inside a generated card is enlarged the same way; the image keeps its own box so no card moves. */
+.oui-zoom{cursor:zoom-in}
+.oui-zoom:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+/* The picture large: a dark scrim over the whole window, the picture contained, close top right. */
+.mb-light{position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;padding:40px;background:var(--scrim);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);animation:fade .2s var(--effects)}
+.mb-light-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:var(--r-md);background:var(--s-lowest);box-shadow:var(--shadow)}
+.mb-light-x{position:absolute;top:18px;right:18px;width:44px;height:44px;border-radius:999px;border:0;background:var(--s-high);color:var(--on-bg);display:grid;place-items:center;box-shadow:var(--shadow)}
+.mb-light-x:hover{background:var(--s-highest)}
+.mb-light-x:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+@media (max-width:520px){
+  .mb-light{padding:14px}
+  .mb-img{max-height:260px}
+  .mb-video{max-height:300px}
+}
 .reader-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .reader{max-height:52vh;overflow:auto;font-size:15px;line-height:1.7;padding-right:4px}
 .free{display:flex;gap:8px;align-items:center;flex-wrap:wrap}

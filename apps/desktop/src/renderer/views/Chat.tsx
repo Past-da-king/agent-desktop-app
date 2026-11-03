@@ -37,6 +37,7 @@ import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon, type IconName } from '../ui/Icon'
 import { Markdown } from '../ui/Markdown'
+import { MediaBlock } from '../ui/MediaBlock'
 import { AgentMessage, AskCard, ProjectAskCard } from '../openui/AgentMessage'
 import type { ProjectAsk } from '../openui/ask'
 import { ReportBody } from '../openui/ReportBody'
@@ -764,6 +765,21 @@ const Row = memo(function Row({
       return <HelperRow helper={helper} />
     case 'report':
       return <ReportRow item={item} onOpen={onOpenReport} />
+    case 'media': {
+      // A picture, a video or a sound the agent shows (main/tools/media.ts): played here, never sent out to a program.
+      const meta = parseMeta(item.meta)
+      const kind = metaText(meta, 'kind')
+      return (
+        <div className="a-msg media-row">
+          <MediaBlock
+            kind={kind === 'video' || kind === 'audio' ? kind : 'image'}
+            src={metaText(meta, 'src')}
+            caption={metaText(meta, 'caption')}
+            name={metaText(meta, 'name')}
+          />
+        </div>
+      )
+    }
     case 'notice':
       if (isDivider(item)) return <ChatDivider item={item} />
       if (mentionNoticeOf(parseMeta(item.meta)) !== null) return <MentionSent item={item} />

@@ -108,7 +108,11 @@ function problems(root: UiNode): string[] {
         break
       case 'ImageBlock':
       case 'Image':
-        if (typeof n.props['src'] !== 'string' || !String(n.props['src']).startsWith('https://')) out.push('pictures are https')
+      case 'Video':
+        // A real web address, or the token address show_media hands out for a file on this computer.
+        if (typeof n.props['src'] !== 'string' || !/^(https:\/\/|agent-media:\/\/f\/[a-f0-9]{32}$)/.test(String(n.props['src']))) {
+          out.push('pictures and video are https or a shown file')
+        }
         break
       default:
         break
