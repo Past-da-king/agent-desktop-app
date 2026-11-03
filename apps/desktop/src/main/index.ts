@@ -124,6 +124,7 @@ import { wakeIdleState } from './wakeups/idle'
 import { MiniAppStore } from './miniapps/store'
 import { MiniAppHost, setMiniAppHost } from './miniapps/host'
 import { guardMiniAppFrames, registerMiniAppScheme, rendererFonts, serveMiniAppsIn } from './miniapps/protocol'
+import { registerMediaFetch } from './media/fetch'
 import { registerMediaScheme, serveMediaIn } from './media/protocol'
 import { ShownMedia } from './media/shown'
 import { latestOrigin } from './devices/origin'
@@ -1858,6 +1859,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     }
     // A page this computer fetches for the person's other nodes (a server a site blocks): relay.fetch.
     registerRelay(devices.host(), { store, rolesOf: rolesFromStore(store) })
+    // A file an agent showed plays on his phone too: the same list, by token, one range at a time (media/fetch.ts).
+    registerMediaFetch(devices.host(), { get: (token) => shownMedia.get(token) })
     // Wake-ups: the phone's ringing screen and wake channel answer and report here (main/wakeups/bridge.ts).
     {
       const wakeStore = store
