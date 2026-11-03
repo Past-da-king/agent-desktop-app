@@ -72,11 +72,11 @@ describe('end-of-day slot', () => {
 describe('end-of-day pass', () => {
   it('compiles today into one pinned "Where we are" page that replaces yesterday and reaches new chats', async () => {
     await store.upsert('memory', { id: WHERE_ID, title: 'Where we are', body: '**Goals**\n- Old goal from yesterday.', kind: 'project', topics: 'continuation, daily, 2026-10-20', pinned: true, source: 'agent' })
-    await talk('Ship the memory import tonight and then email Alex Meyer the summary', 'Done: the import is in. I will draft the email to Ben next.')
+    await talk('Ship the memory import tonight and then email Alex Meyer the summary', 'Done: the import is in. I will draft the email to Alex next.')
     const { memory, prompts } = service((system) =>
       isWhere(system)
-        ? where('**Goals**\n- Memory import live.\n\n**Done today**\n- Import shipped.\n\n**Open threads**\n- Email to [[Alex Meyer]].\n\n**Next steps**\n- Send Ben the summary.', [
-            { kind: 'person', title: 'Alex Meyer', body: 'CEO of Guavas. Gets the weekly summary by email.' },
+        ? where('**Goals**\n- Memory import live.\n\n**Done today**\n- Import shipped.\n\n**Open threads**\n- Email to [[Alex Meyer]].\n\n**Next steps**\n- Send Alex the summary.', [
+            { kind: 'person', title: 'Alex Meyer', body: 'CEO of Acme. Gets the weekly summary by email.' },
           ])
         : JSON.stringify({ changes: [] }),
     )
@@ -89,7 +89,7 @@ describe('end-of-day pass', () => {
     expect(prompts[0]).toContain('Person: Ship the memory import tonight')
     const page = await store.get('memory', WHERE_ID)
     expect(page).toMatchObject({ pinned: true, kind: 'project' })
-    expect(page?.body).toContain('Send Ben the summary.')
+    expect(page?.body).toContain('Send Alex the summary.')
     expect((await store.list('memory')).filter((row) => row.title === 'Where we are')).toHaveLength(1)
     expect(memory.upkeepState().history).toEqual([{ day: '2026-10-20', body: '**Goals**\n- Old goal from yesterday.' }])
     expect(report.changes.map((change) => change.action)).toEqual(['where', 'filed'])
@@ -97,7 +97,7 @@ describe('end-of-day pass', () => {
     // A fresh chat sees it: the pinned page is in every new conversation's prompt.
     const system = buildSystemPrompt({ settings: DEFAULT_SETTINGS, now: new Date(clock), platform: 'win32', memories: await store.list('memory'), goals: [], tasks: [], latestUserText: 'hi', timeZone: 'UTC' })
     expect(system).toContain('CORE MEMORIES (pinned')
-    expect(system).toContain('Send Ben the summary.')
+    expect(system).toContain('Send Alex the summary.')
   })
 
   it('merges near-duplicates, rewrites stale pages and drops noise, all logged and undoable', async () => {

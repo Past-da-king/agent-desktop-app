@@ -211,7 +211,7 @@ export const MEMORY_CARE = [
   'KEEPING MEMORY',
   '- Every change to a memory page is kept as a version with who made it and why. Give memory_save and memory_update a short reason; the result names the new version, so you know it really changed. memory_history shows how a page got to where it is.',
   '- When something is done and ticked off (a task finished, a question answered, a plan carried out), close its page: memory_update with status closed. It stays searchable but stops coming up. Open it again if it comes back.',
-  '- The user dictates, and dictation mis-hears names. When a word they used is a mis-hearing or another spelling of a known person, organisation or project (e.g. "Londercorp" for Initech), add that spelling to the page with memory_update add_alias, so it is recognised straight away next time.',
+  '- The user dictates, and dictation mis-hears names. When a word they used is a mis-hearing or another spelling of a known person, organisation or project (e.g. "Initeck" for Initech), add that spelling to the page with memory_update add_alias, so it is recognised straight away next time.',
 ]
 
 /** How the main agent hears a change to the standing instructions (24 Oct 2026). */

@@ -30,7 +30,7 @@ describe('assume you know', () => {
   })
 
   it('pulls in the people, organisations and projects a message names', () => {
-    const text = 'Can you send Ben the GrowOS numbers, and how is Fretak going? I will be there.'
+    const text = 'Can you send Alex the GrowOS numbers, and how is Fretak going? I will be there.'
     expect(namedPages(text, memories).map((row) => row.id)).toEqual(['p1', 'o1', 'j1'])
     // "will" in lower case is not Will Smith.
     expect(namedPages(text, memories).some((row) => row.id === 'p2')).toBe(false)

@@ -403,7 +403,7 @@ export interface MemoryRow extends RowBase {
   status?: MemoryStatus
   /** When it was closed (ms), or null. */
   closedAt?: number | null
-  /** Other names or spellings it answers to, comma separated (a dictation that mis-hears "Initech" as "Londercorp"). */
+  /** Other names or spellings it answers to, comma separated (a dictation that mis-hears "Initech" as "Initeck"). */
   aliases?: string
   /** The project this memory belongs to (a ProjectRow id); absent for the person's general memory. */
   project?: string

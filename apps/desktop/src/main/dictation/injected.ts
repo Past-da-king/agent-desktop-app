@@ -12,7 +12,7 @@ import { findWords } from '@agent/core'
 /** Words that are not speech content on their own: they never make a stretch "real". */
 const FILLER = new Set(['um', 'uh', 'er', 'erm', 'ah', 'oh', 'hmm', 'mm', 'the', 'a', 'an', 'and', 'for', 'of', 'to', 'in', 'on', 'at', 'with'])
 
-/** The lower-case words of every name, split like search splits them ("Initech" -> londa, corp). */
+/** The lower-case words of every name, split like search splits them ("Strat Edge" -> strat, edge). */
 export function nameWords(names: readonly string[]): Set<string> {
   const out = new Set<string>()
   for (const name of names) for (const word of findWords(name)) out.add(word)
@@ -80,7 +80,7 @@ export function nameCounts(text: string, names: readonly string[]): Map<string, 
     if (words.length === 0) continue
     const key = words.join(' ')
     if (counts.has(key)) continue
-    // "Initech" is said as londa corp or initech, depending on how it was heard.
+    // "Northwind" is said as north wind or northwind, depending on how it was heard.
     const forms = new Set([key, words.join('')])
     let count = 0
     const padded = ` ${said} `

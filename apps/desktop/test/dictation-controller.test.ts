@@ -222,17 +222,17 @@ describe('DictationController', () => {
   })
 
   it('puts names memory knows were mis-heard right, in a plain dictation and before clean-up', async () => {
-    const fixNames = async (text: string): Promise<string> => applyAliases(text, { names: ['Initech'], aliases: [{ heard: 'Londercorp', name: 'Initech' }] })
+    const fixNames = async (text: string): Promise<string> => applyAliases(text, { names: ['Initech'], aliases: [{ heard: 'Initeck', name: 'Initech' }] })
     const plain = harness({ fixNames })
     await listening(plain)
-    plain.transcriber().say('Send the estimate to Londercorp.')
+    plain.transcriber().say('Send the estimate to Initeck.')
     plain.controller.toggle('plain')
     await vi.advanceTimersByTimeAsync(0)
     expect(plain.typed).toEqual(['Send the estimate to Initech.'])
 
     const clean = harness({ fixNames })
     await listening(clean, 'clean')
-    clean.transcriber().say('so um send it to londercorp')
+    clean.transcriber().say('so um send it to initeck')
     clean.controller.toggle('clean')
     await vi.advanceTimersByTimeAsync(0)
     expect(clean.cleaned).toEqual(['so um send it to Initech'])

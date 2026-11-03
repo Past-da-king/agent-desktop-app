@@ -245,10 +245,10 @@ describe('merge and dedupe rules', () => {
     ]
     const entry = (kind: DraftEntry['kind'], title: string, update = ''): DraftEntry => ({ kind, title, body: 'x', topics: '', update })
     expect(findSame(entry('person', 'Someone', 'p1'), rows)?.id).toBe('p1')
-    expect(findSame(entry('person', 'Ben'), rows)?.id).toBe('p1')
+    expect(findSame(entry('person', 'Alex'), rows)?.id).toBe('p1')
     expect(findSame(entry('how-to', 'Deploy the Creek sites on Cloudflare'), rows)?.id).toBe('h1')
     expect(findSame(entry('organisation', 'ACME'), rows)?.id).toBe('f1')
-    expect(findSame(entry('person', 'Ben Smith'), rows)).toBeNull()
+    expect(findSame(entry('person', 'Alex Smith'), rows)).toBeNull()
     expect(findSame(entry('decision', 'Deploy the Creek sites to Cloudflare'), rows)).toBeNull()
   })
 

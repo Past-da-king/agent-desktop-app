@@ -97,7 +97,7 @@ export function rank(query: string, rows: MemoryRow[], limit: number): MemoryRow
   const now = Date.now()
   const scored: Array<{ row: MemoryRow; score: number }> = []
   for (const row of rows) {
-    // Other names it answers to count like its title ("Londercorp" finds Initech).
+    // Other names it answers to count like its title ("Initeck" finds Initech).
     const { title, topics, body, text } = termsOf(row)
     let score = 0
     for (const term of wanted) {

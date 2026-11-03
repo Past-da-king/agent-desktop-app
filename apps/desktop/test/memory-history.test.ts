@@ -152,22 +152,22 @@ describe('closing a page', () => {
 describe('other names a page answers to', () => {
   it('finds a page by a mis-heard name once it is an alias, and the agent can add one', async () => {
     const londa = await store.upsert('memory', { title: 'Initech', body: 'Construction client of Strat Edge.', kind: 'organisation', topics: 'client' })
-    expect(namedPages('send the Londercorp estimate', await store.list('memory'))).toEqual([])
+    expect(namedPages('send the Initeck estimate', await store.list('memory'))).toEqual([])
 
-    const added = await toolNamed(tools(), 'memory_update').run({ id: londa.id, add_alias: 'Londercorp', reason: 'dictation mis-heard it' }, testContext({ agentLabel: 'main' }))
+    const added = await toolNamed(tools(), 'memory_update').run({ id: londa.id, add_alias: 'Initeck', reason: 'dictation mis-heard it' }, testContext({ agentLabel: 'main' }))
     expect(added).toContain('now version 2: aliases')
-    await toolNamed(tools(), 'memory_update').run({ id: londa.id, add_alias: 'londercorp' }, testContext({ agentLabel: 'main' }))
-    expect((await store.get('memory', londa.id))?.aliases).toBe('Londercorp')
+    await toolNamed(tools(), 'memory_update').run({ id: londa.id, add_alias: 'initeck' }, testContext({ agentLabel: 'main' }))
+    expect((await store.get('memory', londa.id))?.aliases).toBe('Initeck')
 
     const rows = await store.list('memory')
-    expect(namedPages('send the Londercorp estimate', rows).map((row) => row.title)).toEqual(['Initech'])
-    expect(rank('Londercorp', rows, 5).map((row) => row.title)).toEqual(['Initech'])
-    expect(await toolNamed(tools(), 'memory_get').run({ id: londa.id }, testContext())).toContain('also called: Londercorp')
+    expect(namedPages('send the Initeck estimate', rows).map((row) => row.title)).toEqual(['Initech'])
+    expect(rank('Initeck', rows, 5).map((row) => row.title)).toEqual(['Initech'])
+    expect(await toolNamed(tools(), 'memory_get').run({ id: londa.id }, testContext())).toContain('also called: Initeck')
   })
 
   it('gives dictation the names memory knows, and puts known mis-hearings right', async () => {
     const rows = [
-      { id: 'a', title: 'Initech', body: '', kind: 'organisation', topics: '', pinned: false, source: 'agent', createdAt: 1, updatedAt: 3, aliases: 'Londercorp, London Corp' },
+      { id: 'a', title: 'Initech', body: '', kind: 'organisation', topics: '', pinned: false, source: 'agent', createdAt: 1, updatedAt: 3, aliases: 'Initeck, Initech Corp' },
       { id: 'b', title: 'Thandi Mokoena', body: '', kind: 'person', topics: '', pinned: false, source: 'agent', createdAt: 1, updatedAt: 2, aliases: 'Bo' },
       { id: 'c', title: 'Seat preference', body: 'Window seats.', kind: 'preference', topics: '', pinned: false, source: 'user', createdAt: 1, updatedAt: 1 },
       { id: 'd', title: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789', body: '', kind: 'project', topics: '', pinned: false, source: 'user', createdAt: 1, updatedAt: 4 },
@@ -175,16 +175,16 @@ describe('other names a page answers to', () => {
     const vocabulary = vocabularyFrom(rows)
     expect(vocabulary.names).toEqual(['Initech', 'Thandi Mokoena'])
     expect(vocabulary.aliases).toEqual([
-      { heard: 'Londercorp', name: 'Initech' },
-      { heard: 'London Corp', name: 'Initech' },
+      { heard: 'Initeck', name: 'Initech' },
+      { heard: 'Initech Corp', name: 'Initech' },
       { heard: 'Bo', name: 'Thandi Mokoena' },
     ])
-    expect(applyAliases('Email londercorp and London  Corp today, Bo said so.', vocabulary)).toBe('Email Initech and Initech today, Bo said so.')
+    expect(applyAliases('Email initeck and Initech  Corp today, Bo said so.', vocabulary)).toBe('Email Initech and Initech today, Bo said so.')
     const brief = vocabularyBrief(vocabulary)
     expect(brief).toContain('Initech, Thandi Mokoena')
-    expect(brief).toContain('Londercorp = Initech')
-    const request = cleanupRequest('send it to londercorp', brief) as { systemInstruction: { parts: Array<{ text: string }> } }
-    expect(request.systemInstruction.parts[0]?.text).toContain('Londercorp = Initech')
+    expect(brief).toContain('Initeck = Initech')
+    const request = cleanupRequest('send it to initeck', brief) as { systemInstruction: { parts: Array<{ text: string }> } }
+    expect(request.systemInstruction.parts[0]?.text).toContain('Initeck = Initech')
     expect(vocabularyBrief({ names: [], aliases: [] })).toBe('')
   })
 })
@@ -193,10 +193,10 @@ describe('the Memory page search', () => {
   it('finds a page by its other names, and is:closed narrows to closed pages', async () => {
     const { searchMemories } = await import('../src/renderer/lib/memory')
     const rows = [
-      { id: 'a', title: 'Initech', body: 'Client.', kind: 'organisation', topics: '', pinned: false, source: 'agent', createdAt: 1, updatedAt: 2, aliases: 'Londercorp' },
+      { id: 'a', title: 'Initech', body: 'Client.', kind: 'organisation', topics: '', pinned: false, source: 'agent', createdAt: 1, updatedAt: 2, aliases: 'Initeck' },
       { id: 'b', title: 'Receipts', body: 'Done.', kind: 'decision', topics: '', pinned: false, source: 'agent', createdAt: 1, updatedAt: 1, status: 'closed' },
     ] as MemoryRow[]
-    expect(searchMemories(rows, 'londercorp').map((row) => row.id)).toEqual(['a'])
+    expect(searchMemories(rows, 'initeck').map((row) => row.id)).toEqual(['a'])
     expect(searchMemories(rows, 'is:closed').map((row) => row.id)).toEqual(['b'])
     expect(searchMemories(rows, 'is:open client').map((row) => row.id)).toEqual(['a'])
   })

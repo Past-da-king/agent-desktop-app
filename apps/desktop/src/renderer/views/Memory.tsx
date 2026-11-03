@@ -154,7 +154,7 @@ function MemoryDialog({
         label="Other names it answers to"
         value={aliases}
         onChange={setAliases}
-        placeholder="How dictation mis-hears it, nicknames: Londercorp, London Corp"
+        placeholder="How dictation mis-hears it, nicknames: Initeck, Initech Corp"
       />
       <div className="dialog-actions">
         <Button variant="text" onClick={onClose}>

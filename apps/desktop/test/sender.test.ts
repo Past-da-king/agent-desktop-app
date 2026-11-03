@@ -70,7 +70,7 @@ describe('the call voice speaks as the agent itself', () => {
       state: () => ({ running: false, waiting: [] }),
       agentName: () => 'Hina',
     }
-    const result = await callHandoff(deps, { target: 'main', message: 'Email Ben' }, { deviceId: 'd1', name: 'Pixel' })
+    const result = await callHandoff(deps, { target: 'main', message: 'Email Alex' }, { deviceId: 'd1', name: 'Pixel' })
     expect(result.ok && result.said).toBe("I'm on it.")
     expect(result.ok ? result.said : '').not.toMatch(THIRD_PERSON)
     const missing = await callHandoff(deps, { target: 'Kitchen', message: 'x' })
@@ -91,7 +91,7 @@ describe('every message says who really sent it', () => {
       state: () => ({ running: false, waiting: [] }),
       agentName: () => 'Hina',
     }
-    await callHandoff(deps, { target: 'main', message: 'Task from our voice call: email Ben' }, { deviceId: 'd1', name: "Ayanda's phone" })
+    await callHandoff(deps, { target: 'main', message: 'Task from our voice call: email Alex' }, { deviceId: 'd1', name: "Ayanda's phone" })
     await sleep(5)
     expect(sent[0]?.via).toEqual({ from: 'call', name: "Ayanda's phone", chat: '' })
   })
@@ -110,7 +110,7 @@ describe('every message says who really sent it', () => {
       timeZone: 'UTC',
     })
     runners.push(runner)
-    await runner.send('Task from our voice call: email Ben', [], MAIN_CHAT, undefined, callVia('Pixel'))
+    await runner.send('Task from our voice call: email Alex', [], MAIN_CHAT, undefined, callVia('Pixel'))
     await runner.send('my own words')
     await waitFor(() => !runner.state(MAIN_CHAT).running, 8_000)
     const users = (await db.list('chat_item')).filter((item) => item.kind === 'user')

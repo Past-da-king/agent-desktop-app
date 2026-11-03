@@ -44,7 +44,7 @@ describe('only names go to the recogniser', () => {
       'How Ayanda wants his agent to work',
       'Cosmiprint: the agents run it as their own business',
       'Decision: a run’s browser tabs close when it ends',
-      'Guavas Lender Selector tool',
+      'Acme Lender Selector tool',
       'lender select',
     ]) expect(nameTerm(title)).toBeNull()
   })
@@ -55,11 +55,11 @@ describe('only names go to the recogniser', () => {
       page('Network architecture', 'project'),
       page('Zernio for Cosmiprint (sign-in)', 'how-to', 'Zeno, Xeno'),
       page('Cosmiprint', 'project'),
-      page('Initech', 'fact', 'Londercorp'),
+      page('Initech', 'fact', 'Initeck'),
       page('How Ayanda wants his agent to work', 'preference', 'wall of text rule'),
     ])
     expect(vocabulary.names).toEqual(['Cosmiprint', 'Initech'])
-    expect(vocabulary.aliases).toEqual([{ heard: 'Londercorp', name: 'Initech' }])
+    expect(vocabulary.aliases).toEqual([{ heard: 'Initeck', name: 'Initech' }])
     const projects = dictationWordsFromProjects([
       { id: 'p1', createdAt: 1, name: 'Cosmiprint', aliases: ['star signs website', 'Cosmi'] } as ProjectRow,
     ])
@@ -67,8 +67,8 @@ describe('only names go to the recogniser', () => {
   })
 
   it('an alias only respells what was said: it never adds a word', () => {
-    const vocabulary = { names: ['Panache Services', 'Initech'], aliases: [{ heard: 'Panache', name: 'Panache Services' }, { heard: 'Londa Corp', name: 'Initech' }] }
-    expect(applyAliases('Ask Panache about Londa Corp.', vocabulary)).toBe('Ask Panache about Initech.')
+    const vocabulary = { names: ['Panache Services', 'Initech'], aliases: [{ heard: 'Panache', name: 'Panache Services' }, { heard: 'Initech Corp', name: 'Initech' }] }
+    expect(applyAliases('Ask Panache about Initech Corp.', vocabulary)).toBe('Ask Panache about Initech.')
   })
 })
 
@@ -157,10 +157,10 @@ describe('names are spelled right after transcription, only for words that were 
 
   it('respells a close mis-hearing and leaves different words alone', () => {
     expect(soundsLike('Cosmic print', 'Cosmiprint')).toBe(true)
-    expect(soundsLike('LonderCorp', 'Initech')).toBe(true)
+    expect(soundsLike('Initeck', 'Initech')).toBe(true)
     expect(soundsLike('Mo Kena', 'Mokoena')).toBe(true)
     expect(soundsLike('Cosmic shows', 'Cosmiprint')).toBe(false)
-    expect(respellNames('Email LonderCorp and Mo Kena about Impetics.', names).text).toBe('Email Initech and Mokoena about Impetix.')
+    expect(respellNames('Email Initeck and Mo Kena about Impetics.', names).text).toBe('Email Initech and Mokoena about Impetix.')
     // An ordinary word, another form of a name, or a name already right: as said.
     expect(respellNames('Finances are tight, finance is late, Finance is fine.', names).text).toBe('Finances are tight, finance is late, Finance is fine.')
     // Heard in lower case and split in two, it is still his name; one ordinary lower-case word is not.

@@ -170,7 +170,7 @@ export function findSame(entry: DraftEntry, memories: MemoryRow[]): MemoryRow | 
     let shared = 0
     for (const word of words) if (other.has(word)) shared += 1
     const jaccard = shared / (words.size + other.size - shared)
-    // "Ben" and "Alex Meyer" are the same person; "Creek sites" and "Creek Retreats sites" the same project.
+    // "Alex" and "Alex Meyer" are the same person; "Creek sites" and "Creek Retreats sites" the same project.
     const prefix = (row.kind === 'person' || row.kind === 'organisation') && (titleKey(row.title).startsWith(`${key} `) || key.startsWith(`${titleKey(row.title)} `))
     const score = prefix ? 0.9 : jaccard
     if (score >= 0.75 && (best === null || score > best.score)) best = { row, score }

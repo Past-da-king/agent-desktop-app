@@ -33,7 +33,7 @@ function fixture(): string {
   add('m2', 'creek', 'person', 'Neesha Nadar', 'Neesha Nadar runs bookings for Creek Retreats. Sometimes written Nisha Nadar.', 30)
   for (let i = 0; i < 15; i += 1) add(`s${i}`, 'creek', 'state', `Creek state ${i}`, `State of the Creek sites on day ${i}: ${'x'.repeat(200)}`, 20 - i)
   add('m3', 'creek', 'how-to', 'Deploy a Creek site', '1. npm run build\n2. wrangler pages deploy dist', 10)
-  add('m4', 'initech-erp', 'project', 'Initech ERP', 'An ERP for Londa Corp. Speech-to-text writes it Londercorp.', 5)
+  add('m4', 'initech-erp', 'project', 'Initech ERP', 'An ERP for Initech. Speech-to-text writes it Initeck.', 5)
   add('m5', '', 'fact', 'Ayanda lives in Durban', 'Ayanda lives in Durban, South Africa.', 50)
   add('r1', 'creek', 'decision', 'Creek stays on Wix', 'Old decision, replaced.', 60, 'retired')
   return JSON.stringify({ format: 'agent-memory-export', version: 1, source: 'Memory Bank', memories })
@@ -91,8 +91,8 @@ describe('planning', () => {
 
 describe('the reply', () => {
   it('reads aliases and status, and keeps them out of the page text (they go on the page itself)', () => {
-    const [entry] = parseTidy('{"memories": [{"kind": "organisation", "title": "Initech", "body": "Construction client.", "aliases": ["Londercorp", "London Corp"], "status": "closed"}]}')
-    expect(entry).toMatchObject({ kind: 'organisation', aliases: 'Londercorp, London Corp', status: 'closed' })
+    const [entry] = parseTidy('{"memories": [{"kind": "organisation", "title": "Initech", "body": "Construction client.", "aliases": ["Initeck", "Initech Corp"], "status": "closed"}]}')
+    expect(entry).toMatchObject({ kind: 'organisation', aliases: 'Initeck, Initech Corp', status: 'closed' })
     expect(foldExtras(entry as TidyEntry).body).toBe('Construction client.')
     expect(() => parseTidy('No JSON here.')).toThrow('did not reply with pages')
   })

@@ -108,7 +108,7 @@ describe('who runs it', () => {
 
   it('Run now on Routines runs the memory pass, and the row shows when it ran and what changed', async () => {
     await ensureDailyRoutine(store, { dailyAt: '23:30' })
-    await talk('Remember the VAT number for Guavas is 4123456789')
+    await talk('Remember the VAT number for Acme is 4123456789')
     const memory = memoryService((report) => recordDailyRun(store, report))
     const runner = new FakeRunner()
     const scheduler = new Scheduler({

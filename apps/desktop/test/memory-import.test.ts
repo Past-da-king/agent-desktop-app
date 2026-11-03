@@ -19,15 +19,15 @@ afterEach(() => {
 const exportFile = JSON.stringify({
   source: 'Test Bank',
   memories: [
-    { id: 'm_1', title: 'Alex Meyer', text: 'CEO of Guavas. Final sign-off on positioning.', kind: 'person', project: 'growos', topics: ['people'], life: 'work', date: '2026-08-01T10:00:00Z', status: 'active' },
+    { id: 'm_1', title: 'Alex Meyer', text: 'CEO of Acme. Final sign-off on positioning.', kind: 'person', project: 'growos', topics: ['people'], life: 'work', date: '2026-08-01T10:00:00Z', status: 'active' },
     { id: 'm_2', title: 'Deploy the site', text: '1. npm run build\n2. wrangler deploy', kind: 'how-to', project: '', topics: ['deploy'], life: 'work', date: '2026-08-02T10:00:00Z', status: 'active' },
     { id: 'm_3', title: 'Chose Cloudflare', text: 'Decided to host on Cloudflare because it is free.', kind: 'decision', project: 'creek', topics: [], life: 'work', date: 1786000000000, status: 'active' },
     { id: 'm_4', title: 'API reference', text: 'The CRM API lives at /api/v2. Token: sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345', kind: 'reference', project: 'crm', topics: [], life: 'work', date: '2026-08-03', status: 'active' },
     { id: 'm_5', title: 'A fact', text: 'Durban is humid in summer.', kind: 'fact', project: '', topics: [], life: 'personal', date: '2026-08-04', status: 'active' },
     { id: 'm_6', title: 'Doing the deploy now', text: 'Currently halfway through the deploy.', kind: 'state', project: '', topics: [], life: 'work', date: '2026-08-05', status: 'active' },
-    { id: 'm_7', title: 'Meeting happened', text: 'Met Ben on Tuesday.', kind: 'event', project: '', topics: [], life: 'work', date: '2026-08-06', status: 'active' },
+    { id: 'm_7', title: 'Meeting happened', text: 'Met Alex on Tuesday.', kind: 'event', project: '', topics: [], life: 'work', date: '2026-08-06', status: 'active' },
     { id: 'm_8', title: 'Old decision', text: 'Host on Vercel.', kind: 'decision', project: '', topics: [], life: 'work', date: '2026-07-01', status: 'retired' },
-    { id: 'org:guavas', title: 'Guavas', text: 'A lender marketplace. People: [[Alex Meyer]].', kind: 'organisation', project: '', topics: [], life: 'work', date: '2026-08-01', status: 'active' },
+    { id: 'org:acme', title: 'Acme', text: 'A lender marketplace. People: [[Alex Meyer]].', kind: 'organisation', project: '', topics: [], life: 'work', date: '2026-08-01', status: 'active' },
     { id: 'project:creek', title: 'Creek Retreats', text: 'Three sites and social.', kind: 'project', project: 'creek', topics: [], life: 'work', date: '2026-08-01', status: 'active' },
     { id: '', title: 'No id', text: 'x', kind: 'fact' },
   ],
@@ -78,7 +78,7 @@ describe('memory import', () => {
     const api = await store.get('memory', rowIdFor('m_4'))
     expect(api?.kind).toBe('fact')
     expect(api?.body).not.toContain('sk-ant')
-    expect(rowIdFor('org:guavas')).toMatch(/^import-[0-9a-f]{20}$/)
+    expect(rowIdFor('org:acme')).toMatch(/^import-[0-9a-f]{20}$/)
 
     const again = await runImport(store, exportFile, false)
     expect(again).toMatchObject({ added: 0, updated: 0, unchanged: 7 })
@@ -89,7 +89,7 @@ describe('memory import', () => {
     const edited = exportFile.replace('Final sign-off on positioning.', 'Final sign-off on positioning and pricing.')
     const third = await runImport(store, edited, false)
     expect(third).toMatchObject({ added: 0, updated: 1, unchanged: 6 })
-    expect(await store.get('memory', rowIdFor('m_1'))).toMatchObject({ pinned: true, body: 'CEO of Guavas. Final sign-off on positioning and pricing.' })
+    expect(await store.get('memory', rowIdFor('m_1'))).toMatchObject({ pinned: true, body: 'CEO of Acme. Final sign-off on positioning and pricing.' })
 
     // A page the person deleted here stays deleted on the next import.
     await store.remove('memory', rowIdFor('m_5'))

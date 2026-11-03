@@ -13,7 +13,7 @@ beforeEach(async () => {
   opened = []
   const icon = { glyph: 'folder', color: 'iris' as const }
   for (const [name, extra] of [
-    ['Guavas Lender Selector', {}],
+    ['Acme Lender Selector', {}],
     ['Strat Edge Website', {}],
     ['The Creek Collection', {}],
     ['Creek Retreats', {}],
@@ -44,8 +44,8 @@ async function nameOf(id: string | undefined): Promise<string | undefined> {
 describe('project_open', () => {
   it('opens the one clear winner and says which', async () => {
     const out = await toolNamed(tools(), 'project_open').run({ project: 'show me the lender select' }, testContext())
-    expect(out).toContain('Opened Guavas Lender Selector')
-    expect(await nameOf(opened[0])).toBe('Guavas Lender Selector')
+    expect(out).toContain('Opened Acme Lender Selector')
+    expect(await nameOf(opened[0])).toBe('Acme Lender Selector')
   })
 
   it('opens Strat Edge Website for "strategic website", RMBLR for "open rumbler", and a hidden old row', async () => {
@@ -69,7 +69,7 @@ describe('project_open', () => {
     const out = await toolNamed(tools(), 'project_open').run({ project: 'banana smoothie' }, testContext())
     expect(opened).toEqual([])
     expect(out).toContain('No project matches')
-    expect(out).toContain('Guavas Lender Selector')
+    expect(out).toContain('Acme Lender Selector')
   })
 
   it('opens by id, and only exists when the window can be told', async () => {
@@ -81,9 +81,9 @@ describe('project_open', () => {
 
   it('project_update keeps other names, and the other tools find a project the way it is said', async () => {
     const out = await toolNamed(tools(), 'project_update').run({ project: 'lender select', aliases: 'the lender tool, Sam app' }, testContext())
-    expect(out).toContain('Guavas Lender Selector')
+    expect(out).toContain('Acme Lender Selector')
     const projects = await store.list('project')
-    expect(findProject(projects, 'sam app')?.name).toBe('Guavas Lender Selector')
+    expect(findProject(projects, 'sam app')?.name).toBe('Acme Lender Selector')
     // Never a guess between two close ones.
     expect(findProject(projects, 'creak')).toBeNull()
   })

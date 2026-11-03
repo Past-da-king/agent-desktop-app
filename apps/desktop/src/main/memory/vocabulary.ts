@@ -1,7 +1,7 @@
 /**
  * The names dictation should spell right, from memory: every person, organisation and project page's name, and
  * the other spellings it answers to (its aliases). A known mis-hearing is put right on every dictation, with or
- * without clean-up ("Londercorp" -> "Initech"); clean-up is also told the names so it spells them as written.
+ * without clean-up ("Initeck" -> "Initech"); clean-up is also told the names so it spells them as written.
  * Only page titles and aliases go out, never bodies, and anything that looks like a secret is left out.
  */
 import type { MemoryRow, ProjectRow } from '@agent/core'
@@ -83,7 +83,7 @@ export function vocabularyFrom(rows: MemoryRow[]): Vocabulary {
  */
 export function applyAliases(text: string, vocabulary: Vocabulary): string {
   let out = text
-  // Longer spellings first, so "London Corp" wins over "London".
+  // Longer spellings first, so "Initech Corp" wins over "Initech".
   for (const { heard, name } of [...vocabulary.aliases].sort((a, b) => b.heard.length - a.heard.length)) {
     // A very short spelling ("Ed", "Bo") is too likely to be an ordinary word; clean-up still hears about it.
     if (heard.replace(/\s+/g, '').length < 4) continue

@@ -2,7 +2,7 @@
  * Names spelled right AFTER transcription, never by biasing the recogniser (29 Oct 2026). A recogniser told a list of
  * names turns unclear speech into those names ("it shows like" became a project's name) and says them into quiet
  * stretches. So the words are transcribed as heard, and afterwards a word or two that is plainly a mis-spelling of a
- * known name ("Cosmic print", "Londercorp", "Mo Kena") is respelled. It only ever replaces words that were said,
+ * known name ("Cosmic print", "Initeck", "Mo Kena") is respelled. It only ever replaces words that were said,
  * with a name that sounds the same; it never adds one.
  */
 import { editDistance } from '@agent/core'
@@ -34,7 +34,7 @@ export function soundsLike(heard: string, name: string): boolean {
   if (b.length < 5 || a.length < 4) return false
   if (a === b) return true
   // A name of several words ("Strat Edge Slack") shares most of its letters with ordinary phrases ("Strat Edge sync"):
-  // one letter off at most. A long one-word name may be two off ("Londercorp").
+  // one letter off at most. A long one-word name may be two off ("Northwind").
   const allowed = b.length >= 8 && !/\s/.test(name.trim()) ? 2 : 1
   if (editDistance(a, b, allowed) <= allowed) return true
   // Same consonants in the same order, and most of the letters agree ("Mo Kena" for Mokoena).

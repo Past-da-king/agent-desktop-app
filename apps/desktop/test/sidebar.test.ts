@@ -60,11 +60,11 @@ describe('what is waiting on the person', () => {
     const html = renderToStaticMarkup(
       createElement(WaitingCard, {
         item: row('approval', 'Deploy', { summary: 'Deploy the site' }),
-        source: { kind: 'project', name: 'Guavas website', icon: { glyph: 'globe', color: 'ocean' }, projectId: 'p1' },
+        source: { kind: 'project', name: 'Acme website', icon: { glyph: 'globe', color: 'ocean' }, projectId: 'p1' },
         onOpen: () => undefined,
       }),
     )
-    expect(html).toContain('Guavas website')
+    expect(html).toContain('Acme website')
     expect(html).toContain('pj-tile')
   })
 })

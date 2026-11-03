@@ -61,7 +61,7 @@ describe('electron-builder config', () => {
   })
 
   it('names no personal infrastructure', () => {
-    expect(config).not.toMatch(/guavas|past9|impetix|vercel|ayanda/i)
+    expect(config).not.toMatch(/acme|past9|impetix|vercel|ayanda/i)
   })
 
   it('keeps source maps off in the Electron build config', () => {

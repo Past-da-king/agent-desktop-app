@@ -192,7 +192,7 @@ function memoryUpdate(store: DataStore): Tool {
           pinned: bool('Pin or unpin it'),
           status: enumOf('open, or closed when it is done and ticked off', 'open', 'closed'),
           aliases: str('The full list of other names or spellings it answers to, comma separated (replaces the list)'),
-          add_alias: str("One more name or spelling it answers to, e.g. how dictation mis-heard it ('Londercorp' for Initech)"),
+          add_alias: str("One more name or spelling it answers to, e.g. how dictation mis-heard it ('Initeck' for Initech)"),
           reason: str('Why, in a few words (kept in its history)'),
           delete: bool('Delete it instead'),
         },

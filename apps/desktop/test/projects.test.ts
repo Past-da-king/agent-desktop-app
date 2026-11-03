@@ -139,10 +139,10 @@ describe('the main agent and project chats', () => {
     fake = await startFakeAi(() => ({ text: 'done' }))
     store = new Store(':memory:')
     const profiles = new ProfileStore(null)
-    const made = profiles.create('Guavas work')
+    const made = profiles.create('Acme work')
     if (!made.ok) throw new Error(made.message)
-    const chat = 'pcguavas00000001'
-    await store.upsert('project', { name: 'Guavas', description: '', icon: { glyph: 'folder', color: 'iris' }, path: '', profile: made.value.id, hidden: false, chats: [chat] })
+    const chat = 'pcacme00000001'
+    await store.upsert('project', { name: 'Acme', description: '', icon: { glyph: 'folder', color: 'iris' }, path: '', profile: made.value.id, hidden: false, chats: [chat] })
     const manager = new HelperManager({
       store,
       settings: settingsView({ ...DEFAULT_SETTINGS, ...READY }),
@@ -164,10 +164,10 @@ describe('the main agent and project chats', () => {
 
 describe('making a project from the chat', () => {
   it('shows a card with the project, and Create makes it with the folder the agent found', async () => {
-    const folder = mkdtempSync(join(tmpdir(), 'guavas-'))
+    const folder = mkdtempSync(join(tmpdir(), 'acme-'))
     fake = await startFakeAi((body): FakeReply => {
       const last = lastText(body)
-      if (last.includes('MAKE IT')) return { toolCalls: [{ name: 'project_create', input: { name: 'Guavas relaunch', path: folder, description: 'The new guavas.co.uk.', icon: 'globe', color: 'teal' } }] }
+      if (last.includes('MAKE IT')) return { toolCalls: [{ name: 'project_create', input: { name: 'Acme relaunch', path: folder, description: 'The new acme.example.', icon: 'globe', color: 'teal' } }] }
       if (last.includes('MAKE A SECOND')) return { toolCalls: [{ name: 'project_create', input: { name: 'Second', path: folder } }] }
       if (last.includes('MAKE A MISSING')) return { toolCalls: [{ name: 'project_create', input: { name: 'Missing', path: join(folder, 'nope') } }] }
       return { text: 'ok' }
@@ -176,14 +176,14 @@ describe('making a project from the chat', () => {
 
     const sending = runner.send('MAKE IT in my folder')
     const card = await waitFor(async () => (await db.list('chat_item')).find((row) => row.kind === 'question'), 5_000)
-    expect(meta(card)['card']).toMatchObject({ kind: 'project', name: 'Guavas relaunch', path: folder, folderNew: false, profile: 'General', icon: { glyph: 'globe', color: 'teal' } })
+    expect(meta(card)['card']).toMatchObject({ kind: 'project', name: 'Acme relaunch', path: folder, folderNew: false, profile: 'General', icon: { glyph: 'globe', color: 'teal' } })
     expect(meta(card)['options']).toEqual(['Create', 'Change'])
     expect(await db.list('project')).toHaveLength(0)
     await runner.answer(card?.id ?? '', 'Create')
     await sending
     const projects = await db.list('project')
     expect(projects).toHaveLength(1)
-    expect(projects[0]).toMatchObject({ name: 'Guavas relaunch', path: folder, description: 'The new guavas.co.uk.', hidden: false, chats: [] })
+    expect(projects[0]).toMatchObject({ name: 'Acme relaunch', path: folder, description: 'The new acme.example.', hidden: false, chats: [] })
 
     // No makes nothing; a folder that is not there is sent back to be found first, with no card.
     const second = runner.send('MAKE A SECOND one')
@@ -312,8 +312,8 @@ describe('the prompt', () => {
   })
 
   it('in the main thread: the projects there are and how to hand work to them', () => {
-    const text = buildSystemPrompt({ ...base, memories: [], latestUserText: 'hi', role: 'main', projectNames: ['Acme finance', 'Guavas'] })
-    expect(text).toContain('PROJECTS: Acme finance, Guavas.')
+    const text = buildSystemPrompt({ ...base, memories: [], latestUserText: 'hi', role: 'main', projectNames: ['Acme finance', 'Acme'] })
+    expect(text).toContain('PROJECTS: Acme finance, Acme.')
     expect(text).toContain('project_chat_start')
     expect(text).not.toContain('THIS PROJECT')
   })
@@ -328,10 +328,10 @@ describe('in the window', () => {
   })
 
   it('draws the project card as OpenUI: the project, its folder and profile, then Create, Change and No', () => {
-    const source = projectAskProgram({ name: 'Guavas', description: 'The site.', path: 'C:\\Sites\\guavas', folderNew: false, profile: 'Work' }, ['Create', 'Change'])
+    const source = projectAskProgram({ name: 'Acme', description: 'The site.', path: 'C:\\Sites\\acme', folderNew: false, profile: 'Work' }, ['Create', 'Change'])
     const root = renderSource(source).root
     expect(root?.type).toBe('Card')
-    expect(source).toContain('C:\\\\Sites\\\\guavas')
+    expect(source).toContain('C:\\\\Sites\\\\acme')
     expect(source.match(/Button\(/g)).toHaveLength(3)
     expect(source).toContain('"No"')
   })

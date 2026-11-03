@@ -51,8 +51,8 @@ describe('a project with its own picture', () => {
         return 'Create'
       },
     })
-    const out = await toolNamed(tools(), 'project_create').run({ name: 'Guavas site', path: folder, icon_image: join(folder, 'logo.png') }, ctx)
-    expect(out).toContain('Made the project Guavas site')
+    const out = await toolNamed(tools(), 'project_create').run({ name: 'Acme site', path: folder, icon_image: join(folder, 'logo.png') }, ctx)
+    expect(out).toContain('Made the project Acme site')
     expect((card as { icon: { image?: string } }).icon.image).toBe(LOGO)
     const [made] = await store.list('project')
     expect(made?.icon.image).toBe(LOGO)

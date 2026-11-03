@@ -75,7 +75,7 @@ describe('a call hands work to the agent it names', () => {
   it('answers at once, without waiting for the turn it started (it may wait minutes on an approval)', async () => {
     const { deps } = setup()
     const never = { ...deps, send: () => new Promise<void>(() => undefined) }
-    const result = await Promise.race([callHandoff(never, { target: 'main', message: 'Email Ben' }), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
+    const result = await Promise.race([callHandoff(never, { target: 'main', message: 'Email Alex' }), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
     expect(result).toMatchObject({ ok: true, kind: 'main' })
     const project = await Promise.race([callHandoff(never, { target: 'Kitchen', message: 'x' }).catch(() => 'none'), new Promise((resolve) => setTimeout(() => resolve('blocked'), 500))])
     expect(project).not.toBe('blocked')
@@ -83,9 +83,9 @@ describe('a call hands work to the agent it names', () => {
 
   it('sends anything unnamed to the main agent', async () => {
     const { deps, sent } = setup()
-    const result = await callHandoff(deps, { target: 'main', message: 'Email Ben the report' }, { device: 'phone' })
+    const result = await callHandoff(deps, { target: 'main', message: 'Email Alex the report' }, { device: 'phone' })
     expect(result).toMatchObject({ ok: true, kind: 'main', said: "I'm on it." })
-    expect(sent).toEqual([{ text: 'Email Ben the report', chat: 'main', origin: { device: 'phone' } }])
+    expect(sent).toEqual([{ text: 'Email Alex the report', chat: 'main', origin: { device: 'phone' } }])
     expect(await callHandoff(deps, { target: '', message: 'x' })).toMatchObject({ ok: true, kind: 'main' })
   })
 

@@ -7,8 +7,8 @@ const PROJECTS: (ProjectLike & { id: string })[] = [
   { id: 'creek', name: 'The Creek Collection', description: 'The Creek Collection leisure sites: three Astro sites in one repo.', path: '\\\\wsl.localhost\\Ubuntu\\home\\past9\\Desktop\\projects\\to do\\creek-leisure' },
   { id: 'agent', name: 'Agent Desktop App', description: "Ayanda's own Electron agent app.", path: '\\\\wsl.localhost\\Ubuntu\\home\\past9\\agent-desktop-app' },
   { id: 'sew', name: 'Strat Edge Website', description: 'The redesigned Strat Edge website (strategyedge.co.za rebuild).', path: 'C:\\Users\\you\\Downloads\\dc\\strategyedge-site' },
-  { id: 'gw', name: 'Guavas Website', description: 'The guavas.co.uk rebuild and cutover onto Astro.', path: 'C:\\Users\\you\\Desktop\\projects\\Guavas\\Guavas-Website-Phase-1' },
-  { id: 'gls', name: 'Guavas Lender Selector', description: "Sam's lender matching tool: business assessment and product routing.", path: 'C:\\Users\\you\\Desktop\\projects\\Guavas\\guavas-lender-selector' },
+  { id: 'gw', name: 'Acme Website', description: 'The acme.example rebuild and cutover onto Astro.', path: 'C:\\Users\\you\\Desktop\\projects\\Acme\\Acme-Website-Phase-1' },
+  { id: 'gls', name: 'Acme Lender Selector', description: "Sam's lender matching tool: business assessment and product routing.", path: 'C:\\Users\\you\\Desktop\\projects\\Acme\\acme-lender-selector' },
   { id: 'sc', name: 'StudyCanvas', description: 'The Gemini Live voice tutor that draws a lesson onto an infinite canvas.', path: 'C:\\Users\\you\\Desktop\\projects\\study-canvas' },
   { id: 'rmblr', name: 'RMBLR', description: 'The MIT Android dictation app.', path: '\\\\wsl.localhost\\Ubuntu\\home\\past9\\rmblr', aliases: ['Rumbler'] },
   { id: 'pf', name: 'Portfolio', description: 'agent.example.app, the page a recruiter or client lands on.', path: '\\\\wsl.localhost\\Ubuntu\\home\\past9\\personal-site\\portfolio' },
@@ -30,9 +30,9 @@ const top = (query: string): string | undefined => findProjects(query, PROJECTS)
 const winner = (query: string): string | undefined => pickMatch(findProjects(query, PROJECTS)).winner?.item.name
 
 describe('finding a project the way it is said', () => {
-  it('"show me the lender select" finds Guavas Lender Selector', () => {
-    expect(top('show me the lender select')).toBe('Guavas Lender Selector')
-    expect(winner('show me the lender select')).toBe('Guavas Lender Selector')
+  it('"show me the lender select" finds Acme Lender Selector', () => {
+    expect(top('show me the lender select')).toBe('Acme Lender Selector')
+    expect(winner('show me the lender select')).toBe('Acme Lender Selector')
   })
 
   it('"strategic website" (dictation for Strat Edge) finds Strat Edge Website', () => {
@@ -54,8 +54,8 @@ describe('finding a project the way it is said', () => {
     expect(winner('open the creek retreats project')).toBe('Creek Retreats')
   })
 
-  it('"londa" finds Initech ERP', () => {
-    expect(winner('londa')).toBe('Initech ERP')
+  it('"initech" finds Initech ERP', () => {
+    expect(winner('initech')).toBe('Initech ERP')
   })
 
   it('"study canvas" finds StudyCanvas', () => {
@@ -68,7 +68,7 @@ describe('finding a project the way it is said', () => {
   })
 
   it('forgives a typo and a cut-off word', () => {
-    expect(winner('lendr selctor')).toBe('Guavas Lender Selector')
+    expect(winner('lendr selctor')).toBe('Acme Lender Selector')
     expect(winner('impetx')).toBe('Impetix')
     expect(winner('portfolo')).toBe('Portfolio')
   })
@@ -102,9 +102,9 @@ describe('the words of the matcher', () => {
 
   it('splits camelCase, punctuation and folder separators', () => {
     expect(findWords('StudyCanvas')).toEqual(['study', 'canvas'])
-    expect(findWords('Initech ERP')).toEqual(['londa', 'corp', 'erp'])
+    expect(findWords('Initech ERP')).toEqual(['initech', 'erp'])
     expect(findWords('GrowOS')).toEqual(['grow', 'os'])
-    expect(findWords('guavas-lender_selector')).toEqual(['guavas', 'lender', 'selector'])
+    expect(findWords('acme-lender_selector')).toEqual(['acme', 'lender', 'selector'])
     expect(folderName('C:\\Users\\x\\study-canvas\\')).toBe('study-canvas')
     expect(folderName('/home/x/rmblr')).toBe('rmblr')
   })

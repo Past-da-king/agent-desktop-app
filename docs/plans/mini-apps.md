@@ -38,7 +38,7 @@ Cordis is real: `cordis` (cordiverse, MIT, ~9.5k stars, npm 4.0.0-rc.12, readme 
 - Cordis is pre-1.0 in spirit ("API not yet stable"); hence the wrapper and a pinned version. If bundling it into Electron main fights us, the wrapper falls back to a 100-line registry with the same dispose model.
 - A bad app can still mislead (show wrong numbers) but cannot exfiltrate: no network, all data via audited tool calls.
 - Size and sync cost of apps on mobile data: inline files capped, assets as data URLs only.
-- Open: do apps live per profile (Personal-, Guavas...) or once for all? Proposed: per profile, so data rules follow the profile.
+- Open: do apps live per profile (Personal-, Acme...) or once for all? Proposed: per profile, so data rules follow the profile.
 
 ## Test plan
 - Unit: manifest checks (denied tool, write without grant asks, rate limit), lint rules, token parse (every var present in both themes), version history and undo.

@@ -60,7 +60,7 @@ function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
 describe('memory IPC', () => {
   it('tidies only a file the person picked, in the background, with progress', async () => {
     const file = join(dir, 'bank.json')
-    writeFileSync(file, JSON.stringify({ source: 'Bank', memories: [{ id: 'a', title: 'Ben', text: 'Ben is the CEO.', kind: 'person', project: 'clients' }] }))
+    writeFileSync(file, JSON.stringify({ source: 'Bank', memories: [{ id: 'a', title: 'Alex', text: 'Alex is the CEO.', kind: 'person', project: 'clients' }] }))
     expect(await invoke(MEMORY_CHANNELS.previewTidy, file, false)).toMatchObject({ ok: false, message: 'Choose the file first.' })
     await expect(invoke(MEMORY_CHANNELS.startTidy, file, false)).rejects.toThrow('Choose the file first.')
     expect(await invoke(MEMORY_CHANNELS.tidyState)).toBeNull()
@@ -82,7 +82,7 @@ describe('memory IPC', () => {
 
   it('imports only a file the person picked', async () => {
     const file = join(dir, 'bank.json')
-    writeFileSync(file, JSON.stringify({ source: 'Bank', memories: [{ id: 'a', title: 'Ben', text: 'CEO.', kind: 'person' }] }))
+    writeFileSync(file, JSON.stringify({ source: 'Bank', memories: [{ id: 'a', title: 'Alex', text: 'CEO.', kind: 'person' }] }))
     expect(await invoke(MEMORY_CHANNELS.previewImport, file, false)).toMatchObject({ ok: false, message: 'Choose the file first.' })
 
     picked = null

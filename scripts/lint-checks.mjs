@@ -20,7 +20,7 @@ SRC_DIRS.forEach((d) => walk(path.join(root, d)))
 
 const problems = []
 const rel = (p) => path.relative(root, p)
-const FORBIDDEN_INFRA = /guavas|past9|ap@|impetix|kronas|100\.86\.|ssh pc2|phoneaos\.past9|\.vercel\.app|ayanda/i
+const FORBIDDEN_INFRA = /acme|past9|ap@|impetix|kronas|100\.86\.|ssh pc2|phoneaos\.past9|\.vercel\.app|ayanda/i
 // Product rule (23 Oct 2026): the product never knows one person's earlier tools. No feature, string, test or channel
 // may name a private predecessor app (its name, its folder, its globals); imports go through generic formats.
 const FORBIDDEN_PREDECESSOR = /A\.O\.S|\baos\b|\.aos\b|__aos|importAos|aos[-_]import|AOS_HOME/i
