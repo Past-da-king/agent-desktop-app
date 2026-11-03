@@ -214,7 +214,7 @@ function layoutProblems(host: El): string[] {
 
 // ---------- what gets rendered ----------
 const LETTER =
-  'Dear Özcan,\n\nThank you for the follow-up. We have gone through your offer, and there are a few things we would like to talk over with you.\n\nWould you be comfortable with a short call this week? We are based in South Africa (SAST, one hour behind Türkiye), so please suggest a time that suits you and we will work around it.\n\nKind regards,\nAyanda Mokoena\nStrat Edge Solutions'
+  'Dear Özcan,\n\nThank you for the follow-up. We have gone through your offer, and there are a few things we would like to talk over with you.\n\nWould you be comfortable with a short call this week? We are based in South Africa (SAST, one hour behind Türkiye), so please suggest a time that suits you and we will work around it.\n\nKind regards,\nAlex Meyer\nAcme Inc'
 
 const EVERY_BLOCK = [
   '# A heading',

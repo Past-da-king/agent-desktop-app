@@ -11,7 +11,7 @@ const PROJECTS: (ProjectLike & { id: string })[] = [
   { id: 'gls', name: 'Acme Lender Selector', description: "Sam's lender matching tool: business assessment and product routing.", path: 'C:\\Users\\you\\Desktop\\projects\\Acme\\acme-lender-selector' },
   { id: 'sc', name: 'StudyCanvas', description: 'The Gemini Live voice tutor that draws a lesson onto an infinite canvas.', path: 'C:\\Users\\you\\Desktop\\projects\\study-canvas' },
   { id: 'rmblr', name: 'RMBLR', description: 'The MIT Android dictation app.', path: '\\\\wsl.localhost\\Ubuntu\\home\\past9\\rmblr', aliases: ['Rumbler'] },
-  { id: 'pf', name: 'Portfolio', description: 'agent.example.app, the page a recruiter or client lands on.', path: '\\\\wsl.localhost\\Ubuntu\\home\\past9\\personal-site\\portfolio' },
+  { id: 'pf', name: 'Portfolio', description: 'agent.example.app, the page a recruiter or client lands on.', path: '\\\\wsl.localhost\\Ubuntu\\home\\you\\personal-site\\portfolio' },
   { id: 'bg', name: 'Brand Guardian', description: "The brand consistency agent: it checks work against each brand's guidelines.", path: 'C:\\Users\\you\\Desktop\\projects\\brand-guardian' },
   { id: 'gos', name: 'GrowOS', description: "GrowFactory's parent brand and the GrowOS marketing site.", path: 'C:\\Users\\you\\Desktop\\projects\\growfactory' },
   { id: 'apps', name: 'Applications', description: 'The job hunt: tailored CVs, cover letters and submissions.', path: '\\\\wsl.localhost\\Ubuntu\\home\\past9\\applications' },

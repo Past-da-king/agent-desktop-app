@@ -8,8 +8,8 @@
 #        ATTACH="M4:1234 M7a:5678" (agents already running locally: wait for the pid, then gate)
 #        BUILD_HOST=impetix (ssh alias of the build server)
 set -uo pipefail
-REPO=/home/you/agent-desktop-app
-WT=/home/you/agent-desktop-wt
+REPO=${REPO:-$HOME/agent-desktop-app}
+WT=${WT:-$HOME/agent-desktop-wt}
 MODEL="opencode-go/deepseek-v4.1-flash"
 SLOTS="${SLOTS:-3}"
 RSLOTS="${RSLOTS:-3}"
