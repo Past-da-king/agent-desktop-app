@@ -25,8 +25,8 @@ export interface MediaToolDeps {
 }
 
 /** What the chat row carries. The renderer draws the card from this and nothing else. */
-export function mediaMeta(file: ShownFile, caption: string): string {
-  return JSON.stringify({ kind: file.kind, src: shownUrl(file.token), token: file.token, name: file.name, caption, mime: file.mime, size: file.size, path: file.path })
+export function mediaMeta(file: ShownFile, caption: string, chat: string): string {
+  return JSON.stringify({ kind: file.kind, src: shownUrl(file.token), token: file.token, name: file.name, caption, mime: file.mime, size: file.size, path: file.path, chat })
 }
 
 export function mediaTools(deps: MediaToolDeps): Tool[] {
@@ -52,7 +52,7 @@ export function mediaTools(deps: MediaToolDeps): Tool[] {
         await deps.store.upsert('chat_item', {
           kind: 'media',
           text: caption === '' ? shown.file.name : caption,
-          meta: mediaMeta(shown.file, caption),
+          meta: mediaMeta(shown.file, caption, chat),
           ...(chat === MAIN_CHAT ? {} : { chat }),
           createdAt: Date.now(),
         })
