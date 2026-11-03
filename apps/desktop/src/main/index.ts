@@ -124,6 +124,9 @@ import { wakeIdleState } from './wakeups/idle'
 import { MiniAppStore } from './miniapps/store'
 import { MiniAppHost, setMiniAppHost } from './miniapps/host'
 import { guardMiniAppFrames, registerMiniAppScheme, rendererFonts, serveMiniAppsIn } from './miniapps/protocol'
+import { registerMediaScheme, serveMediaIn } from './media/protocol'
+import { ShownMedia } from './media/shown'
+import { latestOrigin } from './devices/origin'
 import { MiniAppChecker } from './miniapps/check'
 import { registerMiniAppIpc, registerMiniAppRpc } from './miniapps/ipc'
 import { MINIAPP_EVENTS } from '../shared/miniapps-channels'
@@ -187,6 +190,13 @@ const logsDir = join(app.getPath('userData'), 'logs')
 const logger = new Logger(logsDir)
 // Mini-apps are served from miniapp://<id>/ (main/miniapps/protocol.ts); a privileged scheme is declared before ready.
 registerMiniAppScheme()
+// A file an agent shows plays in the chat from agent-media://f/<token> (main/media/protocol.ts); nothing else is served.
+registerMediaScheme()
+/**
+ * The files an agent has shown him: a video, a picture, a sound. Kept beside the app's data so an older card still
+ * plays, and held here so the window's own session can stream from it.
+ */
+const shownMedia = new ShownMedia(join(app.getPath('userData'), 'shown-media.json'))
 let crashDialogOpen = false
 
 function platformId(): AppPlatform {
@@ -1252,6 +1262,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     appControl: { ...appControl, update: selfUpdater },
     calendar: () => presenceHandle?.calendar ?? null,
     miniappUi: () => miniappUi,
+    media: {
+      show: (path) => shownMedia.show(path),
+      selfId: () => devicesState.sync?.selfId() ?? '',
+      origin: async (chat) => (store === null ? null : latestOrigin(store, chat)),
+    },
     presence,
     store,
     settings,
@@ -1397,6 +1412,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     setMiniAppHost(miniappHost)
     void miniappHost.start().then(() => logger.info('Mini-apps started', { engine: miniappHost?.engine.kind ?? 'off' }))
     serveMiniAppsIn(electronSession.defaultSession, filesOf, font)
+    // Only this window's session can reach a shown file, and only the ones an agent showed.
+    serveMediaIn(electronSession.defaultSession, (token) => shownMedia.get(token))
     guardMiniAppFrames(win.webContents, electronSession.defaultSession, (message, detail) => logger.info(message, detail))
     const checker = new MiniAppChecker({
       host: () => miniappHost,
