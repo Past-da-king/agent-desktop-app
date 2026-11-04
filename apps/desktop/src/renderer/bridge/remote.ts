@@ -298,6 +298,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       checkCli: () => notHere('Checking the plan'),
       cliLogin: () => notHere('Signing in to a plan'),
       reset: () => notHere('Resetting'),
+      resetSettings: () => notHere('Resetting the settings'),
       accounts: {
         add: () => notHere('Adding an account'),
         update: () => notHere('Changing an account'),

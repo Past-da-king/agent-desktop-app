@@ -80,6 +80,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'settings.checkCli': free('Check the command-line AI is installed and signed in (Settings > AI)'),
   'settings.cliLogin': ask('Sign in to the command-line AI (Settings > AI > Sign in)'),
   'settings.reset': ask('Reset the app: forget everything (Settings > Reset)'),
+  'settings.resetSettings': ask('Put every setting back to its default, keeping chats, memory and keys (Settings > Privacy and data > Danger zone)'),
   'settings.accounts.add': ask('Add an AI account (Settings > AI > Add account)', '{ kind, name, provider, model, ... }'),
   'settings.accounts.update': ask('Change an AI account (Settings > AI > account)', 'accountId, { name?, model?, ... }'),
   'settings.accounts.remove': ask('Remove an AI account (Settings > AI > account > Remove)', 'accountId'),

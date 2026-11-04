@@ -91,6 +91,7 @@ const api: AgentApi = {
     checkCli: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.checkCli),
     cliLogin: () => call<{ ok: boolean; message: string }>(CHANNELS.settings.cliLogin),
     reset: () => call<void>(CHANNELS.settings.reset),
+    resetSettings: () => call<Settings>(CHANNELS.settings.resetSettings),
     accounts: {
       add: (draft) => call<AiAccount>(CHANNELS.settings.accounts.add, draft),
       update: (id, patch) => call<AiAccount>(CHANNELS.settings.accounts.update, id, patch),

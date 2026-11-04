@@ -699,6 +699,12 @@ export const mockAgent: AgentApi = {
         return { main: { wanted: full(main), using: full(main), deferred: false }, helpers: { wanted: full(helpers), using: full(helpers), deferred: false } }
       },
     },
+    async resetSettings() {
+      settings = { ...DEFAULT_SETTINGS, deviceName: settings.deviceName || 'This computer' }
+      saveSettings({})
+      emitSettings()
+      return copy(settings)
+    },
     async reset() {
       rows = {
         chat_item: [],

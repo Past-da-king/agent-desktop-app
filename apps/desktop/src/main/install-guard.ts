@@ -31,7 +31,11 @@ export interface CopyFacts {
 }
 
 export function uninstallerOf(exe: string, productName: string): string {
-  return join(dirname(exe), `Uninstall ${productName}.exe`)
+  // The folder is taken from the path itself: path.dirname cuts a Windows path at the wrong place on a machine that is
+  // not Windows, and the guard is tested there too. On Windows this is the same string path.dirname would give.
+  const cut = Math.max(exe.lastIndexOf('\\'), exe.lastIndexOf('/'))
+  const folder = cut < 0 ? '.' : exe.slice(0, cut)
+  return exe.includes('\\') ? `${folder}\\Uninstall ${productName}.exe` : join(folder, `Uninstall ${productName}.exe`)
 }
 
 /** Is this the installed app (or not Windows, or development)? */
