@@ -21,6 +21,7 @@ import {
   ProviderException,
   catalogueKey,
   isImageRoutingRefusal,
+  refusalKey,
   pickImageModel,
   visionSupport,
   type AiAccount,
@@ -246,14 +247,14 @@ describe('learning from what a model really does', () => {
   it('forgets a learned refusal once a call with a picture works', async () => {
     const stores = new MemoryVisionStores()
     const options = optionsFor(stores)
-    stores.refusalStore.write(chatModel, { at: Date.now(), detail: ROUTED_AWAY })
+    stores.refusalStore.write(refusalKey(options, chatModel), { at: Date.now(), detail: ROUTED_AWAY })
     expect(visionSupport(options, chatModel)).toEqual({ state: 'no', source: 'learned' })
 
     const inner = scripted([answer(chatModel)])
     const provider = withImageHandling(inner.provider, { capability: options, alternatives: () => [] })
     await provider.complete('system', withPicture(), [], chatModel)
 
-    expect(stores.refusalStore.read(chatModel)).toBeNull()
+    expect(stores.refusalStore.read(refusalKey(options, chatModel))).toBeNull()
     expect(visionSupport(options, chatModel).source).toBe('none')
   })
 
@@ -274,8 +275,11 @@ describe('learning from what a model really does', () => {
 
   it('picks the image model from the catalogue, never the chat\'s own', () => {
     const catalogue = { fetchedAt: 1, models: [{ id: chatModel, image: 'no' } as const, { id: 'small-vision', image: 'yes' as const, contextLimit: 32_000 }, { id: imageModel, image: 'yes' as const, contextLimit: 200_000 }] }
-    expect(pickImageModel(catalogue, chatModel)).toBe(imageModel)
+    // No 'deepseek-' model in this list takes pictures, so the first one that does is picked.
+    expect(pickImageModel(catalogue, chatModel)).toBe('small-vision')
+    // A model that shares its family prefix wins, and the chat's own model is never the answer.
     expect(pickImageModel(catalogue, 'small-vision')).toBe(imageModel)
+    expect(pickImageModel({ fetchedAt: 1, models: [{ id: 'glm-5.2', image: 'yes' }] as never }, 'glm-5.2')).not.toBe('glm-5.2')
     expect(pickImageModel({ fetchedAt: 1, models: [{ id: chatModel, image: 'no' }] }, chatModel)).toBeNull()
     expect(pickImageModel(null, chatModel)).toBeNull()
   })
@@ -306,10 +310,14 @@ describe('what the chat says', () => {
     expect(said).toContain('Nothing was lost')
   })
 
-  it('names a model that really takes no pictures only when the catalogue says so', () => {
-    const error = new ProviderException('HTTP 400: image input is not supported by this model', 400)
-    expect(friendlyError(error, { modelTakesNoImages: true })).toBe('This model takes no pictures. I can switch this chat to one that does, or you can send the text.')
-    expect(friendlyError(error)).toContain('Something went wrong')
+  it('names a model that takes no pictures when the model itself says so, or the catalogue does', () => {
+    const refusal = new ProviderException('HTTP 400: image input is not supported by this model', 400)
+    const said = 'This model takes no pictures. I can switch this chat to one that does, or you can send the text.'
+    expect(friendlyError(refusal, { modelTakesNoImages: true })).toBe(said)
+    // The provider's own words are evidence too: the gateway is not the thing refusing here.
+    expect(friendlyError(refusal)).toBe(said)
+    // A routing refusal is never dressed up as a model that cannot see.
+    expect(friendlyError(new ProviderException(ROUTED_AWAY, 400))).not.toContain('takes no pictures')
   })
 
   it('keeps the generic wording for every other 400', () => {

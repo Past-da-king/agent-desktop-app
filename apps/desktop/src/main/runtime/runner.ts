@@ -38,6 +38,7 @@ import {
   accountById,
   defaultGoodFor,
   isImageRoutingRefusal,
+  isUnsupportedImageRefusal,
   pickModel,
   rosterName,
   type ChatBrain,
@@ -2179,14 +2180,19 @@ export function friendlyError(error: unknown, imageFacts?: ImageFacts): string {
     // A provider that took too long says so (a helper's creator reads this as the reason it ended).
     if (error.status === 0 && /did not answer within/i.test(error.message)) return error.message
     if (error.status === 0) return 'I could not reach the AI provider. Check your connection.'
+    // A real "this model does not do pictures": named only when the provider says so or its own catalogue does
+    // (never because one answer happened to contain the word image).
+    if (
+      (error.status === 400 && imageFacts?.modelTakesNoImages === true && /image/i.test(error.message)) ||
+      isUnsupportedImageRefusal(error)
+    ) {
+      return 'This model takes no pictures. I can switch this chat to one that does, or you can send the text.'
+    }
     // A gateway that refused to ROUTE a picture says nothing about the model (OpenCode Go picks an engine from the
-    // session id, and one engine has no image input): the turn retried and switched, so say what really happened.
+    // session id, and one engine has no image input): the turn retried on a fresh session and switched, so say what
+    // really happened instead of blaming the model.
     if (isImageRoutingRefusal(error)) {
       return 'Your AI provider refused to route that picture (its gateway says image input is not available on this engine). Nothing was lost: try again, or set another model for this chat.'
-    }
-    // A real "this model does not do pictures", and only when the provider's own catalogue says so.
-    if (error.status === 400 && /image/i.test(error.message) && imageFacts?.modelTakesNoImages === true) {
-      return 'This model takes no pictures. I can switch this chat to one that does, or you can send the text.'
     }
     return `Something went wrong: ${clip(error.message, 240)}`
   }
