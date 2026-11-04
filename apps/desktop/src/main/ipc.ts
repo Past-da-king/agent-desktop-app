@@ -284,6 +284,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     if (typeof o['baseUrl'] === 'string') out.baseUrl = requireString(o['baseUrl'], 'server address', MAX_STRING)
     if (typeof o['model'] === 'string') out.model = requireString(o['model'], 'model', 200)
     if (typeof o['allowHttp'] === 'boolean') out.allowHttp = o['allowHttp']
+    if (o['pictures'] === 'auto' || o['pictures'] === 'on' || o['pictures'] === 'off') out.pictures = o['pictures']
     return out
   }
   const accountId = (raw: unknown): string => requireString(raw, 'account', 64)

@@ -658,7 +658,7 @@ export const mockAgent: AgentApi = {
       async add(draft) {
         const id = `acc_${Math.random().toString(16).slice(2, 8)}`
         const kind = draft.kind ?? 'api'
-        const account: AiAccount = { id, label: draft.label?.trim() || (kind === 'api' ? 'API key' : kind === 'codex' ? 'ChatGPT plan' : 'Claude plan'), kind, model: draft.model ?? '', hasKey: false, ...(kind === 'api' ? { provider: draft.provider ?? 'anthropic' } : {}) }
+        const account: AiAccount = { id, label: draft.label?.trim() || (kind === 'api' ? 'API key' : kind === 'codex' ? 'ChatGPT plan' : 'Claude plan'), kind, model: draft.model ?? '', hasKey: false, ...(kind === 'api' ? { provider: draft.provider ?? 'anthropic' } : {}), ...(draft.pictures === 'on' || draft.pictures === 'off' ? { pictures: draft.pictures } : {}) }
         saveSettings({ accounts: [...settings.accounts, account] })
         return account
       },
@@ -666,6 +666,11 @@ export const mockAgent: AgentApi = {
         const found = settings.accounts.find((a) => a.id === id)
         if (found === undefined) throw new Error('No such account')
         const next: AiAccount = { ...found, ...(patch.label === undefined ? {} : { label: patch.label }), ...(patch.model === undefined ? {} : { model: patch.model }), ...(patch.provider === undefined ? {} : { provider: patch.provider }) }
+        // Pictures: the person's own choice in Settings; 'auto' is what absent means.
+        if (patch.pictures !== undefined) {
+          if (patch.pictures === 'on' || patch.pictures === 'off') next.pictures = patch.pictures
+          else delete next.pictures
+        }
         saveSettings({ accounts: settings.accounts.map((a) => (a.id === id ? next : a)) })
         return next
       },

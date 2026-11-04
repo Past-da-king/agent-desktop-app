@@ -42,7 +42,7 @@ import { helperHold, helperState } from '../../shared/helper-cards'
 import { liveRuns } from './live-runs'
 import type { CliHost } from './cli-host'
 import { projectFolderOf } from './work-folder'
-import { brainFor, isBrain, pickFor, rosterFor, type Brain, type BrainDeps } from './brains'
+import { brainFor, isBrain, pickFor, providerForAccount, rosterFor, type Brain, type BrainDeps } from './brains'
 import { buildSystemPrompt } from './prompt'
 import { finishRun, runStarted } from './run-detail'
 import { redactSecrets } from '../logger'
@@ -51,6 +51,8 @@ import { CANNOT_RUN_HERE, type JobOp, type PlaceRequest, type PlaceResult } from
 import { helperTools } from '../tools/helpers'
 import { runEnded } from '../browser/run-tabs'
 import { promptRulesFor } from './prompt-rules'
+import { FileVisionStores, MemoryVisionStores, VisionRouter, freshImageSession } from './vision'
+import { keyFor } from '../accounts'
 import { isInterruptible } from './read-only'
 import { withNoteTools, type TurnMessages } from './note-tools'
 import {
@@ -202,6 +204,11 @@ export interface HelperResources {
 
 export interface HelperManagerDeps {
   store: DataStore
+  /**
+   * The app's data folder, where what the provider says about pictures is kept (pictures-catalogue.json,
+   * pictures-refused.json). Left out (tests, headless): memory only.
+   */
+  dataDir?: string
   settings: SettingsView
   secrets: SecretsView
   providerFactory: ProviderFactory
@@ -466,6 +473,8 @@ export class HelperManager implements HelperHost {
   private readonly settings: SettingsView
   private readonly secrets: SecretsView
   private readonly providerFactory: ProviderFactory
+  /** Pictures in a helper's turn: what the model can really do, a fresh session to retry on, one turn's switch. */
+  private readonly vision: VisionRouter
   private readonly cli: CliHost | null
   private readonly git: RunGitHookLike | null
   private readonly profiles: ProfileLookup | null
@@ -539,6 +548,11 @@ export class HelperManager implements HelperHost {
     this.settings = deps.settings
     this.secrets = deps.secrets
     this.providerFactory = deps.providerFactory
+    this.vision = new VisionRouter({
+      stores: deps.dataDir === undefined || deps.dataDir.trim() === '' ? new MemoryVisionStores() : new FileVisionStores(deps.dataDir),
+      keyFor: (id) => keyFor({ get: (name) => this.secrets.get(name) }, id),
+      now: () => this.now(),
+    })
     this.cli = deps.cli ?? null
     this.git = deps.git ?? null
     this.profiles = deps.profiles ?? null
@@ -1613,7 +1627,7 @@ export class HelperManager implements HelperHost {
       await this.runOnPlan(run, brain)
       return
     }
-    const ready = { provider: brain.provider, model: brain.model }
+    const ready = { provider: this.picturesFor(brain, run), model: brain.model }
 
     const controller = new AbortController()
     run.controller = controller
@@ -1662,11 +1676,46 @@ export class HelperManager implements HelperHost {
         result = 'Stopped before it finished.'
       } else {
         state = 'failed'
-        result = friendlyError(error)
+        result = friendlyError(error, this.imageFactsFor(brain))
       }
     }
 
     await this.finish(run, state, result)
+  }
+
+  /**
+   * A helper's provider with pictures handled: a gateway refusal is retried on a fresh routing session, and a model
+   * that really takes no pictures is swapped for this run only. The run's own model is never changed.
+   */
+  private picturesFor(brain: Extract<Brain, { kind: 'api' }>, run: HelperRun): LlmProvider {
+    const model = run.model === '' ? brain.model : run.model
+    this.vision.prepare(brain.account)
+    return this.vision.wrap(brain.provider, {
+      account: brain.account,
+      model,
+      refresh: () => providerForAccount(this.brainDeps(), brain.account, model, freshImageSession()) ?? brain.provider,
+      onSwitch: (other) => {
+        // The chat that started it reads one plain line: a picture was looked at, with something else, this once.
+        void this.noticeLine(`Looked at the picture with ${other} for this turn.`, run.chat)
+      },
+    })
+  }
+
+  /** What a helper's failure may say about pictures: only what the catalogue or a refusal proved. */
+  private imageFactsFor(brain: Brain): { modelTakesNoImages?: boolean } {
+    if (brain.kind !== 'api') return {}
+    const support = this.vision.supportFor(brain.account, brain.model)
+    return { modelTakesNoImages: support.state === 'no' && (support.source === 'catalogue' || support.source === 'learned') }
+  }
+
+  /** One plain line in a chat, the way the runner's own notices read. */
+  private async noticeLine(text: string, chat: string = MAIN_CHAT): Promise<void> {
+    try {
+      await this.store.upsert('chat_item', { kind: 'notice', text, meta: JSON.stringify(chatTag(chat)) })
+      this.emit({ type: 'chat_changed' })
+    } catch {
+      // A line that cannot be written must never take a helper down.
+    }
   }
 
   /** The run starts: its project folder's repo is looked at, so its own changes can be told apart at the end. */

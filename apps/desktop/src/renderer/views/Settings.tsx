@@ -285,10 +285,25 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
         <div className="rowempty">No AI account yet. Add your plan or a key, and your agent can think.</div>
       ) : null}
       {accounts.map((account) => (
-        <SettingRow key={account.id} spec={{ ...row('accounts'), label: account.label, description: kindLine(account) }} sub>
+        <SettingRow key={account.id} spec={{ ...row('accounts'), label: account.label, description: kindLine(account) }} sub stack>
           <Pill tone={account.kind === 'api' ? (account.hasKey ? 'ok' : 'mute') : 'ok'}>
             {account.kind === 'api' ? (account.hasKey ? 'Key saved' : 'No key') : 'Plan'}
           </Pill>
+          <div className="pics-ctl">
+            <span className="lbl">Pictures</span>
+            <Segmented
+              ariaLabel={`Pictures on ${account.label}`}
+              options={[
+                { value: 'auto', label: 'Auto' },
+                { value: 'on', label: 'Always' },
+                { value: 'off', label: 'Never' },
+              ]}
+              value={account.pictures ?? 'auto'}
+              onChange={(next) => {
+                void agent.settings.accounts.update(account.id, { pictures: next }).then(() => put({}))
+              }}
+            />
+          </div>
           <Button variant="text" size="sm" onClick={() => setEditing(account)}>
             Change
           </Button>

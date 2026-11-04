@@ -115,3 +115,14 @@
 .setg .wakelog-row .rt .d{display:block;font-size:12.5px;line-height:1.45;color:var(--on-sv)}
 .setg .wakelog-dot{width:9px;height:9px;border-radius:50%;flex:none}
 .setg .wakelog-row .small{margin-left:auto;flex:none}
+
+/* ---- an account's pictures choice: its own line, and it wraps cleanly on a phone ---- */
+.setg .srow.stack .end .pics-ctl{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0;flex:1 1 auto}
+.setg .srow.stack .end .pics-ctl .lbl{font:500 12.5px/1 var(--font);color:var(--on-sv);white-space:nowrap}
+.setg .srow.stack .end .pics-ctl .seg{flex:1 1 auto;min-width:0}
+.setg .srow.stack .end .pics-ctl .seg button{min-width:52px;height:36px;padding:0 12px;white-space:nowrap}
+@media (max-width:560px){
+  .setg .srow.sub.stack{padding-left:16px}
+  .setg .srow.sub.stack .end{margin-left:0;flex:1 0 100%}
+  .setg .srow.stack .end .pics-ctl{flex:1 0 100%}
+}
