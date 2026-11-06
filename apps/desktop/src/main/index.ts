@@ -44,6 +44,8 @@ import { AccountService } from './account'
 import { APP_ID, APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
 import { AgentBrowser } from './browser/browser'
 import { HOST_WINDOW_PREFS, keepPagesAwake } from './browser/keep-awake'
+import { runTurnstileProbe } from './browser/turnstile-probe'
+import { fallbackUserAgent } from './browser/emulation'
 import { runDevtoolsProbe } from './browser/devtools-probe'
 import { Store } from './db'
 import { Logger } from './logger'
@@ -956,6 +958,18 @@ async function startServices(win: BrowserWindow): Promise<void> {
     look: () => brandLook({ theme: settings.get().theme, accent: settings.get().accent, systemDark: nativeTheme.shouldUseDarkColors }),
   })
   agentBrowser.setVault(browserVault)
+  // The human-verification regression probe: load a page with a Turnstile widget (or a managed challenge), read
+  // what the page and its Worker see, write one JSON file and quit. Never set in normal use.
+  const turnstileProbeUrl = process.env['AGENT_TURNSTILE_PROBE']?.trim() ?? ''
+  if (turnstileProbeUrl !== '') {
+    setTimeout(() => {
+      const browser = agentBrowser
+      if (browser === null) return
+      const out = process.env['AGENT_TURNSTILE_PROBE_OUT']?.trim() ?? ''
+      const waitMs = Number(process.env['AGENT_TURNSTILE_PROBE_WAIT_MS'] ?? '30000')
+      void runTurnstileProbe(browser, turnstileProbeUrl, out, Number.isFinite(waitMs) ? waitMs : 30_000, () => app.quit())
+    }, 3000)
+  }
   // The computer switched light/dark while the theme follows it: a ring showing now changes with it.
   const onSystemTheme = (): void => {
     if (settings.get().theme === 'system') void agentBrowser?.restyleGuides()
@@ -1875,6 +1889,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
 }
 
 // Agents browse with the panel hidden and the window minimised: their pages must keep running (browser/keep-awake.ts).
+// One honest Chrome user agent for the whole app, set before any window exists. A session-level or debugger
+// user agent only reaches the top frame: a Worker or a Service Worker still reported the Electron and app tokens
+// (measured 6 Nov 2026), which a human-verification challenge reads.
+app.userAgentFallback = fallbackUserAgent()
+
 keepPagesAwake(app.commandLine)
 
 if (refuseToStart) {

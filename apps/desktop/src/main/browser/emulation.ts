@@ -174,6 +174,32 @@ export interface EngineInfo {
   chromeVersion: string
   /** process.platform of this computer. */
   platform: string
+  /**
+   * The platform version the engine itself reports in `navigator.userAgentData`, for example `19.0.0` on Windows
+   * 11. A page's workers report the engine's own value, so the top frame must say the same or the two disagree.
+   */
+  platformVersion?: string
+  /** The app's own locale, for example `en-GB`: navigator.languages and Accept-Language follow it. */
+  locale?: string
+  /** The primary screen in CSS pixels. The page's `screen` is this, never its own viewport. */
+  screen?: { width: number; height: number }
+}
+
+/** `en-GB,en`: a plain list, the way `navigator.languages` reads. */
+export function languageListFor(engine: EngineInfo): string {
+  const locale = (engine.locale ?? '').trim()
+  if (locale === '') return 'en-US,en'
+  const language = locale.split('-')[0] ?? locale
+  return language === locale ? locale : `${locale},${language}`
+}
+
+/** Accept-Language that agrees with the app's locale, the way Chrome builds it. */
+export function acceptLanguageFor(engine: EngineInfo): string {
+  const locale = (engine.locale ?? '').trim()
+  if (locale === '') return 'en-US,en'
+  const language = locale.split('-')[0] ?? locale
+  if (language === locale) return locale
+  return `${locale},${language};q=0.9,en;q=0.8`
 }
 
 export function chromeVersionOf(userAgent: string): string {
@@ -195,6 +221,20 @@ export function userAgentFor(view: ViewSpec, engine: EngineInfo): string {
     return `Mozilla/5.0 (Linux; Android 14; Pixel Tablet) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v} Safari/537.36`
   }
   return `Mozilla/5.0 (${desktopPlatformToken(engine.platform)}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v} Safari/537.36`
+}
+
+/**
+ * The one user agent the whole app uses before any per-tab view applies: a plain desktop Chrome for this platform
+ * at the engine's own version. Set as `app.userAgentFallback` so workers, service workers and every request
+ * inherit it, never the Electron or app token.
+ */
+export function fallbackUserAgent(): string {
+  return userAgentFor(PRESETS.desktop, { chromeVersion: chromeVersionFromProcess(), platform: process.platform })
+}
+
+function chromeVersionFromProcess(): string {
+  const versions = process.versions as unknown as Record<string, string | undefined>
+  return versions['chrome'] ?? '130.0.0.0'
 }
 
 /** A user agent written the way Chrome writes its own, on any system (Windows, macOS, Linux, Android). */
@@ -276,7 +316,7 @@ function hintsFor(engine: EngineInfo, platform: string, mobile: boolean, model: 
     ],
     fullVersion: full,
     platform,
-    platformVersion: handheld ? '14.0.0' : platform === 'Windows' ? '10.0.0' : platform === 'macOS' ? '10.15.7' : '6.5.0',
+    platformVersion: handheld ? '14.0.0' : (engine.platformVersion ?? (platform === 'macOS' ? '10.15.7' : platform === 'Windows' ? '10.0.0' : '6.5.0')),
     architecture: handheld ? '' : platform === 'macOS' ? 'arm' : 'x86',
     model,
     mobile,
@@ -322,7 +362,7 @@ export function emulationCommands(view: ViewSpec, engine: EngineInfo, fit: FitRe
     params: {
       userAgent: userAgentFor(view, engine),
       // A plain list: Chromium adds the q-values itself (passing them doubled them, "en;q=0.9;q=0.9").
-      acceptLanguage: 'en-US,en',
+      acceptLanguage: acceptLanguageFor(engine),
       platform: navigatorPlatform(view, engine.platform),
       // A hand-written user agent that is not Chrome-shaped cannot be parsed back into hints; sending none is closer to the truth.
       ...(hints === null ? {} : { userAgentMetadata: hints }),
@@ -339,8 +379,9 @@ export function emulationCommands(view: ViewSpec, engine: EngineInfo, fit: FitRe
         deviceScaleFactor: view.dpr,
         mobile: view.mobile,
         scale: followElement ? 1 : round4(fit.scale),
-        screenWidth: view.width,
-        screenHeight: view.height,
+        // A desktop page sits in a window on a real screen. Only a phone or tablet is its own screen.
+        screenWidth: view.mobile || engine.screen === undefined ? view.width : engine.screen.width,
+        screenHeight: view.mobile || engine.screen === undefined ? view.height : engine.screen.height,
         screenOrientation:
           view.width > view.height
             ? { type: 'landscapePrimary', angle: 90 }
