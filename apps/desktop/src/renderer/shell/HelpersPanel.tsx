@@ -1,6 +1,6 @@
 import { MAIN_CHAT, type ChatItem, type MascotId, type ProjectRow } from '@agent/core'
 import { PlaceChip } from '../ui/PlaceChip'
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 
 import { agent } from '../bridge'
 import { cardTarget, dismissCard, mainCard, openTarget, type CardTarget, type MainCard } from '../lib/card-open'
@@ -8,7 +8,8 @@ import { openChat } from '../lib/chat-actions'
 import { chatOf, chatTitleOf, itemsOfChat } from '../lib/chats'
 import { helperCards, helperIdOf, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
 import { metaText, parseMeta } from '../lib/meta'
-import { cardsForChat, HELPER_STALE_MS, helperHold, helperParentChat } from '../../shared/helper-cards'
+import { cardNeeds, foldCards, groupCards, HELPER_STALE_MS, helperHold, helperParentChat, MAIN_GROUP, workCounts, type FoldedCard } from '../../shared/helper-cards'
+import { useWorkList } from '../lib/work-list-pref'
 import { useChats } from '../state/useChats'
 import { useCalmEntity, useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -98,11 +99,29 @@ export function useWorkingHelpers(): HelperCard[] {
 /** A project agent's newest steps under its card while it works (the line above already says the one it is on). */
 const CARD_STEPS = 3
 
+const NONE: ReadonlySet<string> = new Set()
+
+/** The whole block folded to its header: open or not, and what a tap on the header does (the device's choice). */
+export interface ListCollapse {
+  open: boolean
+  onToggle: () => void
+}
+
+/** The list by project: which group comes first (the chat on screen's), which ones are folded, and a header's tap. */
+export interface ListGroups {
+  first: string
+  closed: ReadonlySet<string>
+  onToggle: (id: string) => void
+}
+
 /**
- * The cards working right now (the main chat's while it works or waits, then project chats with their helpers under
- * them, then the other helpers), under the agent's browser in the side panel and in the title bar's list. Nothing is
- * cut off: the list scrolls. What a tap does is the caller's `onOpen` (lib/card-open.ts openTarget everywhere): a
- * project chat's card and the main card open that chat in full; a helper's card opens the helper's own view.
+ * Everything working right now on the computer, under the agent's browser in the side panel and in the title bar's
+ * list: grouped by project (the main chat's group, one per project with its chats and their helpers under them, the
+ * group of the chat on screen first), a helper's own helpers folded under it. With `collapse` the block's header is a
+ * button that folds the whole block (and it is folded by itself while nothing runs); each group's header folds that
+ * group. A card that waits on the person is never folded away: its header says so and the card stays. Nothing is cut
+ * off: the list scrolls. What a tap does is the caller's `onOpen` (lib/card-open.ts openTarget everywhere): a project
+ * chat's card and the main card open that chat in full; a helper's card opens the helper's own view.
  */
 export function HelperCardList({
   cards,
@@ -111,6 +130,12 @@ export function HelperCardList({
   mascot,
   onOpen,
   onClose,
+  heading = 'CHATS AND HELPERS',
+  needs = NONE,
+  collapse,
+  groups,
+  nameChats = false,
+  id = 'work-list',
 }: {
   cards: HelperCard[]
   main?: MainCard | null
@@ -123,106 +148,180 @@ export function HelperCardList({
    * list on every device (lib/card-open.ts dismissCard). Without it a working card's X only stops it.
    */
   onClose?: (card: HelperCard) => void
+  /** The eyebrow of the block's header. */
+  heading?: string
+  /** What waits on the person (useNeedsCards): marked, counted in the headers, and never folded away. */
+  needs?: ReadonlySet<string>
+  /** Given: the header folds the whole block. Left out: the block is always open. */
+  collapse?: ListCollapse
+  /** Given: the cards are grouped by project, each group folding on its header. Left out: one plain list. */
+  groups?: ListGroups
+  /** A project chat's card is named by the chat, not the project (a project's own page; grouped lists always do). */
+  nameChats?: boolean
+  id?: string
 }): JSX.Element | null {
   const { stopping, stop } = useStop()
+  // A helper's own helpers sit folded under it, closed until its row is opened.
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(NONE)
+  // While nothing runs the block folds itself; a tap still opens it, for as long as this list is on screen.
+  const [idleOpen, setIdleOpen] = useState(false)
   if (cards.length === 0 && main === null) return null
-  const waitingHelpers = cards.filter((card) => helperHold(card) !== null).length
-  const working = cards.filter((card) => card.state === 'working').length - waitingHelpers + (main === null ? 0 : 1)
-  const replied = cards.filter((card) => card.waiting).length
-  const counts = [working > 0 || replied === 0 ? `${working} working` : '', waitingHelpers > 0 ? `${waitingHelpers} waiting` : '', replied > 0 ? `${replied} replied` : ''].filter((part) => part !== '').join(', ')
-  return (
-    <section className="hp" aria-label="Chats and helpers">
-      <div className="hp-title">
-        <span className="eyebrow">CHATS AND HELPERS</span>
-        <span className="small muted">{counts}</span>
-      </div>
-      <ul className="hp-list">
-        {main !== null ? (
-          <li key="main" data-card="main" className={main.waiting ? undefined : 'hp-li closable'}>
-            <button type="button" className="hp-card hp-main" data-kind="main" aria-current={current === MAIN_CHAT ? true : undefined} onClick={() => onOpen({ kind: 'main' })} aria-label={`Open the main chat with ${main.label}`} title={main.line}>
-              <span className="hp-av" aria-hidden="true">
-                <Mascot id={mascot} size={32} />
-              </span>
-              <span className="hp-t">
-                <b>{main.label}</b>
-                <span className="hp-where">Main chat</span>
-                <span className="hp-line">{main.line}</span>
-              </span>
-              <span className={`pill ${main.waiting ? 'warn' : 'pri'}`}>{main.waiting ? 'Needs you' : 'Working'}</span>
+  const counts = workCounts(cards, main, needs)
+  const running = counts.working + counts.held > 0
+  const open = collapse === undefined ? true : running ? collapse.open : idleOpen
+  const asking = new Set(cards.filter((card) => cardNeeds(card, needs)).map((card) => card.id))
+  const sets = groups === undefined ? [{ id: '', name: '', cards }] : groupCards(cards, main !== null, groups.first)
+  const toggleFold = (card: string): void =>
+    setUnfolded((before) => {
+      const next = new Set(before)
+      if (next.has(card)) next.delete(card)
+      else next.add(card)
+      return next
+    })
+
+  const mainRow = (shown: MainCard): JSX.Element => (
+    <li key="main" data-card="main" className={shown.waiting ? undefined : 'hp-li closable'}>
+      <button type="button" className="hp-card hp-main" data-kind="main" aria-current={current === MAIN_CHAT ? true : undefined} onClick={() => onOpen({ kind: 'main' })} aria-label={`Open the main chat with ${shown.label}`} title={shown.line}>
+        <span className="hp-av" aria-hidden="true">
+          <Mascot id={mascot} size={32} />
+        </span>
+        <span className="hp-t">
+          <b>{shown.label}</b>
+          <span className="hp-where">Main chat</span>
+          <span className="hp-line">{shown.line}</span>
+        </span>
+        <span className={`pill ${shown.waiting ? 'warn' : 'pri'}`}>{shown.waiting ? 'Needs you' : 'Working'}</span>
+      </button>
+      {shown.waiting ? null : (
+        <button type="button" className="hp-close hp-stop" aria-label={`Stop ${shown.label}`} title="Stop the main chat's run now" onClick={() => void agent.chat.stop(MAIN_CHAT)}>
+          <Icon name="x" size={16} />
+        </button>
+      )}
+    </li>
+  )
+
+  const cardRow = ({ card, level, subs, open: subsOpen }: FoldedCard<HelperCard>): JSX.Element => {
+    const s = asking.has(card.id) ? { label: 'Needs you', tone: 'warn' } : card.waiting ? { label: 'Your turn', tone: 'ok' } : stateLabel(card)
+    const target = cardTarget(card)
+    // Every run at work has its stop on its card (28 Oct 2026: a routine and a background script ran unseen and
+    // could only be stopped by killing processes). A project chat stops its own run; anything else by its id.
+    const stoppable = card.state === 'working' && !card.waiting
+    const closable = !stoppable && onClose !== undefined
+    // A project chat's card reads as its project, named by its chat; a helper under it sits in its group; any other
+    // project helper says which project it works in, unless its group's header already does.
+    // Under its project's header a chat's card is named by the chat itself, not by the project again.
+    const byChat = (groups !== undefined || nameChats) && target.kind === 'project-chat' && card.chatTitle !== ''
+    const where = byChat ? '' : target.kind === 'project-chat' ? card.chatTitle || 'Project chat' : groups === undefined && card.owner.kind === 'project' && card.depth === 0 ? card.owner.name : ''
+    const opens = target.kind === 'project-chat' ? `Open the ${card.label} chat` : `Open ${card.label}, a helper`
+    const nest = `${card.depth === 1 ? ' hp-sub' : ''}${level > 0 ? ` hp-nest${level > 1 ? ' deep' : ''}` : ''}`
+    return (
+      <Fragment key={card.id}>
+        <li className={`hp-li${nest}${card.waiting ? ' waiting' : ''}${closable || stoppable ? ' closable' : ''}`} data-card={card.id}>
+          <button type="button" className="hp-card" data-kind={target.kind} aria-current={target.kind === 'project-chat' && current !== '' && target.chat === current ? true : undefined} onClick={() => onOpen(target)} aria-label={opens} title={card.line}>
+            <OwnerAvatar owner={card.owner} helper={card} mascot={mascot} size={card.depth === 1 || level > 0 ? 28 : 32} />
+            <span className="hp-t">
+              <b>
+                {byChat ? card.chatTitle : card.label}
+                {card.model !== '' ? <span className="hp-model" title={`Runs on ${card.model}`}>{card.model}</span> : null}
+              </b>
+              {where !== '' ? <span className="hp-where">{where}</span> : null}
+              <span className={card.state === 'working' ? 'hp-line' : 'hp-line idle'}>{card.line}</span>
+              {target.kind === 'project-chat' && card.state === 'working' && card.steps.length > 1 ? (
+                <span className="hp-steps-mini" aria-label="Its newest steps">
+                  {card.steps
+                    .slice(-CARD_STEPS - 1, -1)
+                    .reverse()
+                    .map((step) => (
+                      <span key={step.id}>{stepText(step)}</span>
+                    ))}
+                </span>
+              ) : null}
+            </span>
+            <span className={`pill ${s.tone}`}>{s.label}</span>
+          </button>
+          {stoppable ? (
+            <button
+              type="button"
+              className="hp-close hp-stop"
+              aria-label={`Stop ${card.label}`}
+              title="Stop it now (its run, its process and its browser tabs end)"
+              disabled={stopping === card.id}
+              onClick={() => {
+                if (onClose !== undefined) onClose(card)
+                else if (target.kind === 'project-chat') void agent.chat.stop(target.chat)
+                else stop(card.id)
+              }}
+            >
+              <Icon name="x" size={16} />
             </button>
-            {main.waiting ? null : (
-              <button type="button" className="hp-close hp-stop" aria-label={`Stop ${main.label}`} title="Stop the main chat's run now" onClick={() => void agent.chat.stop(MAIN_CHAT)}>
-                <Icon name="x" size={16} />
-              </button>
-            )}
+          ) : null}
+          {closable ? (
+            <button
+              type="button"
+              className="hp-close"
+              aria-label={card.kind === 'project-chat' ? `Close the ${card.label} card. The chat keeps going` : `Close the ${card.label} card`}
+              title={card.kind === 'project-chat' ? 'Close this card (the chat keeps going, and comes back when it moves)' : 'Close this card (its result stays in the chat)'}
+              onClick={() => onClose?.(card)}
+            >
+              <Icon name="x" size={16} />
+            </button>
+          ) : null}
+        </li>
+        {subs > 0 ? (
+          <li className={`hp-fold-li${nest}`}>
+            <button type="button" className="hp-fold" data-fold={card.id} aria-expanded={subsOpen} aria-label={`${subsOpen ? 'Hide' : 'Show'} the ${subs === 1 ? 'helper' : `${subs} helpers`} ${card.label} started`} onClick={() => toggleFold(card.id)}>
+              <Icon name="chev" size={14} />
+              <span>{subs === 1 ? '1 helper under it' : `${subs} helpers under it`}</span>
+            </button>
           </li>
         ) : null}
-        {cards.map((card) => {
-          const s = card.waiting ? { label: 'Your turn', tone: 'ok' } : stateLabel(card)
-          const target = cardTarget(card)
-          // Every run at work has its stop on its card (28 Oct 2026: a routine and a background script ran unseen and
-          // could only be stopped by killing processes). A project chat stops its own run; anything else by its id.
-          const stoppable = card.state === 'working' && !card.waiting
-          const closable = !stoppable && onClose !== undefined
-          // A project chat's card reads as its project, named by its chat; a helper under it sits in its group; any other
-          // project helper says which project it works in.
-          const where = target.kind === 'project-chat' ? card.chatTitle || 'Project chat' : card.owner.kind === 'project' && card.depth === 0 ? card.owner.name : ''
-          const opens = target.kind === 'project-chat' ? `Open the ${card.label} chat` : `Open ${card.label}, a helper`
+      </Fragment>
+    )
+  }
+
+  return (
+    <section className={`hp${open ? '' : ' folded'}`} aria-label="Chats and helpers">
+      {collapse === undefined ? (
+        <div className="hp-title">
+          <span className="eyebrow">{heading}</span>
+          <span className={`small ${counts.needs > 0 ? 'hp-warn' : 'muted'}`}>{counts.text}</span>
+        </div>
+      ) : (
+        <button type="button" className="hp-head" aria-expanded={open} aria-controls={id} title={open ? 'Fold this list' : 'Show this list'} onClick={() => (running ? collapse.onToggle() : setIdleOpen((before) => !before))}>
+          <Icon name="chev" size={16} />
+          <span className="eyebrow">{heading}</span>
+          <span className={`small ${counts.needs > 0 ? 'hp-warn' : 'muted'}`}>{counts.text}</span>
+        </button>
+      )}
+      <div className="hp-groups" id={id}>
+        {sets.map((set) => {
+          const hasMain = main !== null && (groups === undefined || set.id === MAIN_GROUP)
+          const setOpen = open && (groups === undefined || !groups.closed.has(set.id))
+          // Folded (the block or this group): only what waits on the person is left on screen.
+          const rows = setOpen ? foldCards(set.cards, unfolded, asking) : foldCards(set.cards.filter((card) => asking.has(card.id)))
+          const mainShown = hasMain && main !== null && (setOpen || main.waiting) ? main : null
+          const own = workCounts(set.cards, hasMain ? main : null, needs)
+          const header = open && groups !== undefined
+          if (!header && mainShown === null && rows.length === 0) return null
           return (
-            <li key={card.id} className={`hp-li${card.depth === 1 ? ' hp-sub' : ''}${card.waiting ? ' waiting' : ''}${closable || stoppable ? ' closable' : ''}`} data-card={card.id}>
-              <button type="button" className="hp-card" data-kind={target.kind} aria-current={target.kind === 'project-chat' && current !== '' && target.chat === current ? true : undefined} onClick={() => onOpen(target)} aria-label={opens} title={card.line}>
-                <OwnerAvatar owner={card.owner} helper={card} mascot={mascot} size={card.depth === 1 ? 28 : 32} />
-                <span className="hp-t">
-                  <b>
-                    {card.label}
-                    {card.model !== '' ? <span className="hp-model" title={`Runs on ${card.model}`}>{card.model}</span> : null}
-                  </b>
-                  {where !== '' ? <span className="hp-where">{where}</span> : null}
-                  <span className={card.state === 'working' ? 'hp-line' : 'hp-line idle'}>{card.line}</span>
-                  {target.kind === 'project-chat' && card.state === 'working' && card.steps.length > 1 ? (
-                    <span className="hp-steps-mini" aria-label="Its newest steps">
-                      {card.steps
-                        .slice(-CARD_STEPS - 1, -1)
-                        .reverse()
-                        .map((step) => (
-                          <span key={step.id}>{stepText(step)}</span>
-                        ))}
-                    </span>
-                  ) : null}
-                </span>
-                <span className={`pill ${s.tone}`}>{s.label}</span>
-              </button>
-              {stoppable ? (
-                <button
-                  type="button"
-                  className="hp-close hp-stop"
-                  aria-label={`Stop ${card.label}`}
-                  title="Stop it now (its run, its process and its browser tabs end)"
-                  disabled={stopping === card.id}
-                  onClick={() => {
-                    if (onClose !== undefined) onClose(card)
-                    else if (target.kind === 'project-chat') void agent.chat.stop(target.chat)
-                    else stop(card.id)
-                  }}
-                >
-                  <Icon name="x" size={16} />
+            <div className="hp-group" key={set.id} data-group={set.id}>
+              {header ? (
+                <button type="button" className="hp-group-h" aria-expanded={setOpen} onClick={() => groups.onToggle(set.id)}>
+                  <Icon name="chev" size={14} />
+                  <b>{set.name}</b>
+                  <span className={own.needs > 0 ? 'hp-warn' : undefined}>{own.text}</span>
                 </button>
               ) : null}
-              {closable ? (
-                <button
-                  type="button"
-                  className="hp-close"
-                  aria-label={card.kind === 'project-chat' ? `Close the ${card.label} card. The chat keeps going` : `Close the ${card.label} card`}
-                  title={card.kind === 'project-chat' ? 'Close this card (the chat keeps going, and comes back when it moves)' : 'Close this card (its result stays in the chat)'}
-                  onClick={() => onClose?.(card)}
-                >
-                  <Icon name="x" size={16} />
-                </button>
+              {mainShown !== null || rows.length > 0 ? (
+                <ul className="hp-list">
+                  {mainShown !== null ? mainRow(mainShown) : null}
+                  {rows.map(cardRow)}
+                </ul>
               ) : null}
-            </li>
+            </div>
           )
         })}
-      </ul>
+      </div>
     </section>
   )
 }
@@ -238,25 +337,74 @@ export function useMainCard(): MainCard | null {
 }
 
 /**
- * The cards for the chat on screen: in a project chat only that project's (the main chat's card is not one of them);
- * in the main chat and on every other page, everything across all projects.
+ * The cards for the list, wherever it is drawn: every card on the computer, across all projects, whatever chat is on
+ * screen (9 Nov 2026: the list is never cut down to one chat or one project; the chat on screen only decides which
+ * project's group comes first, see useListGroups).
  */
 export function useScopedCards(): { cards: HelperCard[]; main: MainCard | null; current: string } {
-  const all = usePanelCards()
+  const cards = usePanelCards()
   const main = useMainCard()
   const current = useCurrentChat()
-  const projects = useEntity('project')
-  const cards = useMemo(() => cardsForChat(all, projects, current), [all, projects, current])
-  const inProject = current !== '' && current !== MAIN_CHAT
-  return { cards, main: inProject ? null : main, current }
+  return { cards, main, current }
 }
 
-/** The side panel's card list (and the title bar's): a tap goes where lib/card-open.ts says. */
+/**
+ * What waits on the person right now, as a card answers to it (shared/helper-cards.ts cardNeeds): a helper by its id,
+ * a project chat by `chat:<its chat>`. The main chat's own waiting is on its card (useMainCard).
+ */
+export function useNeedsCards(): ReadonlySet<string> {
+  const waiting = useWaiting()
+  return useMemo(() => {
+    const out = new Set<string>()
+    for (const item of waiting) {
+      const helper = metaText(parseMeta(item.meta), 'helper')
+      if (helper !== '') out.add(helper)
+      else if (chatOf(item) !== MAIN_CHAT) out.add(`chat:${chatOf(item)}`)
+    }
+    return out
+  }, [waiting])
+}
+
+/** The list's groups: the project of the chat on screen first, and the groups this device keeps folded. */
+export function useListGroups(current: string): ListGroups {
+  const projects = useEntity('project')
+  const closed = useWorkList((store) => store.closed)
+  const onToggle = useWorkList((store) => store.toggleGroup)
+  const first = current === '' ? '' : current === MAIN_CHAT ? MAIN_GROUP : (projects.find((project) => project.chats.includes(current))?.id ?? '')
+  return useMemo(() => ({ first, closed, onToggle }), [first, closed, onToggle])
+}
+
+/**
+ * The side panel's running list: everything on the computer by project, the whole block folding on its header (the
+ * device remembers), folded by itself while nothing runs. A tap on a card goes where lib/card-open.ts says.
+ */
 export function HelpersPanel(): JSX.Element | null {
   const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
   const { cards, main, current } = useScopedCards()
   const projects = useEntity('project')
-  return <HelperCardList cards={cards} main={main} current={current} mascot={mascot} onOpen={openTarget} onClose={(card) => void dismissCard(card, projects)} />
+  const needs = useNeedsCards()
+  const groups = useListGroups(current)
+  const open = useWorkList((store) => store.open)
+  const onToggle = useWorkList((store) => store.toggle)
+  return <HelperCardList cards={cards} main={main} current={current} mascot={mascot} onOpen={openTarget} onClose={(card) => void dismissCard(card, projects)} needs={needs} groups={groups} collapse={{ open, onToggle }} id="panel-work-list" />
+}
+
+/** A project's page: its chats at work (or waiting on the person) with their helpers under them. Nothing when idle. */
+export function ProjectWork({ project }: { project: ProjectRow }): JSX.Element | null {
+  const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
+  const all = usePanelCards()
+  const projects = useEntity('project')
+  const needs = useNeedsCards()
+  const cards = useMemo(
+    () => all.filter((card) => (card.owner.kind === 'project' && card.owner.id === project.id) || project.chats.includes(card.projectChat) || project.chats.includes(card.parentChat)),
+    [all, project],
+  )
+  if (cards.length === 0) return null
+  return (
+    <section className="pj-sec pj-work">
+      <HelperCardList cards={cards} mascot={mascot} onOpen={openTarget} onClose={(card) => void dismissCard(card, projects)} heading="WORKING NOW" needs={needs} nameChats id="project-work-list" />
+    </section>
+  )
 }
 
 /** The chat on screen, or '' when the window shows another page. */

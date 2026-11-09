@@ -19,6 +19,7 @@ import { Icon } from '../ui/Icon'
 import { ProjectTile } from '../ui/ProjectTile'
 import { Skeleton } from '../ui/Skeleton'
 import { ProjectDialog } from './ProjectDialog'
+import { ProjectWork } from '../shell/HelpersPanel'
 import { useProfiles } from './Profiles'
 import { hasAccounts, pickLine, pickOfChat } from '../lib/ai'
 import { useSettings } from '../state/useSettings'
@@ -226,6 +227,8 @@ export function Project({ id }: { id: string }): JSX.Element {
           </Button>
         </div>
       </div>
+
+      <ProjectWork project={project} />
 
       <section className="pj-sec">
         <div className="sec">

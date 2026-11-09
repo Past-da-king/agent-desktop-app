@@ -710,6 +710,49 @@ export function bigRows(base: SeedResult['rows']): SeedResult['rows'] {
     })
   }
 
+  // Project chats at work with helpers of their own (and helpers those helpers started), so a chat's helper line, the
+  // title bar's list and the project page have a busy state to show.
+  const busy = (id: string, chatId: string, label: string, ago: number, extra: Record<string, unknown> = {}): ChatItem[] => [
+    {
+      id,
+      createdAt: now - ago,
+      kind: 'helper',
+      text: `${label}: the brief this helper was given.`,
+      meta: JSON.stringify({ id, chat: chatId, label, state: 'working', summary: 'Starting', queued: false, startedAt: now - ago, ...extra }),
+    },
+    ...(extra['queued'] === true
+      ? []
+      : [{ id: `${id}-s`, createdAt: now - ago + 5_000, kind: 'activity', text: `${label}: reading the files`, meta: JSON.stringify({ chat: chatId, helper: id, status: 'running', summary: `${label}: reading the files` }) } as ChatItem]),
+  ]
+  const threads: Array<[project: number, chatId: string, ask: string]> = [
+    [0, 'big-pc1', 'Fix the checkout and check it on a phone'],
+    [0, 'big-pc2', 'Write the release notes'],
+    [0, 'big-pc3', 'Audit the settings pages'],
+    [1, 'big-pc4', 'Compare the three quotes'],
+    [2, 'big-pc5', 'Tidy the shared drive'],
+  ]
+  for (const [at, chatId, ask] of threads) {
+    const owner = projects.find((project) => project.id === `big-pj${at}`)
+    if (owner !== undefined) owner.chats = [...owner.chats, chatId]
+    chat.push({ id: `${chatId}-u`, createdAt: now - 9 * 60_000, kind: 'user', text: ask, meta: JSON.stringify({ chat: chatId }) })
+    chat.push({ id: `${chatId}-a`, createdAt: now - 8 * 60_000, kind: 'activity', text: 'Handing the work out', meta: JSON.stringify({ chat: chatId, status: 'running', summary: 'Handing the work out' }) })
+  }
+  chat.push(
+    ...busy('big-h1', 'big-pc1', 'Checkout fix', 7 * 60_000),
+    ...busy('big-h1a', 'big-pc1', 'Cart tests', 6 * 60_000, { parentHelper: 'big-h1' }),
+    ...busy('big-h1b', 'big-pc1', 'Payment page check', 5 * 60_000, { parentHelper: 'big-h1' }),
+    ...busy('big-h2', 'big-pc1', 'Phone width check', 6 * 60_000),
+    ...busy('big-h3', 'big-pc1', 'Copy review', 4 * 60_000, { queued: true, summary: 'Queued: waiting for a free slot' }),
+    ...busy('big-h4', 'big-pc2', 'Change list', 6 * 60_000),
+    ...busy('big-h5', 'big-pc2', 'Screenshots', 5 * 60_000),
+    ...busy('big-h6', 'big-pc3', 'Settings audit', 6 * 60_000),
+    ...busy('big-h7', 'big-pc3', 'Contrast check', 5 * 60_000),
+    ...busy('big-h8', 'big-pc4', 'Quote reader', 6 * 60_000),
+    ...busy('big-h9', 'big-pc5', 'Duplicate finder', 6 * 60_000),
+    ...busy('big-h10', 'big-pc5', 'Folder plan', 5 * 60_000),
+  )
+
+
   return { ...base, task: tasks, memory: memories, trigger: triggers, chat_item: chat, project: projects }
 }
 
