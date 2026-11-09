@@ -7,6 +7,7 @@ import type { WakeDeviceStatus, WakeupRow } from '@agent/core'
 import { useEffect, useMemo, useState } from 'react'
 
 import { agent } from '../../bridge'
+import { Button } from '../../ui/Button'
 import { useEntity } from '../../state/useData'
 import { foldWakes, SEVERITY_LOOK, shownTitle } from '../../../shared/wakeups'
 
@@ -17,21 +18,30 @@ function clock(at: number): string {
 export function WakeLog(): JSX.Element {
   const rows = useEntity('wakeup')
   const [devices, setDevices] = useState<WakeDeviceStatus[]>([])
+  const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   const now = Date.now()
 
+  // Read on open, again when a device connects or leaves, and again when the person presses Retry.
   useEffect(() => {
     let live = true
     const read = (): void => {
       void agent.wakeups
         .devices()
-        .then((list) => live && setDevices(list))
-        .catch(() => undefined)
+        .then((list) => {
+          if (!live) return
+          setDevices(list)
+          setFailed(false)
+        })
+        .catch(() => live && setFailed(true))
     }
     read()
+    const off = agent.devices?.onChanged(read)
     return () => {
       live = false
+      off?.()
     }
-  }, [])
+  }, [attempt])
 
   const log = useMemo(() => foldWakes(rows as WakeupRow[], now).filter((view) => view.state !== 'pending').slice(0, 8), [rows, now])
   const phones = devices.filter((device) => device.kind === 'phone' || device.kind === 'tablet')
@@ -40,8 +50,19 @@ export function WakeLog(): JSX.Element {
     <div className="wakelog">
       <div className="wakelog-h">
         <span className="eyebrow mute">Wake-ups log</span>
-        {phones.length === 0 ? <span className="small muted">No phone linked</span> : null}
-        {phones.map((phone) => (
+        {failed ? (
+          <>
+            <span className="small dv-error-line" role="alert">
+              Could not check your phone.
+            </span>
+            <Button variant="text" size="sm" onClick={() => setAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+          </>
+        ) : phones.length === 0 ? (
+          <span className="small muted">No phone linked</span>
+        ) : null}
+        {failed ? null : phones.map((phone) => (
           <span key={phone.id} className="small muted">
             {phone.name} {phone.reachable ? 'reachable now' : 'not connected'}
           </span>

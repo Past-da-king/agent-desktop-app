@@ -721,8 +721,13 @@ export function seedFor(mode: DemoMode): SeedResult {
     }
   }
   if (mode === 'empty') {
+    // ?demo=empty&bare=1 also takes the AI accounts (and the old single key they are mirrored from) and the voice key away, so Settings shows every empty state. Plain
+    // empty keeps them: the other pages need an account to draw their own empty states.
+    const bare = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('bare') === '1'
+    const demo = demoSettings()
+    const fresh = { ...freshSettings(), userName: demo.userName, agentName: demo.agentName, signedIn: demo.signedIn, syncEmail: demo.syncEmail, onboarded: demo.onboarded }
     return {
-      settings: demoSettings(),
+      settings: bare ? fresh : demo,
       rows: { chat_item: [], turn: [], memory: [], goal: [], task: [], trigger: [], project: [], device: [], device_command: [], turn_lease: [], job: [], prompt_rule: [], wakeup: [], miniapp: [] },
     }
   }

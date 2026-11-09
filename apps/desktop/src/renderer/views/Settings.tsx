@@ -21,6 +21,7 @@ import { folderName } from '../lib/files'
 import { timeAgo } from '../lib/format'
 import { ACCENTS, applyAccent } from '../state/theme'
 import { useAccountStatus } from '../state/useAccount'
+import { refreshDevicesSummary, useDevicesData } from '../state/useDevices'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
@@ -407,24 +408,28 @@ const SHARE_GROUPS: Array<[string, string]> = [
 
 /** Which of the person's devices is used first for each shared tool. Empty means any device that is free. */
 function PreferredDevices({ settings, put }: { settings: SettingsValues | null; put: SectionProps['put'] }): JSX.Element {
-  const [devices, setDevices] = useState<Array<{ id: string; name: string }>>([])
-  useEffect(() => {
-    let live = true
-    void agent.devices
-      .list()
-      .then((rows) => {
-        if (live) setDevices(rows.filter((item) => !item.revoked).map((item) => ({ id: item.id, name: item.name })))
-      })
-      .catch(() => undefined)
-    return () => {
-      live = false
-    }
-  }, [])
+  // The shared read (state/useDevices): no fetch of its own, and it follows the devices changed event.
+  const { status, rows, error } = useDevicesData()
+  const self = status === null ? '' : status.viewer || status.nodeId
+  const devices = rows.filter((item) => !item.revoked && item.id !== self).map((item) => ({ id: item.id, name: item.name }))
   const preferred = settings?.devicesPreferred ?? {}
   return (
     <>
       <SettingRow spec={row('devicesPreferred')}>
-        <span className="small muted">{devices.length === 0 ? 'No other device yet' : 'Empty means any device that is free'}</span>
+        {error !== '' ? (
+          <>
+            <span className="small dv-error-line" role="alert">
+              Could not read your devices.
+            </span>
+            <Button variant="text" size="sm" onClick={refreshDevicesSummary}>
+              Retry
+            </Button>
+          </>
+        ) : (
+          <span className="small muted">
+            {status === null ? 'Looking...' : devices.length === 0 ? 'No other device yet' : 'Any device means the first one that is free'}
+          </span>
+        )}
       </SettingRow>
       {SHARE_GROUPS.map(([group, label]) => (
         <SettingRow key={group} spec={{ ...row('devicesPreferred'), label, description: '' }} sub>
@@ -480,25 +485,12 @@ function DevicesSection({ settings, put, resetRow }: SectionProps): JSX.Element 
 
 /** Where a helper runs: here, or on a linked server when it is free. */
 function RunHelpersOn({ settings, put, resetRow }: SectionProps): JSX.Element {
-  const [brains, setBrains] = useState<Array<{ id: string; name: string }>>([])
-  useEffect(() => {
-    let live = true
-    void Promise.all([agent.devices.list(), agent.devices.status()])
-      .then(([rows, status]) => {
-        if (!live) return
-        // This computer is in its own device list, and it is already the 'This computer' choice.
-        const self = status.viewer || status.nodeId
-        setBrains(
-          rows
-            .filter((item) => !item.revoked && item.id !== self && item.roles.includes('brain'))
-            .map((item) => ({ id: item.id, name: item.name })),
-        )
-      })
-      .catch(() => undefined)
-    return () => {
-      live = false
-    }
-  }, [])
+  const { status, rows } = useDevicesData()
+  // This computer is in its own device list, and it is already the 'This computer' choice.
+  const self = status === null ? '' : status.viewer || status.nodeId
+  const brains = rows
+    .filter((item) => !item.revoked && item.id !== self && item.roles.includes('brain'))
+    .map((item) => ({ id: item.id, name: item.name }))
   const value = settings?.helpersRunOn ?? 'best'
   const options = [
     { value: 'best', label: 'Best' },
@@ -1006,7 +998,9 @@ function DangerZone({ navigate }: { navigate: SectionProps['navigate'] }): JSX.E
               {accounts === 1 ? 'AI account' : 'AI accounts'} and their keys, the theme, the shortcuts, the wake-ups,
               the {folders.length} {folders.length === 1 ? 'folder' : 'folders'} you allowed and the device settings.
             </p>
-            <p className="lead">Chats, memory, to-dos, routines and files are not touched, and your account keeps its copy.</p>
+            <p className="lead" style={{ marginTop: 8 }}>
+              Chats, memory, to-dos, routines and files are not touched, and your account keeps its copy.
+            </p>
           </div>
           <div className="dialog-actions">
             <Button variant="text" onClick={() => setWhich(null)}>
@@ -1214,22 +1208,46 @@ function PrivacySection({ settings, put, resetRow, navigate }: SectionProps): JS
 function GitSection({ settings, put, resetRow }: SectionProps): JSX.Element {
   const [log, setLog] = useState<GitLogEntry[]>([])
   const [checking, setChecking] = useState(false)
+  const [logError, setLogError] = useState(false)
+  const readLog = useRef<() => void>(() => undefined)
   const SIZES = [1, 2, 5, 10, 25, 50, 100]
   const size = settings?.gitMaxFileMb ?? 5
 
+  // Read when the section opens, when it scrolls into view and when the window comes back to the front: a run
+  // commits while the person is elsewhere, so those are the moments the list can have changed. No timer.
   useEffect(() => {
     let live = true
+    let inView = false
     const read = (): void => {
       void agent.git
         .log()
-        .then((list) => live && setLog(list))
-        .catch(() => undefined)
+        .then((list) => {
+          if (!live) return
+          setLog(list)
+          setLogError(false)
+        })
+        .catch(() => live && setLogError(true))
     }
+    readLog.current = read
     read()
-    const timer = setInterval(read, 15_000)
+    const onFocus = (): void => {
+      if (inView) read()
+    }
+    window.addEventListener('focus', onFocus)
+    const section = document.getElementById('set-git')
+    const watcher =
+      section === null || typeof IntersectionObserver === 'undefined'
+        ? null
+        : new IntersectionObserver((entries) => {
+            const now = entries.some((entry) => entry.isIntersecting)
+            if (now && !inView) read()
+            inView = now
+          })
+    if (watcher !== null && section !== null) watcher.observe(section)
     return () => {
       live = false
-      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+      watcher?.disconnect()
     }
   }, [])
 
@@ -1248,7 +1266,10 @@ function GitSection({ settings, put, resetRow }: SectionProps): JSX.Element {
         )
       })
       .catch(() => toast('Could not read the project folders.'))
-      .finally(() => setChecking(false))
+      .finally(() => {
+        setChecking(false)
+        readLog.current()
+      })
   }
 
   return (
@@ -1292,14 +1313,23 @@ function GitSection({ settings, put, resetRow }: SectionProps): JSX.Element {
           {checking ? 'Checking...' : 'Check now'}
         </Button>
       </SettingRow>
-      <div className="rowempty">
-        {log.length === 0
-          ? 'Nothing has been committed after a run yet.'
-          : log
-              .slice(0, 5)
-              .map((entry) => `${outcome(entry)} (${timeAgo(entry.at)})`)
-              .join('. ')}
-      </div>
+      {logError ? (
+        <div className="rowempty rowerr" role="alert">
+          <span>Could not read what was committed.</span>
+          <Button variant="text" size="sm" onClick={() => readLog.current()}>
+            Retry
+          </Button>
+        </div>
+      ) : (
+        <div className="rowempty">
+          {log.length === 0
+            ? 'Nothing has been committed after a run yet.'
+            : log
+                .slice(0, 5)
+                .map((entry) => `${outcome(entry)} (${timeAgo(entry.at)})`)
+                .join('. ')}
+        </div>
+      )}
     </SectionBlock>
   )
 }

@@ -71,6 +71,9 @@ let rows: DeviceRow[] = [
   },
 ]
 
+// The empty demo is a computer with nothing linked yet, so Settings shows its empty states.
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('demo') === 'empty') rows = rows.filter((row) => row.id === SELF)
+
 function changed(): void {
   for (const listener of listeners) listener()
 }
