@@ -52,11 +52,17 @@ import { DEMO_CHATS } from './chats-demo'
 import { mockHotkeys } from './mock-hotkeys'
 import { readMode, seedFor, type DemoMode } from './seed'
 import { cardInfo, HELPER_STALE_MS, helperCards } from '../../shared/helper-cards'
+import { lightRow } from '../../shared/light-row'
 import { localRoutes } from '../../shared/route-target'
 
 const mockRoutes = localRoutes()
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
+
+/** The preview's way to see a failure state by eye: ?fail=decide (a card's answer is refused), ?fail=rest (a run's full record cannot be read). */
+function failing(what: string): boolean {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fail') === what
+}
 
 const mode: DemoMode =
   typeof window === 'undefined' ? 'fresh' : readMode(window.location.search)
@@ -839,12 +845,15 @@ export const mockAgent: AgentApi = {
 
   data: {
     async list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
+      // ?fail=rest: rows are listed as the app lists them (only the head of long output), and reading the rest fails.
+      if (failing('rest')) return copy(rows[entity] as Array<EntityMap[E]>).map((row) => lightRow(entity, row))
       return copy(rows[entity] as Array<EntityMap[E]>)
     },
     async where<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>> {
       return copy(filterRows(rows[entity] as Array<EntityMap[E]>, where))
     },
     async get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null> {
+      if (failing('rest')) throw new Error('The preview refused it.')
       const row = (rows[entity] as Array<EntityMap[E]>).find((each) => each.id === id)
       return row === undefined ? null : (copy(row) as EntityMap[E])
     },
@@ -981,6 +990,8 @@ export const mockAgent: AgentApi = {
       }
     },
     async decide(itemId, decision: Decision) {
+      // ?fail=decide: the preview's way to see a card whose answer did not get through.
+      if (failing('decide')) throw new Error('The preview refused it.')
       patchCard(itemId, { decision })
     },
     async tap(itemId, label, message) {
