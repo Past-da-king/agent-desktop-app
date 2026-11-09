@@ -12,6 +12,18 @@ export interface PostJsonOptions {
   timeoutMs?: number
 }
 
+/** A provider that asks for a longer wait than this before the next try is not waited for here: the caller decides. */
+export const RETRY_AFTER_MAX_MS = 20_000
+
+/** The wait a provider asked for with Retry-After (seconds, or a date), in ms; null when it said nothing usable. */
+export function retryAfterMs(value: string | null | undefined, now: number = Date.now()): number | null {
+  const text = (value ?? '').trim()
+  if (text === '') return null
+  if (/^\d+(\.\d+)?$/.test(text)) return Math.round(Number(text) * 1000)
+  const at = Date.parse(text)
+  return Number.isFinite(at) ? Math.max(0, at - now) : null
+}
+
 /** One request may take this long (a long answer from a slow model fits); then it is retried. */
 export const REQUEST_TIMEOUT_MS = 120_000
 
@@ -25,10 +37,14 @@ export async function postJson(
   const fetchImpl = options.fetchImpl ?? fetch
   const signal = options.signal
   let last: ProviderException | null = null
+  /** A retryable error that must still end the call now (the provider said when to come back, and it is not soon). */
+  let fatal: ProviderException | null = null
 
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS
   let timeouts = 0
   for (let attempt = 0; attempt < attempts; attempt++) {
+    /** The wait the provider asked for before the next try, when it said one. */
+    let asked: number | null = null
     if (signal?.aborted) throw abortError()
     // The person's Stop and this attempt's own clock both end the request.
     const clock = new AbortController()
@@ -55,9 +71,16 @@ export async function postJson(
       const retryable = res.status === 429 || res.status >= 500
       const error = new ProviderException(`HTTP ${res.status}: ${message}`, res.status, retryable)
       if (!retryable) throw error
+      asked = retryAfterMs(res.headers?.get?.('retry-after'))
+      // Told to stay away for longer than a turn should wait: trying twice more in the next 5 s only adds to the
+      // count against the limit. Fail now; whoever runs the turn waits for the limit to reset.
+      if (res.status === 429 && asked !== null && asked > RETRY_AFTER_MAX_MS) {
+        fatal = error
+        throw error
+      }
       last = error
     } catch (e) {
-      if (e instanceof ProviderException && !e.retryable) throw e
+      if (e instanceof ProviderException && (!e.retryable || e === fatal)) throw e
       if (signal?.aborted) throw abortError()
       if (clock.signal.aborted) {
         const timedOut = new ProviderException(`The AI service did not answer within ${Math.round(timeoutMs / 1000)} seconds.`, 0, true)
@@ -72,7 +95,7 @@ export async function postJson(
       clearTimeout(timer)
       signal?.removeEventListener('abort', onStop)
     }
-    if (attempt < attempts - 1) await sleep(1500 * (attempt + 1), signal)
+    if (attempt < attempts - 1) await sleep(Math.max(1500 * (attempt + 1), asked ?? 0), signal)
   }
   throw last ?? new ProviderException('request failed', 0, true)
 }
