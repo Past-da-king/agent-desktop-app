@@ -131,7 +131,10 @@ export function MemoryHistoryDialog({ memory, onClose }: { memory: MemoryRow; on
     void agent.memory
       .restoreVersion(memory.id, n)
       .then((done) => toast(done ? `Version ${n} is back, as a new version.` : 'That version could not be brought back.'))
-      .catch(() => toast('That version could not be brought back.'))
+      .catch((cause: unknown) => {
+        const why = cause instanceof Error ? cause.message.trim() : ''
+        toast(why === '' ? 'That version could not be brought back.' : `That version could not be brought back: ${why}`)
+      })
   }
   return (
     <Dialog label={`History of ${memory.title}`} onClose={onClose} labelledBy="memory-history-title" className="mh-dialog">

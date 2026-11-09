@@ -7,7 +7,7 @@ import { dueLabel, greeting, nextRun, scheduleLabel, short, timeAgo, todayEyebro
 import { workingHelpers } from '../lib/helpers'
 import { helperHold } from '../../shared/helper-cards'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
-import { dueSoon, openUserTasks } from '../lib/tasks'
+import { dueTone, openUserTasks, overdue } from '../lib/tasks'
 import { useCalmEntity, useEntity, useEntityLoaded } from '../state/useData'
 import { useRunInfo, lastAgentWork } from '../state/useRun'
 import { useSettings } from '../state/useSettings'
@@ -221,7 +221,9 @@ export function Home(): JSX.Element {
         toast('To-do deleted.', {
           actionLabel: 'Undo',
           onAction: () => {
-            void agent.data.upsert('task', task)
+            void agent.data.upsert('task', task).catch((cause: unknown) => {
+              toast(cause instanceof Error ? cause.message : 'Could not bring that to-do back.')
+            })
           },
         })
       })
@@ -445,7 +447,10 @@ export function Home(): JSX.Element {
                       onClick={() => setEditingTask(task)}
                     >
                       <div className="tt">{task.title}</div>
-                      <div className={`dd${dueSoon(task) ? ' soon' : ''}`}>{dueLabel(task)}</div>
+                      <div className={`dd${dueTone(task)}`}>
+                        {overdue(task) ? 'Overdue · ' : ''}
+                        {dueLabel(task)}
+                      </div>
                     </button>
                     <button
                       type="button"
