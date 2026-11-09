@@ -35,3 +35,8 @@
 
 /* The title bar's button is the way to this list in a narrow window: there it keeps its count and drops its word. */
 @media (max-width:520px){.tb-work-t{display:none}.tb-work{padding:0 10px}}
+
+/* The plain title (the title bar's list, a project's page): the eyebrow stays on one line, the counts wrap under it. */
+.hp-title{flex-wrap:wrap;row-gap:2px}
+.hp-title>.eyebrow{white-space:nowrap}
+.hp-title>.small{margin-left:auto;text-align:right}
