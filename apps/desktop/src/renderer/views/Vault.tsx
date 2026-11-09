@@ -83,11 +83,19 @@ export function VaultSettings(): JSX.Element {
   const fileRef = useRef<HTMLInputElement>(null)
   const remote = agent.remote !== undefined
 
+  // A list that could not be read is said so: an empty vault and a vault that failed to open are not the same thing.
+  const [loadError, setLoadError] = useState('')
   const load = useCallback(() => {
     void agent.vault
       .list()
-      .then(setItems)
-      .catch(() => setItems([]))
+      .then((list) => {
+        setItems(list)
+        setLoadError('')
+      })
+      .catch((cause: unknown) => {
+        setItems((now) => now ?? [])
+        setLoadError(cause instanceof Error && cause.message !== '' ? cause.message : 'The vault could not be read.')
+      })
   }, [])
 
   useEffect(() => {
@@ -232,13 +240,13 @@ export function VaultSettings(): JSX.Element {
   }
 
   return (
-    <section>
+    <section className="vault-sec">
       <SectionHeader eyebrow="VAULT" line="Passwords, passkeys and keys your agent uses without seeing them" />
       <div className="card vault" style={{ padding: 10 }}>
         <div className="vault-head">
           <label className="search vault-search" htmlFor="vault-search">
             <Icon name="search" size={20} />
-            <input id="vault-search" placeholder={count === 0 ? 'Nothing in the vault yet' : `Search ${count} items`} value={query} onChange={(event) => setQuery(event.target.value)} autoComplete="off" />
+            <input id="vault-search" placeholder={count === 0 ? 'Nothing in the vault yet' : `Search ${count} ${count === 1 ? 'item' : 'items'}`} value={query} onChange={(event) => setQuery(event.target.value)} autoComplete="off" />
           </label>
           {remote ? null : (
             <div className="vault-head-acts">
@@ -280,7 +288,22 @@ export function VaultSettings(): JSX.Element {
           </div>
         )}
 
-        {items === null ? null : visibleGroups.length === 0 ? (
+        {loadError === '' ? null : (
+          <div className="rowc" role="alert">
+            <div className="ri">
+              <Icon name="x" size={22} />
+            </div>
+            <div className="rt">
+              <b>The vault could not be read</b>
+              <span>{loadError}</span>
+            </div>
+            <Button variant="tonal" size="sm" onClick={load}>
+              Try again
+            </Button>
+          </div>
+        )}
+
+        {items === null || (loadError !== '' && items.length === 0) ? null : visibleGroups.length === 0 ? (
           <div className="rowc">
             <div className="ri">
               <Icon name="lock" size={22} />

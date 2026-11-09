@@ -6,6 +6,7 @@ import {
   type EntityMap,
   type GoalRow,
   type MemoryRow,
+  type MiniAppRow,
   type ProjectRow,
   type Settings,
   type TaskRow,
@@ -713,6 +714,52 @@ export function bigRows(base: SeedResult['rows']): SeedResult['rows'] {
   return { ...base, task: tasks, memory: memories, trigger: triggers, chat_item: chat, project: projects }
 }
 
+/** Mini-apps for the preview: two pinned, one whose look check found something, one still being checked. */
+function miniAppsDemo(now: number, big: boolean): MiniAppRow[] {
+  const make = (id: string, name: string, description: string, icon: string, pinned: number, extra: Partial<MiniAppRow> = {}): MiniAppRow => ({
+    id,
+    createdAt: now - 6 * DAY,
+    name,
+    description,
+    icon,
+    profile: '',
+    files: { 'index.html': '<!doctype html><title>Preview</title>' },
+    permissions: [],
+    subscribe: [],
+    refreshMinutes: 0,
+    version: 1,
+    history: [],
+    pinned,
+    allowed: [],
+    data: {},
+    check: { version: 1, at: now - DAY, ok: true, issues: [], shots: [] },
+    by: 'agent',
+    openedAt: now - 3 * HOUR,
+    updatedAt: now - DAY,
+    ...extra,
+  })
+  const list = [
+    make('weekcal', 'Week calendar', 'Every calendar in one week view, with a join button on each meeting.', 'cal', 1, { permissions: ['calendar_events'], aliases: ['diary'] }),
+    make('trip', 'Durban trip', 'Flights, the guesthouse and what is still to book.', 'globe', 2, {
+      version: 3,
+      permissions: ['task_list', 'task_update'],
+      check: { version: 3, at: now - 2 * HOUR, ok: true, issues: [], shots: [] },
+      history: [],
+      openedAt: now - 20 * 60_000,
+    }),
+    make('invoices', 'Invoices', 'Who owes what, and what is overdue.', 'doc', 0, {
+      version: 2,
+      check: { version: 2, at: now - HOUR, ok: false, issues: ['At 390 wide the table scrolls sideways.', 'Dark: the totals row is hard to read.'], shots: [] },
+      openedAt: now - 2 * DAY,
+    }),
+    make('habits', 'Habit tracker', '', 'heart', 0, { version: 2, openedAt: 0 }),
+  ]
+  if (!big) return list
+  const long = make('longname', 'Quarterly client reporting and renewals overview for the whole studio team', 'A very long description that keeps going so the card has to cut it somewhere sensible instead of pushing the buttons off the edge of the card or the page.', 'building', 3)
+  const many = Array.from({ length: 14 }, (_, i) => make(`big${i}`, `App number ${i + 1}`, 'One of many apps, for the long-list state.', i % 2 === 0 ? 'grid' : 'tasks', 0, { openedAt: now - (i + 1) * DAY }))
+  return [...list, long, ...many]
+}
+
 export function seedFor(mode: DemoMode): SeedResult {
   if (mode === 'fresh') {
     return {
@@ -727,5 +774,6 @@ export function seedFor(mode: DemoMode): SeedResult {
     }
   }
   const rows = demoRows()
-  return { settings: demoSettings(), rows: mode === 'big' ? bigRows(rows) : rows }
+  const seeded = mode === 'big' ? bigRows(rows) : rows
+  return { settings: demoSettings(), rows: { ...seeded, miniapp: miniAppsDemo(Date.now(), mode === 'big') } }
 }

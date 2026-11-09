@@ -9,6 +9,7 @@ import {
   type SignInDraft,
 } from '../state/onboarding'
 import { useSettings } from '../state/useSettings'
+import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
 import { Field } from '../ui/Field'
@@ -103,7 +104,12 @@ export function SignIn(): JSX.Element {
     } catch {
       // Signing out of nothing is fine.
     }
-    await save({ signedIn: false, syncEmail: null })
+    try {
+      await save({ signedIn: false, syncEmail: null })
+    } catch (cause) {
+      setError(cause instanceof Error && cause.message !== '' ? cause.message : 'That could not be saved. Try again.')
+      return
+    }
     markLocalOnly()
     navigate({ page: 'onboarding', step: 'ai' })
   }
@@ -117,6 +123,9 @@ export function SignIn(): JSX.Element {
       setPassword('')
       setServerUrl(settings?.syncUrl ?? '')
       setUseOther(true)
+    } catch (cause) {
+      // Without this the button looked dead when signing out failed.
+      toast(cause instanceof Error && cause.message !== '' ? cause.message : 'Could not sign out. Try again.')
     } finally {
       setBusy(false)
     }

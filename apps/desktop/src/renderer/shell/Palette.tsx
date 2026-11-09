@@ -1,17 +1,21 @@
-import { MAIN_CHAT, findMatches, projectFields, type FindField, type TaskRow } from '@agent/core'
+import { MAIN_CHAT, findMatches, projectFields, type FindField } from '@agent/core'
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 
 import { agent, chat } from '../bridge'
 import { openChat, startNewChat } from '../lib/chat-actions'
+import { formatAccelerator } from '../lib/hotkey'
+import { orTell } from '../lib/tell'
 import { isDarkNow } from '../state/theme'
 import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
+import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Dialog } from '../ui/Dialog'
 import { Icon, type IconName } from '../ui/Icon'
 import { MiniAppIcon } from '../ui/MiniAppIcon'
 import { miniAppFields } from '../../shared/miniapps'
+import { TaskDialog } from '../views/TaskDialog'
 
 interface Action {
   id: string
@@ -72,6 +76,9 @@ export function Palette(): JSX.Element | null {
   const save = useSettings((state) => state.save)
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
+  // "Add a to-do" opens the real to-do form once the palette has closed.
+  const [adding, setAdding] = useState(false)
+  const goals = useEntity('goal')
   const listRef = useRef<HTMLDivElement>(null)
 
   const open = overlay === 'palette'
@@ -88,7 +95,23 @@ export function Palette(): JSX.Element | null {
     active?.scrollIntoView({ block: 'nearest' })
   }, [selected, query])
 
-  if (!open) return null
+  if (!open) {
+    if (!adding) return null
+    return (
+      <TaskDialog
+        task={null}
+        owner="user"
+        goals={goals}
+        onClose={() => setAdding(false)}
+        onSaved={(saved) => {
+          const state = useUi.getState()
+          state.selectTask(saved.id)
+          state.setTaskTab('todos')
+          state.navigate({ page: 'tasks' })
+        }}
+      />
+    )
+  }
 
   const agentName = settings?.agentName.trim() || 'your agent'
 
@@ -98,30 +121,11 @@ export function Palette(): JSX.Element | null {
   }
 
   const addTodo = (): void => {
-    const now = Date.now()
-    const due = new Date(now)
-    due.setDate(due.getDate() + 1)
-    due.setHours(9, 0, 0, 0)
-    const row: TaskRow = {
-      id: '',
-      createdAt: now,
-      goalId: null,
-      title: 'Call the dentist',
-      notes: 'Added just now. Book a check-up for next month.',
-      status: 'todo',
-      dueAt: due.getTime(),
-      owner: 'user',
-      blocker: '',
-      updatedAt: now,
-    }
-    void agent.data.upsert('task', row).then((saved) => {
-      const state = useUi.getState()
-      state.selectTask(saved.id)
-      state.setTaskTab('todos')
-      state.navigate({ page: 'tasks' })
-      state.closeOverlay()
-    })
+    setAdding(true)
+    close()
   }
+  // The shortcut he set (Settings, Shortcuts), not a fixed one.
+  const quickKeys = formatAccelerator(settings?.quickAskHotkey || 'CommandOrControl+Shift+Space', agent.platform).join(' ')
 
   const jump: Action[] = [
     { id: 'jump-home', label: 'Home', icon: 'home', run: closeAnd(() => navigate({ page: 'home' })) },
@@ -169,14 +173,16 @@ export function Palette(): JSX.Element | null {
       icon: 'stop',
       run: () => {
         close()
-        void agent.helpers.stopAll()
+        void orTell(agent.helpers.stopAll().then(() => true), 'The helpers could not be stopped.').then((done) => {
+          if (done === true) toast('Helpers stopped.')
+        })
       },
     },
     {
       id: 'do-quick',
       label: 'Quick ask',
       icon: 'bolt',
-      shortcut: 'Ctrl Alt Space',
+      shortcut: quickKeys,
       run: () => {
         close()
         openQuick()
@@ -188,7 +194,7 @@ export function Palette(): JSX.Element | null {
       icon: 'sun',
       run: () => {
         close()
-        void save({ theme: isDarkNow() ? 'light' : 'dark' })
+        void orTell(save({ theme: isDarkNow() ? 'light' : 'dark' }), 'The theme could not be changed.')
       },
     },
   ]
@@ -233,7 +239,7 @@ export function Palette(): JSX.Element | null {
         icon: 'chat',
         run: () => {
           close()
-          void chat.send(query.trim())
+          void orTell(chat.send(query.trim()), 'Your message could not be sent. Try again.')
           navigate({ page: 'chat' })
         },
       },

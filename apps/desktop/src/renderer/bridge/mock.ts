@@ -53,6 +53,7 @@ import { mockHotkeys } from './mock-hotkeys'
 import { readMode, seedFor, type DemoMode } from './seed'
 import { cardInfo, HELPER_STALE_MS, helperCards } from '../../shared/helper-cards'
 import { localRoutes } from '../../shared/route-target'
+import { repin } from '../../shared/miniapps'
 
 const mockRoutes = localRoutes()
 
@@ -1513,19 +1514,34 @@ export const mockAgent: AgentApi = {
     selfId: async () => 'mock-pc',
     devices: async () => [],
   },
-  // The browser preview has no main process to run an app's bridge: apps list from the rows, frames stay empty.
+  // The browser preview has no main process to run an app's bridge: frames stay empty, but pinning, ordering,
+  // allowing and deleting change the rows, so the Apps page and the sidebar behave as they do in the app.
   miniapps: {
     session: async () => null,
     send: async () => null,
     close: async () => undefined,
     onPush: () => () => undefined,
     onOpen: () => () => undefined,
-    pin: async () => undefined,
-    unpin: async () => undefined,
-    order: async () => undefined,
-    remove: async () => undefined,
+    pin: async (id, position) => {
+      const at = position ?? rows.miniapp.filter((app) => app.pinned > 0 && app.id !== id).length + 1
+      for (const change of repin(rows.miniapp, id, at)) upsertRow('miniapp', change)
+    },
+    unpin: async (id) => {
+      for (const change of repin(rows.miniapp, id, null)) upsertRow('miniapp', change)
+    },
+    order: async (ids) => {
+      ids.forEach((id, index) => upsertRow('miniapp', { id, pinned: index + 1 }))
+    },
+    remove: async (id) => {
+      rows.miniapp = rows.miniapp.filter((app) => app.id !== id)
+      emitData('miniapp')
+    },
     undo: async () => 'Not in the preview.',
-    allow: async () => undefined,
+    allow: async (id, key, on) => {
+      const app = rows.miniapp.find((row) => row.id === id)
+      if (app === undefined) return
+      upsertRow('miniapp', { id, allowed: on ? [...new Set([...app.allowed, key])] : app.allowed.filter((each) => each !== key) })
+    },
     check: async () => null,
     askChange: async () => undefined,
     info: async () => ({ engine: 'preview' }),

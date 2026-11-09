@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 
 import { chat } from '../bridge'
+import { orTell } from '../lib/tell'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { Kbd } from '../ui/bits'
-import { Chip } from '../ui/Chip'
 import { Dialog } from '../ui/Dialog'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
@@ -28,9 +28,9 @@ export function QuickAsk(): JSX.Element | null {
 
   const send = (): void => {
     const value = text.trim()
-    close()
     if (value === '') return
-    void chat.send(value)
+    close()
+    void orTell(chat.send(value), 'Your message could not be sent. Try again.')
     navigate({ page: 'chat' })
   }
 
@@ -51,17 +51,22 @@ export function QuickAsk(): JSX.Element | null {
           autoComplete="off"
           aria-label={`Ask ${agentName}`}
         />
-        <button type="button" className="send" onClick={send} aria-label="Send">
+        <button type="button" className="send" onClick={send} aria-label="Send" title="Send" disabled={text.trim() === ''}>
           <Icon name="arrow" size={22} />
         </button>
       </div>
       <div className="ctx">
         <span className="eyebrow mute">USING</span>
-        <Chip active icon={<Icon name="bolt" size={14} />}>
-          {settings?.model.trim() || 'Your provider'}
-        </Chip>
-        <Chip icon={<Icon name="monitor" size={14} />}>This computer</Chip>
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        {/* Facts, not controls: plain labels, so nothing here looks pressable and does nothing. */}
+        <span className="quick-fact">
+          <Icon name="bolt" size={14} />
+          {settings?.model.trim() || 'Your AI'}
+        </span>
+        <span className="quick-fact">
+          <Icon name="monitor" size={14} />
+          This computer
+        </span>
+        <span className="quick-keys">
           <Kbd>Enter</Kbd> send <span aria-hidden="true">·</span> <Kbd>Esc</Kbd> close
         </span>
       </div>

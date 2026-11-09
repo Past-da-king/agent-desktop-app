@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { agent } from '../bridge'
 import { formatAccelerator } from '../lib/hotkey'
 import { machineSummary, scanSummary } from '../lib/system'
+import { failText, orTell } from '../lib/tell'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
@@ -139,9 +140,15 @@ export function Connections(): JSX.Element {
       const folder = await agent.files.pickFolder()
       if (!folder) return
       const current = settings?.grantedFolders ?? []
-      if (!current.includes(folder)) await save({ grantedFolders: [...current, folder] })
-    } catch {
-      // A cancelled or refused picker leaves the granted list as it was.
+      if (current.includes(folder)) {
+        toast('That folder is already granted.')
+        return
+      }
+      await save({ grantedFolders: [...current, folder] })
+      toast('Folder granted. Your agent can read and write there.')
+    } catch (cause: unknown) {
+      // A cancelled picker resolves with nothing; this is a picker or a save that really failed.
+      toast(failText(cause, 'The folder could not be added.'))
     }
   }
 
@@ -173,7 +180,7 @@ export function Connections(): JSX.Element {
         <div className="stack">
 
           <section>
-            <SectionHeader eyebrow="BUILT IN" line="On this computer, plus the machines you add" />
+            <SectionHeader eyebrow="BUILT IN" line="Ready from the start, nothing to set up" />
             <div className="list" style={{ padding: 6 }}>
               <Row
                 icon="globe"
@@ -189,30 +196,10 @@ export function Connections(): JSX.Element {
                   <Switch
                     on={settings?.notifications ?? true}
                     onToggle={(next) => {
-                      void save({ notifications: next })
+                      void orTell(save({ notifications: next }), 'That could not be saved.')
                     }}
                     label="Desktop notifications"
                   />
-                }
-              />
-              <Row
-                icon="folder"
-                title="Files on this computer"
-                line={
-                  allowed.length === 0
-                    ? 'Let your agent find and read files you point it to'
-                    : `${allowed.length} ${allowed.length === 1 ? 'folder' : 'folders'} granted`
-                }
-                right={
-                  <Button
-                    variant="tonal"
-                    size="sm"
-                    onClick={() => {
-                      void askForFolder()
-                    }}
-                  >
-                    Allow
-                  </Button>
                 }
               />
               <Row
@@ -256,15 +243,28 @@ export function Connections(): JSX.Element {
                     : `${folderLine}. Your agent can read and write there without asking.`
                 }
                 right={
-                  <Button
-                    variant="tonal"
-                    size="sm"
-                    onClick={() => {
-                      navigate({ page: 'settings' })
-                    }}
-                  >
-                    Manage
-                  </Button>
+                  <span className="conn-row-actions">
+                    <Button
+                      variant="tonal"
+                      size="sm"
+                      onClick={() => {
+                        void askForFolder()
+                      }}
+                    >
+                      {allowed.length === 0 ? 'Allow a folder' : 'Add'}
+                    </Button>
+                    {allowed.length === 0 ? null : (
+                      <Button
+                        variant="text"
+                        size="sm"
+                        onClick={() => {
+                          navigate({ page: 'settings' })
+                        }}
+                      >
+                        Manage
+                      </Button>
+                    )}
+                  </span>
                 }
               />
               <Row
