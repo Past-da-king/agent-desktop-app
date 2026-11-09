@@ -5,7 +5,7 @@ import { isOpenCard } from '../lib/cards'
 import { openChat, startNewChat } from '../lib/chat-actions'
 import { chatOf } from '../lib/chats'
 import { short } from '../lib/format'
-import { fitRail, RAIL_PAD_SMALL, RAIL_TILE, RAIL_TILE_SMALL, railProjects, type RailRoom } from '../lib/projects'
+import { fitRail, RAIL_TILE, RAIL_TILE_SMALL, railMinHeight, railProjects, type RailRoom } from '../lib/projects'
 import { useDevicesSummary } from '../state/useDevices'
 import { startChatTracking, useAnyRunning, useChats } from '../state/useChats'
 import { ProjectDialog } from '../views/ProjectDialog'
@@ -184,8 +184,8 @@ export function Rail({ needs }: { needs: number }): JSX.Element {
         ref={pjRef}
         className={`pj-rail${fit.small ? ' small' : ''}`}
         aria-label="Projects"
-        // The header's All link stands in for the tile only when there are projects to list; with none the + tile stays.
-        style={{ minHeight: header && projects.length > 0 ? 0 : RAIL_PAD_SMALL + RAIL_TILE_SMALL + 4 }}
+        // Projects always keep one row: pinned apps above shrink (smaller tiles, then a +N tile) before a project row goes.
+        style={{ minHeight: railMinHeight(room?.extra ?? (railCollapsed ? 0 : 18)) }}
       >
         {shown.map((project) => {
           const on = (route.page === 'project' && route.id === project.id) || (route.page === 'chat' && project.chats.includes(open))

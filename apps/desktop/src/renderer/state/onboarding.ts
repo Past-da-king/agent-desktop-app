@@ -61,3 +61,9 @@ export function clearLocalOnly(): void {
     // Nothing to clear.
   }
 }
+
+/** The agent's line in the hero: the person's own first name once it is known, and no name before that. */
+export function heroReply(userName: string): string {
+  const first = userName.trim().split(/\s+/)[0] ?? ''
+  return first === '' ? 'On it.' : `On it, ${first.slice(0, 24)}.`
+}

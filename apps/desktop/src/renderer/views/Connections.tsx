@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 
 import { agent } from '../bridge'
 import { formatAccelerator } from '../lib/hotkey'
+import { requestSettingsSection } from '../lib/settings-jump'
 import { machineSummary, scanSummary } from '../lib/system'
 import { failText, orTell } from '../lib/tell'
 import { useSettings } from '../state/useSettings'
@@ -276,6 +277,8 @@ export function Connections(): JSX.Element {
                         variant="text"
                         size="sm"
                         onClick={() => {
+                          // Folders are the first rows of Privacy and data: open Settings there, not at the top.
+                          requestSettingsSection('privacy')
                           navigate({ page: 'settings' })
                         }}
                       >

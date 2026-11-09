@@ -346,18 +346,41 @@ export function VaultSettings(): JSX.Element {
 /** When the Vault asks the person. Asking is the default; the master switch turns all of it off at once. */
 function VaultAsking(): JSX.Element | null {
   const [prefs, setPrefs] = useState<VaultPrefs | null>(null)
+  const [failed, setFailed] = useState('')
   const remote = agent.remote !== undefined
+  const load = useCallback((): void => {
+    void agent.vault
+      .prefs()
+      .then((next) => {
+        setPrefs(next)
+        setFailed('')
+      })
+      .catch((cause: unknown) => setFailed(cause instanceof Error && cause.message !== '' ? cause.message : 'Try again in a moment.'))
+  }, [])
   useEffect(() => {
-    const load = (): void => {
-      void agent.vault
-        .prefs()
-        .then(setPrefs)
-        .catch(() => undefined)
-    }
     load()
     return agent.vault.onChange(load)
-  }, [])
-  if (prefs === null) return null
+  }, [load])
+  // Switches that could not be read are said so, not left out: he would not know the asking rules exist.
+  if (prefs === null) {
+    if (failed === '') return null
+    return (
+      <div className="card vault" style={{ padding: 10, marginTop: 12 }}>
+        <div className="rowc" role="alert">
+          <div className="ri">
+            <Icon name="x" size={22} />
+          </div>
+          <div className="rt">
+            <b>When the vault asks you could not be read</b>
+            <span>{failed}</span>
+          </div>
+          <Button variant="tonal" size="sm" onClick={load}>
+            Try again
+          </Button>
+        </div>
+      </div>
+    )
+  }
   const change = (patch: Partial<VaultPrefs>): void => {
     setPrefs({ ...prefs, ...patch })
     void agent.vault

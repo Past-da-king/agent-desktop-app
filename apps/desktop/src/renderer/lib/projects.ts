@@ -52,6 +52,18 @@ export interface RailRoom {
   extra: number
 }
 
+/** Room under the tiles of the rail's grid (its own top and bottom padding, projects.css .pj-rail). */
+export const RAIL_BOX_PAD = 4
+
+/**
+ * The least height the projects area keeps, whatever else is on the rail (pinned apps above it): one row of small
+ * tiles with their names, so at least the All tile and, when expanded, two projects always show. With no projects
+ * it is the room of the + tile alone.
+ */
+export function railMinHeight(extra: number): number {
+  return RAIL_PAD_SMALL + RAIL_TILE_SMALL + Math.max(0, extra) + RAIL_BOX_PAD
+}
+
 /** How the rail draws its projects: whether the tiles are small, and how many projects show before the All tile. */
 export interface RailFit {
   small: boolean

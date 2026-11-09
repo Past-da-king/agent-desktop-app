@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 
+import { heroReply } from '../state/onboarding'
 import { ONBOARDING_STEPS, type OnboardingStep } from '../state/route'
 import { useSettings } from '../state/useSettings'
 import { Icon } from '../ui/Icon'
@@ -7,6 +8,7 @@ import { Mascot } from '../ui/Mascot'
 
 function Hero(): JSX.Element {
   const settings = useSettings((state) => state.settings)
+  const reply = heroReply(settings?.userName ?? '')
   return (
     <section className="ob-hero">
       <div style={{ position: 'relative' }}>
@@ -31,7 +33,7 @@ function Hero(): JSX.Element {
               PHONE
             </div>
             <div className="bub">Hold the 06:05</div>
-            <div className="agt">On it, Sam.</div>
+            <div className="agt">{reply}</div>
             <div className="ln" />
           </div>
           <div className="sync">
@@ -42,7 +44,7 @@ function Hero(): JSX.Element {
               THIS COMPUTER
             </div>
             <div className="bub">Hold the 06:05</div>
-            <div className="agt">On it, Sam. Booking is waiting for your OK.</div>
+            <div className="agt">{reply} Booking is waiting for your OK.</div>
             <div className="ln" style={{ width: '70%' }} />
           </div>
         </div>

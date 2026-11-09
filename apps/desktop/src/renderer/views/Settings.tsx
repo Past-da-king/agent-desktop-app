@@ -43,6 +43,7 @@ import { SettingsRail, DEFAULT_SECTION } from './settings/Rail'
 import { DateTimeControl, HotkeyControl, NumberControl, SelectControl, SliderControl, TextControl, TimeControl } from './settings/Controls'
 import { SectionBlock, SettingRow } from './settings/Row'
 import { PromptRulesSettings } from './PromptRules'
+import { takeSettingsSection } from '../lib/settings-jump'
 import { VaultSettings } from './Vault'
 import { ROW_BY_KEY, defaultOf, isDefault, railSections, searchSettings, type RowSpec, type SectionId } from './settings/registry'
 
@@ -90,6 +91,18 @@ export function Settings(): JSX.Element {
     const target = document.getElementById(`set-${id}`)
     target?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }
+
+  // Another page asked for one section (Connections, Manage folders): open there, once.
+  useEffect(() => {
+    const asked = takeSettingsSection()
+    if (asked === null || !rail.some((section) => section.id === asked)) return undefined
+    const id = asked as SectionId
+    setCurrent(id)
+    const frame = window.requestAnimationFrame(() => document.getElementById(`set-${id}`)?.scrollIntoView({ block: 'start' }))
+    return () => window.cancelAnimationFrame(frame)
+    // Only when Settings opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Ctrl+F (Cmd+F on a Mac) puts the cursor in the search box, and Escape empties it, the way the field itself says.
   useEffect(() => {
