@@ -1,170 +1,224 @@
-import { PROVIDERS, type EnvironmentReport, type Found, type SystemInfo } from '@agent/core'
-import { useEffect, useState } from 'react'
+/**
+ * Settings (redesigned 4 Nov 2026, the approved mock-ups): a section rail with the ten sections and their counts, one
+ * search field that finds every setting in every section (hidden ones too), one row shape for every setting, and the
+ * danger zone at the bottom of Privacy and data.
+ *
+ * The rows, their labels, their descriptions and the sections live in views/settings/registry.ts, so the page, the
+ * rail, the search box and the tests all read the same list. Every change saves as it happens, through the same
+ * settings call the rest of the window uses (useSettings.save); nothing about how settings are stored or synced
+ * changed. A row says its default and offers Reset only while its value is not the default, and a group of rows (the
+ * AI accounts, the folders, the devices) is never emptied by one button.
+ */
+import type { AiAccount, AiPicks, GitLogEntry, Settings as SettingsValues } from '@agent/core'
+import { VOICES } from '@agent/core'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
+import type { Route } from '../state/route'
+import { accountsOf } from '@agent/core'
+import { kindLine } from '../lib/ai'
 import { folderName } from '../lib/files'
 import { timeAgo } from '../lib/format'
-import { machineSummary, scanSummary } from '../lib/system'
 import { ACCENTS, applyAccent } from '../state/theme'
 import { useAccountStatus } from '../state/useAccount'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
-import { Avatar, IconButton, Pill } from '../ui/bits'
+import { IconButton, Pill } from '../ui/bits'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
-import { AiAccounts } from './AiAccounts'
+import { Field } from '../ui/Field'
 import { Icon } from '../ui/Icon'
-import { MASCOT_ORDER, Mascot, MASCOTS } from '../ui/Mascot'
-import { SectionHeader } from '../ui/SectionHeader'
-import { VoiceSettings } from '../voice/VoiceSettings'
-import { HotkeySettings } from './HotkeySettings'
-import { MemorySettings } from './MemorySettings'
+import { AiPickRows } from '../ui/AiPickRows'
+import { Mascot, MASCOT_ORDER, MASCOTS } from '../ui/Mascot'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
+import { AccountDialog } from './AiAccounts'
 import { DevicesSettings } from './Devices'
-import { useDevicesSummary } from '../state/useDevices'
-import { WorkLimits } from './WorkLimits'
-import { VaultSettings } from './Vault'
+import { outcome, waiting } from './GitSettings'
+import { speakText, stopSpeaking, useSpeaker } from '../voice/speaker'
+import { WakeLog } from './settings/WakeLog'
+import { SettingsRail, DEFAULT_SECTION } from './settings/Rail'
+import { DateTimeControl, HotkeyControl, NumberControl, SelectControl, SliderControl, TextControl, TimeControl } from './settings/Controls'
+import { SectionBlock, SettingRow } from './settings/Row'
 import { PromptRulesSettings } from './PromptRules'
-import { WakeupsSettings } from './WakeupsSettings'
-import { GitSettings } from './GitSettings'
+import { VaultSettings } from './Vault'
+import { ROW_BY_KEY, defaultOf, isDefault, railSections, searchSettings, type RowSpec, type SectionId } from './settings/registry'
 
-function ResetDialog({ onClose }: { onClose: () => void }): JSX.Element {
+const row = (key: string): RowSpec => {
+  const spec = ROW_BY_KEY[key]
+  if (spec === undefined) throw new Error(`Settings has no row for ${key}`)
+  return spec
+}
+
+/** A row that is never emptied by one button: a group of rows, a value read from somewhere else, or a name. */
+const isQuiet = (spec: RowSpec): boolean => spec.quiet === true || spec.control === 'block' || spec.control === 'readonly'
+
+/** What the row says about itself: changed only when a single value is not the default. */
+function changedNow(spec: RowSpec, settings: SettingsValues | null): boolean {
+  if (settings === null || isQuiet(spec)) return false
+  return !isDefault(spec, (settings as unknown as Record<string, unknown>)[spec.key])
+}
+
+/** The end of every row: the control, and Reset while the value is not the default. */
+export function Settings(): JSX.Element {
+  const settings = useSettings((state) => state.settings)
+  const save = useSettings((state) => state.save)
   const navigate = useUi((state) => state.navigate)
-  const [busy, setBusy] = useState(false)
+  const [query, setQuery] = useState('')
+  const [current, setCurrent] = useState<SectionId>(DEFAULT_SECTION)
+  const field = useRef<HTMLInputElement>(null)
+  const showDeveloper = settings?.showDeveloperSettings ?? false
+  const rail = railSections(showDeveloper, settings as unknown as Record<string, unknown> | null)
+  const hits = searchSettings(query, showDeveloper)
+  const searching = query.trim() !== ''
+
+  const put = useCallback(
+    (patch: Partial<SettingsValues>): void => {
+      void save(patch).catch(() => toast('Could not save that. Try again.'))
+    },
+    [save],
+  )
+
+  const resetRow = (spec: RowSpec): void => {
+    put({ [spec.key]: defaultOf(spec.key) } as Partial<SettingsValues>)
+  }
+
+  const goTo = (id: SectionId): void => {
+    setCurrent(id)
+    const target = document.getElementById(`set-${id}`)
+    target?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
+
+  // Escape empties the search box, the way the field itself says.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      if (query !== '') setQuery('')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [query])
+
+  // The rail follows the page: the section nearest the top of the sheet is the one marked.
+  useEffect(() => {
+    const sheet = document.querySelector('.sheet')
+    if (sheet === null) return
+    const onScroll = (): void => {
+      let best: SectionId | null = null
+      let bestTop = Number.POSITIVE_INFINITY
+      for (const item of rail) {
+        const element = document.getElementById(`set-${item.section.id}`)
+        if (element === null) continue
+        const top = Math.abs(element.getBoundingClientRect().top - 90)
+        if (element.getBoundingClientRect().bottom > 120 && top < bestTop) {
+          bestTop = top
+          best = item.section.id
+        }
+      }
+      if (best !== null) setCurrent(best)
+    }
+    sheet.addEventListener('scroll', onScroll, { passive: true })
+    return () => sheet.removeEventListener('scroll', onScroll)
+  }, [rail])
+
+  const openHit = (rowKey: string, hidden: boolean): void => {
+    const spec = row(rowKey)
+    if (hidden) put({ showDeveloperSettings: true })
+    setQuery('')
+    // The section is drawn on the next paint once a hidden one is shown, so the scroll waits a moment.
+    window.setTimeout(() => goTo(spec.section), 60)
+  }
+
   return (
-    <Dialog label="Reset this computer" onClose={onClose} labelledBy="reset-title">
-      <div>
-        <span className="eyebrow">DANGER ZONE</span>
-        <h2 className="h2" id="reset-title" style={{ marginTop: 6 }}>
-          Reset everything on this computer?
-        </h2>
-        <p className="lead" style={{ marginTop: 8 }}>
-          This deletes keys, memory, to-dos, routines and chats from this computer only. Your account keeps its copy
-          on the server.
-        </p>
+    <div className="page setg">
+      <div className="ph">
+        <div>
+          <span className="eyebrow">SETTINGS</span>
+          <h1 className="h1">Settings</h1>
+          <p className="lead">Your account, your agent, this computer and its devices.</p>
+        </div>
+        <div className="ssrch">
+          <Icon name="search" size={18} />
+          <input
+            ref={field}
+            type="search"
+            value={query}
+            aria-label="Search settings"
+            placeholder="Search settings"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <span className="kbd">{searching ? 'Esc' : 'Search'}</span>
+        </div>
       </div>
-      <div className="dialog-actions">
-        <Button variant="text" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          variant="line"
-          style={{ color: 'var(--err)', borderColor: 'var(--err)' }}
-          disabled={busy}
-          onClick={() => {
-            setBusy(true)
-            void agent.settings
-              .reset()
-              .then(() => {
-                onClose()
-                navigate({ page: 'onboarding', step: 'signin' })
-              })
-              .catch(() => setBusy(false))
-          }}
-        >
-          {busy ? 'Resetting...' : 'Reset this computer'}
-        </Button>
+
+      <div className="settings">
+        <SettingsRail sections={rail} current={current} onPick={goTo} />
+        <div className="content">
+          {searching ? (
+            <div className="hits" role="region" aria-label="Search results">
+              <div className="hits-h">
+                <span className="eyebrow mute">Results</span>
+                <span className="n">
+                  {hits.length === 0 ? 'Nothing matches' : `${hits.length} ${hits.length === 1 ? 'setting' : 'settings'}`}
+                </span>
+              </div>
+              {hits.length === 0 ? (
+                <div className="nores">Nothing in Settings matches that. Try a plainer word, like theme, volume or folders.</div>
+              ) : null}
+              {hits.map((hit) => (
+                <button type="button" className="hit" key={hit.row.key} onClick={() => openHit(hit.row.key, hit.hidden)}>
+                  <span className="ri">
+                    <Icon name={hit.row.icon} size={18} />
+                  </span>
+                  <span className="rt">
+                    <b>{hit.row.label}</b>
+                    <span className="d">{hit.row.description}</span>
+                  </span>
+                  <span className="where">
+                    {hit.section.name}
+                    {hit.hidden ? <span className="pill warn">Hidden</span> : null}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <AccountSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+          <ConnectionsSection settings={settings} navigate={navigate} />
+          <DevicesSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+          <AgentsSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+          <VoiceSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+          <NotifySection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+          <AppearanceSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+          <PrivacySection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+          {showDeveloper ? (
+            <>
+              <GitSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+              <AdvancedSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
+            </>
+          ) : null}
+        </div>
       </div>
-    </Dialog>
+    </div>
   )
 }
 
-function toolsLine(report: EnvironmentReport): string {
-  const shells = report.shells.filter((item) => item.found).map((item) => item.label)
-  const runtimes = report.runtimes.filter((item) => item.found).map((item) => foundName(item))
-  const aiTools = report.aiTools.filter((item) => item.found).map((item) => foundName(item))
-  const missing = report.aiTools.filter((item) => !item.found).map((item) => item.label)
-  const parts = [...shells, ...runtimes, ...aiTools]
-  const found = parts.length === 0 ? 'Nothing found yet' : parts.join(', ')
-  return missing.length === 0 ? found : `${found}. Not found: ${missing.join(', ')}.`
+interface SectionProps {
+  settings: SettingsValues | null
+  put: (patch: Partial<SettingsValues>) => void
+  resetRow: (spec: RowSpec) => void
+  navigate: (route: Route) => void
 }
 
-function foundName(item: Found): string {
-  return item.version === undefined ? item.label : `${item.label} ${item.version}`
-}
-
-export function Settings(): JSX.Element {
-  const settings = useSettings((state) => state.settings)
-  const navigateTo = useUi((state) => state.navigate)
-  const [cliStatus, setCliStatus] = useState('')
-  const [cliBusy, setCliBusy] = useState(false)
-  const checkCli = async (): Promise<void> => {
-    setCliBusy(true)
-    try {
-      const result = await agent.settings.checkCli()
-      setCliStatus(result.message)
-    } catch (cause) {
-      setCliStatus(cause instanceof Error ? cause.message : 'Could not reach Claude Code.')
-    } finally {
-      setCliBusy(false)
-    }
-  }
-  const save = useSettings((state) => state.save)
-  const navigate = useUi((state) => state.navigate)
+/** Account and AI: the two names, who is signed in, the AI accounts and what thinks in the main chat. */
+function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JSX.Element {
   const status = useAccountStatus()
-  const [resetting, setResetting] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<AiAccount | null>(null)
+  const [removing, setRemoving] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
-  const [pickingFolder, setPickingFolder] = useState(false)
-  const [system, setSystem] = useState<SystemInfo | null>(null)
-  const [environment, setEnvironment] = useState<EnvironmentReport | null>(null)
-  const [scanning, setScanning] = useState(true)
-
-  useEffect(() => {
-    let live = true
-    agent.system
-      .info()
-      .then((info) => {
-        if (live) setSystem(info)
-      })
-      .catch(() => {
-        // The machine line is a detail; the rest of Settings works without it.
-      })
-    return () => {
-      live = false
-    }
-  }, [])
-
-  useEffect(() => {
-    let live = true
-    agent.environment
-      .scan()
-      .then((report) => {
-        if (live) setEnvironment(report)
-      })
-      .catch(() => {
-        // The summary is a detail; the rest of Settings works without it.
-      })
-      .finally(() => {
-        if (live) setScanning(false)
-      })
-    return () => {
-      live = false
-    }
-  }, [])
-
-  const scanAgain = async (): Promise<void> => {
-    setScanning(true)
-    try {
-      const report = await agent.environment.scan(true)
-      setEnvironment(report)
-      toast(scanSummary(report))
-    } catch (cause: unknown) {
-      toast(cause instanceof Error ? cause.message : 'The scan could not finish.')
-    } finally {
-      setScanning(false)
-    }
-  }
-
-  const provider = PROVIDERS.find((item) => item.id === settings?.provider)
-  const model = settings?.model.trim() || provider?.defaultModel || 'No model chosen'
   const signedIn = settings?.signedIn ?? false
-  const userName = settings?.userName.trim() || 'You'
-  const email = settings?.syncEmail ?? ''
-  const device = settings?.deviceName || 'This computer'
-  const devices = useDevicesSummary()
-
+  const accounts = settings === null ? [] : accountsOf(settings)
   const syncLine = status.syncing
     ? 'Syncing now'
     : status.error
@@ -173,385 +227,1101 @@ export function Settings(): JSX.Element {
         ? `Synced ${timeAgo(status.lastSyncedAt) === 'now' ? 'just now' : timeAgo(status.lastSyncedAt)}`
         : 'Not synced yet'
 
-  const syncNow = async (): Promise<void> => {
-    if (!signedIn || syncing) return
-    setSyncing(true)
-    try {
-      await agent.account.syncNow()
-    } catch {
-      // The status listener shows an offline state; the button returns to normal.
-    } finally {
-      setSyncing(false)
-    }
+  const signOut = (): void => {
+    void agent.account.signOut().then(() => navigate({ page: 'onboarding', step: 'signin' }))
   }
-
-  const addFolder = async (): Promise<void> => {
-    if (pickingFolder) return
-    setPickingFolder(true)
-    try {
-      const folder = await agent.files.pickFolder()
-      if (folder === null) return
-      const current = settings?.grantedFolders ?? []
-      if (!current.includes(folder)) await save({ grantedFolders: [...current, folder] })
-    } catch {
-      // A cancelled or refused picker leaves the list as it was.
-    } finally {
-      setPickingFolder(false)
-    }
-  }
-
-  const removeFolder = (folder: string): void => {
-    const current = settings?.grantedFolders ?? []
-    void save({ grantedFolders: current.filter((item) => item !== folder) })
-  }
-
-  const folders = settings?.grantedFolders ?? []
-  // The node's web UI on another device: only what that device may change (its look) and the device list.
-  const remote = agent.remote !== undefined
 
   return (
-    <div className="page">
-      <div className="ph">
-        <div>
-          <span className="eyebrow">SETTINGS</span>
-          <h1 className="h1">Settings</h1>
-          <p className="lead">{remote ? `Your agent on ${agent.remote?.nodeName ?? 'your computer'}, and how it looks here.` : 'Account, AI, look and this computer.'}</p>
-        </div>
-      </div>
-
-      <div className="two">
-        <div className="stack">
-          {remote ? null : (
-          <section>
-            <SectionHeader eyebrow="ACCOUNT AND SYNC" line="One agent across your devices" />
-            <div className="card" style={{ padding: 10 }}>
-              <div className="rowc">
-                <Avatar name={userName} size={48} />
-                <div className="rt">
-                  <b>{signedIn ? userName : devices.count > 0 ? userName : 'This computer only'}</b>
-                  <span>{signedIn ? email : devices.count > 0 ? `No account. ${devices.line}, kept in step in Devices below.` : 'No account. Everything stays here.'}</span>
-                </div>
-                {signedIn ? (
-                  <Button
-                    variant="tonal"
-                    size="sm"
-                    onClick={() => {
-                      void agent.account.signOut().then(() => {
-                        navigate({ page: 'onboarding', step: 'signin' })
-                      })
-                    }}
-                  >
-                    Sign out
-                  </Button>
-                ) : (
-                  <Button
-                    variant="tonal"
-                    size="sm"
-                    onClick={() => navigate({ page: 'onboarding', step: 'signin' })}
-                  >
-                    Sign in
-                  </Button>
-                )}
-              </div>
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="monitor" size={22} />
-                </div>
-                <div className="rt">
-                  <b>This computer</b>
-                  <span>
-                    {device}, {syncLine}
-                  </span>
-                </div>
-                <Pill tone="pri">This one</Pill>
-              </div>
-              <div style={{ padding: '6px 18px 12px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Button
-                  variant="tonal"
-                  size="sm"
-                  onClick={() => {
-                    void syncNow()
-                  }}
-                  disabled={!signedIn || syncing}
-                >
-                  <Icon name="sync" size={16} />
-                  {syncing ? 'Syncing...' : 'Sync now'}
-                </Button>
-                <span className="small muted">Keys never sync. Each device keeps its own.</span>
-              </div>
-            </div>
-          </section>
-
-          )}
-
-          <DevicesSettings />
-
-          {remote ? null : (
+    <SectionBlock id="account" name="Account and AI" line="Who you are, who your agent is, and what it thinks with.">
+      <SettingRow spec={row('userName')} changed={changedNow(row('userName'), settings)} onReset={() => resetRow(row('userName'))}>
+        <TextControl
+          label="Your name"
+          value={settings?.userName ?? ''}
+          placeholder="Your name"
+          onCommit={(value) => put({ userName: value })}
+        />
+      </SettingRow>
+      <SettingRow spec={row('agentName')} changed={changedNow(row('agentName'), settings)} onReset={() => resetRow(row('agentName'))}>
+        <TextControl
+          label="Your agent's name"
+          value={settings?.agentName ?? ''}
+          placeholder="Your agent's name"
+          onCommit={(value) => put({ agentName: value })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow spec={row('syncEmail')} icon={{ name: 'mail', tone: signedIn ? 'ok' : undefined }}>
+        <Pill tone={signedIn ? 'ok' : 'mute'}>{signedIn ? 'Signed in' : 'No account'}</Pill>
+        <Button variant="tonal" size="sm" onClick={signedIn ? signOut : () => navigate({ page: 'onboarding', step: 'signin' })}>
+          {signedIn ? 'Sign out' : 'Sign in'}
+        </Button>
+      </SettingRow>
+      {signedIn ? (
+        <SettingRow spec={row('signedIn')} sub>
+          <span className="small muted">
+            {settings?.syncEmail ?? ''} {syncLine === '' ? '' : `. ${syncLine}.`}
+          </span>
+          <Button
+            variant="text"
+            size="sm"
+            disabled={syncing}
+            onClick={() => {
+              setSyncing(true)
+              void agent.account.syncNow().finally(() => setSyncing(false))
+            }}
+          >
+            {syncing ? 'Syncing...' : 'Sync now'}
+          </Button>
+        </SettingRow>
+      ) : null}
+      <div className="divider" />
+      <SettingRow spec={row('accounts')}>
+        <Button variant="tonal" size="sm" onClick={() => setAdding(true)}>
+          <Icon name="plus" size={16} />
+          Add an account
+        </Button>
+      </SettingRow>
+      {accounts.length === 0 ? (
+        <div className="rowempty">No AI account yet. Add your plan or a key, and your agent can think.</div>
+      ) : null}
+      {accounts.map((account) => (
+        <SettingRow key={account.id} spec={{ ...row('accounts'), label: account.label, description: kindLine(account) }} sub>
+          <Pill tone={account.kind === 'api' ? (account.hasKey ? 'ok' : 'mute') : 'ok'}>
+            {account.kind === 'api' ? (account.hasKey ? 'Key saved' : 'No key') : 'Plan'}
+          </Pill>
+          <Button variant="text" size="sm" onClick={() => setEditing(account)}>
+            Change
+          </Button>
+          {removing === account.id ? (
             <>
-          <section>
-            <SectionHeader eyebrow="YOUR AI" line="Your plans and keys, and who thinks for what" />
-            <AiAccounts />
-          </section>
-
-          <VoiceSettings />
-            </>
-          )}
-
-          {remote ? null : <WakeupsSettings />}
-
-          <PromptRulesSettings />
-
-          <VaultSettings />
-        </div>
-
-        <div className="stack">
-          <section>
-            <SectionHeader eyebrow="LOOK" line="Light, dark or the same as your computer, your colour, your sidekick" />
-            <div className="card">
-              <Segmented
-                ariaLabel="Theme"
-                value={settings?.theme ?? 'system'}
-                onChange={(value) => {
-                  void save({ theme: value })
-                }}
-                options={[
-                  { value: 'system', label: 'System', icon: <Icon name="monitor" size={18} /> },
-                  { value: 'light', label: 'Light', icon: <Icon name="sun" size={18} /> },
-                  { value: 'dark', label: 'Dark', icon: <Icon name="moon" size={18} /> },
-                ]}
-                style={{ marginBottom: 20 }}
-              />
-              <div className="eyebrow mute" style={{ marginBottom: 10 }}>
-                YOUR COLOUR
-              </div>
-              <div className="swatches" style={{ marginBottom: 22 }}>
-                {ACCENTS.map((accent) => {
-                  const active = (settings?.accent ?? 'iris') === accent.id
-                  return (
-                    <button
-                      key={accent.id}
-                      type="button"
-                      className={`sw${active ? ' on' : ''}`}
-                      aria-label={accent.label}
-                      aria-pressed={active}
-                      style={{ background: accent.swatch }}
-                      onClick={() => {
-                        applyAccent(accent.id)
-                        void save({ accent: accent.id })
-                      }}
-                    >
-                      {active ? <Icon name="check" size={20} /> : null}
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="eyebrow mute" style={{ marginBottom: 10 }}>
-                YOUR SIDEKICK
-              </div>
-              <div className="mascots">
-                {MASCOT_ORDER.map((id) => {
-                  const active = (settings?.mascot ?? 'scout') === id
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      className={`mk${active ? ' on' : ''}`}
-                      aria-label={MASCOTS[id].label}
-                      aria-pressed={active}
-                      onClick={() => {
-                        void save({ mascot: id })
-                      }}
-                    >
-                      <Mascot id={id} size={38} />
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          </section>
-
-          {remote ? null : (
-            <>
-          <section>
-            <SectionHeader eyebrow="THIS COMPUTER" line="How the app behaves here" />
-            <div className="card" style={{ padding: 10 }}>
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="monitor" size={22} />
-                </div>
-                <div className="rt">
-                  <b>{device}</b>
-                  <span>{system ? machineSummary(system) : 'This computer'}</span>
-                </div>
-                <Pill tone="ok">This one</Pill>
-              </div>
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="search" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Tools on this computer</b>
-                  <span>{environment === null ? 'Looking at this computer...' : toolsLine(environment)}</span>
-                </div>
-                <Button variant="tonal" size="sm" disabled={scanning} onClick={() => void scanAgain()}>
-                  {scanning ? 'Scanning...' : 'Scan again'}
-                </Button>
-              </div>
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="play" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Start when I sign in</b>
-                  <span>So routines run without you opening anything</span>
-                </div>
-                <Switch
-                  on={settings?.launchAtLogin ?? false}
-                  onToggle={(next) => {
-                    void save({ launchAtLogin: next })
-                  }}
-                  label="Start when I sign in"
-                />
-              </div>
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="bell" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Desktop notifications</b>
-                  <span>For questions and approvals</span>
-                </div>
-                <Switch
-                  on={settings?.notifications ?? true}
-                  onToggle={(next) => {
-                    void save({ notifications: next })
-                  }}
-                  label="Desktop notifications"
-                />
-              </div>
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="panel" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Keep running in the tray</b>
-                  <span>Closing the window does not stop routines</span>
-                </div>
-                <Switch
-                  on={settings?.closeToTray ?? true}
-                  onToggle={(next) => {
-                    void save({ closeToTray: next })
-                  }}
-                  label="Keep running in the tray"
-                />
-              </div>
-              <HotkeySettings />
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="folder" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Folders I can use</b>
-                  <span>
-                    {folders.length === 0
-                      ? 'None yet. I ask before touching any file.'
-                      : `${folders.length} ${folders.length === 1 ? 'folder' : 'folders'} I can read and write without asking`}
-                  </span>
-                </div>
-                <Button
-                  variant="tonal"
-                  size="sm"
-                  disabled={pickingFolder}
-                  onClick={() => {
-                    void addFolder()
-                  }}
-                >
-                  {pickingFolder ? 'Choosing...' : 'Add folder'}
-                </Button>
-              </div>
-              {folders.map((folder) => (
-                <div className="rowc" key={folder}>
-                  <div className="ri" style={{ background: 'var(--s-high)', color: 'var(--on-sv)' }}>
-                    <Icon name="folder" size={18} />
-                  </div>
-                  <div className="rt">
-                    <b>{folderName(folder)}</b>
-                    <span>{folder}</span>
-                  </div>
-                  <IconButton
-                    icon="trash"
-                    size={18}
-                    label={`Remove ${folder}`}
-                    onClick={() => removeFolder(folder)}
-                  />
-                </div>
-              ))}
-              <div className="rowc">
-                <div className="ri">
-                  <Icon name="shield" size={22} />
-                </div>
-                <div className="rt">
-                  <b>Commands and files</b>
-                  <span>
-                    {settings?.shell === 'never'
-                      ? 'Never run a command or code on this computer'
-                      : settings?.shell === 'always'
-                        ? 'Runs commands and code, and opens files anywhere, without asking'
-                        : 'Asks before every command, and before files outside your folders'}
-                  </span>
-                </div>
-                <Pill tone={settings?.shell === 'always' ? 'pri' : 'mute'}>
-                  {settings?.shell === 'never' ? 'Off' : settings?.shell === 'always' ? 'No asking' : 'Ask first'}
-                </Pill>
-              </div>
-              <div style={{ padding: '0 18px 14px 78px' }}>
-                <Segmented
-                  ariaLabel="Commands and files"
-                  value={settings?.shell ?? 'ask'}
-                  onChange={(value) => {
-                    void save({ shell: value })
-                  }}
-                  options={[
-                    { value: 'always', label: 'Run without asking' },
-                    { value: 'ask', label: 'Ask first' },
-                    { value: 'never', label: 'Never' },
-                  ]}
-                />
-              </div>
-              <WorkLimits />
-            </div>
-          </section>
-
-          <GitSettings />
-
-          <MemorySettings />
-
-          <section>
-            <SectionHeader eyebrow="DANGER ZONE" line="Cannot be undone" />
-            <div className="card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-              <div style={{ flex: 1, minWidth: 220 }}>
-                <div className="h3 danger">Reset everything on this computer</div>
-                <div className="small muted">
-                  Deletes keys, memory, to-dos, routines and chats from this computer only. Your account keeps its
-                  copy.
-                </div>
-              </div>
               <Button
-                variant="line"
+                variant="text"
                 size="sm"
-                style={{ color: 'var(--err)', borderColor: 'var(--err)' }}
-                onClick={() => setResetting(true)}
+                className="danger"
+                onClick={() => {
+                  setRemoving(null)
+                  void agent.settings.accounts.remove(account.id).then(() => put({}))
+                }}
               >
-                Reset
+                Remove it
               </Button>
-            </div>
-          </section>
+              <Button variant="text" size="sm" onClick={() => setRemoving(null)}>
+                Keep
+              </Button>
             </>
+          ) : (
+            <Button variant="text" size="sm" onClick={() => setRemoving(account.id)}>
+              Remove
+            </Button>
           )}
+        </SettingRow>
+      ))}
+      <div className="divider" />
+      <SettingRow spec={row('ai')} />
+      {settings === null ? null : (
+        <div style={{ padding: '0 16px 14px 76px' }}>
+          <AiPickRows settings={settings} picks={settings.ai} onChange={(ai: AiPicks) => put({ ai })} />
+        </div>
+      )}
+      {adding ? <AccountDialog onClose={() => setAdding(false)} /> : null}
+      {editing !== null ? <AccountDialog account={editing} onClose={() => setEditing(null)} /> : null}
+    </SectionBlock>
+  )
+}
+
+/** Profiles and connections: the two places a person looks for their accounts. Each row opens the page that owns it. */
+function ConnectionsSection({ settings, navigate }: { settings: SettingsValues | null; navigate: SectionProps['navigate'] }): JSX.Element {
+  return (
+    <SectionBlock id="profiles" name="Profiles and connections" line="Where your accounts live. Each row opens the page that owns it.">
+      <SettingRow
+        spec={{
+          key: 'profiles.connected',
+          section: 'profiles',
+          label: 'Connected apps',
+          description: 'Mail, calendar, Slack and the rest, and which profile each one belongs to.',
+          control: 'block',
+          icon: 'grid',
+          sample: null,
+        }}
+      >
+        <Button variant="tonal" size="sm" onClick={() => navigate({ page: 'connections' })}>
+          Open Connections
+        </Button>
+      </SettingRow>
+      <SettingRow
+        spec={{
+          key: 'profiles.signins',
+          section: 'profiles',
+          label: 'Profiles and browser sign-ins',
+          description: 'Parts of your life, each with its own accounts and the sites your browser is signed in to.',
+          control: 'block',
+          icon: 'person',
+          sample: null,
+        }}
+      >
+        <Button variant="tonal" size="sm" onClick={() => navigate({ page: 'connections' })}>
+          Open Connections
+        </Button>
+      </SettingRow>
+      <div className="rowempty">{settings === null ? '' : 'Profiles are picked and changed next to the accounts they use, in Connections.'}</div>
+    </SectionBlock>
+  )
+}
+
+/** The groups of this computer's tools another device may be given first (protocol s11). */
+const SHARE_GROUPS: Array<[string, string]> = [
+  ['browser', 'The browser'],
+  ['files', 'Files'],
+  ['notifications', 'Notifications'],
+  ['approval', 'Questions and approvals'],
+  ['shell', 'Commands'],
+]
+
+/** Which of the person's devices is used first for each shared tool. Empty means any device that is free. */
+function PreferredDevices({ settings, put }: { settings: SettingsValues | null; put: SectionProps['put'] }): JSX.Element {
+  const [devices, setDevices] = useState<Array<{ id: string; name: string }>>([])
+  useEffect(() => {
+    void agent.devices
+      .list()
+      .then((rows) => setDevices(rows.filter((item) => !item.revoked).map((item) => ({ id: item.id, name: item.name }))))
+      .catch(() => undefined)
+  }, [])
+  const preferred = settings?.devicesPreferred ?? {}
+  return (
+    <>
+      <SettingRow spec={row('devicesPreferred')}>
+        <span className="small muted">{devices.length === 0 ? 'No other device yet' : 'Empty means any device that is free'}</span>
+      </SettingRow>
+      {SHARE_GROUPS.map(([group, label]) => (
+        <SettingRow key={group} spec={{ ...row('devicesPreferred'), label }} sub>
+          <SelectControl
+            label={`Preferred device for ${label.toLowerCase()}`}
+            value={preferred[group] ?? ''}
+            options={[{ value: '', label: 'Any device' }, ...devices.map((device) => ({ value: device.id, label: device.name }))]}
+            onChange={(value) => put({ devicesPreferred: { ...preferred, [group]: value } })}
+          />
+        </SettingRow>
+      ))}
+    </>
+  )
+}
+
+/** Devices: this computer's name, what may connect, the devices themselves, and what they may use here. */
+function DevicesSection({ settings, put, resetRow }: SectionProps): JSX.Element {
+  return (
+    <SectionBlock id="devices" name="Devices" line="Your phone and other computers, one agent.">
+      <SettingRow spec={row('deviceName')}>
+        <TextControl
+          label="This computer's name"
+          value={settings?.deviceName ?? ''}
+          placeholder="This computer"
+          onCommit={(value) => put({ deviceName: value })}
+        />
+      </SettingRow>
+      <div className="dv-embed">
+        <DevicesSettings />
+      </div>
+      <div className="divider" />
+      <PreferredDevices settings={settings} put={put} />
+      <SettingRow
+        spec={row('devicesJobLimit')}
+        changed={changedNow(row('devicesJobLimit'), settings)}
+        onReset={() => resetRow(row('devicesJobLimit'))}
+      >
+        <SelectControl
+          label="Work for your other devices"
+          value={String(settings?.devicesJobLimit ?? 0)}
+          options={[
+            { value: '0', label: 'No limit' },
+            { value: '4', label: '4 at once' },
+            { value: '8', label: '8 at once' },
+            { value: '16', label: '16 at once' },
+          ]}
+          onChange={(value) => put({ devicesJobLimit: Number(value) })}
+        />
+      </SettingRow>
+    </SectionBlock>
+  )
+}
+
+/** Where a helper runs: here, or on a linked server when it is free. */
+function RunHelpersOn({ settings, put, resetRow }: SectionProps): JSX.Element {
+  const [brains, setBrains] = useState<Array<{ id: string; name: string }>>([])
+  useEffect(() => {
+    let live = true
+    void agent.devices
+      .list()
+      .then((rows) => {
+        if (!live) return
+        setBrains(rows.filter((item) => !item.revoked && item.roles.includes('brain')).map((item) => ({ id: item.id, name: item.name })))
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [])
+  const value = settings?.helpersRunOn ?? 'best'
+  const options = [
+    { value: 'best', label: 'Best' },
+    { value: 'here', label: 'This computer' },
+    ...brains.map((device) => ({ value: device.id, label: device.name })),
+  ]
+  return (
+    <SettingRow spec={row('helpersRunOn')} changed={changedNow(row('helpersRunOn'), settings)} onReset={() => resetRow(row('helpersRunOn'))}>
+      <Segmented ariaLabel="Run helpers on" options={options} value={value} onChange={(next) => put({ helpersRunOn: next })} />
+    </SettingRow>
+  )
+}
+
+/** Agents and helpers: what helpers think with, how much runs at once, and whether the app keeps running. */
+function AgentsSection({ settings, put, resetRow }: SectionProps): JSX.Element {
+  const limit = (key: string, label: string, off: string, decimal = false, unit?: string): JSX.Element => {
+    const spec = row(key)
+    return (
+      <SettingRow spec={spec} changed={changedNow(spec, settings)} onReset={() => resetRow(spec)}>
+        <NumberControl
+          label={label}
+          value={Number((settings as unknown as Record<string, unknown> | null)?.[key] ?? 0)}
+          off={off}
+          decimal={decimal}
+          unit={unit}
+          onCommit={(next) => put({ [key]: next } as Partial<SettingsValues>)}
+        />
+      </SettingRow>
+    )
+  }
+
+  const quiet = String(settings?.helperQuietMinutes ?? 0)
+  return (
+    <SectionBlock
+      id="agents"
+      name="Agents and helpers"
+      line="What helpers think with, how many work at once, and whether the app keeps running."
+      extra={<PromptRulesSettings />}
+    >
+      {limit('helpersAtOnce', 'Helpers at once', 'No limit')}
+      {limit('helperMaxSteps', 'Steps per helper', 'No limit')}
+      {limit('routinesAtOnce', 'Routines at once', 'No limit')}
+      <SettingRow
+        spec={row('helperQuietMinutes')}
+        changed={changedNow(row('helperQuietMinutes'), settings)}
+        onReset={() => resetRow(row('helperQuietMinutes'))}
+      >
+        <SelectControl
+          label="Heads-up on a quiet helper"
+          value={quiet}
+          options={[
+            { value: '0', label: 'Never' },
+            { value: '5', label: '5 minutes' },
+            { value: '10', label: '10 minutes' },
+            { value: '15', label: '15 minutes' },
+            { value: '30', label: '30 minutes' },
+            { value: '60', label: '60 minutes' },
+          ]}
+          onChange={(value) => put({ helperQuietMinutes: Number(value) })}
+        />
+      </SettingRow>
+      {limit('helperMinFreeRamGb', 'Pause helpers when memory is low, GB', 'No check', true, 'GB')}
+      {limit('helperMinFreeDiskGb', 'Pause helpers when disk is low, GB', 'No check', true, 'GB')}
+      {limit('helperBusyCpu', 'Busy processor use, percent', 'Off', false, '%')}
+      <RunHelpersOn settings={settings} put={put} resetRow={resetRow} navigate={() => undefined} />
+      <SettingRow spec={row('launchAtLogin')} changed={changedNow(row('launchAtLogin'), settings)} onReset={() => resetRow(row('launchAtLogin'))}>
+        <Switch on={settings?.launchAtLogin ?? false} label="Start when I sign in" onToggle={(next) => put({ launchAtLogin: next })} />
+      </SettingRow>
+      <SettingRow spec={row('closeToTray')} changed={changedNow(row('closeToTray'), settings)} onReset={() => resetRow(row('closeToTray'))}>
+        <Switch on={settings?.closeToTray ?? true} label="Keep running in the tray" onToggle={(next) => put({ closeToTray: next })} />
+      </SettingRow>
+      <SettingRow spec={row('dailyMemoryAt')} changed={changedNow(row('dailyMemoryAt'), settings)} onReset={() => resetRow(row('dailyMemoryAt'))}>
+        <TimeControl label="End of day memory pass" value={settings?.dailyMemoryAt ?? ''} onCommit={(value) => put({ dailyMemoryAt: value })} />
+        <Button variant="text" size="sm" onClick={() => useUi.getState().navigate({ page: 'routines' })}>
+          Routines
+        </Button>
+      </SettingRow>
+    </SectionBlock>
+  )
+}
+
+/** The Gemini key, in its own dialog: pasted once, stored by the operating system, never shown again. */
+function VoiceKeyDialog({ onClose }: { onClose: () => void }): JSX.Element {
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null)
+  const hasKey = useSettings((state) => state.settings?.hasVoiceKey ?? false)
+
+  const store = (): void => {
+    const value = draft.trim()
+    if (value === '') return
+    setBusy(true)
+    void agent.voice
+      .setKey(value)
+      .then(() => agent.voice.check())
+      .then((result) => {
+        setStatus(result)
+        setDraft('')
+      })
+      .catch(() => setStatus({ ok: false, message: 'Could not store the key.' }))
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <Dialog label="Voice key" onClose={onClose}>
+      <div>
+        <span className="eyebrow">VOICE</span>
+        <h2 className="h2" style={{ marginTop: 6 }}>
+          {hasKey ? 'Replace the Gemini key' : 'Add a Gemini key'}
+        </h2>
+        <p className="lead" style={{ marginTop: 8 }}>
+          Voice runs on Google Gemini. A free key from Google AI Studio works. It is stored by your operating system
+          and never shown in this window.
+        </p>
+      </div>
+      <Field
+        label="Gemini key"
+        type="password"
+        revealable
+        revealLabel="key"
+        autoComplete="off"
+        value={draft}
+        onChange={setDraft}
+        placeholder="Starts with AIza"
+        onEnter={store}
+      />
+      {status !== null ? (
+        <p className={status.ok ? 'small' : 'small'} role="status" style={{ color: status.ok ? 'var(--ok)' : 'var(--err)' }}>
+          {status.message}
+        </p>
+      ) : null}
+      <div className="dialog-actions">
+        <Button variant="text" onClick={onClose}>
+          Close
+        </Button>
+        <Button disabled={busy || draft.trim() === ''} onClick={store}>
+          {busy ? 'Checking...' : 'Save key'}
+        </Button>
+      </div>
+    </Dialog>
+  )
+}
+
+/** Voice and dictation: the key, the voice, the voice note, and the two shortcuts. */
+function VoiceSection({ settings, put, resetRow }: SectionProps): JSX.Element {
+  const [keyOpen, setKeyOpen] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const sampling = useSpeaker((state) => state.speaking === 'voice-sample' || state.loading === 'voice-sample')
+  const hasKey = settings?.hasVoiceKey ?? false
+  const voice = settings?.voiceName || 'Kore'
+
+  const check = (): void => {
+    setChecking(true)
+    void agent.voice
+      .check()
+      .then((result) => toast(result.message))
+      .catch(() => toast('Could not reach Gemini.'))
+      .finally(() => setChecking(false))
+  }
+
+  return (
+    <SectionBlock id="voice" name="Voice and dictation" line="Talk to your agent, dictate anywhere, and hear replies.">
+      <SettingRow spec={row('hasVoiceKey')} icon={{ name: 'key', tone: hasKey ? 'ok' : undefined }}>
+        <Pill tone={hasKey ? 'ok' : 'mute'}>{hasKey ? 'Key stored' : 'No key'}</Pill>
+        <Button variant="tonal" size="sm" onClick={() => setKeyOpen(true)}>
+          {hasKey ? 'Replace' : 'Add a key'}
+        </Button>
+        {hasKey ? (
+          <Button variant="text" size="sm" disabled={checking} onClick={check}>
+            {checking ? 'Checking...' : 'Check'}
+          </Button>
+        ) : null}
+      </SettingRow>
+      <SettingRow spec={row('voiceName')} changed={changedNow(row('voiceName'), settings)} onReset={() => resetRow(row('voiceName'))}>
+        <SelectControl
+          label="Voice"
+          value={voice}
+          options={VOICES.map((option) => ({ value: option.id, label: `${option.id}, ${option.feel}` }))}
+          onChange={(value) => put({ voiceName: value })}
+        />
+        <Button
+          variant="tonal"
+          size="sm"
+          disabled={!hasKey}
+          title={hasKey ? 'Hear this voice' : 'Add a Gemini key first'}
+          onClick={() => {
+            if (sampling) stopSpeaking()
+            else void speakText('voice-sample', 'Hi. This is how I sound on a call and when I read your replies.')
+          }}
+        >
+          {sampling ? 'Stop' : 'Hear it'}
+        </Button>
+      </SettingRow>
+      <SettingRow spec={row('speakReplies')} changed={changedNow(row('speakReplies'), settings)} onReset={() => resetRow(row('speakReplies'))}>
+        <Switch
+          on={settings?.speakReplies ?? false}
+          disabled={!hasKey}
+          label="Voice note with every reply"
+          onToggle={(next) => put({ speakReplies: next })}
+        />
+      </SettingRow>
+      <SettingRow spec={row('dictateHotkey')} changed={changedNow(row('dictateHotkey'), settings)} onReset={() => resetRow(row('dictateHotkey'))}>
+        <HotkeyControl label="Dictation shortcut" value={settings?.dictateHotkey ?? ''} onSave={(next) => put({ dictateHotkey: next })} />
+      </SettingRow>
+      <SettingRow
+        spec={row('dictateCleanHotkey')}
+        changed={changedNow(row('dictateCleanHotkey'), settings)}
+        onReset={() => resetRow(row('dictateCleanHotkey'))}
+      >
+        <HotkeyControl
+          label="Clean-up dictation shortcut"
+          value={settings?.dictateCleanHotkey ?? ''}
+          onSave={(next) => put({ dictateCleanHotkey: next })}
+        />
+      </SettingRow>
+      {keyOpen ? <VoiceKeyDialog onClose={() => setKeyOpen(false)} /> : null}
+    </SectionBlock>
+  )
+}
+
+/** The quiet hours presets, and whatever else the file already holds. */
+const QUIET_PRESETS = ['', '22:00-07:00', '23:00-06:00', '21:00-06:00', '00:00-07:00']
+
+function quietLabel(value: string): string {
+  if (value === '') return 'Off'
+  const [from, to] = value.split('-')
+  return `${from} to ${to}`
+}
+
+/** Notifications and wake-ups: when something needs you now, and how loud it is. */
+function NotifySection({ settings, put, resetRow }: SectionProps): JSX.Element {
+  const [where, setWhere] = useState<'here' | 'all'>('here')
+  const quiet = settings?.wakeupQuietHours ?? ''
+  const paused = settings?.wakeupsPauseHereUntil ?? ''
+  const presets = QUIET_PRESETS.includes(quiet) ? QUIET_PRESETS : [...QUIET_PRESETS, quiet]
+
+  const test = (severity: 'critical' | 'urgent' | 'heads_up'): void => {
+    void agent.wakeups
+      .test(severity, where)
+      .then(() => toast(`Test sent ${where === 'here' ? 'on this computer' : 'on every device'}.`))
+      .catch((cause: unknown) => toast(cause instanceof Error ? cause.message : 'The test did not ring.'))
+  }
+
+  return (
+    <SectionBlock
+      id="notify"
+      name="Notifications and wake-ups"
+      line="When something needs you now, your devices ring until you answer."
+      extra={<WakeLog />}
+    >
+      <SettingRow spec={row('notifications')} changed={changedNow(row('notifications'), settings)} onReset={() => resetRow(row('notifications'))}>
+        <Switch on={settings?.notifications ?? true} label="Desktop notifications" onToggle={(next) => put({ notifications: next })} />
+      </SettingRow>
+      <SettingRow
+        spec={row('wakeupsRingHere')}
+        changed={changedNow(row('wakeupsRingHere'), settings)}
+        onReset={() => resetRow(row('wakeupsRingHere'))}
+      >
+        <Switch on={settings?.wakeupsRingHere ?? true} label="Ring on this computer" onToggle={(next) => put({ wakeupsRingHere: next })} />
+      </SettingRow>
+      <SettingRow
+        spec={row('wakeupsPauseHereUntil')}
+        changed={changedNow(row('wakeupsPauseHereUntil'), settings)}
+        onReset={() => resetRow(row('wakeupsPauseHereUntil'))}
+      >
+        <DateTimeControl label="Pause ringing on this computer" value={paused} onCommit={(value) => put({ wakeupsPauseHereUntil: value })} />
+        {paused === '' ? null : (
+          <Button variant="text" size="sm" onClick={() => put({ wakeupsPauseHereUntil: '' })}>
+            Resume
+          </Button>
+        )}
+      </SettingRow>
+      <SettingRow
+        spec={row('wakeupsPhoneOnlyWhenIdle')}
+        changed={changedNow(row('wakeupsPhoneOnlyWhenIdle'), settings)}
+        onReset={() => resetRow(row('wakeupsPhoneOnlyWhenIdle'))}
+      >
+        <Switch
+          on={settings?.wakeupsPhoneOnlyWhenIdle ?? true}
+          label="Only the phone when this computer is idle or locked"
+          onToggle={(next) => put({ wakeupsPhoneOnlyWhenIdle: next })}
+        />
+      </SettingRow>
+      <SettingRow
+        spec={row('wakeupsIdleMinutes')}
+        changed={changedNow(row('wakeupsIdleMinutes'), settings)}
+        onReset={() => resetRow(row('wakeupsIdleMinutes'))}
+      >
+        <SelectControl
+          label="Idle after"
+          value={String(settings?.wakeupsIdleMinutes ?? 5)}
+          options={[1, 2, 5, 10, 15, 30, 60].map((minutes) => ({ value: String(minutes), label: `${minutes} minutes` }))}
+          onChange={(value) => put({ wakeupsIdleMinutes: Number(value) })}
+        />
+      </SettingRow>
+      <SettingRow
+        spec={row('wakeupSnoozeMinutes')}
+        changed={changedNow(row('wakeupSnoozeMinutes'), settings)}
+        onReset={() => resetRow(row('wakeupSnoozeMinutes'))}
+      >
+        <SelectControl
+          label="Snooze"
+          value={String(settings?.wakeupSnoozeMinutes ?? 5)}
+          options={[1, 2, 5, 10, 15, 30].map((minutes) => ({ value: String(minutes), label: `${minutes} minutes` }))}
+          onChange={(value) => put({ wakeupSnoozeMinutes: Number(value) })}
+        />
+      </SettingRow>
+      <SettingRow
+        spec={row('wakeupQuietHours')}
+        changed={changedNow(row('wakeupQuietHours'), settings)}
+        onReset={() => resetRow(row('wakeupQuietHours'))}
+      >
+        <SelectControl
+          label="Quiet hours"
+          value={quiet}
+          options={presets.map((value) => ({ value, label: quietLabel(value) }))}
+          onChange={(value) => put({ wakeupQuietHours: value })}
+        />
+      </SettingRow>
+      <SettingRow spec={row('wakeupVolume')} changed={changedNow(row('wakeupVolume'), settings)} onReset={() => resetRow(row('wakeupVolume'))}>
+        <SliderControl label="Alarm volume" value={settings?.wakeupVolume ?? 1} onChange={(value) => put({ wakeupVolume: value })} />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
+        spec={{
+          key: 'wakeups.test',
+          section: 'notify',
+          label: 'Test a wake-up',
+          description: 'Rings for real, at the severity you pick, so you know what it sounds like.',
+          control: 'block',
+          icon: 'bell',
+          sample: null,
+        }}
+      >
+        <Segmented
+          ariaLabel="Where the test rings"
+          value={where}
+          onChange={setWhere}
+          options={[
+            { value: 'here', label: 'This computer' },
+            { value: 'all', label: 'Every device' },
+          ]}
+        />
+        <Button variant="tonal" size="sm" onClick={() => test('critical')}>
+          Critical
+        </Button>
+        <Button variant="tonal" size="sm" onClick={() => test('urgent')}>
+          Urgent
+        </Button>
+        <Button variant="tonal" size="sm" onClick={() => test('heads_up')}>
+          Heads-up
+        </Button>
+      </SettingRow>
+    </SectionBlock>
+  )
+}
+
+/** Appearance: the theme, the accent, the sidekick and how many pinned apps the sidebar keeps. */
+function AppearanceSection({ settings, put, resetRow }: SectionProps): JSX.Element {
+  const accent = settings?.accent ?? 'iris'
+  const mascot = settings?.mascot ?? 'scout'
+  return (
+    <SectionBlock id="appearance" name="Appearance" line="Light, dark or the same as your computer, your colour, your sidekick.">
+      <SettingRow spec={row('theme')} changed={changedNow(row('theme'), settings)} onReset={() => resetRow(row('theme'))}>
+        <Segmented
+          ariaLabel="Theme"
+          value={settings?.theme ?? 'system'}
+          onChange={(value) => put({ theme: value as SettingsValues['theme'] })}
+          options={[
+            { value: 'system', label: 'System' },
+            { value: 'light', label: 'Light' },
+            { value: 'dark', label: 'Dark' },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow spec={row('accent')} changed={changedNow(row('accent'), settings)} onReset={() => resetRow(row('accent'))} stack>
+        <div className="swatches" role="radiogroup" aria-label="Your colour">
+          {ACCENTS.map((item) => {
+            const on = item.id === accent
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                aria-label={item.label}
+                className={`sw${on ? ' on' : ''}`}
+                style={{ background: item.swatch }}
+                onClick={() => {
+                  applyAccent(item.id)
+                  put({ accent: item.id })
+                }}
+              >
+                {on ? <Icon name="check" size={18} /> : null}
+              </button>
+            )
+          })}
+        </div>
+      </SettingRow>
+      <SettingRow spec={row('mascot')} changed={changedNow(row('mascot'), settings)} onReset={() => resetRow(row('mascot'))} stack>
+        <div className="mascots" role="radiogroup" aria-label="Your sidekick">
+          {MASCOT_ORDER.map((id) => {
+            const on = id === mascot
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                aria-label={MASCOTS[id].label}
+                className={`mk${on ? ' on' : ''}`}
+                onClick={() => put({ mascot: id })}
+              >
+                <Mascot id={id} size={34} />
+              </button>
+            )
+          })}
+        </div>
+      </SettingRow>
+      <SettingRow
+        spec={row('miniappPinCap')}
+        changed={changedNow(row('miniappPinCap'), settings)}
+        onReset={() => resetRow(row('miniappPinCap'))}
+      >
+        <SelectControl
+          label="Pinned apps in the sidebar"
+          value={String(settings?.miniappPinCap ?? 8)}
+          options={[4, 6, 8, 12, 16, 20].map((count) => ({ value: String(count), label: `${count} apps` }))}
+          onChange={(value) => put({ miniappPinCap: Number(value) })}
+        />
+      </SettingRow>
+    </SectionBlock>
+  )
+}
+
+/** The three things that cannot be undone, each in the app's own dialog, saying exactly what goes. */
+function DangerZone({ navigate }: { navigate: SectionProps['navigate'] }): JSX.Element {
+  const [which, setWhich] = useState<'settings' | 'data' | 'signout' | null>(null)
+  const folders = useSettings((state) => state.settings?.grantedFolders ?? [])
+  const accounts = useSettings((state) => (state.settings === null ? 0 : accountsOf(state.settings).length))
+  return (
+    <div className="danger-card">
+      <div className="ssec-h">
+        <span className="eyebrow">Danger zone</span>
+        <span className="line">These cannot be undone. Each one asks first, and says exactly what goes.</span>
+      </div>
+      <div className="srow">
+        <div className="ri">
+          <Icon name="sync" size={22} />
+        </div>
+        <div className="rt">
+          <b>Reset settings only</b>
+          <span className="d">Every setting on this computer goes back to its default. Chats, memory, keys and files stay.</span>
+        </div>
+        <div className="end">
+          <button type="button" className="btn-danger" onClick={() => setWhich('settings')}>
+            Reset settings
+          </button>
+        </div>
+      </div>
+      <div className="srow">
+        <div className="ri">
+          <Icon name="trash" size={22} />
+        </div>
+        <div className="rt">
+          <b>Delete everything on this computer</b>
+          <span className="d">Chats, memory, to-dos, routines, wake-ups, mini-apps, keys and settings. Your account keeps its copy.</span>
+        </div>
+        <div className="end">
+          <button type="button" className="btn-danger" onClick={() => setWhich('data')}>
+            Delete local data
+          </button>
+        </div>
+      </div>
+      <div className="srow">
+        <div className="ri">
+          <Icon name="x" size={22} />
+        </div>
+        <div className="rt">
+          <b>Sign out</b>
+          <span className="d">Stops syncing on this computer and asks you to sign in again. It deletes nothing.</span>
+        </div>
+        <div className="end">
+          <button type="button" className="btn-danger" onClick={() => setWhich('signout')}>
+            Sign out
+          </button>
         </div>
       </div>
 
-      {resetting ? <ResetDialog onClose={() => setResetting(false)} /> : null}
+      {which === 'settings' ? (
+        <Dialog label="Reset settings" onClose={() => setWhich(null)}>
+          <div>
+            <span className="eyebrow">DANGER ZONE</span>
+            <h2 className="h2" style={{ marginTop: 6 }}>
+              Put every setting back to its default?
+            </h2>
+            <p className="lead" style={{ marginTop: 8 }}>
+              Every setting on this computer goes back to its default: your name, your agent&apos;s name, {accounts}{' '}
+              {accounts === 1 ? 'AI account' : 'AI accounts'} and their keys, the theme, the shortcuts, the wake-ups,
+              the {folders.length} {folders.length === 1 ? 'folder' : 'folders'} you allowed and the device settings.
+            </p>
+            <p className="lead">Chats, memory, to-dos, routines and files are not touched, and your account keeps its copy.</p>
+          </div>
+          <div className="dialog-actions">
+            <Button variant="text" onClick={() => setWhich(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="line"
+              style={{ color: 'var(--err)', borderColor: 'var(--err)' }}
+              onClick={() => {
+                void agent.settings
+                  .resetSettings()
+                  .then(() => {
+                    toast('Every setting is back to its default.')
+                    setWhich(null)
+                  })
+                  .catch(() => toast('Could not reset the settings.'))
+              }}
+            >
+              Reset every setting
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
+
+      {which === 'data' ? (
+        <Dialog label="Delete local data" onClose={() => setWhich(null)}>
+          <div>
+            <span className="eyebrow">DANGER ZONE</span>
+            <h2 className="h2" style={{ marginTop: 6 }}>
+              Delete everything on this computer?
+            </h2>
+            <p className="lead" style={{ marginTop: 8 }}>
+              This deletes keys, memory, to-dos, routines, wake-ups, mini-apps, chats and settings from this computer
+              only, then asks you to set it up again. Your account keeps its copy on the server.
+            </p>
+          </div>
+          <div className="dialog-actions">
+            <Button variant="text" onClick={() => setWhich(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="line"
+              style={{ color: 'var(--err)', borderColor: 'var(--err)' }}
+              onClick={() => {
+                void agent.settings
+                  .reset()
+                  .then(() => navigate({ page: 'onboarding', step: 'signin' }))
+                  .catch(() => toast('Could not delete the local data.'))
+              }}
+            >
+              Delete it all
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
+
+      {which === 'signout' ? (
+        <Dialog label="Sign out" onClose={() => setWhich(null)}>
+          <div>
+            <span className="eyebrow">ACCOUNT</span>
+            <h2 className="h2" style={{ marginTop: 6 }}>
+              Sign out of this computer?
+            </h2>
+            <p className="lead" style={{ marginTop: 8 }}>
+              Nothing is deleted. This computer stops syncing, keeps everything it already has here, and asks you to
+              sign in the next time it needs the server.
+            </p>
+          </div>
+          <div className="dialog-actions">
+            <Button variant="text" onClick={() => setWhich(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="line"
+              style={{ color: 'var(--err)', borderColor: 'var(--err)' }}
+              onClick={() => {
+                void agent.account.signOut().then(() => {
+                  setWhich(null)
+                  navigate({ page: 'onboarding', step: 'signin' })
+                })
+              }}
+            >
+              Sign out
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
     </div>
+  )
+}
+
+/** Privacy and data: folders, commands, recordings, the developer switch, the Vault and the danger zone. */
+function PrivacySection({ settings, put, resetRow, navigate }: SectionProps): JSX.Element {
+  const [pickingFolder, setPickingFolder] = useState(false)
+  const folders = settings?.grantedFolders ?? []
+
+  const addFolder = (): void => {
+    if (pickingFolder) return
+    setPickingFolder(true)
+    void agent.files
+      .pickFolder()
+      .then((folder) => {
+        if (folder === null) return
+        if (!folders.includes(folder)) put({ grantedFolders: [...folders, folder] })
+      })
+      .catch(() => undefined)
+      .finally(() => setPickingFolder(false))
+  }
+
+  return (
+    <SectionBlock
+      id="privacy"
+      name="Privacy and data"
+      line="What your agent may touch on this computer, and what is kept."
+      extra={
+        <>
+          <div className="embed">
+            <VaultSettings />
+          </div>
+          <DangerZone navigate={navigate} />
+        </>
+      }
+    >
+      <SettingRow spec={row('grantedFolders')}>
+        <Button variant="tonal" size="sm" disabled={pickingFolder} onClick={addFolder}>
+          {pickingFolder ? 'Choosing...' : 'Add folder'}
+        </Button>
+      </SettingRow>
+      {folders.length === 0 ? <div className="rowempty">No folder yet. Your agent asks before it touches any file.</div> : null}
+      {folders.map((folder) => (
+        <SettingRow key={folder} spec={{ ...row('grantedFolders'), label: folderName(folder), description: folder }} sub>
+          <IconButton
+            icon="trash"
+            size={18}
+            label={`Remove ${folder}`}
+            onClick={() => put({ grantedFolders: folders.filter((item) => item !== folder) })}
+          />
+        </SettingRow>
+      ))}
+      <div className="divider" />
+      <SettingRow spec={row('shell')} changed={changedNow(row('shell'), settings)} onReset={() => resetRow(row('shell'))}>
+        <Segmented
+          ariaLabel="Commands and code"
+          value={settings?.shell ?? 'ask'}
+          onChange={(value) => put({ shell: value as SettingsValues['shell'] })}
+          options={[
+            { value: 'always', label: 'Run without asking' },
+            { value: 'ask', label: 'Ask first' },
+            { value: 'never', label: 'Never' },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow
+        spec={row('recordingAudioKeep')}
+        changed={changedNow(row('recordingAudioKeep'), settings)}
+        onReset={() => resetRow(row('recordingAudioKeep'))}
+      >
+        <SelectControl
+          label="Keep recording audio"
+          value={settings?.recordingAudioKeep ?? 'today'}
+          options={[
+            { value: 'today', label: 'Until the end of today' },
+            { value: 'week', label: 'A week' },
+            { value: 'always', label: 'Always' },
+          ]}
+          onChange={(value) => put({ recordingAudioKeep: value as SettingsValues['recordingAudioKeep'] })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
+        spec={row('showDeveloperSettings')}
+        changed={changedNow(row('showDeveloperSettings'), settings)}
+        onReset={() => resetRow(row('showDeveloperSettings'))}
+      >
+        <Switch
+          on={settings?.showDeveloperSettings ?? false}
+          label="Developer settings"
+          onToggle={(next) => put({ showDeveloperSettings: next })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
+        spec={{
+          key: 'memory.open',
+          section: 'privacy',
+          label: 'Memory',
+          description: 'What your agent remembers about you, and every version of it.',
+          control: 'block',
+          icon: 'memory',
+          sample: null,
+        }}
+      >
+        <Button variant="tonal" size="sm" onClick={() => navigate({ page: 'memory' })}>
+          Open Memory
+        </Button>
+      </SettingRow>
+    </SectionBlock>
+  )
+}
+
+/** Git and developer: what is committed and pushed after a run, and what is waiting in the project folders. */
+function GitSection({ settings, put, resetRow }: SectionProps): JSX.Element {
+  const [log, setLog] = useState<GitLogEntry[]>([])
+  const [checking, setChecking] = useState(false)
+  const SIZES = [1, 2, 5, 10, 25, 50, 100]
+  const size = settings?.gitMaxFileMb ?? 5
+
+  useEffect(() => {
+    let live = true
+    const read = (): void => {
+      void agent.git
+        .log()
+        .then((list) => live && setLog(list))
+        .catch(() => undefined)
+    }
+    read()
+    const timer = setInterval(read, 15_000)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
+  }, [])
+
+  const check = (): void => {
+    setChecking(true)
+    void agent.git
+      .report()
+      .then((list) => {
+        const pending = list.filter((item) => waiting(item) !== '')
+        toast(
+          pending.length === 0
+            ? 'Every project folder is committed and pushed.'
+            : `${pending.length} ${pending.length === 1 ? 'folder needs' : 'folders need'} attention: ${pending
+                .map((item) => `${item.root.split(/[\\/]/).filter((part) => part !== '').pop() ?? item.root} (${waiting(item)})`)
+                .join(', ')}`,
+        )
+      })
+      .catch(() => toast('Could not read the project folders.'))
+      .finally(() => setChecking(false))
+  }
+
+  return (
+    <SectionBlock id="git" name="Git and developer" line="What is committed and pushed after a run.">
+      <SettingRow spec={row('gitAutoCommit')} changed={changedNow(row('gitAutoCommit'), settings)} onReset={() => resetRow(row('gitAutoCommit'))}>
+        <Switch on={settings?.gitAutoCommit === true} label="Commit after each run" onToggle={(next) => put({ gitAutoCommit: next })} />
+      </SettingRow>
+      <SettingRow spec={row('gitAutoPush')} changed={changedNow(row('gitAutoPush'), settings)} onReset={() => resetRow(row('gitAutoPush'))}>
+        <Switch on={settings?.gitAutoPush !== false} label="Push after the commit" onToggle={(next) => put({ gitAutoPush: next })} />
+      </SettingRow>
+      <SettingRow spec={row('gitMaxFileMb')} changed={changedNow(row('gitMaxFileMb'), settings)} onReset={() => resetRow(row('gitMaxFileMb'))}>
+        <SelectControl
+          label="Biggest file"
+          value={String(size)}
+          options={(SIZES.includes(size) ? SIZES : [...SIZES, size]).map((mb) => ({ value: String(mb), label: `${mb} MB` }))}
+          onChange={(value) => put({ gitMaxFileMb: Number(value) })}
+        />
+      </SettingRow>
+      <SettingRow spec={row('gitExclude')} changed={changedNow(row('gitExclude'), settings)} onReset={() => resetRow(row('gitExclude'))}>
+        <TextControl
+          label="Also leave out"
+          value={settings?.gitExclude ?? ''}
+          placeholder="Nothing more"
+          width={220}
+          onCommit={(value) => put({ gitExclude: value })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
+        spec={{
+          key: 'git.report',
+          section: 'git',
+          label: 'Project folders',
+          description: 'Which folders hold work that is not committed or not pushed yet.',
+          control: 'block',
+          icon: 'folder',
+          sample: null,
+        }}
+      >
+        <Button variant="tonal" size="sm" disabled={checking} onClick={check}>
+          {checking ? 'Checking...' : 'Check now'}
+        </Button>
+      </SettingRow>
+      <div className="rowempty">
+        {log.length === 0
+          ? 'Nothing has been committed after a run yet.'
+          : log
+              .slice(0, 5)
+              .map((entry) => `${outcome(entry)} (${timeAgo(entry.at)})`)
+              .join('. ')}
+      </div>
+    </SectionBlock>
+  )
+}
+
+/** Advanced: the quick chat shortcut, the sync server, the freeze watchdog, and every stored value in one table. */
+function AdvancedSection({ settings, put, resetRow }: SectionProps): JSX.Element {
+  const stored = ['mode', 'cli', 'cliModel', 'provider', 'model', 'hasKey', 'baseUrl', 'allowHttp', 'onboarded']
+  const shown = (value: unknown): string => {
+    if (typeof value === 'boolean') return value ? 'yes' : 'no'
+    if (value === '' || value === null || value === undefined) return 'empty'
+    return String(value)
+  }
+  return (
+    <SectionBlock
+      id="advanced"
+      name="Advanced"
+      line="Shortcuts, the sync server and the stored values. Every one of these is also found by the search box."
+    >
+      <SettingRow
+        spec={row('quickAskHotkey')}
+        changed={changedNow(row('quickAskHotkey'), settings)}
+        onReset={() => resetRow(row('quickAskHotkey'))}
+      >
+        <HotkeyControl label="Quick chat shortcut" value={settings?.quickAskHotkey ?? ''} onSave={(next) => put({ quickAskHotkey: next })} />
+      </SettingRow>
+      <SettingRow spec={row('syncUrl')} changed={changedNow(row('syncUrl'), settings)} onReset={() => resetRow(row('syncUrl'))}>
+        <TextControl
+          label="Sync server"
+          value={settings?.syncUrl ?? ''}
+          placeholder="The default service"
+          width={240}
+          onCommit={(value) => put({ syncUrl: value })}
+        />
+      </SettingRow>
+      <SettingRow spec={row('watchdogMs')} changed={changedNow(row('watchdogMs'), settings)} onReset={() => resetRow(row('watchdogMs'))}>
+        <NumberControl
+          label="Log a frozen main thread, ms"
+          value={settings?.watchdogMs ?? 1000}
+          off="Off"
+          max={60_000}
+          unit="ms"
+          onCommit={(next) => put({ watchdogMs: next })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <div className="rowempty" style={{ paddingBottom: 0 }}>
+        <b>Stored values</b>
+        <div className="small muted">Read only. Kept from installs that came before AI accounts; the account holds the truth now.</div>
+      </div>
+      <table className="tbl">
+        <thead>
+          <tr>
+            <th>What</th>
+            <th>Key</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {stored.map((key) => (
+            <tr key={key}>
+              <td className="say">{row(key).label}</td>
+              <td>
+                <code>{key}</code>
+              </td>
+              <td>{shown((settings as unknown as Record<string, unknown> | null)?.[key])}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="rowempty" />
+    </SectionBlock>
   )
 }

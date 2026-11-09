@@ -1,0 +1,117 @@
+/* Settings (4 Nov 2026): the section rail, one row shape, one control per kind of value, the danger zone.
+   Scoped to .setg so nothing here can move another page. Tokens only, from tokens.css. */
+/* The rail is 218 wide, not the mock-up's 206, so the longest section name sits on one line next to its count. */
+.setg .settings{display:grid;grid-template-columns:218px minmax(0,1fr);gap:34px;align-items:start;max-width:1016px}
+.setg .snav{position:sticky;top:0;display:flex;flex-direction:column;gap:1px;padding-top:2px}
+.setg .snav button{display:flex;align-items:center;gap:8px;height:34px;padding:0 11px;border-radius:11px;font:500 12.5px/1.15 var(--font);color:var(--on-sv);width:100%;text-align:left;background:none;border:0;cursor:pointer}
+.setg .snav button svg{opacity:.7;flex:none}
+.setg .snav button:hover{background:var(--s-mid);color:var(--on-bg)}
+.setg .snav button.on{background:var(--pc);color:var(--on-pc)}
+.setg .snav button.on svg{opacity:1}
+.setg .snav .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.setg .snav .n{flex:none;margin-left:auto;font:600 10.5px/1 var(--font);opacity:.65}
+.setg .snav .foot{margin-top:12px;padding:10px 11px 0;border-top:1px solid var(--outline-v);font-size:11.5px;line-height:1.45;color:var(--on-sv)}
+.setg .content{min-width:0;display:flex;flex-direction:column;gap:26px;max-width:760px}
+.setg .ssec{display:flex;flex-direction:column;scroll-margin-top:16px}
+.setg .ssec-h{display:flex;flex-direction:column;gap:2px;margin-bottom:12px}
+.setg .ssec-h .line{font-size:13px;color:var(--on-sv)}
+.setg .card.rows{padding:6px}
+.setg .srow{display:flex;align-items:center;gap:16px;padding:12px 16px;border-radius:var(--r-md)}
+.setg .srow:hover{background:var(--s-mid)}
+.setg .srow .ri{width:44px;height:44px;border-radius:16px;background:var(--sc);color:var(--on-sc);display:grid;place-items:center;flex:none}
+.setg .srow .ri.ok{background:var(--okc);color:var(--ok)}
+.setg .srow .ri.warn{background:var(--tc);color:var(--on-tc)}
+.setg .srow .rt{flex:1;min-width:0}
+.setg .srow .rt b{display:block;font:500 15px/1.3 var(--font)}
+.setg .srow .rt .d{display:block;font-size:12.5px;line-height:1.45;color:var(--on-sv);margin-top:1px}
+.setg .srow .rt .d b{display:inline;font:600 12.5px/1.45 var(--font);color:var(--on-sv)}
+.setg .srow .end{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+.setg .srow.sub{padding:10px 16px 10px 76px}
+.setg .srow.sub .rt b{font-size:14px}
+.setg .srow.stack{align-items:flex-start;flex-wrap:wrap}
+.setg .srow.stack .end{flex:1 0 100%;margin-left:60px;justify-content:flex-start}
+.setg .divider{height:1px;background:var(--outline-v);margin:8px 16px}
+.setg .note{font-size:12px;line-height:1.45;color:var(--on-sv);padding:0 16px 12px 76px}
+.setg .rowempty{padding:14px 16px;font-size:12.5px;color:var(--on-sv)}
+
+/* ---- controls: one per kind of value ---- */
+.setg .seg{display:inline-flex;background:var(--s-mid);padding:4px;gap:4px;border-radius:999px}
+.setg .seg button{flex:none;height:36px;padding:0 14px;font:500 12.5px/1 var(--font);gap:7px}
+.setg .sel{appearance:none;height:36px;padding:0 32px 0 12px;border-radius:var(--r-sm);border:1.5px solid var(--outline-v);background-color:var(--s-lowest);color:var(--on-bg);font:500 12.5px/1 var(--font);cursor:pointer;max-width:240px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23797683' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center}
+.setg .sel:hover{border-color:var(--outline)}
+.setg .sel:focus-visible{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 25%,transparent)}
+.setg .inp{height:38px;width:190px;border-radius:var(--r-sm);border:1.5px solid var(--outline-v);background:var(--s-lowest);color:var(--on-bg);padding:0 12px;font:400 13px/1 var(--font)}
+.setg .inp:hover{border-color:var(--outline)}
+.setg .inp:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 25%,transparent)}
+.setg .inp.num{width:96px;text-align:right}
+.setg .inp.bad{border-color:var(--err)}
+.setg .rec{height:36px;border-radius:999px;border:1.5px solid var(--outline-v);background:var(--s-lowest);display:inline-flex;align-items:center;justify-content:center;gap:7px;font:500 12.5px/1 var(--font);color:var(--on-bg);padding:0 14px;cursor:pointer}
+.setg .rec:hover{background:var(--s-high)}
+.setg .rec.on{border-color:var(--primary);color:var(--primary)}
+.setg .range{width:150px;height:20px;appearance:none;background:transparent}
+.setg .range::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:var(--s-highest)}
+.setg .range::-webkit-slider-thumb{appearance:none;width:18px;height:18px;border-radius:50%;background:var(--primary);margin-top:-7px;border:0}
+.setg .swatches .sw{width:42px;height:42px}
+.setg .mascots .mk{width:54px;height:54px}
+.setg .mascots .mk svg{width:34px;height:34px}
+.setg .switches{display:flex;align-items:center;gap:10px}
+.setg .switches .sw-label{font-size:12.5px;color:var(--on-sv)}
+
+/* ---- the search box and its results ---- */
+.setg .ssrch{display:flex;align-items:center;gap:10px;width:360px;max-width:100%;height:44px;border-radius:999px;border:1.5px solid var(--outline-v);background:var(--s-lowest);padding:0 14px;color:var(--on-sv);font-size:13px;transition:border-color .2s var(--effects),box-shadow .2s var(--effects)}
+.setg .ssrch:hover{border-color:var(--outline)}
+.setg .ssrch:focus-within{border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 25%,transparent)}
+.setg .ssrch input{flex:1;min-width:0;border:0;outline:0;background:transparent;font:400 13px/1 var(--font);color:var(--on-bg)}
+.setg .ssrch input::placeholder{color:var(--on-sv);opacity:.85}
+.setg .ssrch .kbd{font:600 10.5px/1 var(--font);color:var(--on-sv);border:1px solid var(--outline-v);border-radius:6px;padding:3px 5px}
+.setg .content > .hits{margin-top:0}
+.setg .hits{margin-top:16px;border:1.5px solid var(--outline-v);border-radius:var(--r-lg);background:var(--s-low);padding:8px}
+.setg .hits-h{display:flex;align-items:center;gap:10px;padding:8px 14px 10px}
+.setg .hits-h .n{margin-left:auto;font-size:11.5px;color:var(--on-sv)}
+.setg .hit{display:flex;align-items:center;gap:12px;width:100%;padding:10px 14px;border-radius:var(--r-md);background:none;border:0;cursor:pointer;color:inherit;text-align:left}
+.setg .hit:hover{background:var(--s-mid)}
+.setg .hit .ri{width:34px;height:34px;border-radius:12px;background:var(--sc);color:var(--on-sc);display:grid;place-items:center;flex:none}
+.setg .hit .rt b{display:block;font:500 14px/1.3 var(--font)}
+.setg .hit .rt .d{display:block;font-size:12px;line-height:1.4;color:var(--on-sv)}
+.setg .hit .where{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--on-sv);flex:none}
+.setg .hit .where .pill{height:20px;font-size:10px}
+.setg .nores{padding:14px;font-size:13px;color:var(--on-sv)}
+
+/* ---- danger zone ---- */
+.setg .danger-card{border:1.5px solid var(--err);background:color-mix(in srgb,var(--ec) 62%,transparent);border-radius:var(--r-lg);padding:16px 18px 8px;margin-top:16px}
+.setg .danger-card .eyebrow{color:var(--err)}
+.setg .danger-card .srow:hover{background:color-mix(in srgb,var(--err) 10%,transparent)}
+.setg .danger-card .srow .ri{background:color-mix(in srgb,var(--err) 16%,transparent);color:var(--err)}
+.setg .btn-danger{display:inline-flex;align-items:center;justify-content:center;height:36px;padding:0 16px;border-radius:999px;font:500 13px/1 var(--font);color:var(--err);border:1.5px solid var(--err);background:transparent;cursor:pointer}
+.setg .btn-danger:hover{background:var(--ec);color:var(--on-ec)}
+
+/* ---- the stored values table ---- */
+.setg .tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.setg .tbl th{text-align:left;font:700 10.5px/1 var(--font);letter-spacing:.1em;text-transform:uppercase;color:var(--on-sv);padding:8px 14px}
+.setg .tbl td{padding:9px 14px;border-top:1px solid var(--outline-v);color:var(--on-bg)}
+.setg .tbl td code{font:500 11.5px/1 ui-monospace,Menlo,Consolas,monospace;color:var(--on-sv)}
+.setg .tbl td.say{color:var(--on-sv)}
+
+@media (max-width: 1100px){
+  .setg .settings{grid-template-columns:minmax(0,1fr);gap:18px}
+  .setg .snav{position:static;flex-direction:row;flex-wrap:wrap}
+  .setg .snav .foot{display:none}
+}
+
+/* blocks whose own section header is left out because the row above already names them */
+/* the block keeps its own small header, so the rows below it have a name */
+.setg .embed > section{padding:0}
+.setg .dv-embed .sec-row{display:none}
+.setg .dv-embed .card{background:transparent;padding:0}
+.setg .dv-embed .dv-place{display:none}
+
+/* the wake-ups log, under the rows */
+.setg .wakelog{margin-top:12px;border:1.5px solid var(--outline-v);border-radius:var(--r-lg);background:var(--s-low);padding:6px}
+.setg .wakelog-h{display:flex;align-items:center;gap:10px;padding:8px 14px 10px;flex-wrap:wrap}
+.setg .wakelog-h .eyebrow{margin-right:auto}
+.setg .wakelog-row{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid var(--outline-v)}
+.setg .wakelog-row .rt{flex:1;min-width:0}
+.setg .wakelog-row .rt b{display:block;font:500 14px/1.3 var(--font)}
+.setg .wakelog-row .rt .d{display:block;font-size:12.5px;line-height:1.45;color:var(--on-sv)}
+.setg .wakelog-dot{width:9px;height:9px;border-radius:50%;flex:none}
+.setg .wakelog-row .small{margin-left:auto;flex:none}

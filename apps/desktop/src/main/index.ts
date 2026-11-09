@@ -175,7 +175,7 @@ const refuseToStart = !copyCheck.ok
 if (refuseToStart) {
   if (copyCheck.handTo !== '') {
     try {
-      spawnProcess(copyCheck.handTo, process.argv.slice(1), { detached: true, stdio: 'ignore' }).unref()
+      spawnProcess(copyCheck.handTo, process.argv.slice(1), { detached: true, stdio: 'ignore', windowsHide: true }).unref()
     } catch {
       // nothing to hand over to after all: the box below says why
     }

@@ -11,3 +11,5 @@ logs-driver.out
 shots-*
 .night/
 dist-headless/
+# run logs, never source
+*.out

@@ -14,6 +14,7 @@ export const CHANNELS = {
     checkCli: 'agent:settings.checkCli',
     cliLogin: 'agent:settings.cliLogin',
     reset: 'agent:settings.reset',
+    resetSettings: 'agent:settings.resetSettings',
     accounts: {
       add: 'agent:accounts.add',
       update: 'agent:accounts.update',

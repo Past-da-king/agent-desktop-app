@@ -346,6 +346,8 @@ export function registerIpc(deps: IpcDeps): () => void {
     deps.chat.checkCli === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.checkCli(),
   )
 
+  handle(CHANNELS.settings.resetSettings, async () => settings.resetSettings())
+
   handle(CHANNELS.settings.reset, async () => {
     await account.signOut()
     await store.clearAll()

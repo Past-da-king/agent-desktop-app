@@ -200,6 +200,12 @@ export interface Settings {
   helperBusyCpu: number
   /** The main thread blocked this long (ms) is written to main.log with its call stacks; 0 = off. */
   watchdogMs: number
+  /**
+   * Settings (4 Nov 2026, the Settings redesign): shows the Git and developer and Advanced sections. It changes
+   * nothing about what the agent may do, so it is a free setting; off by default, and search finds those settings
+   * either way.
+   */
+  showDeveloperSettings: boolean
 }
 
 /** The node row's `cap` for "no limit": older brains read cap <= 0 as "takes no work", so no limit is a big number. */
@@ -268,6 +274,7 @@ export const DEFAULT_SETTINGS: Settings = {
   helperMinFreeDiskGb: 5,
   helperBusyCpu: 90,
   watchdogMs: 1000,
+  showDeveloperSettings: false,
 }
 
 export interface ModelOption {
@@ -1805,8 +1812,13 @@ export interface AgentApi {
     accounts: AccountsApi
     /** Runs the chosen plan's own sign-in (it opens the browser) and resolves when it is done. */
     cliLogin(): Promise<{ ok: boolean; message: string }>
-    /** Wipes local data and settings (not the account on the server). Used by "Start again". */
+    /** Wipes local data and settings (not the account on the server). Used by "Delete everything on this computer". */
     reset(): Promise<void>
+    /**
+     * Puts every setting back to its default on this computer and keeps chats, memory, keys and files. The first
+     * row of the Danger zone in Settings > Privacy and data.
+     */
+    resetSettings(): Promise<Settings>
     onChanged(cb: (s: Settings) => void): Unsubscribe
   }
 

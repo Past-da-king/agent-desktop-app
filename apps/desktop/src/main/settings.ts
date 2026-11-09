@@ -79,6 +79,18 @@ export class SettingsStore {
     return clone(next)
   }
 
+  /**
+   * Every setting back to its default, keeping a sensible device name. Chats, memory, keys and files are not touched:
+   * this is "Reset settings only" in Settings > Privacy and data. The full wipe is the IPC `reset`.
+   */
+  resetSettings(): Settings {
+    this.state = { ...DEFAULT_SETTINGS, grantedFolders: [] }
+    this.state.deviceName = this.hostname() || 'This computer'
+    this.writeState(this.state)
+    this.emit()
+    return clone(this.state)
+  }
+
   /** Back to defaults, keeping a sensible device name. */
   reset(): Settings {
     this.state = { ...DEFAULT_SETTINGS, grantedFolders: [] }
@@ -214,6 +226,13 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     if (typeof value !== 'string') return INVALID
     const clean = value.trim()
     return clean === 'best' || clean === 'here' || /^[A-Za-z0-9_-]{1,64}$/.test(clean) ? clean : INVALID
+  }
+  if (key === 'miniappPinCap') {
+    // How many pinned mini-apps the sidebar shows. It was added to the defaults but never to this list, so a value
+    // could not be saved at all; the Settings row for it needs it to work.
+    const number = typeof value === 'string' ? Number(value.trim()) : value
+    if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
+    return Math.min(20, Math.max(1, Math.round(number)))
   }
   if (key === 'devicesJobLimit') {
     if (value === null || value === '') return 0
