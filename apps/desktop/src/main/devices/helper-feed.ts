@@ -27,6 +27,8 @@ export interface HelperFeedDeps {
   running?: (chat: string) => boolean
   now?: () => number
   debounceMs?: number
+  /** How long a working card may go with no new step before it stops counting as working, in ms (9 Nov 2026). */
+  staleAfterMs?: number
 }
 
 function metaOf(row: ChatItem): Record<string, unknown> {
@@ -188,7 +190,9 @@ export class HelperFeed {
     items.push(...this.said.values())
     for (const [chat, row] of this.first) if (this.said.get(chat) !== row) items.push(row)
     const running = this.deps.running
-    const cards = helperCards(items, this.projects, running === undefined ? { now: this.now() } : { running, now: this.now() }).map((card) => cardInfo(card))
+    const stale = this.deps.staleAfterMs
+    const options = { ...(running === undefined ? {} : { running }), now: this.now(), ...(stale === undefined ? {} : { staleAfterMs: stale }) }
+    const cards = helperCards(items, this.projects, options).map((card) => cardInfo(card))
     const json = JSON.stringify(cards)
     if (json !== this.lastJson) {
       this.lastJson = json

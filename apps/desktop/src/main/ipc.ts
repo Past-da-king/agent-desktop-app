@@ -44,6 +44,7 @@ import { POPULAR_APPS } from './apps/catalog'
 import type { AppsService } from './apps/service'
 import { isProfileColor } from './apps/profiles'
 import { asWriter } from './memory/history'
+import { HELPER_STALE_MS } from '../shared/helper-cards'
 import { isIconImage } from '../shared/project-icon'
 import { feedState } from './devices/feed-state'
 import { changesForPhone, isPhoneListOpts, listForPhone } from './devices/phone-reads'
@@ -564,6 +565,9 @@ export function registerIpc(deps: IpcDeps): () => void {
     store,
     emit: (snapshot) => send(EVENTS.helperCards, snapshot),
     running: (id) => (chat.states?.() ?? []).some((info) => info.chat === id && info.running),
+    // A card whose helper has not taken a step for this long is not working: the phone must never be told it is
+    // (9 Nov 2026: 12 helpers "working" for 260 h from a PC that had died days before).
+    staleAfterMs: HELPER_STALE_MS,
   })
   handle(CHANNELS.helpers.cards, async (event) => {
     const snapshot = await helperFeed.snapshot()

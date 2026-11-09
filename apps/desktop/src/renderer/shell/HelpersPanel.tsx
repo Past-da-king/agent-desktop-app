@@ -8,7 +8,7 @@ import { openChat } from '../lib/chat-actions'
 import { chatOf, chatTitleOf, itemsOfChat } from '../lib/chats'
 import { helperCards, helperIdOf, helperOwner, helperView, isHelper, type HelperCard, type HelperOwner, type HelperView } from '../lib/helpers'
 import { metaText, parseMeta } from '../lib/meta'
-import { cardsForChat, helperHold, helperParentChat } from '../../shared/helper-cards'
+import { cardsForChat, HELPER_STALE_MS, helperHold, helperParentChat } from '../../shared/helper-cards'
 import { useChats } from '../state/useChats'
 import { useCalmEntity, useEntity } from '../state/useData'
 import { usePanel } from '../state/usePanel'
@@ -84,7 +84,10 @@ export function usePanelCards(): HelperCard[] {
   const items = useCalmEntity('chat_item')
   const projects = useEntity('project')
   const runs = useChats((state) => state.runs)
-  return useMemo(() => helperCards(items, projects, { running: (chat) => runs[chat]?.running === true, now: Date.now() }), [items, projects, runs])
+  return useMemo(
+    () => helperCards(items, projects, { running: (chat) => runs[chat]?.running === true, now: Date.now(), staleAfterMs: HELPER_STALE_MS }),
+    [items, projects, runs],
+  )
 }
 
 /** The same cards (the collapsed strip's faces and older callers). */
