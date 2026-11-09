@@ -10,6 +10,7 @@ import { limitOf, matchesEvent, parseEventFilter, type TriggerRow, type WorkerEv
 
 import type { DataStore } from '../runtime/data'
 import type { DeskOutcome, DeskSpec } from '../runtime/helpers'
+import { isLimitFailure, limitWaitMs, waitWords } from '../runtime/limit-backoff'
 import type { RoutineRunResult } from '../runtime/runner'
 import { DEFAULT_GATHER_SECONDS } from '../tools/routines'
 import type { WorkerStore } from './store'
@@ -41,6 +42,8 @@ interface Lane {
   running: boolean
   /** Due to run as soon as a slot is free. */
   queued: boolean
+  /** Desk runs in a row that failed on the AI's limit (rate limit, quota): the lane waits longer each time. */
+  limitHits: number
 }
 
 export class EventRouter {
@@ -140,7 +143,7 @@ export class EventRouter {
   private lane(id: string): Lane {
     let lane = this.lanes.get(id)
     if (lane === undefined) {
-      lane = { pending: new Map(), timer: null, running: false, queued: false }
+      lane = { pending: new Map(), timer: null, running: false, queued: false, limitHits: 0 }
       this.lanes.set(id, lane)
     }
     return lane
@@ -205,10 +208,27 @@ export class EventRouter {
     }
     const finishedAt = this.now()
     const ok = outcome.state === 'done'
-    if (ids.length > 0) {
-      this.workers.setStatus(ids, ok ? 'routed' : 'failed', trigger.id, ok ? `To the desk of "${trigger.name}"` : clip(outcome.result, 300))
+    // The AI is at its limit (rate limit, quota): running the desk again on the next event fails the same way. The
+    // batch goes back to wait with whatever arrives meanwhile, and the lane tries again after a growing wait (5 min,
+    // 15 min, then hourly). The person is told once, not on every try.
+    const limited = this.ready && outcome.state === 'failed' && isLimitFailure(outcome.result)
+    let waitMs = 0
+    if (limited) {
+      lane.limitHits += 1
+      waitMs = limitWaitMs(lane.limitHits)
+      if (ids.length > 0) {
+        const kept = new Map(batch.map((event) => [event.id, event] as const))
+        for (const [id, event] of lane.pending) kept.set(id, event)
+        lane.pending = kept
+        this.workers.setStatus(ids, 'new', trigger.id, `Waiting for the AI limit to reset; tried again in ${waitWords(waitMs)}`)
+      }
+    } else {
+      if (ok) lane.limitHits = 0
+      if (ids.length > 0) {
+        this.workers.setStatus(ids, ok ? 'routed' : 'failed', trigger.id, ok ? `To the desk of "${trigger.name}"` : clip(outcome.result, 300))
+      }
+      for (const id of ids) this.inFlight.delete(id)
     }
-    for (const id of ids) this.inFlight.delete(id)
     try {
       await this.store.upsert('trigger', {
         id: trigger.id,
@@ -219,10 +239,23 @@ export class EventRouter {
     } catch {
       // The run happened; a row that cannot be written must not stop the next one.
     }
-    if (!ok && outcome.state !== 'stopped') this.onFailed(trigger, outcome.result)
+    if (limited) {
+      if (lane.limitHits === 1) {
+        this.onFailed(trigger, `${clip(outcome.result.trim(), 200)} Its events are kept and it tries again by itself in ${waitWords(waitMs)}, then at longer waits.`)
+      }
+    } else if (!ok && outcome.state !== 'stopped') this.onFailed(trigger, outcome.result)
     lane.running = false
     this.active -= 1
     this.onChange()
+    if (limited) {
+      // Events that arrive during the wait gather behind this timer (gather() leaves a lane with a timer alone).
+      if (lane.timer !== null) clearTimeout(lane.timer)
+      lane.timer = setTimeout(() => {
+        lane.timer = null
+        void this.flush(trigger.id)
+      }, waitMs)
+      lane.timer.unref?.()
+    }
     this.next(trigger.id)
     return outcome
   }
