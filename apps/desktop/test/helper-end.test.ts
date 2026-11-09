@@ -99,6 +99,7 @@ async function harness(options: {
   maxConcurrent?: number
   maxSteps?: number
   quietMinutes?: number
+  limitWaitMs?: (hit: number) => number
   db?: Store
   offload?: OffloadLink
   leases?: LeaseHook
@@ -121,6 +122,7 @@ async function harness(options: {
     ...(options.maxConcurrent === undefined ? {} : { maxConcurrent: options.maxConcurrent }),
     ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     ...(options.quietMinutes === undefined ? {} : { quietMinutes: options.quietMinutes }),
+    ...(options.limitWaitMs === undefined ? {} : { limitWaitMs: options.limitWaitMs }),
     ...(options.offload === undefined ? {} : { offload: options.offload }),
     ...(options.leases === undefined ? {} : { leases: options.leases }),
   })
@@ -215,6 +217,52 @@ describe('a helper never ends silently', () => {
     expect(notes).toHaveLength(1)
     expect(notes[0]?.note).toContain('failed: The AI provider says we are sending too much right now (rate limit or out of credit)')
     expect(meta(await db.get('chat_item', id))).toMatchObject({ state: 'failed' })
+  })
+
+  it('a rate limit: it is not pushed again and again; it waits, retries by itself a few times, and its creator hears twice at most', async () => {
+    let calls = 0
+    const limited: LlmProvider = {
+      name: 'limited',
+      complete: async () => {
+        calls += 1
+        throw new ProviderException('HTTP 429: Too many requests', 429, false)
+      },
+    }
+    const { manager, delivered, db } = await harness({ provider: limited, limitWaitMs: () => 500 })
+    const id = idOf(await manager.delegate([{ label: 'Busy AI', brief: 'Try the thing.' }]))
+    await waitFor(() => delivered.length > 0, 8_000)
+    expect(delivered[0]?.note).toContain('goes back to work by itself')
+    expect(delivered[0]?.note).not.toContain('Push at least twice')
+    // The agent that started it pushes it anyway, 30 times: none of them reaches the AI.
+    const before = calls
+    for (let i = 0; i < 30; i += 1) expect(await manager.push(id, 'You can do it, try again.')).toContain('Not sent.')
+    expect(calls).toBe(before)
+    // It goes back by itself after each wait: three retries, then it is left failed and its creator hears once more.
+    await waitFor(() => delivered.length > 1, 10_000)
+    await sleep(700)
+    expect(calls).toBe(4)
+    expect(delivered).toHaveLength(2)
+    expect(delivered[1]?.note).toContain('It went back to work by itself 3 times')
+    expect(meta(await db.get('chat_item', id))).toMatchObject({ state: 'failed' })
+  })
+
+  it('a rate limit that resets: the helper carries on by itself and hands back its result', async () => {
+    let calls = 0
+    const { manager, delivered } = await harness({
+      limitWaitMs: () => 150,
+      provider: {
+        name: 'limited-once',
+        complete: async () => {
+          calls += 1
+          if (calls === 1) throw new ProviderException('HTTP 429: Too many requests', 429, false)
+          return { message: { role: 'ASSISTANT', blocks: [{ t: 'text', text: 'All done after the wait.' }] }, stopReason: 'end', usage: { inputTokens: 1, outputTokens: 1 } }
+        },
+      },
+    })
+    await manager.delegate([{ label: 'Busy AI', brief: 'Try the thing.' }])
+    await waitFor(() => delivered.length > 1, 8_000)
+    expect(delivered).toHaveLength(2)
+    expect(delivered[1]?.note).toContain('All done after the wait.')
   })
 
   it('a timeout: its creator is told, once', async () => {

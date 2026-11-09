@@ -111,6 +111,33 @@ describe('project agents in the main chat', () => {
     expect((await store.list('chat_item')).filter((row) => row.id === 'pa-pc1')).toHaveLength(1)
   })
 
+  it('the minute sweep reads only project rows, not every helper card there ever was', async () => {
+    const store = new Store(':memory:')
+    cleanups.push(() => store.close())
+    const project = await store.upsert('project', { name: 'Shop Site', description: '', icon: { glyph: 'globe', color: 'iris' }, path: '', profile: '', hidden: false, chats: ['pc9'] })
+    for (let i = 0; i < 60; i += 1) {
+      await store.upsert('chat_item', { kind: 'helper', text: `Old job ${i}`, meta: JSON.stringify({ label: `Helper ${i}`, state: 'done', result: 'x'.repeat(2000) }) })
+    }
+    const before = new ProjectAgentRows({ store, state: () => ({ running: true, waiting: [] }), checkMs: 50 })
+    await before.delegated('pc9', project, 'Fix the cart')
+    before.dispose()
+
+    let read = 0
+    const counting = Object.create(store) as Store
+    counting.listWhere = (async (entity, where) => {
+      const rows = await store.listWhere(entity, where)
+      read += rows.length
+      return rows
+    }) as Store['listWhere']
+    const after = new ProjectAgentRows({ store: counting, state: () => ({ running: true, waiting: [] }), checkMs: 50, sweepMs: 0 })
+    cleanups.push(() => after.dispose())
+    await after.restore()
+    expect(read).toBe(1)
+    // And it still finds the row it must follow: a step in that chat reaches it.
+    await store.upsert('chat_item', { kind: 'activity', text: 'Read the cart', meta: JSON.stringify({ chat: 'pc9', status: 'running' }) })
+    await waitFor(async () => meta(await store.get('chat_item', 'pa-pc9'))['summary'] === 'Read the cart', 2000)
+  })
+
   it('after a restart the row is followed again: it stays open while its chat resumes, then closes when the chat is done', async () => {
     const store = new Store(':memory:')
     cleanups.push(() => store.close())

@@ -83,6 +83,26 @@ describe('helper cards for linked devices', () => {
     expect(heard.length).toBe(count)
   })
 
+  it('holds only the helpers that can make a card, not every helper there ever was', async () => {
+    const { store, feed, heard } = await setup()
+    const t = Date.now()
+    for (let i = 0; i < 120; i += 1) {
+      await store.upsert('chat_item', { id: `old-${i}`, kind: 'helper', text: `Old job ${i}`, meta: JSON.stringify({ id: `old-${i}`, label: `Old ${i}`, state: i % 3 === 0 ? 'failed' : 'done', result: 'x'.repeat(1500), startedAt: t - 90_000, endedAt: t - 60_000 }) })
+    }
+    await store.upsert('chat_item', { id: 'h-live', kind: 'helper', text: 'Look up the weather', meta: JSON.stringify({ id: 'h-live', label: 'Weather', state: 'working', startedAt: t - 1000 }) })
+    const first = await feed.snapshot()
+    expect(first.cards.map((c) => c.id)).toEqual(['h-live'])
+    expect(feed.held()).toBe(1)
+    // It finishes: its card goes, and so does the row from memory. Another old helper's row changing is no news.
+    await store.upsert('chat_item', { id: 'h-live', kind: 'helper', text: 'Look up the weather', meta: JSON.stringify({ id: 'h-live', label: 'Weather', state: 'done', result: 'Sunny.', startedAt: t - 1000, endedAt: t }) })
+    await waitFor(() => heard.length > 0 && heard[heard.length - 1]!.cards.length === 0, 2000)
+    expect(feed.held()).toBe(0)
+    const sent = heard.length
+    await store.upsert('chat_item', { id: 'old-1', kind: 'helper', text: 'Old job 1', meta: JSON.stringify({ id: 'old-1', label: 'Old 1', state: 'done', result: 'changed', noticed: 'k' }) })
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(heard.length).toBe(sent)
+  })
+
   it('stopped, done and failed helpers are not on the list at all', async () => {
     const clock = Date.now()
     const { store, feed } = await setup(() => clock)

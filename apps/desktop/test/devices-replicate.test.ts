@@ -193,6 +193,35 @@ describe('replication between nodes', () => {
     expect(ra.status()[0]?.ok).toBe(true)
   })
 
+  it('a peer that is down is retried on the backoff, not once per local write', async () => {
+    const a = await node('a')
+    const lines: string[] = []
+    const replicator = new Replicator({
+      store: a.store,
+      selfId: () => a.id,
+      pass: () => a.pass,
+      // Nothing listens here: every pass fails at once.
+      peers: async () => [{ id: 'gone', name: 'gone', urls: ['http://127.0.0.1:9'], fp: '' }],
+      clientFor: (url, _peer, pass) => new CountingClient(url, pass, fetch, true),
+      waitSeconds: 1,
+      initialBackoffMs: 300,
+      maxBackoffMs: 300,
+      refreshMs: 60_000,
+      log: (line) => lines.push(line),
+    })
+    a.replicator = replicator
+    replicator.start()
+    await waitFor(() => lines.length >= 1, 5_000)
+    const before = lines.length
+    // A busy node: 30 writes in about 600 ms while its peer is off.
+    for (let i = 0; i < 30; i += 1) {
+      await a.store.upsert('memory', { title: `note ${i}` })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    // Two or three retries fit in that time on a 300 ms backoff; it used to be one per write.
+    expect(lines.length - before).toBeLessThanOrEqual(4)
+  })
+
   it('says when a link goes up or down, once each time, so the window can show it', async () => {
     const a = await node('dev_a')
     const b = await node('dev_b')

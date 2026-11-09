@@ -82,6 +82,40 @@ describe('EventRouter', () => {
     expect(workers.events({ status: 'routed' })).toHaveLength(2)
   })
 
+  it('a desk that fails on a rate limit is not run again on every event: it waits, keeps its events, and tells the person once', async () => {
+    const trigger = await routine()
+    const failed: string[] = []
+    desk.outcome = (spec) => ({ deskId: spec.deskId || 'h_desk1', state: 'failed', result: 'Your Claude plan has reached its limit for now. It resets on its own; try again later.' })
+    const router = new EventRouter({ store, workers, desk, onFailed: (_t, why) => failed.push(why) })
+    await router.start()
+    await router.offer(emit('1')!)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(desk.calls).toHaveLength(1)
+    // Nothing is lost or marked failed: the event waits for the limit to reset.
+    expect(workers.events({ status: 'failed' })).toHaveLength(0)
+    expect(workers.events({ status: 'new' })).toHaveLength(1)
+    // More events during the wait do not start the desk again.
+    for (const key of ['2', '3', '4', '5']) {
+      await router.offer(emit(key)!)
+      await vi.advanceTimersByTimeAsync(30_000)
+    }
+    expect(desk.calls).toHaveLength(1)
+    // After 5 minutes it tries once, with everything that gathered; still limited, so the next wait is 15 minutes.
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(desk.calls).toHaveLength(2)
+    expect(desk.calls[1]!.message).toContain('5 new events')
+    await vi.advanceTimersByTimeAsync(12 * 60_000)
+    expect(desk.calls).toHaveLength(2)
+    // The limit resets: the next try goes through and every event is routed.
+    desk.outcome = (spec) => ({ deskId: spec.deskId || 'h_desk1', state: 'done', result: 'Sorted.' })
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    expect(desk.calls).toHaveLength(3)
+    expect(workers.events({ status: 'routed' })).toHaveLength(5)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toContain('tries again by itself in 5 min')
+    expect((await store.get('trigger', trigger.id))?.lastResult).toBe('Sorted.')
+  })
+
   it('the next batch goes to the same desk', async () => {
     await routine()
     const router = new EventRouter({ store, workers, desk })
