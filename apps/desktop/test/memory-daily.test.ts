@@ -154,6 +154,27 @@ describe('end-of-day pass', () => {
     expect(memory.upkeepState().lastDay).toBe('')
   })
 
+  it('once the day is done, the minute check reads no chats at all', async () => {
+    await talk('Plan the Lisbon trip for March', 'Here are three flight options.')
+    let userReads = 0
+    const counting = Object.create(store) as typeof store
+    counting.listWhere = (async (entity, where) => {
+      if (entity === 'chat_item' && where.kind === 'user' && where.limit === 1) userReads += 1
+      return store.listWhere(entity, where)
+    }) as typeof store.listWhere
+    const memory = new MemoryService({ store: counting, index, upkeep, complete: async () => where('x'), dailyAt: () => '23:30', now: () => clock })
+    // Today's upkeep has run.
+    upkeep.update((state) => {
+      state.lastDay = '2026-10-21'
+    })
+    expect(memory.upkeepState().lastDay).toBe('2026-10-21')
+    for (let minute = 46; minute < 60; minute += 1) {
+      clock = new Date(2026, 9, 21, 23, minute).getTime()
+      expect(await memory.tick()).toBeNull()
+    }
+    expect(userReads).toBe(0)
+  })
+
   it('leaves a day another brain claimed to that brain', async () => {
     await talk('Plan the Lisbon trip for March', 'Here are three flight options.')
     const asked: string[] = []

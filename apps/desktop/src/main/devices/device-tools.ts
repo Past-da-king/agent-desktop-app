@@ -169,6 +169,8 @@ export interface DeviceToolHubDeps {
   /** Tests shorten how long the agent waits; the device still gets the real deadline. */
   waitMs?: number
   now?: () => number
+  /** The tick's period (tests shorten it). */
+  tickMs?: number
 }
 
 interface Waiter {
@@ -186,12 +188,21 @@ export class DeviceToolHub {
   private offChange: (() => void) | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private readonly now: () => number
+  /**
+   * Commands waiting for their device to connect, as the change events said. While there are none, the 3 s tick
+   * does not read the commands at all (it read them every 3 s for nothing); every 20th tick reads anyway, so one
+   * that arrived without an event still goes out within a minute.
+   */
+  private readonly queued = new Set<string>()
+  private ticks = 0
 
   constructor(private readonly deps: DeviceToolHubDeps) {
     this.now = deps.now ?? Date.now
     this.offChange = deps.store.onChange((change) => {
       if (change.entity !== 'device_command' || change.row === undefined) return
       const row = change.row as DeviceCommandRow
+      if (row.kind === 'tool' && row.status === 'queued') this.queued.add(row.id)
+      else this.queued.delete(row.id)
       if (row.status === 'done' || row.status === 'failed') void this.settle(row)
     })
   }
@@ -204,7 +215,14 @@ export class DeviceToolHub {
       return this.result(deviceId, id, ok === true, value)
     })
     void this.refresh()
-    this.timer = setInterval(() => void this.refresh().then(() => this.deliverQueued()), 3_000)
+    void this.deliverQueued().catch(() => undefined)
+    this.timer = setInterval(() => {
+      this.ticks += 1
+      const sweep = this.ticks % 20 === 0
+      void this.refresh()
+        .then(() => (this.queued.size > 0 || sweep ? this.deliverQueued() : undefined))
+        .catch(() => undefined)
+    }, this.deps.tickMs ?? 3_000)
     this.timer.unref?.()
   }
 
@@ -380,8 +398,12 @@ export class DeviceToolHub {
   async deliverQueued(): Promise<void> {
     const host = this.host
     if (host === null) return
-    for (const row of await listWhere(this.deps.store, 'device_command', { statuses: ['queued'] })) {
+    const rows = await listWhere(this.deps.store, 'device_command', { statuses: ['queued'] })
+    // What the read found is the truth: expired ones stop counting, missed ones start.
+    this.queued.clear()
+    for (const row of rows) {
       if (row.kind !== 'tool' || row.status !== 'queued' || row.expiresAt <= this.now()) continue
+      this.queued.add(row.id)
       if (host.isConnected(row.target)) await this.deliver(row)
     }
   }
@@ -504,7 +526,12 @@ export interface DeviceToolRunnerDeps {
   /** The context a tool runs with here: the person on this node answers ask_user / request_approval. */
   context?: (chat: string, signal: AbortSignal) => Partial<ToolContext>
   now?: () => number
+  /** The safety sweep's period (tests shorten it). */
+  sweepMs?: number
 }
+
+/** How often the runner looks for a command whose change event it missed. */
+export const RUNNER_SWEEP_MS = 60_000
 
 export class DeviceToolRunner {
   private readonly running = new Set<string>()
@@ -517,7 +544,9 @@ export class DeviceToolRunner {
     this.offChange = this.deps.store.onChange((change) => {
       if (change.entity === 'device_command' && change.row !== undefined) void this.consider(change.row as DeviceCommandRow)
     })
-    this.timer = setInterval(() => void this.scan(), 5_000)
+    // A command for this device runs the moment its row arrives (the change above). This sweep only catches one
+    // whose event was missed; it was a database read every 5 s on an idle app.
+    this.timer = setInterval(() => void this.scan(), this.deps.sweepMs ?? RUNNER_SWEEP_MS)
     this.timer.unref?.()
     void this.scan()
   }

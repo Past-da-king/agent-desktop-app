@@ -26,7 +26,13 @@ import type { DataStore } from './data'
 export const NODE_BEAT_MS = 20_000
 /** A node row older than this is a brain that is gone or switched off: nothing is placed on it. */
 export const NODE_FRESH_MS = 75_000
-export const SCAN_MS = 3_000
+/**
+ * The safety sweep for messages. A message is handled the moment its row arrives (store.onChange); the sweep only
+ * catches one whose event was missed. It was a read every 3 s, all day, on an idle app.
+ */
+export const SCAN_MS = 60_000
+/** A message that could not be handled yet (its card has not arrived) is looked at again this soon. */
+export const RETRY_SCAN_MS = 3_000
 /** A start nobody took within this long (no job lease) is run where it was placed from. */
 export const TAKE_BACK_MS = 45_000
 /** A routine slot the preferred brain has not claimed within this long is run by whichever brain sees it next. */
@@ -188,6 +194,8 @@ export interface OffloadDeps {
   now?: () => number
   beatMs?: number
   scanMs?: number
+  /** How soon a message that could not be handled yet is looked at again. */
+  retryScanMs?: number
   log?: (line: string, detail?: Record<string, unknown>) => void
 }
 
@@ -196,6 +204,7 @@ export class Offload {
   private offChange: (() => void) | null = null
   private beatTimer: ReturnType<typeof setInterval> | null = null
   private scanTimer: ReturnType<typeof setInterval> | null = null
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
   private readonly handling = new Set<string>()
   private scanning: Promise<void> | null = null
   private rescan = false
@@ -226,6 +235,8 @@ export class Offload {
     this.offChange = null
     if (this.beatTimer !== null) clearInterval(this.beatTimer)
     if (this.scanTimer !== null) clearInterval(this.scanTimer)
+    if (this.retryTimer !== null) clearTimeout(this.retryTimer)
+    this.retryTimer = null
     this.beatTimer = null
     this.scanTimer = null
   }
@@ -315,6 +326,7 @@ export class Offload {
           this.handling.add(row.id)
           try {
             const done = await this.deps.handle(row)
+            if (!done) this.scanSoon()
             if (done) await this.deps.store.upsert('job', { id: row.id, status: 'done', at: this.now() })
           } catch (error) {
             this.deps.log?.('Offload message failed', { op: row.op, message: error instanceof Error ? error.message : String(error) })
@@ -329,6 +341,16 @@ export class Offload {
       this.scanning = null
     })
     return this.scanning
+  }
+
+  /** Something is still waiting to be handled: look again shortly, once (only while there is such a message). */
+  private scanSoon(): void {
+    if (this.retryTimer !== null || this.offChange === null) return
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      void this.scan()
+    }, this.deps.retryScanMs ?? RETRY_SCAN_MS)
+    this.retryTimer.unref?.()
   }
 
   /** The brain holding a helper's job lease now (any status), or '' when it has none. */

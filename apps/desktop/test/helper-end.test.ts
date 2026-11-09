@@ -235,7 +235,7 @@ describe('a helper never ends silently', () => {
     expect(delivered[0]?.note).not.toContain('Push at least twice')
     // The agent that started it pushes it anyway, 30 times: none of them reaches the AI.
     const before = calls
-    for (let i = 0; i < 30; i += 1) expect(await manager.push(id, 'You can do it, try again.')).toContain('Not sent.')
+    for (let i = 0; i < 30; i += 1) expect(await manager.push(id, 'You can do it, try again.')).toContain('Kept for it, not sent yet.')
     expect(calls).toBe(before)
     // It goes back by itself after each wait: three retries, then it is left failed and its creator hears once more.
     await waitFor(() => delivered.length > 1, 10_000)
@@ -263,6 +263,54 @@ describe('a helper never ends silently', () => {
     await waitFor(() => delivered.length > 1, 8_000)
     expect(delivered).toHaveLength(2)
     expect(delivered[1]?.note).toContain('All done after the wait.')
+  })
+
+  it('a message sent to a helper that waits for the limit is kept and read when it goes back to work', async () => {
+    let calls = 0
+    let second = ''
+    const { manager, delivered, db } = await harness({
+      limitWaitMs: () => 600,
+      provider: {
+        name: 'limited-once',
+        complete: async (_system, messages) => {
+          calls += 1
+          if (calls === 1) throw new ProviderException('HTTP 429: Too many requests', 429, false)
+          second = JSON.stringify(messages)
+          return { message: { role: 'ASSISTANT', blocks: [{ t: 'text', text: 'Did both.' }] }, stopReason: 'end', usage: { inputTokens: 1, outputTokens: 1 } }
+        },
+      },
+    })
+    const id = idOf(await manager.delegate([{ label: 'Busy AI', brief: 'Try the thing.' }]))
+    await waitFor(() => delivered.length > 0, 8_000)
+    const said = await manager.steer(id, 'Also check the cart page.')
+    expect(said).toContain('Kept for it, not sent yet.')
+    expect(said).toContain('waiting for the AI limit to reset')
+    expect(calls).toBe(1)
+    expect(JSON.stringify(meta(await db.get('chat_item', id))['limitQueue'])).toContain('Also check the cart page.')
+    await waitFor(() => delivered.length > 1, 8_000)
+    expect(second).toContain('Also check the cart page.')
+    expect(delivered[1]?.note).toContain('Did both.')
+  })
+
+  it('a restart while a helper waits for the limit: the wait carries on from its card and it retries', async () => {
+    const db = new Store(':memory:')
+    cleanups.push(() => db.close())
+    const first = await harness({ db, limitWaitMs: () => 60_000, provider: failing(new ProviderException('HTTP 429: Too many requests', 429, false)) })
+    const id = idOf(await first.manager.delegate([{ label: 'Busy AI', brief: 'Try the thing.' }]))
+    await waitFor(() => first.delivered.length > 0, 8_000)
+    expect(Number(meta(await db.get('chat_item', id))['limitRetryAt'])).toBeGreaterThan(Date.now())
+    // The app closes: the timer dies with the process.
+    first.manager.shutdown()
+    // It starts again after the retry time has passed: the helper goes back to work at once.
+    const second = await harness({
+      db,
+      now: () => Date.now() + 120_000,
+      provider: { name: 'fine', complete: async () => ({ message: { role: 'ASSISTANT', blocks: [{ t: 'text', text: 'Done after the restart.' }] }, stopReason: 'end', usage: { inputTokens: 1, outputTokens: 1 } }) },
+    })
+    await second.manager.restore()
+    await waitFor(() => second.delivered.length > 0, 8_000)
+    expect(second.delivered[0]?.note).toContain('Done after the restart.')
+    expect(meta(await db.get('chat_item', id))).toMatchObject({ state: 'done', limitRetryAt: 0 })
   })
 
   it('a timeout: its creator is told, once', async () => {

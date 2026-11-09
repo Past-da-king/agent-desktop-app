@@ -310,9 +310,15 @@ export class MemoryService {
     const slot = (await this.deps.dailyAt?.()) ?? DEFAULT_DAILY_AT
     if (slot.trim() === '' || this.dailyRunning !== null) return null
     const state = this.deps.upkeep.read()
-    const [newest] = await listWhere(this.deps.store, 'chat_item', { kind: 'user', limit: 1, newestFirst: true })
-    const lastChatAt = newest?.createdAt ?? 0
-    const due = dueDay(this.now(), slot, state.lastDay, lastChatAt)
+    const now = this.now()
+    // The newest chat only matters for catching up an earlier day. Once today's upkeep is done there is no earlier
+    // day left to catch up, and when today's slot is due it runs whatever the chats say: neither reads the chats, so
+    // this minute check costs nothing for the rest of the day.
+    let due = dueDay(now, slot, state.lastDay, 0)
+    if (due === null && state.lastDay !== dayKey(now)) {
+      const [newest] = await listWhere(this.deps.store, 'chat_item', { kind: 'user', limit: 1, newestFirst: true })
+      due = dueDay(now, slot, state.lastDay, newest?.createdAt ?? 0)
+    }
     if (due === null) return null
     if (this.deps.claimDaily !== undefined && !(await this.deps.claimDaily(due.day).catch(() => true))) return null
     return this.daily(due.catchUp ? 'catch-up' : 'schedule', due)
