@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
 import { timeAgo } from '../lib/format'
-import { refreshDevicesSummary } from '../state/useDevices'
+import { refreshDevicesSummary, setDevicesStatus, useDevicesData } from '../state/useDevices'
 import { toast } from '../state/useToast'
 import { IconButton, Pill } from '../ui/bits'
 import { Button } from '../ui/Button'
@@ -366,30 +366,15 @@ function HelperPlacement({ brains, selfId }: { brains: DeviceRow[]; selfId: stri
 
 export function DevicesSettings(): JSX.Element {
   const readOnly = agent.remote !== undefined
-  const [status, setStatus] = useState<DevicesStatus | null>(null)
-  const [devices, setDevices] = useState<DeviceRow[]>([])
+  // One read for the whole window (state/useDevices): the rail, the title bar and the rows below share it.
+  const { status, rows: devices, error: loadError } = useDevicesData()
+  const setStatus = setDevicesStatus
   const [adding, setAdding] = useState(false)
   const [revoking, setRevoking] = useState<DeviceRow | null>(null)
   const [switching, setSwitching] = useState(false)
   const [allowing, setAllowing] = useState(false)
 
-  const refresh = useCallback(() => {
-    void agent.devices.status().then(setStatus).catch(() => undefined)
-    void agent.devices.list().then(setDevices).catch(() => undefined)
-    refreshDevicesSummary()
-  }, [])
-
-  useEffect(() => {
-    refresh()
-    const off = agent.devices.onChanged(refresh)
-    const offData = agent.data.onChanged((change) => {
-      if (change.entity === 'device') refresh()
-    })
-    return () => {
-      off()
-      offData()
-    }
-  }, [refresh])
+  const refresh = refreshDevicesSummary
 
   const live = devices.filter((device) => !device.revoked)
   const brains = live.filter((device) => device.roles.includes('brain')).sort((a, b) => a.priority - b.priority)
@@ -403,7 +388,6 @@ export function DevicesSettings(): JSX.Element {
       .setEnabled(on)
       .then((next) => {
         setStatus(next)
-        refreshDevicesSummary()
         if (next.error !== '') toast(next.error)
       })
       .catch((cause: unknown) => toast(message(cause, 'Could not change that.')))
@@ -430,7 +414,9 @@ export function DevicesSettings(): JSX.Element {
   }
 
   const line = status === null
-    ? 'Looking...'
+    ? loadError !== ''
+      ? loadError
+      : 'Looking...'
     : status.error !== ''
       ? status.error
       : status.running
@@ -440,7 +426,7 @@ export function DevicesSettings(): JSX.Element {
   return (
     <section className="dv" id="settings-devices">
       <SectionHeader eyebrow="DEVICES" line="Your phone and other computers, one agent" />
-      <div className="card" style={{ padding: 10 }}>
+      <div className="card dv-card">
         {readOnly ? (
           <div className="rowc">
             <div className="ri ok">
@@ -458,8 +444,13 @@ export function DevicesSettings(): JSX.Element {
             </div>
             <div className="rt">
               <b>Let my other devices connect</b>
-              <span className={status?.error ? 'dv-error-line' : undefined}>{line}</span>
+              <span className={status?.error || loadError !== '' ? 'dv-error-line' : undefined}>{line}</span>
             </div>
+            {loadError !== '' ? (
+              <Button variant="text" size="sm" onClick={refresh}>
+                Retry
+              </Button>
+            ) : null}
             <Switch on={enabled} label="Let my other devices connect" disabled={switching || status === null} onToggle={setEnabled} />
           </div>
         )}

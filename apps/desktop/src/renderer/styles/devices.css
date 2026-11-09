@@ -2,6 +2,7 @@
 .dv .dv-add{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:4px 18px 12px}
 .dv .dv-note{flex-basis:100%}
 .dv .dv-fp{font-family:ui-monospace,'Cascadia Mono',Menlo,monospace;font-weight:600;color:var(--on-bg);letter-spacing:.02em}
+.dv .dv-card{padding:10px}
 .dv .dv-sep{height:1px;background:var(--outline-v);margin:4px 14px 6px}
 .dv .dv-row{align-items:flex-start}
 .dv .dv-row .rt{flex:1 1 220px;min-width:0}
@@ -40,7 +41,10 @@
   .dv-qr{width:184px;height:184px}
   .dv-dialog .lead{font-size:15px}
   .dv-code{font-size:28px}
-  .dv .dv-acts{width:100%;justify-content:flex-start;padding-left:58px}
+  /* the row's own actions take one line under the role chips; the row already starts that line where the name starts */
+  .dv .dv-row .dv-acts{flex:1 0 100%;width:auto;justify-content:flex-start;flex-wrap:wrap;padding-left:0}
+  .dv .dv-row .dv-acts .btn.text{margin-left:-10px}
+  .dv .dv-address-form{flex-wrap:wrap}
 }
 /* The node's web UI on another device (bridge/remote.ts). */
 .remote .wc{display:none}
