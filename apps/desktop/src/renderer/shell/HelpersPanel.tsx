@@ -11,6 +11,7 @@ import { metaText, parseMeta } from '../lib/meta'
 import { cardsForChat, HELPER_STALE_MS, helperHold, helperParentChat } from '../../shared/helper-cards'
 import { useChats } from '../state/useChats'
 import { useCalmEntity, useEntity } from '../state/useData'
+import { toast } from '../state/useToast'
 import { usePanel } from '../state/usePanel'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
@@ -65,13 +66,21 @@ function stepText(item: ChatItem): string {
   return metaText(parseMeta(item.meta), 'summary') || item.text
 }
 
+/** A Stop that did not get through says so, instead of leaving the card working with no word. */
+function stopFailed(): void {
+  toast('That did not stop. Try again.')
+}
+
 function useStop(): { stopping: string | null; stop: (id: string) => void } {
   const [stopping, setStopping] = useState<string | null>(null)
   return {
     stopping,
     stop: (id) => {
       setStopping(id)
-      void agent.helpers.stop(id).finally(() => setStopping(null))
+      void agent.helpers
+        .stop(id)
+        .catch(stopFailed)
+        .finally(() => setStopping(null))
     },
   }
 }
@@ -151,7 +160,7 @@ export function HelperCardList({
               <span className={`pill ${main.waiting ? 'warn' : 'pri'}`}>{main.waiting ? 'Needs you' : 'Working'}</span>
             </button>
             {main.waiting ? null : (
-              <button type="button" className="hp-close hp-stop" aria-label={`Stop ${main.label}`} title="Stop the main chat's run now" onClick={() => void agent.chat.stop(MAIN_CHAT)}>
+              <button type="button" className="hp-close hp-stop" aria-label={`Stop ${main.label}`} title="Stop the main chat's run now" onClick={() => void agent.chat.stop(MAIN_CHAT).catch(stopFailed)}>
                 <Icon name="x" size={16} />
               </button>
             )}
@@ -201,7 +210,7 @@ export function HelperCardList({
                   disabled={stopping === card.id}
                   onClick={() => {
                     if (onClose !== undefined) onClose(card)
-                    else if (target.kind === 'project-chat') void agent.chat.stop(target.chat)
+                    else if (target.kind === 'project-chat') void agent.chat.stop(target.chat).catch(stopFailed)
                     else stop(card.id)
                   }}
                 >
