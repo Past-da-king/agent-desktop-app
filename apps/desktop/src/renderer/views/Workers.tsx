@@ -6,10 +6,12 @@ import type { WorkerEvent, WorkerInfo, WorkerLogLine, WorkerState } from '@agent
 import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
+import { clock } from '../lib/format'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { useWorkers } from '../state/useWorkers'
 import { Button } from '../ui/Button'
+import { Dialog } from '../ui/Dialog'
 import { Icon } from '../ui/Icon'
 import { SectionHeader } from '../ui/SectionHeader'
 
@@ -36,7 +38,8 @@ export function ago(stamp: number | null, now = Date.now()): string {
 function clockOf(stamp: number): string {
   const date = new Date(stamp)
   const today = new Date()
-  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  // The same 24-hour clock the routines above use; this used to print "05:41 PM" beside "Every day at 23:30".
+  const time = clock(stamp)
   return date.toDateString() === today.toDateString() ? time : `${date.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`
 }
 
@@ -64,7 +67,7 @@ function payloadLine(event: WorkerEvent): string {
 }
 
 export function WorkersSection(): JSX.Element | null {
-  const { workers, loaded } = useWorkers()
+  const { workers, loaded, error, reload } = useWorkers()
   const settings = useSettings((state) => state.settings)
   const save = useSettings((state) => state.save)
   if (!loaded) return null
@@ -73,7 +76,14 @@ export function WorkersSection(): JSX.Element | null {
   return (
     <div style={{ marginTop: 34 }}>
       <SectionHeader eyebrow="WORKERS" line="Background scripts that tell your agent when something happens" />
-      {workers.length === 0 ? (
+      {error !== '' ? (
+        <div className="banner wk-failed">
+          The workers could not be read: {error}{' '}
+          <button type="button" className="linkish" onClick={reload}>
+            Try again
+          </button>
+        </div>
+      ) : workers.length === 0 ? (
         <div className="banner">
           No workers yet. Ask your agent for one, for example: "watch my team chat and wake you up when someone messages me". It writes the script, you approve it once, and it shows here.
         </div>
@@ -91,7 +101,9 @@ export function WorkersSection(): JSX.Element | null {
             type="button"
             className="linkish"
             onClick={() => {
-              void save({ launchAtLogin: true }).then(() => toast('The app now opens when you sign in.'))
+              void save({ launchAtLogin: true })
+                .then(() => toast('The app now opens when you sign in.'))
+                .catch((cause: unknown) => toast(cause instanceof Error ? cause.message : 'Could not change that setting.'))
             }}
           >
             Open at sign-in
@@ -105,6 +117,7 @@ export function WorkersSection(): JSX.Element | null {
 function WorkerCard({ worker }: { worker: WorkerInfo }): JSX.Element {
   const [open, setOpen] = useState<'events' | 'log' | null>(null)
   const [busy, setBusy] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const missing = worker.secrets.filter((name) => !worker.secretsSet.includes(name))
   const live = worker.state === 'running' || worker.state === 'starting' || worker.state === 'waiting' || worker.state === 'backoff'
 
@@ -143,7 +156,9 @@ function WorkerCard({ worker }: { worker: WorkerInfo }): JSX.Element {
           <button type="button" className="ib" title="Restart" aria-label={`Restart ${worker.name}`} disabled={busy} onClick={() => void act('restart')}>
             <Icon name="sync" size={18} />
           </button>
-          <button type="button" className="ib" title="Open its folder" aria-label={`Open the folder of ${worker.name}`} onClick={() => void agent.workers.openFolder(worker.id)}>
+          <button type="button" className="ib" title="Open its folder" aria-label={`Open the folder of ${worker.name}`} onClick={() => {
+              void agent.workers.openFolder(worker.id).catch((cause: unknown) => toast(cause instanceof Error ? cause.message : 'Could not open its folder.'))
+            }}>
             <Icon name="folder" size={18} />
           </button>
           <button
@@ -152,9 +167,7 @@ function WorkerCard({ worker }: { worker: WorkerInfo }): JSX.Element {
             title="Delete"
             aria-label={`Delete ${worker.name}`}
             disabled={busy}
-            onClick={() => {
-              if (window.confirm(`Delete ${worker.name}? Its script, keys and events go with it.`)) void act('remove')
-            }}
+            onClick={() => setConfirmDelete(true)}
           >
             <Icon name="trash" size={18} />
           </button>
@@ -199,6 +212,32 @@ function WorkerCard({ worker }: { worker: WorkerInfo }): JSX.Element {
       </div>
       {open === 'events' ? <EventList worker={worker} /> : null}
       {open === 'log' ? <LogList worker={worker} /> : null}
+      {confirmDelete ? (
+        <Dialog label="Delete worker" onClose={() => setConfirmDelete(false)} labelledBy={`wk-del-${worker.id}`}>
+          <div>
+            <span className="eyebrow">DELETE WORKER</span>
+            <h2 className="h2" id={`wk-del-${worker.id}`} style={{ marginTop: 6 }}>
+              Delete {worker.name}?
+            </h2>
+          </div>
+          <p className="wk-confirm">Its script, its keys and its events go with it. This cannot be undone.</p>
+          <div className="dialog-actions">
+            <Button variant="text" onClick={() => setConfirmDelete(false)}>
+              Keep it
+            </Button>
+            <Button
+              className="danger"
+              disabled={busy}
+              onClick={() => {
+                setConfirmDelete(false)
+                void act('remove')
+              }}
+            >
+              Delete worker
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
     </div>
   )
 }
@@ -245,12 +284,21 @@ function SecretField({ worker, name }: { worker: WorkerInfo; name: string }): JS
 
 function EventList({ worker }: { worker: WorkerInfo }): JSX.Element {
   const [events, setEvents] = useState<WorkerEvent[] | null>(null)
+  const [failed, setFailed] = useState('')
   useEffect(() => {
     let alive = true
     const read = (): void => {
-      void agent.workers.events(worker.id, 30).then((list) => {
-        if (alive) setEvents(list)
-      })
+      void agent.workers
+        .events(worker.id, 30)
+        .then((list) => {
+          if (!alive) return
+          setEvents(list)
+          setFailed('')
+        })
+        .catch((cause: unknown) => {
+          // Without this the list sat on "Reading..." for ever when the read failed.
+          if (alive) setFailed(cause instanceof Error ? cause.message : 'Could not read its events.')
+        })
     }
     read()
     const off = agent.workers.onChange(read)
@@ -259,6 +307,7 @@ function EventList({ worker }: { worker: WorkerInfo }): JSX.Element {
       off()
     }
   }, [worker.id])
+  if (failed !== '' && events === null) return <div className="wk-rows small wk-failed">{failed}</div>
   if (events === null) return <div className="wk-rows small muted">Reading...</div>
   if (events.length === 0) return <div className="wk-rows small muted">Nothing emitted yet.</div>
   return (
@@ -279,12 +328,20 @@ function EventList({ worker }: { worker: WorkerInfo }): JSX.Element {
 
 function LogList({ worker }: { worker: WorkerInfo }): JSX.Element {
   const [lines, setLines] = useState<WorkerLogLine[] | null>(null)
+  const [failed, setFailed] = useState('')
   useEffect(() => {
     let alive = true
     const read = (): void => {
-      void agent.workers.logs(worker.id, 80).then((list) => {
-        if (alive) setLines(list)
-      })
+      void agent.workers
+        .logs(worker.id, 80)
+        .then((list) => {
+          if (!alive) return
+          setLines(list)
+          setFailed('')
+        })
+        .catch((cause: unknown) => {
+          if (alive) setFailed(cause instanceof Error ? cause.message : 'Could not read its log.')
+        })
     }
     read()
     const off = agent.workers.onChange(read)
@@ -293,6 +350,7 @@ function LogList({ worker }: { worker: WorkerInfo }): JSX.Element {
       off()
     }
   }, [worker.id])
+  if (failed !== '' && lines === null) return <div className="wk-rows small wk-failed">{failed}</div>
   if (lines === null) return <div className="wk-rows small muted">Reading...</div>
   if (lines.length === 0) return <div className="wk-rows small muted">No log lines yet.</div>
   return (

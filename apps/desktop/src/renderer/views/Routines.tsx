@@ -345,8 +345,10 @@ export function Routines(): JSX.Element {
     try {
       await agent.routines.runNow(trigger.id)
       toast(`${trigger.name} is running now.`)
-    } catch {
-      toast(`${trigger.name} is saved and ready. Running it from here needs the scheduler, which is not switched on in this build.`)
+    } catch (cause) {
+      // Say what really went wrong. Every failure used to get the same fixed excuse about the scheduler.
+      const why = cause instanceof Error ? cause.message.trim() : ''
+      toast(why === '' ? `Could not run ${trigger.name}.` : `Could not run ${trigger.name}: ${why}`)
     } finally {
       setRunningId(null)
     }
@@ -359,7 +361,9 @@ export function Routines(): JSX.Element {
         toast('Routine deleted.', {
           actionLabel: 'Undo',
           onAction: () => {
-            void agent.data.upsert('trigger', trigger)
+            void agent.data.upsert('trigger', trigger).catch((cause: unknown) => {
+              toast(cause instanceof Error ? cause.message : 'Could not bring that routine back.')
+            })
           },
         })
       })

@@ -337,7 +337,9 @@ export function Memory(): JSX.Element {
         toast('Page deleted.', {
           actionLabel: 'Undo',
           onAction: () => {
-            void agent.data.upsert('memory', memory)
+            void agent.data.upsert('memory', memory).catch((cause: unknown) => {
+              toast(cause instanceof Error ? cause.message : 'Could not bring that page back.')
+            })
           },
         })
       })
