@@ -432,6 +432,32 @@ interface EndInput {
   silent?: boolean
 }
 
+/** Messages kept for a helper that waits for the AI's limit to reset (card meta `limitQueue`). */
+interface LimitKept {
+  text: string
+  from: SteerFrom
+  ids: string[]
+}
+const LIMIT_QUEUE_MAX = 10
+
+function limitQueueOf(meta: Record<string, unknown>): LimitKept[] {
+  const raw = meta['limitQueue']
+  if (!Array.isArray(raw)) return []
+  const out: LimitKept[] = []
+  for (const each of raw) {
+    if (typeof each !== 'object' || each === null) continue
+    const item = each as Record<string, unknown>
+    if (typeof item['text'] !== 'string') continue
+    const from = item['from']
+    out.push({
+      text: item['text'],
+      from: from === 'helper' || from === 'device' || from === 'desk' ? from : 'creator',
+      ids: Array.isArray(item['ids']) ? item['ids'].filter((id): id is string => typeof id === 'string') : [],
+    })
+  }
+  return out
+}
+
 /** The result a helper hands back when it was stopped, which says nothing about what it had. */
 const STOPPED_TEXT = 'Stopped before it finished.'
 /** What the core loop says when a helper used every step it may take. */
@@ -832,6 +858,8 @@ export class HelperManager implements HelperHost {
     await this.noteSteer(id, { id: steerId, at: this.now(), text: clip(message, 100), state: 'queued' })
     const said = await this.push(id, message, { steerIds: [steerId], from })
     if (said.includes('is back on it')) return `Helper #${id} had already ended (${state}), so your message did not reach that run. It starts its next run with it. ${said}`
+    // Waiting for the AI's limit to reset: the message stays queued and goes with it when the wait ends.
+    if (said.startsWith('Kept for it')) return said
     await this.noteSteer(id, { id: steerId, at: this.now(), text: clip(message, 100), state: 'not_delivered', reason: said })
     return `Not delivered to helper #${id} (it had already ended, ${state}): ${said}`
   }
@@ -928,14 +956,22 @@ export class HelperManager implements HelperHost {
 
     const meta = parseMeta(row.meta)
     // It stopped on the AI's limit (rate limit, plan limit): sent straight back it fails the same way, and an agent
-    // told "it failed, push it" did exactly that 30 times in a row. Until the wait is over only its own timed retry
-    // (auto) goes through; a routine's desk is paced by its router (workers/router.ts).
+    // told "it failed, push it" did exactly that 30 times in a row. Until the wait is over nothing reaches the AI: a
+    // message for it (the person's, or its creator's) is kept on its card and it reads it when it goes back to work,
+    // by itself, once the wait ends. A routine's desk is paced by its router (workers/router.ts).
     const limitLeft = numberField(meta['limitUntil']) - this.now()
     if (options.auto !== true && options.from !== 'desk' && limitLeft > 0) {
-      const then = this.limitTimers.has(id) ? `It goes back to work by itself in about ${waitWords(limitLeft)}; its result will come as a message` : `Send it back in about ${waitWords(limitLeft)}, once`
-      return `Not sent. Helper #${id} stopped because the AI is at its limit (rate limit or plan limit), and sending it back now would fail the same way. ${then}. Do not keep pushing it.`
+      const kept = limitQueueOf(meta)
+      if (!kept.some((each) => each.text === message) && kept.length < LIMIT_QUEUE_MAX) {
+        kept.push({ text: message, from: options.from ?? 'creator', ids: options.steerIds ?? [] })
+      }
+      const at = numberField(meta['limitUntil'])
+      await this.updateMeta(id, { limitQueue: kept, limitRetryAt: numberField(meta['limitRetryAt']) || at })
+      if (!this.limitTimers.has(id)) this.armLimit(id, limitLeft)
+      return `Kept for it, not sent yet. Helper #${id} is waiting for the AI limit to reset (rate limit or plan limit); sending it back now would fail the same way. It reads this when it goes back to work by itself in about ${waitWords(limitLeft)}, and its result will come as a message. No need to send it again.`
     }
     this.clearLimitTimer(id)
+    if (numberField(meta['limitRetryAt']) > 0) await this.updateMeta(id, { limitRetryAt: 0, limitQueue: [] })
     // It ran on another brain (s12): it goes back to work there, where its session and steps are, while that brain
     // is up. A lease this brain holds (a takeover, a resume after a restart) always runs here.
     const link = this.link()
@@ -1198,6 +1234,7 @@ export class HelperManager implements HelperHost {
   /** `routed`: another brain sent this stop here, so it is never sent on again (no stop goes round in circles). */
   private async stopFrom(id: string, by: string, routed: boolean): Promise<boolean> {
     // Stopped while it waited for the AI's limit to reset: it does not go back to work by itself.
+    if (this.limitTimers.has(id)) await this.updateMeta(id, { limitRetryAt: 0, limitUntil: 0, limitQueue: [] }).catch(() => undefined)
     this.clearLimitTimer(id)
     this.limitHits.delete(id)
     // A routine run or background script: stopped at once, its process and tabs with it.
@@ -1563,6 +1600,14 @@ export class HelperManager implements HelperHost {
     for (const row of rows) {
       if (row.kind !== 'helper') continue
       const meta = parseMeta(row.meta)
+      // It was waiting for the AI's limit to reset when the app closed: the wait carries on from its card (at once
+      // when the time has passed), so a restart does not leave it failed for good.
+      const retryAt = numberField(meta['limitRetryAt'])
+      if (meta['state'] === 'failed' && retryAt > 0 && !this.limitTimers.has(row.id) && !this.runs.has(row.id) && this.placerOf(meta) === '') {
+        const hit = numberField(meta['limitHit'])
+        if (hit > 0) this.limitHits.set(row.id, hit)
+        this.armLimit(row.id, retryAt - this.now())
+      }
       if (meta['state'] !== 'working') continue
       // Already taken up again on this start (a start another brain sent, a lease resumed): it is ours and running.
       if (this.runs.has(row.id)) continue
@@ -1915,16 +1960,42 @@ export class HelperManager implements HelperHost {
     } else {
       await this.ended({ ...base, silent: true })
     }
-    await this.updateMeta(run.id, { limitUntil: this.now() + wait, ...(retry ? { summary: clip(`Waiting for the AI limit to reset, then it carries on (try ${hit})`, 160) } : {}) }).catch(() => undefined)
+    // The retry time and the count are on the card, so a restart arms the timer again (restore).
+    await this.updateMeta(run.id, {
+      limitUntil: this.now() + wait,
+      limitRetryAt: retry ? this.now() + wait : 0,
+      limitHit: retry ? hit : 0,
+      ...(retry ? { summary: clip(`Waiting for the AI limit to reset, then it carries on (try ${hit})`, 160) } : {}),
+    }).catch(() => undefined)
     if (!retry || this.closing) return
-    this.clearLimitTimer(run.id)
+    this.armLimit(run.id, wait)
+  }
+
+  /** In `wait` ms the helper goes back to work by itself, with any message kept for it meanwhile. */
+  private armLimit(id: string, wait: number): void {
+    this.clearLimitTimer(id)
     const timer = setTimeout(() => {
-      this.limitTimers.delete(run.id)
+      this.limitTimers.delete(id)
       if (this.closing) return
-      void this.push(run.id, 'The AI limit that stopped you should have reset by now. Carry on from where you stopped.', { auto: true }).catch(() => undefined)
-    }, wait)
+      void this.limitOver(id).catch(() => undefined)
+    }, Math.max(0, wait))
     timer.unref?.()
-    this.limitTimers.set(run.id, timer)
+    this.limitTimers.set(id, timer)
+  }
+
+  /** The wait is over: it carries on, reading what was kept for it (the person's message first, as its own). */
+  private async limitOver(id: string): Promise<void> {
+    if (this.runs.has(id)) return
+    const row = await this.store.get('chat_item', id)
+    if (row === null || row.kind !== 'helper') return
+    const meta = parseMeta(row.meta)
+    // Stopped, pushed or finished some other way meanwhile: nothing to retry.
+    if (meta['state'] !== 'failed' || numberField(meta['limitRetryAt']) === 0) return
+    const kept = limitQueueOf(meta)
+    await this.updateMeta(id, { limitRetryAt: 0, limitQueue: [] })
+    const text = kept.length === 0 ? 'The AI limit that stopped you should have reset by now. Carry on from where you stopped.' : kept.map((each) => each.text).join('\n\n')
+    const ids = kept.flatMap((each) => each.ids)
+    await this.push(id, text, { auto: true, ...(kept[0] === undefined ? {} : { from: kept[0].from }), ...(ids.length === 0 ? {} : { steerIds: ids }) })
   }
 
   /** Why a run that ran here ended, in plain words ('' when it simply finished). */
