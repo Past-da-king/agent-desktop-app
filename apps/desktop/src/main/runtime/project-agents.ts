@@ -97,9 +97,13 @@ export class ProjectAgentRows {
    * after start) is followed too, so it is closed once its chat is quiet instead of saying working for ever.
    */
   async restore(): Promise<void> {
-    for (const row of await this.deps.store.listWhere?.('chat_item', { kind: 'helper', chat: MAIN_CHAT }) ?? []) {
+    // Only the rows that stand for a project chat are read (the database filters on the word): this runs every
+    // minute for as long as the app is open, and reading and parsing every helper card there ever was each time
+    // was idle work that grew with the history.
+    for (const row of await this.deps.store.listWhere?.('chat_item', { kind: 'helper', chat: MAIN_CHAT, contains: 'projectChat' }) ?? []) {
+      if (!row.id.startsWith('pa-')) continue
       const meta = parse(row.meta)
-      if (row.id.startsWith('pa-') && meta['state'] === 'working' && typeof meta['projectChat'] === 'string' && !this.tracked.has(meta['projectChat'])) {
+      if (meta['state'] === 'working' && typeof meta['projectChat'] === 'string' && !this.tracked.has(meta['projectChat'])) {
         this.resuming.set(meta['projectChat'], this.now() + (this.deps.resumeGraceMs ?? RESUME_GRACE_MS))
         this.follow(meta['projectChat'])
       }
