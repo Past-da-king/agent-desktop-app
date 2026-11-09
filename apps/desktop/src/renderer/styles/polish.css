@@ -154,7 +154,7 @@ details.adv[open]>summary::before{transform:rotate(45deg)}
 .chip>svg{flex:none}
 
 /* ---------- routines: two roomy columns, never three cramped ones ---------- */
-.rtn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:14px}
+.rtn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(520px,100%),1fr));gap:14px}
 .rtn{min-height:92px}
 .rtn .rt span{display:block;line-height:1.4}
 .rtn .rt .rt-when{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
