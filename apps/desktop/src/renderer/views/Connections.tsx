@@ -178,7 +178,6 @@ export function Connections(): JSX.Element {
 
       <div className="two conn-rest">
         <div className="stack">
-
           <section>
             <SectionHeader eyebrow="BUILT IN" line="Ready from the start, nothing to set up" />
             <div className="list" style={{ padding: 6 }}>
@@ -221,6 +220,25 @@ export function Connections(): JSX.Element {
                 }
               />
             </div>
+          </section>
+
+          <section>
+            <SectionHeader
+              eyebrow="MACHINES"
+              line="Hand heavy work to your servers and computers"
+              right={
+                <Button size="sm" onClick={openDevices}>
+                  <Icon name="plus" size={16} />
+                  Add machine
+                </Button>
+              }
+            />
+            <div className="list" style={{ padding: 6 }}>
+              <Machines look="rows" thisName="This computer" thisLine={`${machine}, ${folderLine}. Runs jobs while the app is open.`} />
+            </div>
+            <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
+              Your agent only sees the names. Addresses, passwords and keys stay encrypted on this computer.
+            </p>
           </section>
         </div>
 
@@ -306,24 +324,6 @@ export function Connections(): JSX.Element {
             </div>
           </section>
 
-          <section>
-            <SectionHeader
-              eyebrow="MACHINES"
-              line="Hand heavy work to your servers and computers"
-              right={
-                <Button size="sm" onClick={openDevices}>
-                  <Icon name="plus" size={16} />
-                  Add machine
-                </Button>
-              }
-            />
-            <div className="list" style={{ padding: 6 }}>
-              <Machines look="rows" thisName="This computer" thisLine={`${machine}, ${folderLine}. Runs jobs while the app is open.`} />
-            </div>
-            <p className="small muted" style={{ margin: '10px 6px 0', lineHeight: 1.5 }}>
-              Your agent only sees the names. Addresses, passwords and keys stay encrypted on this computer.
-            </p>
-          </section>
         </div>
       </div>
     </div>

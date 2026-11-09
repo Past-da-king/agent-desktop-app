@@ -218,6 +218,8 @@ function ConnectDialog({ onClose }: { onClose: () => void }): JSX.Element {
   const [catalog, setCatalog] = useState<AppChoice[] | null>(null)
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState('')
+  // A list that could not be loaded is said so; search still reaches all of Composio.
+  const [catalogFailed, setCatalogFailed] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -227,7 +229,9 @@ function ConnectDialog({ onClose }: { onClose: () => void }): JSX.Element {
         if (live) setCatalog(list)
       })
       .catch(() => {
-        if (live) setCatalog([])
+        if (!live) return
+        setCatalog([])
+        setCatalogFailed(true)
       })
     return () => {
       live = false
@@ -312,7 +316,9 @@ function ConnectDialog({ onClose }: { onClose: () => void }): JSX.Element {
             ? 'Searching all of Composio...'
             : query.trim().length >= 2
               ? `${shown.length} ${shown.length === 1 ? 'match' : 'matches'} across all of Composio`
-              : total > shown.length
+              : catalogFailed
+                ? 'The list of apps could not be loaded. Type an app name to search for it.'
+                : total > shown.length
                 ? `Showing ${shown.length} of ${total} popular apps. Search to find any of Composio's apps.`
                 : `${total} ${total === 1 ? 'app' : 'apps'}. Search to find any of Composio's apps.`}
       </p>

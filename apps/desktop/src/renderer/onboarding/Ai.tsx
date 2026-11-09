@@ -3,6 +3,7 @@ import type { Found, ProviderId, ProviderInfo, ModelOption } from '@agent/core'
 import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
+import { orTell } from '../lib/tell'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
@@ -136,7 +137,7 @@ export function Ai(): JSX.Element {
     const next = providers.find((item) => item.id === value) ?? PROVIDERS.find((item) => item.id === value)
     setModel('')
     setModels([])
-    void save({ provider: value, model: '' })
+    void orTell(save({ provider: value, model: '' }), 'That could not be saved. Try again.')
   }
 
   const check = async (): Promise<boolean> => {
@@ -197,7 +198,9 @@ export function Ai(): JSX.Element {
   }
 
   const skip = async (): Promise<void> => {
-    await save({ mode: ok && model.trim() !== '' ? 'api_key' : 'none', provider, model: model.trim() })
+    // A save that fails must not leave Skip looking dead.
+    const saved = await orTell(save({ mode: ok && model.trim() !== '' ? 'api_key' : 'none', provider, model: model.trim() }), 'That could not be saved. Try again.')
+    if (saved === undefined) return
     navigate({ page: 'onboarding', step: 'style' })
   }
 
@@ -208,13 +211,17 @@ export function Ai(): JSX.Element {
       setMessage('Pick a model first.')
       return
     }
-    await save({
-      mode: 'api_key',
-      provider,
-      model: model.trim(),
-      baseUrl: custom ? baseUrl.trim() : '',
-      allowHttp,
-    })
+    const saved = await orTell(
+      save({
+        mode: 'api_key',
+        provider,
+        model: model.trim(),
+        baseUrl: custom ? baseUrl.trim() : '',
+        allowHttp,
+      }),
+      'Your choice could not be saved. Try again.',
+    )
+    if (saved === undefined) return
     navigate({ page: 'onboarding', step: 'style' })
   }
 
