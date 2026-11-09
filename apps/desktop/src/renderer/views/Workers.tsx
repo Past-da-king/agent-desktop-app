@@ -10,6 +10,7 @@ import { clock } from '../lib/format'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { useWorkers } from '../state/useWorkers'
+import { aboutWorker } from '../state/workersStore'
 import { Button } from '../ui/Button'
 import { Dialog } from '../ui/Dialog'
 import { Icon } from '../ui/Icon'
@@ -301,7 +302,10 @@ function EventList({ worker }: { worker: WorkerInfo }): JSX.Element {
         })
     }
     read()
-    const off = agent.workers.onChange(read)
+    // Only when this worker changed; another worker's burst of log lines is not ours to read.
+    const off = agent.workers.onChange((changed) => {
+      if (aboutWorker(changed, worker.id)) read()
+    })
     return () => {
       alive = false
       off()
@@ -344,7 +348,10 @@ function LogList({ worker }: { worker: WorkerInfo }): JSX.Element {
         })
     }
     read()
-    const off = agent.workers.onChange(read)
+    // Only when this worker changed; another worker's burst of log lines is not ours to read.
+    const off = agent.workers.onChange((changed) => {
+      if (aboutWorker(changed, worker.id)) read()
+    })
     return () => {
       alive = false
       off()

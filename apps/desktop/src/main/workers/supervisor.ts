@@ -35,7 +35,7 @@ export interface SupervisorDeps {
   /** A worker failed too often; the app stops retrying and the person must see it. */
   onFailing?: (worker: WorkerInfo) => void
   /** Anything the Workers page shows changed. */
-  onChange?: () => void
+  onChange?: (workerId?: string) => void
   killTree?: (pid: number | undefined) => void
   killLeftover?: (pid: number) => boolean
   baseEnv?: NodeJS.ProcessEnv
@@ -87,7 +87,7 @@ export class Supervisor {
   private readonly secrets: WorkerSecrets
   private readonly onEvent: (event: WorkerEvent) => void
   private readonly onFailing: (worker: WorkerInfo) => void
-  private readonly onChange: () => void
+  private readonly onChange: (workerId?: string) => void
   private readonly killTree: (pid: number | undefined) => void
   private readonly killLeftover: (pid: number) => boolean
   private readonly baseEnv: NodeJS.ProcessEnv
@@ -177,7 +177,7 @@ export class Supervisor {
       else this.secrets.set(secretKey(id, name), '')
     }
     this.store.remove(id)
-    this.onChange()
+    this.onChange(id)
   }
 
   /** App quit: every worker is told to stop, then its process tree is ended. Its stop time is saved first. */
@@ -210,7 +210,7 @@ export class Supervisor {
   setSecret(id: string, name: string, value: string): void {
     if (!WORKER_SECRET_NAME.test(name)) throw new Error('Secret names are CAPITALS_AND_UNDERSCORES.')
     this.secrets.set(secretKey(id, name), value)
-    this.onChange()
+    this.onChange(id)
   }
 
   info(): WorkerInfo[] {
@@ -351,7 +351,7 @@ export class Supervisor {
       pid: child.pid ?? null,
     })
     this.log(id, 'info', appStart && live.gap !== null ? `Started; catching up from ${new Date(live.gap.from).toISOString()}` : 'Started')
-    this.onChange()
+    this.onChange(id)
 
     const current = live
     readLines(child.stdout, (line) => this.onLine(id, current, child, line))
@@ -377,7 +377,7 @@ export class Supervisor {
     live.lastLineAt = at
     if (live.state === 'starting') {
       live.state = 'running'
-      this.onChange()
+      this.onChange(id)
     }
     if (at - live.lineSavedAt > LINE_SAVE_MS) {
       live.lineSavedAt = at
@@ -388,7 +388,7 @@ export class Supervisor {
         // Connected again: an old error no longer describes it.
         if (this.store.state(id).lastError !== '') {
           this.store.patchState(id, { lastError: '' })
-          this.onChange()
+          this.onChange(id)
         }
         return
       case 'alive':
@@ -410,7 +410,7 @@ export class Supervisor {
         } catch {
           // Routing failing must never take the worker down; the event is stored as new and routed later.
         }
-        this.onChange()
+        this.onChange(id)
         return
       }
     }
@@ -430,7 +430,7 @@ export class Supervisor {
     if (live.stopping) {
       live.state = 'stopped'
       this.log(id, 'info', 'Stopped')
-      this.onChange()
+      this.onChange(id)
       return
     }
     const manifest = this.store.manifest(id)
@@ -443,7 +443,7 @@ export class Supervisor {
         this.launch(id, false)
       }, live.nextRunAt - at)
       live.timer.unref?.()
-      this.onChange()
+      this.onChange(id)
       return
     }
     const why = live.hung
@@ -464,7 +464,7 @@ export class Supervisor {
     if (live.failures.length >= this.failLimit) {
       live.state = 'failing'
       this.log(id, 'error', `Failed ${live.failures.length} times in ${Math.round(this.failWindowMs / 60_000)} minutes; not retrying until it is restarted.`)
-      this.onChange()
+      this.onChange(id)
       const info = this.info().find((w) => w.id === id)
       if (info !== undefined) this.onFailing(info)
       return
@@ -478,7 +478,7 @@ export class Supervisor {
       this.launch(id, false)
     }, delay)
     live.timer.unref?.()
-    this.onChange()
+    this.onChange(id)
   }
 
   private async halt(id: string, state: WorkerState): Promise<void> {
@@ -490,7 +490,7 @@ export class Supervisor {
     const child = live.child
     if (child === null) {
       live.state = state
-      this.onChange()
+      this.onChange(id)
       return
     }
     live.stopping = true
@@ -519,7 +519,7 @@ export class Supervisor {
       }, this.graceMs)
     })
     live.state = state
-    this.onChange()
+    this.onChange(id)
   }
 
   private checkHung(): void {

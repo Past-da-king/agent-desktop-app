@@ -5,10 +5,12 @@ import { agent, chat } from '../bridge'
 import { dueLabel } from '../lib/format'
 import { dueTone, overdue, userTasks } from '../lib/tasks'
 import { useEntity, useEntityLoaded } from '../state/useData'
+import { useNarrow } from '../state/useNarrow'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
 import { useUi } from '../state/useUi'
 import { Button } from '../ui/Button'
+import { Dialog } from '../ui/Dialog'
 import { EmptyState } from '../ui/EmptyState'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
@@ -16,6 +18,9 @@ import { Ring } from '../ui/Ring'
 import { Segmented } from '../ui/Segmented'
 import { Skeleton } from '../ui/Skeleton'
 import { TaskDialog } from './TaskDialog'
+
+/** The width where `.list-detail` becomes one column (styles/responsive.css). */
+export const TASKS_NARROW = '(max-width:1180px)'
 
 function GoalCard({ goal, tasks }: { goal: GoalRow; tasks: TaskRow[] }): JSX.Element {
   const steps = tasks.filter((task) => task.goalId === goal.id)
@@ -63,6 +68,9 @@ export function Tasks(): JSX.Element {
   const selectTask = useUi((state) => state.selectTask)
   const navigate = useUi((state) => state.navigate)
   const [dialog, setDialog] = useState<{ task: TaskRow | null } | null>(null)
+  // Below this width the list takes the whole page, so the detail opens over it instead of under 31 rows.
+  const narrow = useNarrow(TASKS_NARROW)
+  const [sheet, setSheet] = useState(false)
 
   const tasks = userTasks(taskRows)
   const selected = tasks.find((task) => task.id === selectedId) ?? tasks[0]
@@ -89,6 +97,7 @@ export function Tasks(): JSX.Element {
 
   const remove = (task: TaskRow): void => {
     setDialog(null)
+    setSheet(false)
     selectTask(null)
     void agent.data
       .remove('task', task.id)
@@ -112,84 +121,11 @@ export function Tasks(): JSX.Element {
     navigate({ page: 'chat' })
   }
 
-  return (
-    <div className="page">
-      <div className="ph">
-        <div>
-          <span className="eyebrow">TASKS</span>
-          <h1 className="h1">{openCount === 0 ? 'A clear list' : `${openCount} on your list`}</h1>
-        </div>
-        <div className="ph-actions">
-          <Button onClick={() => setDialog({ task: null })}>
-            <Icon name="plus" size={18} />
-            Add to-do
-          </Button>
-        </div>
-      </div>
-
-      <Segmented
-        ariaLabel="Task lists"
-        value={tab}
-        onChange={setTab}
-        options={[
-          { value: 'todos', label: 'My to-dos' },
-          { value: 'agent', label: "Agent's work" },
-        ]}
-        style={{ maxWidth: 440, marginBottom: 24 }}
-      />
-
-      {!loaded ? (
-        <Skeleton rows={5} />
-      ) : tab === 'todos' ? (
-        tasks.length === 0 ? (
-          <EmptyState
-            mascot={settings?.mascot ?? 'scout'}
-            title="Your list is clear"
-            line="Add something small now, or just tell the agent and it will keep the list for you."
-            action={
-              <Button variant="tonal" size="sm" onClick={() => setDialog({ task: null })}>
-                Add your first to-do
-              </Button>
-            }
-          />
-        ) : (
-          <div className="list-detail">
-            <div>
-              <div className="list">
-                {tasks.map((task) => (
-                  <div key={task.id} className={`todo${task.status === 'done' ? ' done' : ''}${selected?.id === task.id ? ' on' : ''}`}>
-                    <button
-                      type="button"
-                      className="cb"
-                      role="checkbox"
-                      aria-checked={task.status === 'done'}
-                      aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'}: ${task.title}`}
-                      onClick={() => toggle(task)}
-                    >
-                      {task.status === 'done' ? <Icon name="check" size={16} /> : null}
-                    </button>
-                    <button
-                      type="button"
-                      className="todo-body"
-                      style={{ flex: 1, minWidth: 0, textAlign: 'left' }}
-                      onClick={() => selectTask(task.id)}
-                    >
-                      <div className="tt">{task.title}</div>
-                      <div className={`dd${dueTone(task)}`}>
-                        {overdue(task) ? 'Overdue · ' : ''}
-                        {dueLabel(task)}
-                      </div>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {selected ? (
-              <div className="detail">
+  const detail = selected ? (
+              <div className={narrow ? 'detail in-dialog' : 'detail'}>
                 <div>
                   <span className="eyebrow">{selected.status === 'done' ? 'DONE' : 'TO-DO'}</span>
-                  <h2 className="h2" style={{ marginTop: 6 }}>
+                  <h2 className="h2" id="task-detail-title" style={{ marginTop: 6 }}>
                     {selected.title}
                   </h2>
                 </div>
@@ -248,7 +184,85 @@ export function Tasks(): JSX.Element {
                   </Button>
                 </div>
               </div>
-            ) : null}
+  ) : null
+
+  return (
+    <div className="page">
+      <div className="ph">
+        <div>
+          <span className="eyebrow">TASKS</span>
+          <h1 className="h1">{openCount === 0 ? 'A clear list' : `${openCount} on your list`}</h1>
+        </div>
+        <div className="ph-actions">
+          <Button onClick={() => setDialog({ task: null })}>
+            <Icon name="plus" size={18} />
+            Add to-do
+          </Button>
+        </div>
+      </div>
+
+      <Segmented
+        ariaLabel="Task lists"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'todos', label: 'My to-dos' },
+          { value: 'agent', label: "Agent's work" },
+        ]}
+        style={{ maxWidth: 440, marginBottom: 24 }}
+      />
+
+      {!loaded ? (
+        <Skeleton rows={5} />
+      ) : tab === 'todos' ? (
+        tasks.length === 0 ? (
+          <EmptyState
+            mascot={settings?.mascot ?? 'scout'}
+            title="Your list is clear"
+            line="Add something small now, or just tell the agent and it will keep the list for you."
+            action={
+              <Button variant="tonal" size="sm" onClick={() => setDialog({ task: null })}>
+                Add your first to-do
+              </Button>
+            }
+          />
+        ) : (
+          <div className="list-detail">
+            <div>
+              <div className="list">
+                {tasks.map((task) => (
+                  <div key={task.id} className={`todo${task.status === 'done' ? ' done' : ''}${selected?.id === task.id && (!narrow || sheet) ? ' on' : ''}`}>
+                    <button
+                      type="button"
+                      className="cb"
+                      role="checkbox"
+                      aria-checked={task.status === 'done'}
+                      aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'}: ${task.title}`}
+                      onClick={() => toggle(task)}
+                    >
+                      {task.status === 'done' ? <Icon name="check" size={16} /> : null}
+                    </button>
+                    <button
+                      type="button"
+                      className="todo-body"
+                      style={{ flex: 1, minWidth: 0, textAlign: 'left' }}
+                      onClick={() => {
+                        selectTask(task.id)
+                        setSheet(true)
+                      }}
+                    >
+                      <div className="tt">{task.title}</div>
+                      <div className={`dd${dueTone(task)}`}>
+                        {overdue(task) ? 'Overdue · ' : ''}
+                        {dueLabel(task)}
+                      </div>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {narrow ? null : detail}
           </div>
         )
       ) : goals.filter((goal) => goal.status === 'open').length === 0 ? (
@@ -277,6 +291,12 @@ export function Tasks(): JSX.Element {
             ))}
         </div>
       )}
+
+      {narrow && sheet && detail !== null && dialog === null ? (
+        <Dialog label="To-do" onClose={() => setSheet(false)} labelledBy="task-detail-title">
+          {detail}
+        </Dialog>
+      ) : null}
 
       {dialog ? (
         <TaskDialog

@@ -17,6 +17,7 @@ import { SectionHeader } from '../ui/SectionHeader'
 import { Segmented } from '../ui/Segmented'
 import { Skeleton } from '../ui/Skeleton'
 import { Switch } from '../ui/Switch'
+import { TimeField } from '../ui/TimeField'
 import { useWorkers } from '../state/useWorkers'
 import { WorkersSection } from './Workers'
 
@@ -129,6 +130,13 @@ function RoutineDialog({
       later.setSeconds(0, 0)
       setSpec(later.toISOString())
     }
+  }
+
+  /** A one-time routine: the day and the 24-hour time, kept as one ISO moment. */
+  const setWhen = (day: string, time: string): void => {
+    const date = new Date(`${day}T${time === '' ? '09:00' : time}`)
+    if (day !== '' && !Number.isNaN(date.getTime())) setSpec(date.toISOString())
+    setError('')
   }
 
   const builtin = trigger !== null && typeof trigger.builtin === 'string' && trigger.builtin !== ''
@@ -267,24 +275,41 @@ function RoutineDialog({
         <label htmlFor="routine-spec">
           {kind === 'daily' ? 'Time' : kind === 'interval' ? 'Minutes between runs' : 'When'}
         </label>
-        <input
-          id="routine-spec"
-          className="input"
-          type={kind === 'daily' ? 'time' : kind === 'interval' ? 'number' : 'datetime-local'}
-          min={kind === 'interval' ? 1 : undefined}
-          value={kind === 'at' ? localDateTime(spec) : spec}
-          onChange={(event) => {
-            const value = event.target.value
-            if (kind === 'at') {
-              const date = new Date(value)
-              setSpec(value === '' || Number.isNaN(date.getTime()) ? value : date.toISOString())
-            } else {
+        {kind === 'daily' ? (
+          <TimeField
+            id="routine-spec"
+            value={spec}
+            onChange={(value) => {
               setSpec(value)
-            }
-            setError('')
-          }}
-          style={{ paddingRight: 18 }}
-        />
+              setError('')
+            }}
+          />
+        ) : kind === 'interval' ? (
+          <input
+            id="routine-spec"
+            className="input"
+            type="number"
+            min={1}
+            value={spec}
+            onChange={(event) => {
+              setSpec(event.target.value)
+              setError('')
+            }}
+            style={{ paddingRight: 18 }}
+          />
+        ) : (
+          <div className="rtn-when">
+            <input
+              id="routine-spec"
+              className="input"
+              type="date"
+              value={localDateTime(spec).slice(0, 10)}
+              onChange={(event) => setWhen(event.target.value, localDateTime(spec).slice(11, 16))}
+              style={{ paddingRight: 18 }}
+            />
+            <TimeField ariaLabel="Time" value={localDateTime(spec).slice(11, 16)} onChange={(value) => setWhen(localDateTime(spec).slice(0, 10), value)} />
+          </div>
+        )}
         {builtin && error !== '' ? <span className="small" role="alert">{error}</span> : null}
       </div>
       )}

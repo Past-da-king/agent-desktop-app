@@ -348,7 +348,7 @@ const api: AgentApi = {
     remove: (id) => call<void>(WORKER_CHANNELS.remove, id),
     setSecret: (id, name, value) => call<void>(WORKER_CHANNELS.setSecret, id, name, value),
     openFolder: (id) => call<void>(WORKER_CHANNELS.openFolder, id),
-    onChange: (callback) => on<null>(WORKER_EVENTS.changed, () => callback()),
+    onChange: (callback) => on<{ workers: string[] } | null>(WORKER_EVENTS.changed, (payload) => callback(payload?.workers ?? null)),
   },
   wakeups: {
     test: (severity, devices) => call<string>(WAKEUP_CHANNELS.test, severity, devices),

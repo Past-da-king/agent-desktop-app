@@ -23,27 +23,59 @@ const FIELD_LABELS: Record<string, string> = {
 }
 
 /** A page's kept versions, newest first, read again whenever the page changes. Empty while loading or when it has none. */
-export function useMemoryHistory(memoryId: string | null, changedAt: number): MemoryVersion[] {
+export interface MemoryHistoryState {
+  versions: MemoryVersion[]
+  /** Why the history could not be read; empty when the last read worked. */
+  error: string
+  loading: boolean
+  retry: () => void
+}
+
+/** A page's versions, with the failure kept apart from "no versions yet" so the dialog can say which it is. */
+export function useMemoryHistoryState(memoryId: string | null, changedAt: number): MemoryHistoryState {
   const [versions, setVersions] = useState<MemoryVersion[]>([])
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(memoryId !== null)
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     if (memoryId === null) {
       setVersions([])
+      setError('')
+      setLoading(false)
       return
     }
     let live = true
+    setLoading(true)
     void agent.memory
       .history(memoryId)
       .then((list) => {
-        if (live) setVersions(list)
+        if (!live) return
+        setVersions(list)
+        setError('')
       })
-      .catch(() => {
-        if (live) setVersions([])
+      .catch((cause: unknown) => {
+        if (!live) return
+        setVersions([])
+        setError(historyError(cause))
+      })
+      .finally(() => {
+        if (live) setLoading(false)
       })
     return () => {
       live = false
     }
-  }, [memoryId, changedAt])
-  return versions
+  }, [memoryId, changedAt, attempt])
+  return { versions, error, loading, retry: () => setAttempt((n) => n + 1) }
+}
+
+/** The line shown when the history cannot be read. Never empty, so a failure can not pass for "no changes yet". */
+export function historyError(cause: unknown): string {
+  const why = cause instanceof Error ? cause.message.trim() : ''
+  return why === '' ? 'The history could not be read.' : `The history could not be read: ${why}`
+}
+
+export function useMemoryHistory(memoryId: string | null, changedAt: number): MemoryVersion[] {
+  return useMemoryHistoryState(memoryId, changedAt).versions
 }
 
 export function whenLabel(ms: number): string {
@@ -126,7 +158,7 @@ function VersionEntry({
  * said. Bringing an old version back adds a new version, so the history never loses anything.
  */
 export function MemoryHistoryDialog({ memory, onClose }: { memory: MemoryRow; onClose: () => void }): JSX.Element {
-  const versions = useMemoryHistory(memory.id, memory.updatedAt)
+  const { versions, error, loading, retry } = useMemoryHistoryState(memory.id, memory.updatedAt)
   const restore = (n: number): void => {
     void agent.memory
       .restoreVersion(memory.id, n)
@@ -147,7 +179,16 @@ export function MemoryHistoryDialog({ memory, onClose }: { memory: MemoryRow; on
           Every change, newest first: who made it, why, and what the page said.
         </p>
       </div>
-      {versions.length === 0 ? (
+      {error !== '' ? (
+        <div className="banner mh-failed" role="alert">
+          <span>{error}</span>{' '}
+          <button type="button" className="linkish" onClick={retry}>
+            Try again
+          </button>
+        </div>
+      ) : loading && versions.length === 0 ? (
+        <p className="muted">Reading the history...</p>
+      ) : versions.length === 0 ? (
         <p className="muted">No changes yet. The next edit, by you or an agent, starts the history.</p>
       ) : (
         <ol className="mh-list">

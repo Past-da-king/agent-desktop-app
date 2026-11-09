@@ -126,8 +126,11 @@ export interface WorkersApi {
   /** The person types a key for one of its secrets; it goes straight to the encrypted store. */
   setSecret(id: string, name: string, value: string): Promise<void>
   openFolder(id: string): Promise<void>
-  /** Something about the workers or their events changed. */
-  onChange(cb: () => void): () => void
+  /**
+   * Something about the workers or their events changed. `workers` names the ones it was about; null means any of
+   * them, so read everything again.
+   */
+  onChange(cb: (workers: string[] | null) => void): () => void
 }
 
 export const WORKER_PAYLOAD_MAX = 32_000
