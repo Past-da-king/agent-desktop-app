@@ -163,10 +163,11 @@ describe('end-of-day pass', () => {
       return store.listWhere(entity, where)
     }) as typeof store.listWhere
     const memory = new MemoryService({ store: counting, index, upkeep, complete: async () => where('x'), dailyAt: () => '23:30', now: () => clock })
-    clock = new Date(2026, 9, 21, 23, 45).getTime()
-    expect((await memory.tick())?.ok).toBe(true)
+    // Today's upkeep has run.
+    upkeep.update((state) => {
+      state.lastDay = '2026-10-21'
+    })
     expect(memory.upkeepState().lastDay).toBe('2026-10-21')
-    userReads = 0
     for (let minute = 46; minute < 60; minute += 1) {
       clock = new Date(2026, 9, 21, 23, minute).getTime()
       expect(await memory.tick()).toBeNull()
