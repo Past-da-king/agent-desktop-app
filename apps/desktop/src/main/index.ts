@@ -1366,6 +1366,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     providerFactory: factory,
     notify: showNotification,
     notifyCard: (itemId, title, body) => notifier.needsYou(itemId, title, body),
+    // A finished reply while the window is not in front of the person: one notification per chat, replaced not stacked.
+    notifyReply: (chat, body) => notifier.replyFinished(chat, settings.get().agentName, body),
     emit: (event) => {
       broadcast(EVENTS.chat, event)
       tray?.refresh()

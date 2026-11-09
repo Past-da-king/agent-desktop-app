@@ -72,6 +72,7 @@ import { describeRun, finishRun, runStarted } from './run-detail'
 import { viaLabel, type ChatVia } from '../tools/projects'
 import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
+import { replyText } from '../notify'
 import type { MessageOrigin } from '../devices/types'
 import type { LeaseHook } from './turns'
 import { MAIN_IDLE_MS, runEnded } from '../browser/run-tabs'
@@ -168,6 +169,8 @@ export interface RunnerDeps {
   notify?: (title: string, body: string) => void
   /** The same, naming the card so a click on the notification can open it. */
   notifyCard?: (itemId: string, title: string, body: string) => void
+  /** A chat's turn finished with a reply while the window is not in front of the person: one per chat. */
+  notifyReply?: (chat: string, body: string) => void
   /** Pushes a ChatEvent to the renderer. */
   emit?: (event: ChatEvent) => void
   /** True while the app window has the person's attention. Defaults to true (no notifications in tests). */
@@ -265,6 +268,8 @@ interface ChatLine {
   taken: Steer[]
   /** The last transcript row written, so a note riding with it can be stored with it. */
   lastTurnId: string
+  /** What the agent last said in this chat's running turn, for the notification when the turn ends. */
+  lastSaid: string
 }
 
 /** A joined message the run has not read after this long is started alongside instead, so it is never stuck. */
@@ -281,6 +286,7 @@ export class Runner {
   private readonly tools: Tool[]
   private readonly notify: (title: string, body: string) => void
   private readonly notifyCard: (itemId: string, title: string, body: string) => void
+  private readonly notifyReply: (chat: string, body: string) => void
   private readonly emit: (event: ChatEvent) => void
   private readonly isFocused: () => boolean
   private readonly now: () => number
@@ -339,6 +345,7 @@ export class Runner {
     this.notify = deps.notify ?? (() => undefined)
     this.notifyCard =
       deps.notifyCard ?? ((_itemId, title, body) => this.notify(title, body))
+    this.notifyReply = deps.notifyReply ?? (() => undefined)
     this.emit = deps.emit ?? (() => undefined)
     this.isFocused = deps.isFocused ?? (() => true)
     this.now = deps.now ?? Date.now
@@ -456,6 +463,7 @@ export class Runner {
         pauseWhenSafe: false,
         taken: [],
         lastTurnId: '',
+        lastSaid: '',
       }
       this.lines.set(chat, line)
     }
@@ -1212,6 +1220,7 @@ export class Runner {
     // Quitting: no new turn starts (his messages wait in their rows, undelivered, for the next start).
     if (this.disposing) return
     line.running = true
+    line.lastSaid = ''
     // A message the person sent starts a fresh action budget. A helper's result does not.
     if (user !== null) {
       this.budget?.reset()
@@ -1254,6 +1263,8 @@ export class Runner {
       // The turn is over: its tabs close after a few idle minutes, unless the next turn browses again first.
       runEnded(browserOwnerOf('main', line.chat), MAIN_IDLE_MS)
       this.emitFor(line.chat, error === undefined ? { type: 'run_finished' } : { type: 'run_finished', error })
+      // A turn that finished with a reply while the window was not in front of the person says so once.
+      if (error === undefined) this.announceReply(line.chat)
       // Messages that landed in the last instant of the run, or while it was being stopped, still get an answer.
       // The app is quitting: what is still waiting stays undelivered in its rows, and the next start delivers it.
       const leftover = this.disposing ? [] : line.steer.splice(0)
@@ -1829,6 +1840,8 @@ export class Runner {
         return
       case 'said':
         await this.store.upsert('chat_item', { kind: 'agent', text: event.text, meta: JSON.stringify(chatTag(chat)) })
+        // Kept for the notification a finished turn sends when the window is not in front of the person.
+        this.line(chat).lastSaid = event.text
         this.emitFor(chat, { type: 'chat_changed' })
         return
       case 'tool_started':
@@ -2145,6 +2158,23 @@ export class Runner {
       this.notify(title, body)
     } catch {
       // A notification failing must never take a run down with it.
+    }
+  }
+
+  /**
+   * A chat's turn finished with something to say and the window is not in front of the person: one notification for
+   * that chat, carrying the reply itself. Nothing for a turn that only drew a card or only ran code, and nothing
+   * while a card in that chat is already waiting on the person: the card's own notification says it.
+   */
+  private announceReply(chat: string): void {
+    if (this.disposing || this.isFocused()) return
+    const body = replyText(this.line(chat).lastSaid)
+    if (body === '') return
+    for (const waitingIn of this.waiting.values()) if (waitingIn === chat) return
+    try {
+      this.notifyReply(chat, body)
+    } catch {
+      // A notification failing must never take a turn down with it.
     }
   }
 
