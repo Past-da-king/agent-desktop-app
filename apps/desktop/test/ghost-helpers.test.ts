@@ -20,6 +20,7 @@ import { sleep, waitFor } from '../../../packages/core/test/helpers'
 import * as dbModule from '../src/main/db'
 import { Store } from '../src/main/db'
 import { HelperManager, type OffloadLink } from '../src/main/runtime/helpers'
+import { helperCards } from '../src/shared/helper-cards'
 import { buildWorkerToolset } from '../src/main/runtime/toolset'
 import { secretsView, settingsView } from './support'
 
@@ -52,7 +53,7 @@ interface Brain {
 }
 
 /** Two brains, A (places helpers) and B (runs them), with replication and the job messages between them. */
-function pair(options: { now?: () => number; stopGraceMs?: number; quietMinutes?: number; reapAfterMs?: number } = {}): {
+function pair(options: { now?: () => number; stopGraceMs?: number; quietMinutes?: number; reapAfterMs?: number; queueLimitMs?: number } = {}): {
   a: Brain
   b: Brain
   up: { a: boolean; b: boolean }
@@ -102,6 +103,7 @@ function pair(options: { now?: () => number; stopGraceMs?: number; quietMinutes?
       ...(options.now === undefined ? {} : { now: options.now }),
       ...(options.quietMinutes === undefined ? {} : { quietMinutes: options.quietMinutes }),
       ...(options.reapAfterMs === undefined ? {} : { reapAfterMs: options.reapAfterMs }),
+      ...(options.queueLimitMs === undefined ? {} : { queueLimitMs: options.queueLimitMs }),
     })
     const brain = { id, db, manager, delivered }
     brains.set(id, brain)
@@ -459,5 +461,134 @@ describe('the quiet heads-up', () => {
     }
     expect(a.delivered).toHaveLength(0)
     expect(a.manager.live()).toHaveLength(0)
+  })
+})
+
+/**
+ * A helper can never work for ever (9 Nov 2026). Ayanda's phone showed 12 helpers "working for you right now", some
+ * 260 h and 174 h old, for a profile whose helpers had died days before: a row kept state working long after its
+ * process, its app or its device was gone. Four things kept it: a queued card was never ended, a card this brain had
+ * placed on another was never ended once that device was gone, a run that stopped logging steps was never ended, and
+ * every list counted a row by its state alone. Checked here:
+ *  - a queued card 174 h old, with nothing running it, is failed with the reason and its starter told;
+ *  - a card placed on a device that is gone for good is ended after the orphan window, not skipped for ever;
+ *  - a fresh start (a new manager, the same store) ends what the last process left working, before any timer;
+ *  - a list counts only helpers that are alive, so its count always equals the rows it shows.
+ */
+describe('a helper cannot work for ever', () => {
+  const MIN = 60_000
+  const HOUR = 60 * MIN
+
+  it('a queued card 174 h old with nothing running it: failed for never getting a slot, its starter told', async () => {
+    let clock = 70_000_000_000
+    const { a, flush } = pair({ now: () => clock, queueLimitMs: 30 * MIN })
+    const id = await ghost(a, { lease: 'none', startedAt: clock - 174 * HOUR })
+    const row = await a.db.get('chat_item', id)
+    await a.db.upsert('chat_item', { id, kind: 'helper', text: row?.text ?? '', meta: JSON.stringify({ ...meta(row), queued: true, summary: 'Queued: waiting for a free slot' }) })
+    await a.manager.restore()
+    await flush()
+    clock += MIN
+    expect(await a.manager.reap()).toBe(1)
+    await flush()
+    const ended = meta(await a.db.get('chat_item', id))
+    expect(ended['state']).toBe('failed')
+    expect(String(ended['endReason'])).toContain('never got a slot')
+    expect(Number(ended['endedAt'])).toBeGreaterThan(0)
+    expect(ended['queued']).toBe(false)
+    expect(a.delivered).toHaveLength(1)
+    expect(a.delivered[0]?.note).toContain('never got a slot')
+    // And it is gone from every list.
+    expect(helperCards([(await a.db.get('chat_item', id)) as ChatItem], [], { now: clock, staleAfterMs: 30 * MIN }).length).toBe(0)
+  })
+
+  it('a card placed on a device that is gone for good is ended after the orphan window, not skipped for ever', async () => {
+    let clock = 80_000_000_000
+    const { a, flush, up } = pair({ now: () => clock })
+    const id = await ghost(a, { lease: 'none', startedAt: clock - 260 * HOUR })
+    await a.manager.restore()
+    await flush()
+    // Its device is offline, and nothing has taken the job: no lease, no step, nothing.
+    up.b = false
+    clock += MIN
+    expect(await a.manager.reap()).toBe(1)
+    await flush()
+    expect(await stateOn(a, id)).toBe('stopped')
+    expect(String(meta(await a.db.get('chat_item', id))['endReason'])).toContain('its run was lost')
+    expect(a.delivered).toHaveLength(1)
+    up.b = true
+  })
+
+  it('a fresh start ends what the last process left working, before any timer runs', async () => {
+    let clock = 90_000_000_000
+    const db = new Store(':memory:')
+    cleanups.push(() => db.close())
+    const delivered: Delivery[] = []
+    const link: OffloadLink = {
+      selfId: () => 'node-a',
+      isSelf: (id) => id === 'node-a',
+      // The device it was placed on is gone: it never answers and it will not come back.
+      up: () => false,
+      place: async () => ({ device: 'node-b', name: 'Desktop', why: 'it needs a computer' }),
+      send: async () => undefined,
+      leaseHolder: async () => ({ device: 'node-b', running: true }),
+      deviceName: async () => 'Desktop',
+    }
+    const make = (): HelperManager => {
+      const manager = new HelperManager({
+        store: db,
+        settings: settingsView(READY),
+        secrets: secretsView('test-key'),
+        providerFactory: () => providerFor({ provider: 'openai', key: 'k', baseUrl: 'http://127.0.0.1:9', allowHttp: true }),
+        workerTools: [],
+        deliver: (note, chat) => {
+          delivered.push({ note, chat: chat ?? MAIN_CHAT })
+        },
+        offload: link,
+        now: () => clock,
+        reapEveryMs: 0,
+        sweepEveryMs: 0,
+      })
+      cleanups.push(() => manager.shutdown())
+      return manager
+    }
+    // The row the last process left behind: working, its lease on a device that has not been seen for days.
+    const row = await db.upsert('chat_item', {
+      kind: 'helper',
+      text: 'Send the invites.',
+      meta: JSON.stringify({ label: 'Invites', state: 'working', summary: 'Thinking', chat: MAIN_CHAT, runToken: 'run-1', startedAt: clock - 174 * HOUR, placedBy: 'node-a', runOn: 'node-b' }),
+    })
+    await db.upsert('turn_lease', { id: `job-${row.id}`, kind: 'job', chatId: MAIN_CHAT, messageId: row.id, brainId: 'node-b', status: 'running', attempt: 1, startedAt: clock - 174 * HOUR, heartbeatAt: clock - 174 * HOUR, prompt: 'Send the invites.' })
+    const manager = make()
+    await manager.restore()
+    const first = meta(await db.get('chat_item', row.id))
+    expect(first['state']).not.toBe('working')
+    expect(['stopped', 'failed']).toContain(String(first['state']))
+    expect(String(first['endReason'])).toMatch(/restarted|no activity|gone/)
+    expect(Number(first['endedAt'])).toBeGreaterThan(0)
+    expect(manager.live()).toHaveLength(0)
+    await sleep(20)
+    expect(delivered).toHaveLength(1)
+    // A restart of that start finds nothing left to do.
+    const again = make()
+    await again.restore()
+    expect(await again.sweep()).toBe(0)
+  })
+
+  it('every list counts only live helpers, so the count equals the rows shown', async () => {
+    const now = 100_000_000_000
+    const items: ChatItem[] = [
+      // Alive: it started a minute ago and took a step ten seconds ago.
+      { id: 'live', kind: 'helper', text: 'Build it.', meta: JSON.stringify({ label: 'Live', state: 'working', startedAt: now - MIN }), createdAt: now - MIN },
+      { id: 'step-1', kind: 'activity', text: 'Ran the build', meta: JSON.stringify({ helper: 'live', summary: 'Ran the build' }), createdAt: now - 10_000 },
+      // A row from a device that is not here any more: 260 h old, nothing behind it.
+      { id: 'gone', kind: 'helper', text: 'Old job.', meta: JSON.stringify({ label: 'Gone', state: 'working', runOn: 'node-b', startedAt: now - 260 * HOUR }), createdAt: now - 260 * HOUR },
+      // A row with nothing behind it at all: quiet far longer than any heartbeat window.
+      { id: 'quiet', kind: 'helper', text: 'Older job.', meta: JSON.stringify({ label: 'Quiet', state: 'working', startedAt: now - 174 * HOUR }), createdAt: now - 174 * HOUR },
+    ]
+    const cards = helperCards(items, [], { now, staleAfterMs: 30 * MIN, deviceOffline: (device) => device === 'node-b' })
+    expect(cards.map((card) => card.label)).toEqual(['Live'])
+    // The header count the side panel shows, and the phone's: only what is listed.
+    expect(cards.filter((card) => card.state === 'working').length).toBe(cards.length)
+    expect(cards.length).toBe(1)
   })
 })

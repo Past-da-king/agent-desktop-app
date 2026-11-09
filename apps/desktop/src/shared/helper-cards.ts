@@ -298,6 +298,34 @@ export interface CardOptions {
   running?: (chat: string) => boolean
   /** The clock, for the waiting cards' day (WAITING_CARD_MS); without it a waiting card stays until closed. */
   now?: number
+  /**
+   * How long a working card may go with no new step before it is a ghost, in ms (9 Nov 2026). Without it a row is
+   * counted by its stored state alone, which is how dead helpers showed as working for 260 h.
+   */
+  staleAfterMs?: number
+  /** Whether the device a helper runs on (or was placed on) is gone: its card is then not working. */
+  deviceOffline?: (device: string) => boolean
+}
+
+/** The default window a working card may go with no new step before it stops counting as working. */
+export const HELPER_STALE_MS = 30 * 60_000
+
+/**
+ * Whether a helper is alive right now (9 Nov 2026): still working, not silent for longer than the window, and not
+ * placed on a device the caller says is gone. Every list and count goes through this one rule, so a row whose run
+ * died can never be counted as working, however old its copy is.
+ */
+export function helperAlive(row: ChatItem, steps: readonly ChatItem[] = [], options: CardOptions = {}): boolean {
+  const meta = metaOf(row)
+  if (helperState(metaText(meta, 'state')) !== 'working') return false
+  const device = metaText(meta, 'runOn') || metaText(meta, 'placedBy')
+  if (device !== '' && options.deviceOffline?.(device) === true) return false
+  const window = options.staleAfterMs
+  if (window === undefined) return true
+  const now = options.now ?? Date.now()
+  let last = Math.max(row.createdAt, metaNumber(meta, 'startedAt') ?? 0, metaNumber(meta, 'lastStepAt') ?? 0, metaNumber(meta, 'heartbeatAt') ?? 0)
+  for (const step of steps) if (step.createdAt > last) last = step.createdAt
+  return now - last < window
 }
 
 /**
@@ -376,6 +404,8 @@ function lastAgentLine(lines: ChatItem[]): ChatItem | undefined {
 export function helperCards(items: ChatItem[], projects: ProjectRow[], options: CardOptions = {}): HelperCard[] {
   const index = rowIndex(items)
   const closed = closedChats(projects)
+  /** One rule for "this helper is alive now", used by the list, the grouping and every count that comes off it. */
+  const liveOf = (item: ChatItem): boolean => helperAlive(item, index.steps.get(helperIdOf(item)) ?? [], options)
   // A hidden project shows nothing of itself: its chats get no card of their own (their helpers still show).
   const projectOf = new Map<string, ProjectRow>()
   for (const project of projects) {
@@ -403,11 +433,14 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       const list = helpersIn.get(chat)
       if (list === undefined) helpersIn.set(chat, [item])
       else list.push(item)
-    } else if (helperState(metaText(metaOf(item), 'state')) === 'working') loose.push(item)
+    } else if (liveOf(item)) loose.push(item)
   }
 
   const helperCard = (item: ChatItem, depth: 0 | 1): HelperCard => {
-    const view = helperView(item, items)
+    const stored = helperView(item, items)
+    // A card whose run is gone (silent for longer than the window, or its device is not there any more) is not
+    // working: it is shown ended here, so no header count or list can include it (9 Nov 2026).
+    const view = stored.state === 'working' && !liveOf(item) ? { ...stored, state: 'stopped' as HelperState } : stored
     const line = view.state === 'working' ? helperLine(view) : oneLine(view.result) || oneLine(view.summary) || (view.state === 'done' ? 'Done' : view.state === 'failed' ? 'Did not finish' : 'Stopped')
     return {
       ...view,
@@ -433,7 +466,7 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
     const agentRow = agentRows.get(chat)
     const agentMeta = agentRow === undefined ? {} : metaOf(agentRow)
     const inChat = helpersIn.get(chat) ?? []
-    const helperWorking = inChat.some((row) => helperState(metaText(metaOf(row), 'state')) === 'working')
+    const helperWorking = inChat.some((row) => liveOf(row))
     const running = options.running?.(chat) === true || (agentRow !== undefined && helperState(metaText(agentMeta, 'state')) === 'working') || helperWorking
     const waiting = !running && said.agent > 0 && said.agent >= said.user
     if (!running && !waiting) continue

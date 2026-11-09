@@ -244,6 +244,10 @@ export interface HelperManagerDeps {
   reapEveryMs?: number
   /** How long a card must show no sign of life (no run, no fresh lease) before it is ended as lost. Default 3 min. */
   reapAfterMs?: number
+  /** How long a queued helper may wait for a slot before it is failed, in ms. Default 30 min. */
+  queueLimitMs?: number
+  /** How often the start-up sweep runs again while the app is open, in ms. Default 0: only at start. */
+  sweepEveryMs?: number
   /** How long helper_steer waits for a message to be read before it answers Queued. */
   steerWaitMs?: number
   emit?: (event: ChatEvent) => void
@@ -451,6 +455,8 @@ const LOST_REASON = 'its run was lost: no device was running it any more'
 export const ORPHAN_ANY_MS = 2 * 60 * MINUTE_MS
 /** The same for a routine's card, which writes no steps of its own while its run works. */
 export const ORPHAN_ROUTINE_MS = 6 * 60 * MINUTE_MS
+/** A queued helper waits at most this long for a slot: then it is failed, never left queued for days (9 Nov 2026). */
+export const QUEUE_LIMIT_MS = 30 * MINUTE_MS
 
 /** Words a helper uses when it gives up. Usually it can do it; it needs sending back. */
 export const GAVE_UP =
@@ -521,6 +527,9 @@ export class HelperManager implements HelperHost {
   private readonly stopGraceMs: number
   private readonly reapEveryMs: number
   private readonly reapAfterMs: number
+  private readonly queueLimitMs: number
+  private readonly sweepEveryMs: number
+  private sweepTimer: ReturnType<typeof setInterval> | null = null
   private readonly steerWaitMs: number
   private reapTimer: ReturnType<typeof setInterval> | null = null
   /** Stops sent to the brain running a helper, each ended here if that brain does not end it in time. */
@@ -579,6 +588,8 @@ export class HelperManager implements HelperHost {
     this.stopGraceMs = deps.stopGraceMs ?? STOP_GRACE_MS
     this.reapEveryMs = deps.reapEveryMs ?? MINUTE_MS
     this.reapAfterMs = deps.reapAfterMs ?? REAP_AFTER_MS
+    this.queueLimitMs = deps.queueLimitMs ?? QUEUE_LIMIT_MS
+    this.sweepEveryMs = deps.sweepEveryMs ?? 0
     this.steerWaitMs = deps.steerWaitMs ?? STEER_WAIT_MS
   }
 
@@ -594,6 +605,8 @@ export class HelperManager implements HelperHost {
     this.quietTimer = null
     if (this.reapTimer !== null) clearInterval(this.reapTimer)
     this.reapTimer = null
+    if (this.sweepTimer !== null) clearInterval(this.sweepTimer)
+    this.sweepTimer = null
     for (const timer of this.pendingStops.values()) clearTimeout(timer)
     this.pendingStops.clear()
   }
@@ -1268,6 +1281,40 @@ export class HelperManager implements HelperHost {
   }
 
   /**
+   * The start-up sweep (9 Nov 2026): a card this process left working when it died is ended at once, before any
+   * timer, so nothing counts as working for a process that is not there. A card still waiting in the queue is left
+   * to the queue limit; a card placed on a device that is not up cannot resume either, so it is ended too. Returns
+   * how many it ended. Safe to run again: it only ever ends a card that is still working with nothing behind it.
+   */
+  async sweep(): Promise<number> {
+    if (this.closing) return 0
+    const now = this.now()
+    const rows = await listWhere(this.store, 'chat_item', { kind: 'helper', contains: WORKING_IN_META }).catch(() => [])
+    const link = this.link()
+    let ended = 0
+    for (const row of rows) {
+      if (row.kind !== 'helper' || this.runs.has(row.id) || this.queue.includes(row.id)) continue
+      if (liveRuns.has(row.id) || this.pendingStops.has(row.id)) continue
+      const meta = parseMeta(row.meta)
+      if (meta['state'] !== 'working') continue
+      if (typeof meta['projectChat'] === 'string' && meta['projectChat'] !== '') continue
+      // Waiting its turn, not a run that died: the queue limit decides its fate.
+      if (meta['queued'] === true) continue
+      const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
+      const beating = lease !== null && (lease.status === 'running' || lease.status === 'interrupted') && now - lease.heartbeatAt < LEASE_DEAD_MS
+      if (beating) continue
+      const runOn = stringField(meta['runOn'])
+      const here = runOn === '' || link === null || link.isSelf(runOn)
+      // Placed on a device that is up: it works there, and its card is that device's to end.
+      if (!here && link !== null && link.up(runOn)) continue
+      const name = here ? '' : await Promise.resolve(link?.deviceName?.(runOn) ?? '').catch(() => '')
+      const reason = here ? 'lost: the app restarted while it was working' : `lost: ${name || 'the device it ran on'} was gone`
+      if (await this.endUnrun(row.id, 'stopped', reason)) ended += 1
+    }
+    return ended
+  }
+
+  /**
    * The orphan watch: a card still marked working with no run anywhere is ended as lost, so nothing shows as working
    * forever. Its run is gone when it does not run in this process and no brain holds a live lease on it (a lease
    * beats every 10 s while its run lives). This brain judges the cards it runs (with no live lease of another brain)
@@ -1292,6 +1339,14 @@ export class HelperManager implements HelperHost {
       // A routine run or background script (runtime/live-runs.ts) is ended by its own run.
       if (liveRuns.has(row.id)) continue
       if (this.pendingStops.has(row.id)) continue
+      // Waiting for a slot: it never started, so no lease and no steps. A card that has waited longer than the queue
+      // limit is failed here with the reason, never left "waiting for a free slot" for days (9 Nov 2026: 174 h).
+      if (meta['queued'] === true) {
+        if (now - (numberField(meta['startedAt']) || row.createdAt) < this.queueLimitMs) continue
+        const mins = Math.max(1, Math.round(this.queueLimitMs / MINUTE_MS))
+        if (await this.endUnrun(row.id, 'failed', `never got a slot after ${mins} min`)) ended += 1
+        continue
+      }
       const lease = await this.store.get('turn_lease', `job-${row.id}`).catch(() => null)
       const life = Math.max(numberField(meta['startedAt']) || row.createdAt, lease?.heartbeatAt ?? 0)
       if (now - life < this.reapAfterMs) continue
@@ -1334,8 +1389,11 @@ export class HelperManager implements HelperHost {
         // Placed on another brain: only the brain that placed it judges it, and only with the link up.
         if (link === null || !link.isSelf(stringField(meta['placedBy']))) continue
         if (lease !== null && live && now - lease.heartbeatAt < LEASE_DEAD_MS) continue
-        // No lease yet: still waiting its turn there, or the start was never taken (takeBack runs it here).
-        if (lease === null && (meta['queued'] === true || this.remote.has(row.id))) continue
+        // No lease yet: still waiting its turn there, or the start was never taken (takeBack runs it here). That only
+        // holds while the device is up: with it gone there is nothing to wait for, so the card is ended below instead
+        // of saying working for ever (9 Nov 2026).
+        if (lease === null && runOn !== '' && link !== null && link.up(runOn)) continue
+        if (lease === null && this.remote.has(row.id) && (runOn === '' || link === null || link.up(runOn))) continue
       }
       if (await this.endUnrun(row.id, 'stopped', LOST_REASON)) ended += 1
     }
@@ -1513,6 +1571,12 @@ export class HelperManager implements HelperHost {
     for (const id of waiting) {
       const row = await this.store.get('chat_item', id)
       await this.adopt(id, row === null ? '' : this.originOf(parseMeta(row.meta)))
+    }
+    // What the last process left working is ended now, before any timer runs (9 Nov 2026).
+    await this.sweep()
+    if (this.sweepEveryMs > 0 && this.sweepTimer === null && !this.closing) {
+      this.sweepTimer = setInterval(() => void this.sweep().catch(() => 0), this.sweepEveryMs)
+      this.sweepTimer.unref?.()
     }
     // From now on, a card left working with no run anywhere (a ghost) is found and ended.
     this.watchOrphans()
