@@ -20,6 +20,10 @@
   .detail{position:static}
   .two{grid-template-columns:minmax(0,1fr)}
   .tb-brand,.tb-right{min-width:0}
+  /* The rail is folded by the window's width here, so its fold button would do nothing: it goes, and the mascot
+     sits alone and centred. */
+  .shell .rail-fold{display:none}
+  .shell .me-row{justify-content:center}
 }
 @media (max-width:1080px){
   .ob{grid-template-columns:minmax(0,1fr)}
@@ -93,9 +97,20 @@
   .titlebar{gap:6px}
   .cmdbar{padding:0 10px;gap:8px}
   .cmdbar kbd{display:none}
+  .compose textarea{text-overflow:ellipsis}
   .compose textarea::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 }
+/* A helper over a narrow window: its name keeps room in the bar, and at the narrowest it takes its own line. */
+@media (max-width:520px){
+  .hp-float .hp-stage-bar b{flex:1 1 90px;min-width:90px}
+  .hp-float .hp-stage-bar .hp-stage-gap{display:none}
+}
 @media (max-width:400px){
+  .hp-float .hp-stage-bar{flex-wrap:wrap;gap:2px 6px;padding:10px 6px 10px 12px}
+  .hp-float .hp-stage-bar b{order:9;flex:1 1 100%;min-width:0}
+  .hp-float .hp-stage-bar .pill{margin-right:auto}
+  /* Three tabs in one pill: each takes the room its words need, on one line. */
+  .page .seg button{flex:1 1 auto;padding:0 8px;white-space:nowrap;font-size:12.5px}
   .titlebar .tb-btn{width:34px}
   .wc{width:36px}
 }
