@@ -48,6 +48,8 @@ interface ChatsState {
   open: string
   /** Every chat with something going on, by chat id. */
   runs: Record<string, ChatRunInfo>
+  /** The run states were read at least once: before that, nothing can be called idle. */
+  runsKnown: boolean
   /** When the person last looked at each chat (epoch ms), for "done, not read yet". */
   seen: Record<string, number>
   /** Replies before this are read (unread tracking started then). */
@@ -60,6 +62,7 @@ interface ChatsState {
 export const useChats = create<ChatsState>((set, get) => ({
   open: currentChat(),
   runs: {},
+  runsKnown: false,
   seen: readSeen(),
   since: readSince(),
   openChat: (chat) => {
@@ -78,7 +81,7 @@ export const useChats = create<ChatsState>((set, get) => ({
       const list = await chatApi.states()
       const runs: Record<string, ChatRunInfo> = {}
       for (const info of list) runs[info.chat] = info
-      set({ runs })
+      set({ runs, runsKnown: true })
     } catch {
       // An older main process without states(): fall back to events only.
     }
