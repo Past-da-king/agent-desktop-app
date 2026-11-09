@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Script } from 'node:vm'
 
-import { BrowserWindow, clipboard as systemClipboard, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard as systemClipboard, screen, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
 import type { DownloadItem, Session, WebContents, WebPreferences } from 'electron'
 
 import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
@@ -29,7 +29,9 @@ import { PRESENCE_SCRIPT } from './presence'
 import { watchDevtools } from './devtools'
 import type { NetEntry } from './devtools-log'
 import {
+  acceptLanguageFor,
   chromeVersionOf,
+  languageListFor,
   emulationCommands,
   fitView,
   presetView,
@@ -101,6 +103,55 @@ import {
 } from './outline'
 
 const PARTITION = 'persist:agent-browser'
+
+/**
+ * Permissions a page may hold without a person deciding: the same ones a fresh Chrome profile answers `prompt`
+ * or `granted` to. Camera, microphone, location, screen capture, clipboard reading and device access are not
+ * here, so they stay refused.
+ */
+const BENIGN_PERMISSIONS = new Set([
+  'fullscreen',
+  'pointerLock',
+  'notifications',
+  'clipboard-sanitized-write',
+  'mediaKeySystem',
+  'speaker-selection',
+  'openExternal',
+  'background-sync',
+  'storage-access',
+  'top-level-storage-access',
+])
+/** The platform version the engine itself reports in `navigator.userAgentData`, so the top frame matches its workers. */
+function platformVersionOf(platform: string): string {
+  if (platform === 'win32') {
+    const version = process.getSystemVersion() || '10.0.0'
+    const build = Number(version.split('.')[2] ?? '0')
+    return build >= 22_000 ? '19.0.0' : '10.0.0'
+  }
+  if (platform === 'darwin') return '10.15.7'
+  return '6.5.0'
+}
+
+/** The screen the panel is on, in CSS pixels, so the page's screen is a real one and not its own viewport. */
+function primaryScreen(): { width: number; height: number } | undefined {
+  try {
+    const display = screen.getPrimaryDisplay()
+    const size = display.size
+    return { width: Math.round(size.width), height: Math.round(size.height) }
+  } catch {
+    return undefined
+  }
+}
+
+/** The app's own locale, so navigator.languages and Accept-Language agree with Intl and with the person. */
+function appLocale(): string {
+  try {
+    return app.getLocale() ?? ''
+  } catch {
+    return ''
+  }
+}
+
 const MAX_TABS = 5
 const EMPTY_BOUNDS: BrowserBounds = { x: 0, y: 0, width: 0, height: 0, visible: false }
 
@@ -163,7 +214,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (vault === null || !alive(wc) || this.vaultAttached.has(wc)) return
     this.vaultAttached.add(wc)
     try {
-      await attachVaultTo(vault, wc, { person, frames: true })
+      // The top frame only: a third-party frame (a sign-in window, a human-verification widget) must run
+      // exactly as it would in Chrome, with no injected world, no binding and no patched credentials.
+      await attachVaultTo(vault, wc, { person })
     } catch {
       this.vaultAttached.delete(wc)
     }
@@ -271,7 +324,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     } catch {
       engineUa = ''
     }
-    this.engine = { chromeVersion: chromeVersionOf(engineUa), platform: process.platform }
+    this.engine = { chromeVersion: chromeVersionOf(engineUa), platform: process.platform, platformVersion: platformVersionOf(process.platform), locale: appLocale(), screen: primaryScreen() }
 
     // A run that ends closes the tabs it opened (helpers and routines at once, the main agent after a few idle minutes).
     this.offRunEnd = onRunEnded((owner, graceMs) => this.endRun(owner, graceMs))
@@ -2459,11 +2512,14 @@ ${await this.snapshot()}`
     if (this.sessionsReady.has(partition)) return
     this.sessionsReady.add(partition)
 
-    session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-    session.setPermissionCheckHandler(() => false)
+    // Chrome's own answers, as far as an app can give them. The powerful permissions are still refused, but
+    // the everyday ones are not pre-denied: a page that finds every permission `denied` reads as headless.
+    session.setPermissionRequestHandler((_contents, permission, callback) => callback(BENIGN_PERMISSIONS.has(permission)))
+    session.setPermissionCheckHandler((_contents, permission) => BENIGN_PERMISSIONS.has(permission))
     // No Electron or app token in the user agent: sites treat those as an embedded shell.
     try {
-      session.setUserAgent(userAgentFor(presetView('desktop'), this.engine), 'en-US,en')
+      // A plain list, the way navigator.languages reads: q-values belong in the header, not in this string.
+      session.setUserAgent(userAgentFor(presetView('desktop'), this.engine), languageListFor(this.engine))
     } catch {
       // A session that refuses a user agent keeps its own.
     }
