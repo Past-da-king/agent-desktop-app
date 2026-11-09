@@ -61,7 +61,7 @@ export function SettingRow({
   icon,
   sub = false,
   stack = false,
-  tileSlot,
+  below,
 }: {
   spec: RowSpec
   /** True when the value is not the default: the row then says the default and offers Reset. */
@@ -73,13 +73,13 @@ export function SettingRow({
   sub?: boolean
   /** A control too wide for the right side drops under the label instead. */
   stack?: boolean
-  /** Pills or a switch drawn instead of an icon tile. */
-  tileSlot?: ReactNode
+  /** A second line under the label and its description, lined up with them (an account's own choice). */
+  below?: ReactNode
 }): JSX.Element {
   const said = defaultText(spec)
   const tone = icon?.tone === undefined ? '' : ` ${icon.tone}`
   return (
-    <div className={`srow${sub ? ' sub' : ''}${stack ? ' stack' : ''}`}>
+    <div className={`srow${sub ? ' sub' : ''}${stack ? ' stack' : ''}${below === undefined ? '' : ' two'}`}>
       {sub ? null : (
         <div className={`ri${tone}`}>
           <Icon name={icon?.name ?? spec.icon} size={22} />
@@ -87,15 +87,18 @@ export function SettingRow({
       )}
       <div className="rt">
         <b>{spec.label}</b>
-        <span className="d">
-          {spec.description}
-          {changed === true && said !== '' ? (
-            <>
-              {' '}
-              <b>Default: {said}.</b>
-            </>
-          ) : null}
-        </span>
+        {spec.description === '' && !(changed === true && said !== '') ? null : (
+          <span className="d">
+            {spec.description}
+            {changed === true && said !== '' ? (
+              <>
+                {' '}
+                <b>Default: {said}.</b>
+              </>
+            ) : null}
+          </span>
+        )}
+        {below === undefined ? null : <div className="below">{below}</div>}
       </div>
       <div className="end">
         {children}

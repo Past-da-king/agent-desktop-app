@@ -90,9 +90,15 @@ export function Settings(): JSX.Element {
     target?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }
 
-  // Escape empties the search box, the way the field itself says.
+  // Ctrl+F (Cmd+F on a Mac) puts the cursor in the search box, and Escape empties it, the way the field itself says.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        field.current?.focus()
+        field.current?.select()
+        return
+      }
       if (event.key !== 'Escape') return
       if (query !== '') setQuery('')
     }
@@ -148,7 +154,9 @@ export function Settings(): JSX.Element {
             placeholder="Search settings"
             onChange={(event) => setQuery(event.target.value)}
           />
-          <span className="kbd">{searching ? 'Esc' : 'Search'}</span>
+          <span className="kbd" aria-hidden="true">
+            {searching ? 'Esc' : 'Ctrl F'}
+          </span>
         </div>
       </div>
 
@@ -184,7 +192,7 @@ export function Settings(): JSX.Element {
             </div>
           ) : null}
           <AccountSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
-          <ConnectionsSection settings={settings} navigate={navigate} />
+          <ConnectionsSection navigate={navigate} />
           <DevicesSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
           <AgentsSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
           <VoiceSection settings={settings} put={put} resetRow={resetRow} navigate={navigate} />
@@ -228,7 +236,15 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
         : 'Not synced yet'
 
   const signOut = (): void => {
-    void agent.account.signOut().then(() => navigate({ page: 'onboarding', step: 'signin' }))
+    void agent.account
+      .signOut()
+      .then(() => navigate({ page: 'onboarding', step: 'signin' }))
+      .catch(() => toast('Could not sign out. Try again.'))
+  }
+
+  /** The accounts live outside the settings file; an empty save reads them back in, and a failure is said. */
+  const changeAccount = (work: Promise<unknown>, failed: string): void => {
+    void work.then(() => put({})).catch(() => toast(failed))
   }
 
   return (
@@ -250,30 +266,38 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
         />
       </SettingRow>
       <div className="divider" />
-      <SettingRow spec={row('syncEmail')} icon={{ name: 'mail', tone: signedIn ? 'ok' : undefined }}>
-        <Pill tone={signedIn ? 'ok' : 'mute'}>{signedIn ? 'Signed in' : 'No account'}</Pill>
+      <SettingRow
+        spec={
+          signedIn
+            ? {
+                ...row('syncEmail'),
+                label: settings?.syncEmail || 'Signed in',
+                description: `Signed in on this computer. ${syncLine}. Keys never sync.`,
+              }
+            : { ...row('syncEmail'), label: 'No account', description: 'Sign in to sync with your other devices. Keys never sync.' }
+        }
+        icon={{ name: 'mail', tone: signedIn ? 'ok' : undefined }}
+      >
+        {signedIn ? (
+          <Button
+            variant="text"
+            size="sm"
+            disabled={syncing || status.syncing}
+            onClick={() => {
+              setSyncing(true)
+              void agent.account
+                .syncNow()
+                .catch(() => toast('Could not sync just now. It will try again by itself.'))
+                .finally(() => setSyncing(false))
+            }}
+          >
+            {syncing || status.syncing ? 'Syncing...' : 'Sync now'}
+          </Button>
+        ) : null}
         <Button variant="tonal" size="sm" onClick={signedIn ? signOut : () => navigate({ page: 'onboarding', step: 'signin' })}>
           {signedIn ? 'Sign out' : 'Sign in'}
         </Button>
       </SettingRow>
-      {signedIn ? (
-        <SettingRow spec={row('signedIn')} sub>
-          <span className="small muted">
-            {settings?.syncEmail ?? ''} {syncLine === '' ? '' : `. ${syncLine}.`}
-          </span>
-          <Button
-            variant="text"
-            size="sm"
-            disabled={syncing}
-            onClick={() => {
-              setSyncing(true)
-              void agent.account.syncNow().finally(() => setSyncing(false))
-            }}
-          >
-            {syncing ? 'Syncing...' : 'Sync now'}
-          </Button>
-        </SettingRow>
-      ) : null}
       <div className="divider" />
       <SettingRow spec={row('accounts')}>
         <Button variant="tonal" size="sm" onClick={() => setAdding(true)}>
@@ -285,25 +309,29 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
         <div className="rowempty">No AI account yet. Add your plan or a key, and your agent can think.</div>
       ) : null}
       {accounts.map((account) => (
-        <SettingRow key={account.id} spec={{ ...row('accounts'), label: account.label, description: kindLine(account) }} sub stack>
+        <SettingRow
+          key={account.id}
+          spec={{ ...row('accounts'), label: account.label, description: kindLine(account) }}
+          sub
+          below={
+            <>
+              <span className="lbl">Pictures</span>
+              <Segmented
+                ariaLabel={`Pictures on ${account.label}`}
+                options={[
+                  { value: 'auto', label: 'Auto' },
+                  { value: 'on', label: 'Always' },
+                  { value: 'off', label: 'Never' },
+                ]}
+                value={account.pictures ?? 'auto'}
+                onChange={(next) => changeAccount(agent.settings.accounts.update(account.id, { pictures: next }), 'Could not change that. Try again.')}
+              />
+            </>
+          }
+        >
           <Pill tone={account.kind === 'api' ? (account.hasKey ? 'ok' : 'mute') : 'ok'}>
             {account.kind === 'api' ? (account.hasKey ? 'Key saved' : 'No key') : 'Plan'}
           </Pill>
-          <div className="pics-ctl">
-            <span className="lbl">Pictures</span>
-            <Segmented
-              ariaLabel={`Pictures on ${account.label}`}
-              options={[
-                { value: 'auto', label: 'Auto' },
-                { value: 'on', label: 'Always' },
-                { value: 'off', label: 'Never' },
-              ]}
-              value={account.pictures ?? 'auto'}
-              onChange={(next) => {
-                void agent.settings.accounts.update(account.id, { pictures: next }).then(() => put({}))
-              }}
-            />
-          </div>
           <Button variant="text" size="sm" onClick={() => setEditing(account)}>
             Change
           </Button>
@@ -315,7 +343,7 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
                 className="danger"
                 onClick={() => {
                   setRemoving(null)
-                  void agent.settings.accounts.remove(account.id).then(() => put({}))
+                  changeAccount(agent.settings.accounts.remove(account.id), `Could not remove ${account.label}. Try again.`)
                 }}
               >
                 Remove it
@@ -334,7 +362,7 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
       <div className="divider" />
       <SettingRow spec={row('ai')} />
       {settings === null ? null : (
-        <div style={{ padding: '0 16px 14px 76px' }}>
+        <div className="pickwrap">
           <AiPickRows settings={settings} picks={settings.ai} onChange={(ai: AiPicks) => put({ ai })} />
         </div>
       )}
@@ -345,15 +373,16 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
 }
 
 /** Profiles and connections: the two places a person looks for their accounts. Each row opens the page that owns it. */
-function ConnectionsSection({ settings, navigate }: { settings: SettingsValues | null; navigate: SectionProps['navigate'] }): JSX.Element {
+function ConnectionsSection({ navigate }: { navigate: SectionProps['navigate'] }): JSX.Element {
   return (
-    <SectionBlock id="profiles" name="Profiles and connections" line="Where your accounts live. Each row opens the page that owns it.">
+    <SectionBlock id="profiles" name="Profiles and connections" line="Where your accounts live. They are kept on the Connections page.">
       <SettingRow
         spec={{
           key: 'profiles.connected',
           section: 'profiles',
-          label: 'Connected apps',
-          description: 'Mail, calendar, Slack and the rest, and which profile each one belongs to.',
+          label: 'Connected apps and profiles',
+          description:
+            'Mail, calendar, Slack and the rest, the profile each one belongs to, and the sites your browser is signed in to. Profiles are picked and changed there, next to the accounts they use.',
           control: 'block',
           icon: 'grid',
           sample: null,
@@ -363,22 +392,6 @@ function ConnectionsSection({ settings, navigate }: { settings: SettingsValues |
           Open Connections
         </Button>
       </SettingRow>
-      <SettingRow
-        spec={{
-          key: 'profiles.signins',
-          section: 'profiles',
-          label: 'Profiles and browser sign-ins',
-          description: 'Parts of your life, each with its own accounts and the sites your browser is signed in to.',
-          control: 'block',
-          icon: 'person',
-          sample: null,
-        }}
-      >
-        <Button variant="tonal" size="sm" onClick={() => navigate({ page: 'connections' })}>
-          Open Connections
-        </Button>
-      </SettingRow>
-      <div className="rowempty">{settings === null ? '' : 'Profiles are picked and changed next to the accounts they use, in Connections.'}</div>
     </SectionBlock>
   )
 }
@@ -396,10 +409,16 @@ const SHARE_GROUPS: Array<[string, string]> = [
 function PreferredDevices({ settings, put }: { settings: SettingsValues | null; put: SectionProps['put'] }): JSX.Element {
   const [devices, setDevices] = useState<Array<{ id: string; name: string }>>([])
   useEffect(() => {
+    let live = true
     void agent.devices
       .list()
-      .then((rows) => setDevices(rows.filter((item) => !item.revoked).map((item) => ({ id: item.id, name: item.name }))))
+      .then((rows) => {
+        if (live) setDevices(rows.filter((item) => !item.revoked).map((item) => ({ id: item.id, name: item.name })))
+      })
       .catch(() => undefined)
+    return () => {
+      live = false
+    }
   }, [])
   const preferred = settings?.devicesPreferred ?? {}
   return (
@@ -408,7 +427,7 @@ function PreferredDevices({ settings, put }: { settings: SettingsValues | null; 
         <span className="small muted">{devices.length === 0 ? 'No other device yet' : 'Empty means any device that is free'}</span>
       </SettingRow>
       {SHARE_GROUPS.map(([group, label]) => (
-        <SettingRow key={group} spec={{ ...row('devicesPreferred'), label }} sub>
+        <SettingRow key={group} spec={{ ...row('devicesPreferred'), label, description: '' }} sub>
           <SelectControl
             label={`Preferred device for ${label.toLowerCase()}`}
             value={preferred[group] ?? ''}
@@ -464,11 +483,16 @@ function RunHelpersOn({ settings, put, resetRow }: SectionProps): JSX.Element {
   const [brains, setBrains] = useState<Array<{ id: string; name: string }>>([])
   useEffect(() => {
     let live = true
-    void agent.devices
-      .list()
-      .then((rows) => {
+    void Promise.all([agent.devices.list(), agent.devices.status()])
+      .then(([rows, status]) => {
         if (!live) return
-        setBrains(rows.filter((item) => !item.revoked && item.roles.includes('brain')).map((item) => ({ id: item.id, name: item.name })))
+        // This computer is in its own device list, and it is already the 'This computer' choice.
+        const self = status.viewer || status.nodeId
+        setBrains(
+          rows
+            .filter((item) => !item.revoked && item.id !== self && item.roles.includes('brain'))
+            .map((item) => ({ id: item.id, name: item.name })),
+        )
       })
       .catch(() => undefined)
     return () => {
@@ -482,7 +506,12 @@ function RunHelpersOn({ settings, put, resetRow }: SectionProps): JSX.Element {
     ...brains.map((device) => ({ value: device.id, label: device.name })),
   ]
   return (
-    <SettingRow spec={row('helpersRunOn')} changed={changedNow(row('helpersRunOn'), settings)} onReset={() => resetRow(row('helpersRunOn'))}>
+    <SettingRow
+      spec={row('helpersRunOn')}
+      changed={changedNow(row('helpersRunOn'), settings)}
+      onReset={() => resetRow(row('helpersRunOn'))}
+      stack={options.length > 2}
+    >
       <Segmented ariaLabel="Run helpers on" options={options} value={value} onChange={(next) => put({ helpersRunOn: next })} />
     </SettingRow>
   )
@@ -602,7 +631,7 @@ function VoiceKeyDialog({ onClose }: { onClose: () => void }): JSX.Element {
         onEnter={store}
       />
       {status !== null ? (
-        <p className={status.ok ? 'small' : 'small'} role="status" style={{ color: status.ok ? 'var(--ok)' : 'var(--err)' }}>
+        <p className="small" role="status" style={{ color: status.ok ? 'var(--ok)' : 'var(--err)' }}>
           {status.message}
         </p>
       ) : null}
@@ -808,6 +837,7 @@ function NotifySection({ settings, put, resetRow }: SectionProps): JSX.Element {
           icon: 'bell',
           sample: null,
         }}
+        stack
       >
         <Segmented
           ariaLabel="Where the test rings"
@@ -1053,10 +1083,13 @@ function DangerZone({ navigate }: { navigate: SectionProps['navigate'] }): JSX.E
               variant="line"
               style={{ color: 'var(--err)', borderColor: 'var(--err)' }}
               onClick={() => {
-                void agent.account.signOut().then(() => {
-                  setWhich(null)
-                  navigate({ page: 'onboarding', step: 'signin' })
-                })
+                void agent.account
+                  .signOut()
+                  .then(() => {
+                    setWhich(null)
+                    navigate({ page: 'onboarding', step: 'signin' })
+                  })
+                  .catch(() => toast('Could not sign out. Try again.'))
               }}
             >
               Sign out
@@ -1082,7 +1115,7 @@ function PrivacySection({ settings, put, resetRow, navigate }: SectionProps): JS
         if (folder === null) return
         if (!folders.includes(folder)) put({ grantedFolders: [...folders, folder] })
       })
-      .catch(() => undefined)
+      .catch(() => toast('Could not open the folder picker. Try again.'))
       .finally(() => setPickingFolder(false))
   }
 
@@ -1327,7 +1360,7 @@ function AdvancedSection({ settings, put, resetRow }: SectionProps): JSX.Element
         <tbody>
           {stored.map((key) => (
             <tr key={key}>
-              <td className="say">{row(key).label}</td>
+              <td className="what">{row(key).label}</td>
               <td>
                 <code>{key}</code>
               </td>
