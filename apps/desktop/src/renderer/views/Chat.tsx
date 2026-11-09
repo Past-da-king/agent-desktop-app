@@ -1,5 +1,6 @@
 import { VoiceNote } from '../voice/VoiceNote'
 import { PROFILE_COLORS, fileSizeLabel, type Attachment, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
+import { useShallow } from 'zustand/react/shallow'
 import { Suspense, createContext, lazy, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
@@ -7,6 +8,7 @@ import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { helperHold } from '../../shared/helper-cards'
+import { chatIsIdle, helperStepRowsOf, mergeRows, rowsSelector, shownStepStatus, threadRowsOf } from '../lib/chat-rows'
 import { showWaitingCard } from '../lib/needs-you'
 import { countNewMessages, newBelowLabel } from '../lib/new-below'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
@@ -15,7 +17,7 @@ import { mentionNoticeOf, mentionReplyOf } from '../../shared/mentions'
 import { toneStyle } from '../lib/profiles'
 import { projectOfChat, viaIcon, viaOf } from '../lib/projects'
 import { ProjectTile } from '../ui/ProjectTile'
-import { chatTitleOf, isSideRun, itemsOfChat, routeLine } from '../lib/chats'
+import { chatTitleOf, isSideRun, routeLine } from '../lib/chats'
 import { MAIN_CHAT } from '@agent/core'
 import { startChatTracking, useChatRunning, useChats } from '../state/useChats'
 import { CopyButton } from '../ui/CopyButton'
@@ -23,7 +25,7 @@ import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { plainPreview, reportText } from '../lib/report'
 import { chatPlaces } from '../lib/chat-place'
 import { PlaceChip } from '../ui/PlaceChip'
-import { useEntity, useEntityLoaded } from '../state/useData'
+import { useData, useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
@@ -120,15 +122,16 @@ function MessageAttachment({ file }: { file: Attachment }): JSX.Element {
   )
 }
 
-function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
+function ActivityRow({ item, idle = false }: { item: ChatItem; /** Nothing is working or waiting where this step ran. */ idle?: boolean }): JSX.Element {
   const meta = parseMeta(item.meta)
   const tool = metaText(meta, 'tool')
-  const status = metaText(meta, 'status') || 'done'
+  // A step left "running" where nothing runs any more was cut off: it says so instead of spinning for ever.
+  const status = shownStepStatus(metaText(meta, 'status') || 'done', idle)
   const summary = metaText(meta, 'summary') || item.text
   // A command, program or file step shows what it actually ran, and opens to the full record.
   const run = runFromMeta(meta)
   if (run !== null) return <RunStep run={run} status={status} by={metaText(meta, 'by') || undefined} summary={summary} rowId={item.id} />
-  const icon: IconName = status === 'error' ? 'x' : status === 'running' ? toolIcon(tool) : 'check'
+  const icon: IconName = status === 'error' ? 'x' : status === 'interrupted' ? 'stop' : status === 'running' ? toolIcon(tool) : 'check'
   return (
     <div className={`tool ${status}`} title={tool === '' ? undefined : tool}>
       <i className={status === 'running' ? 'spin' : ''}>
@@ -136,6 +139,7 @@ function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
       </i>
       <span className="tool-tag">{toolLabel(tool)}</span>
       <span className="tool-sum">{summary}</span>
+      {status === 'interrupted' ? <span className="tool-cut">Interrupted</span> : null}
     </div>
   )
 }
@@ -175,23 +179,35 @@ function segmentsOf(messages: ChatItem[]): Segment[] {
 function ApprovalLine({ item }: { item: ChatItem }): JSX.Element {
   const meta = parseMeta(item.meta)
   const approved = metaText(meta, 'decision') === 'approve'
-  return (
-    <div className={`appr-line${approved ? '' : ' no'}`}>
+  const details = metaText(meta, 'details').trim()
+  const line = (
+    <>
       <i>
         <Icon name={approved ? 'check' : 'x'} size={14} />
       </i>
       <span>
         <b>{approved ? 'Approved' : 'Declined'}</b> {metaText(meta, 'summary') || item.text}
       </span>
-    </div>
+    </>
+  )
+  if (details === '') return <div className={`appr-line${approved ? '' : ' no'}`}>{line}</div>
+  // What exactly was approved stays one tap away after the decision.
+  return (
+    <details className="appr-kept">
+      <summary className={`appr-line${approved ? '' : ' no'}`}>
+        {line}
+        <Icon name="chevd" size={14} />
+      </summary>
+      <pre>{details}</pre>
+    </details>
   )
 }
 
-function StepRow({ item }: { item: ChatItem }): JSX.Element {
-  return item.kind === 'approval' ? <ApprovalLine item={item} /> : <ActivityRow item={item} />
+function StepRow({ item, idle }: { item: ChatItem; idle: boolean }): JSX.Element {
+  return item.kind === 'approval' ? <ApprovalLine item={item} /> : <ActivityRow item={item} idle={idle} />
 }
 
-const ToolSteps = memo(function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.Element {
+const ToolSteps = memo(function ToolSteps({ items, live, idle }: { items: ChatItem[]; live: boolean; /** The chat neither works nor waits on a card. */ idle: boolean }): JSX.Element {
   const [open, setOpen] = useState(false)
   const statuses = items.map((item) => (item.kind === 'approval' ? 'done' : metaText(parseMeta(item.meta), 'status') || 'done'))
   const running = live && statuses.includes('running')
@@ -216,12 +232,12 @@ const ToolSteps = memo(function ToolSteps({ items, live }: { items: ChatItem[]; 
   if (running && current !== undefined) {
     return (
       <div className="tool-live">
-        <StepRow item={current} />
+        <StepRow item={current} idle={idle} />
         {items.length > 1 ? <span className="tool-count">Step {items.length}</span> : null}
       </div>
     )
   }
-  if (items.length === 1 && items[0] !== undefined) return <StepRow item={items[0]} />
+  if (items.length === 1 && items[0] !== undefined) return <StepRow item={items[0]} idle={idle} />
   return (
     <div className="tool-group">
       <button type="button" className="tool-sum-row" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -235,13 +251,13 @@ const ToolSteps = memo(function ToolSteps({ items, live }: { items: ChatItem[]; 
       {open ? (
         <div className="tool-list">
           {items.map((item) => (
-            <StepRow key={item.id} item={item} />
+            <StepRow key={item.id} item={item} idle={idle} />
           ))}
         </div>
       ) : null}
     </div>
   )
-}, (a, b) => a.live === b.live && a.items.length === b.items.length && a.items.every((row, i) => sameItem(row, b.items[i] as ChatItem)))
+}, (a, b) => a.live === b.live && a.idle === b.idle && a.items.length === b.items.length && a.items.every((row, i) => sameItem(row, b.items[i] as ChatItem)))
 
 /** True while the side panel shows its list of what needs the person (it is on screen and not taken by a report or helper). */
 function useSidebarWaiting(): boolean {
@@ -426,15 +442,18 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   if (decision === 'approve' || decision === 'decline') {
     const approved = decision === 'approve'
     return (
-      <div
-        className="appr done"
-        style={approved ? undefined : { background: 'var(--s-low)', color: 'var(--on-bg)' }}
-      >
-        <div className="eyebrow" style={approved ? undefined : { color: 'var(--on-sv)' }}>
+      <div className={`appr done${approved ? '' : ' no'}`}>
+        <div className="eyebrow">
           <Icon name={approved ? 'check' : 'x'} size={14} />
           {approved ? 'APPROVED' : 'DECLINED'}
         </div>
         <div className="tt">{summary}</div>
+        {details.trim() !== '' ? (
+          <details className="appr-kept in-card">
+            <summary>{approved ? 'What was approved' : 'What was declined'}</summary>
+            <pre>{details}</pre>
+          </details>
+        ) : null}
         <div className="hint">
           {approved ? 'The work can go ahead now.' : 'Nothing was done. Tell me what to change if you want another try.'}
         </div>
@@ -649,7 +668,7 @@ function SideRunRow({ helper, asked }: { helper: HelperView; asked: string }): J
           ) : (
             <div className="hacts">
               {helper.activity.map((activity) => (
-                <ActivityRow key={activity.id} item={activity} />
+                <ActivityRow key={activity.id} item={activity} idle={!live} />
               ))}
             </div>
           )}
@@ -723,7 +742,7 @@ function HelperRow({ helper }: { helper: HelperView }): JSX.Element {
           ) : (
             <div className="hacts">
               {helper.activity.map((activity) => (
-                <ActivityRow key={activity.id} item={activity} />
+                <ActivityRow key={activity.id} item={activity} idle={!live} />
               ))}
             </div>
           )}
@@ -940,9 +959,12 @@ function EarlierRows({ above, earlier, onMore, onEarlier }: { above: number; ear
   return <EarlierChats count={earlier} onShow={onEarlier} />
 }
 
+const pickThread = rowsSelector(threadRowsOf)
+const pickSteps = rowsSelector(helperStepRowsOf)
+const NO_ROWS: ChatItem[] = []
+
 export function Chat(): JSX.Element {
   const settings = useSettings((state) => state.settings)
-  const allItems = useEntity('chat_item')
   const loaded = useEntityLoaded('chat_item')
   const scrollToken = useUi((state) => state.chatScroll)
   const openChat = useChats((state) => state.open)
@@ -976,7 +998,15 @@ export function Chat(): JSX.Element {
     setFar(false)
   }, [])
   // Only this chat's rows: every other chat keeps running on its own and shows in the rail.
-  const items = useMemo(() => itemsOfChat(allItems, openChat), [allItems, openChat])
+  // Two selections of the window's rows (lib/chat-rows.ts): the conversation, and helper steps only while a side run
+  // is shown. A helper's step, or a row of another chat, changes neither, so the thread is not worked out again.
+  const threadRows = useData(useShallow((state) => pickThread(state.rows.chat_item, openChat)))
+  const showsSideRun = useMemo(() => threadRows.some(isSideRun), [threadRows])
+  const stepRows = useData(useShallow((state) => (showsSideRun ? pickSteps(state.rows.chat_item, openChat) : NO_ROWS)))
+  const items = useMemo(() => mergeRows(threadRows, stepRows), [threadRows, stepRows])
+  useEffect(() => {
+    if (!loaded) void useData.getState().load('chat_item')
+  }, [loaded])
   const all = useMemo(
     () => [...threadItems(items), ...items.filter(isSideRun)].sort((a, b) => a.createdAt - b.createdAt),
     [items],
@@ -988,7 +1018,8 @@ export function Chat(): JSX.Element {
   // Helper rows need the whole chat (their steps and results live in other rows); worked out once per change.
   const helperViews = useMemo(() => {
     const views = new Map<string, HelperView>()
-    for (const item of items) if (item.kind === 'helper') views.set(item.id, helperView(item, items))
+    // Only side runs are drawn in the thread; every other helper lives in the side panel.
+    for (const item of items) if (isSideRun(item)) views.set(item.id, helperView(item, items))
     return views
   }, [items])
   const segments = useMemo(() => segmentsOf(messages), [messages])
@@ -998,6 +1029,10 @@ export function Chat(): JSX.Element {
   const chatIds = useMemo(() => new Set(items.map((item) => item.id)), [items])
   const waiting = allWaiting.filter((item) => chatIds.has(item.id))
   const needsYou = waiting.length > 0 || cards.length > 0
+  const runsKnown = useChats((state) => state.runsKnown)
+  const alongside = useChats((state) => state.runs[openChat]?.alongside ?? 0)
+  // Nothing works here and nothing waits: a step still marked running was cut off (lib/chat-rows.ts shownStepStatus).
+  const idle = chatIsIdle({ known: runsKnown, running, alongside, waiting: waiting.length + cards.length })
   const agentName = settings?.agentName.trim() || 'Your agent'
   const startCall = useCall((state) => state.start)
   const projects = useEntity('project')
@@ -1074,10 +1109,10 @@ export function Chat(): JSX.Element {
   const closeReport = usePanel((store) => store.closeReport)
   useEffect(() => {
     if (!narrow || panelReport === null) return
-    const row = allItems.find((item) => item.id === panelReport)
+    const row = useData.getState().rows.chat_item.find((item) => item.id === panelReport)
     closeReport()
     if (row !== undefined) setReader(row)
-  }, [narrow, panelReport, allItems, closeReport])
+  }, [narrow, panelReport, closeReport])
   // Beside the chat in the side panel; a window too narrow for the panel reads it in a dialog instead.
   const openReader = useCallback(
     (row: ChatItem): void => {
@@ -1232,7 +1267,7 @@ export function Chat(): JSX.Element {
             />
             {segments.map((segment, index) =>
               segment.kind === 'tools' ? (
-                <ToolSteps key={segment.id} items={segment.items} live={running && index === segments.length - 1} />
+                <ToolSteps key={segment.id} items={segment.items} live={running && index === segments.length - 1} idle={idle} />
               ) : (
                 <Row
                   key={segment.item.id}

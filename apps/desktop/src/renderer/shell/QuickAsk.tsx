@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 
-import { chat } from '../bridge'
+import type { ChatBrain } from '@agent/core'
+
+import { agent, chat } from '../bridge'
+import { pickLine } from '../lib/ai'
 import { currentChat } from '../lib/current-chat'
 import { useDrafts } from '../state/useDrafts'
 import { toast } from '../state/useToast'
@@ -23,6 +26,25 @@ export function QuickAsk(): JSX.Element | null {
   useEffect(() => {
     if (open) setText('')
   }, [open])
+
+  // What the open chat thinks with (its own pick, a project's over the main thread's), the same line its header shows.
+  const [brain, setBrain] = useState<ChatBrain | null>(null)
+  useEffect(() => {
+    if (!open) return
+    let live = true
+    setBrain(null)
+    agent.settings.accounts
+      .chatBrain(currentChat())
+      .then((next) => {
+        if (live) setBrain(next)
+      })
+      .catch(() => {
+        // The label falls back to a plain word; sending still goes to the open chat.
+      })
+    return () => {
+      live = false
+    }
+  }, [open, settings])
 
   if (!open) return null
 
@@ -67,7 +89,7 @@ export function QuickAsk(): JSX.Element | null {
         {/* Facts, not controls: plain labels, so nothing here looks pressable and does nothing. */}
         <span className="chip on ctx-fact">
           <Icon name="bolt" size={14} />
-          <span className="chip-t">{settings?.model.trim() || 'Your provider'}</span>
+          <span className="chip-t">{(brain === null ? '' : pickLine(settings, brain.main.using)) || 'Your AI'}</span>
         </span>
         <span className="chip ctx-fact">
           <Icon name="monitor" size={14} />

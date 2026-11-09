@@ -202,10 +202,14 @@ export function RunStep({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const [full, setFull] = useState<RunRecord | null>(null)
+  /** The rest of a long record could not be read; `tries` reads it again. */
+  const [missed, setMissed] = useState(false)
+  const [tries, setTries] = useState(0)
   const bodyId = useId()
   useEffect(() => {
     if (!open || raw.more !== true || rowId === undefined || full !== null) return
     let live = true
+    setMissed(false)
     void import('../bridge')
       .then(({ agent }) => agent.data.get('chat_item', rowId))
       .then((row) => {
@@ -213,11 +217,14 @@ export function RunStep({
         const whole = runFromMeta(parseMeta(row.meta))
         if (whole !== null) setFull(whole)
       })
-      .catch(() => undefined)
+      .catch(() => {
+        // Only the head of the output is shown then: say so, with a way to read it again.
+        if (live) setMissed(true)
+      })
     return () => {
       live = false
     }
-  }, [open, raw.more, rowId, full])
+  }, [open, raw.more, rowId, full, tries])
   const run = settled(full ?? raw, status)
   const running = run.state === 'running'
   const said = run.kind === 'tool' && summary !== undefined && summary.trim().toLowerCase() !== run.label.toLowerCase() ? summary.trim() : ''
@@ -241,13 +248,21 @@ export function RunStep({
         </i>
         <span className="tool-tag">{runTag(run)}</span>
         <code className={`run-snip${said !== '' ? ' said' : ''}`}>{snippet}</code>
-        <span className={`run-st ${tone}`}>{statusText(run)}</span>
+        <span className={`run-st ${tone}`}>{status === 'interrupted' ? 'interrupted' : statusText(run)}</span>
         {time !== '' ? <span className="run-ms">{time}</span> : null}
         <span className="run-chev">
           <Icon name={open ? 'chevd' : 'chev'} size={16} />
         </span>
       </button>
       {open ? <RunDetail run={run} id={bodyId} /> : null}
+      {open && missed ? (
+        <div className="run-missed" role="status">
+          <span>Could not load the rest.</span>
+          <button type="button" className="linkish" onClick={() => setTries((count) => count + 1)}>
+            Try again
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }

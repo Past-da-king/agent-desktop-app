@@ -97,3 +97,24 @@
 .chip.ctx-fact{cursor:default}
 .chip.ctx-fact:hover{background:transparent}
 .chip.on.ctx-fact:hover{background:var(--sc)}
+
+/* A step cut off before it finished (its chat neither works nor waits): no spinner, and it says so. */
+.tool.interrupted i{background:var(--s-high);color:var(--on-sv)}
+.tool-cut{flex:none;font:500 12px/1 var(--font);color:var(--on-sv);padding:4px 8px;border-radius:999px;background:var(--s-high)}
+
+/* The rest of a long run record could not be read: a quiet line with a way to read it again. */
+.run-missed{display:flex;align-items:center;gap:8px;padding:6px 12px 10px;font:400 13px/1.4 var(--font);color:var(--on-sv)}
+
+/* A decided approval: declined is neutral, and what exactly was decided stays one tap away. */
+.appr.done.no{background:var(--s-low);color:var(--on-bg)}
+.appr.done.no .eyebrow{color:var(--on-sv)}
+.appr-kept{min-width:0}
+.appr-kept>summary{list-style:none;cursor:pointer}
+.appr-kept>summary::-webkit-details-marker{display:none}
+.appr-kept>summary.appr-line{border-radius:10px}
+.appr-kept>summary.appr-line>svg{flex:none;transition:transform .2s var(--effects)}
+.appr-kept[open]>summary.appr-line>svg{transform:rotate(180deg)}
+.appr-kept>summary:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.appr-kept>pre{margin:4px 0 6px 34px;padding:10px 14px;border-radius:var(--r-md);background:var(--s-low);color:var(--on-bg);font:400 12.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:168px;overflow:auto}
+.appr-kept.in-card>summary{font:500 13px/1.4 var(--font);color:var(--on-sv);text-decoration:underline;text-underline-offset:2px}
+.appr-kept.in-card>pre{margin:8px 0 0}
