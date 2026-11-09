@@ -1,11 +1,12 @@
 import type { ChatItem } from '@agent/core'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { withNo } from '../../shared/ask-options'
 import { chat } from '../bridge'
 import { openChat } from '../lib/chat-actions'
 import { chatOf } from '../lib/chats'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
+import { flashWaitingCard, SHOW_WAITING_EVENT } from '../lib/needs-you'
 import { sourceOfChat, type ChatSource } from '../lib/source'
 import { useCalmEntity, useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
@@ -44,10 +45,19 @@ export function WaitingCard({ item, source, onOpen }: { item: ChatItem; source: 
   const title = approval ? metaText(meta, 'summary') || item.text : item.text
   const answers = approval ? [] : handoff ? ['Done, carry on', 'Skip'] : withNo(options.length > 0 ? options : ['Yes']).slice(0, 4)
 
+  // The exact thing being approved (the command, the message, the list), not only its one-line summary.
+  const details = approval ? metaText(meta, 'details').trim() : ''
+  const [failed, setFailed] = useState(false)
+
   const act = (run: () => Promise<unknown>): void => {
     if (sending) return
     setSending(true)
-    void run().catch(() => setSending(false))
+    setFailed(false)
+    void run().catch(() => {
+      // The answer did not get through: the card says so and can be pressed again.
+      setSending(false)
+      setFailed(true)
+    })
   }
 
   return (
@@ -62,6 +72,16 @@ export function WaitingCard({ item, source, onOpen }: { item: ChatItem; source: 
       <div className="ny-t" title={title}>
         {title}
       </div>
+      {details !== '' ? (
+        <pre className="ny-details" tabIndex={0} aria-label="Exactly what will happen">
+          {details}
+        </pre>
+      ) : null}
+      {failed ? (
+        <div className="ny-fail" role="alert">
+          That did not go through. Try again.
+        </div>
+      ) : null}
       <div className="ny-acts">
         {approval ? (
           <>
@@ -101,6 +121,23 @@ export function NeedsYou(): JSX.Element | null {
   const agentName = useSettings((store) => store.settings?.agentName.trim()) || 'Your agent'
   const closeOverlay = useUi((store) => store.closeOverlay)
   const [all, setAll] = useState(false)
+  // The chat pointed at a card that is folded behind "Show all": unfold, then ring it once it is drawn.
+  const [point, setPoint] = useState('')
+  useEffect(() => {
+    const onShow = (event: Event): void => {
+      const id = (event as CustomEvent<string>).detail
+      if (typeof id !== 'string' || id === '') return
+      setAll(true)
+      setPoint(id)
+    }
+    window.addEventListener(SHOW_WAITING_EVENT, onShow)
+    return () => window.removeEventListener(SHOW_WAITING_EVENT, onShow)
+  }, [])
+  useEffect(() => {
+    if (point === '' || !all) return
+    flashWaitingCard(point)
+    setPoint('')
+  }, [point, all])
   const cards = useMemo(() => waiting.map((item) => ({ item, source: sourceOfChat(chatOf(item), items, projects, agentName) })), [waiting, items, projects, agentName])
   if (cards.length === 0) return null
 

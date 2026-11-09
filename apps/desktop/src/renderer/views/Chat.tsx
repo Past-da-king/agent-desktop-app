@@ -7,6 +7,8 @@ import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { helperHold } from '../../shared/helper-cards'
+import { showWaitingCard } from '../lib/needs-you'
+import { countNewMessages, newBelowLabel } from '../lib/new-below'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
 import { branchFrom, openChat as openChatPage, startProjectChat } from '../lib/chat-actions'
 import { mentionNoticeOf, mentionReplyOf } from '../../shared/mentions'
@@ -264,13 +266,8 @@ function Waiting({ item, full }: { item: ChatItem; full: JSX.Element }): JSX.Ele
       className="wait-line"
       title="Show it in the side panel"
       onClick={() => {
-        // Brings the card into view in the side panel and points it out.
-        const card = document.querySelector<HTMLElement>(`.ny-card[data-item="${item.id}"]`)
-        if (card === null) return
-        card.scrollIntoView({ block: 'center' })
-        card.classList.remove('ny-flash')
-        void card.offsetWidth
-        card.classList.add('ny-flash')
+        // Brings the card into view in the side panel and points it out, unfolding the list when it is past "Show all".
+        showWaitingCard(item.id)
       }}
     >
       <i>
@@ -312,6 +309,7 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   const answered = typeof meta['answer'] === 'string' && meta['answer'] !== ''
   const [custom, setCustom] = useState('')
   const [sending, setSending] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   if (answered) {
     return (
@@ -330,7 +328,12 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
     const clean = value.trim()
     if (clean === '' || sending) return
     setSending(true)
-    void chat.answer(item.id, clean).catch(() => setSending(false))
+    setFailed(false)
+    void chat.answer(item.id, clean).catch(() => {
+      // The answer did not get through: the card says so and can be answered again.
+      setSending(false)
+      setFailed(true)
+    })
   }
 
   // browser_handoff asks with these two options. Draw it as a handoff card, not a generic question.
@@ -356,6 +359,11 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
             </button>
           ) : null}
         </div>
+        {failed ? (
+          <div className="hint card-fail" role="alert">
+            That did not go through. Try again.
+          </div>
+        ) : null}
         <div className="hint">The page is yours while this card is open. Finish the step, then carry on.</div>
       </div>
     )
@@ -390,6 +398,11 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
           Answer
         </button>
       </form>
+      {failed ? (
+        <div className="hint card-fail" role="alert">
+          That did not go through. Try again.
+        </div>
+      ) : null}
       <div className="hint">The run waits until you answer.</div>
     </div>
   )
@@ -403,6 +416,12 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   const computer = meta['scope'] === 'computer'
   const save = useSettings((state) => state.save)
   const [sending, setSending] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const retry = (): void => {
+    // The answer did not get through: the card says so and can be pressed again.
+    setSending(false)
+    setFailed(true)
+  }
 
   if (decision === 'approve' || decision === 'decline') {
     const approved = decision === 'approve'
@@ -426,7 +445,8 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   const decide = (value: 'approve' | 'decline'): void => {
     if (sending) return
     setSending(true)
-    void chat.decide(item.id, value).catch(() => setSending(false))
+    setFailed(false)
+    void chat.decide(item.id, value).catch(retry)
   }
 
   return (
@@ -451,7 +471,8 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
               setSending(true)
               // Settings, Commands and files: Run without asking. The main process then lets this card and any
               // other waiting command, code or file card go ahead. Connected apps and anything sent still ask.
-              void save({ shell: 'always' }).catch(() => setSending(false))
+              setFailed(false)
+              void save({ shell: 'always' }).catch(retry)
             }}
           >
             Always allow on this computer
@@ -461,6 +482,11 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
           Decline
         </button>
       </div>
+      {failed ? (
+        <div className="hint card-fail" role="alert">
+          That did not go through. Try again.
+        </div>
+      ) : null}
       <div className="hint">
         {computer
           ? 'Always allow covers commands, code and files on this computer. Connected apps and anything sent in your name still ask. Change it in Settings.'
@@ -834,7 +860,12 @@ function MentionReplyCard({ item }: { item: ChatItem }): JSX.Element | null {
     if (words === '') return
     setDraft('')
     setReplying(false)
-    void chat.send(words, [], reply.chat, { replyIn: here })
+    chat.send(words, [], reply.chat, { replyIn: here }).catch(() => {
+      // It did not go: the words come back in the box instead of vanishing.
+      setDraft((now) => (now.trim() === '' ? words : now))
+      setReplying(true)
+      toast(`That reply to ${reply.name} did not go. It is back in the box.`)
+    })
   }
   return (
     <div className="pf mention-reply" style={toneStyle(icon.color) as CSSProperties} aria-label={`Reply from ${reply.name}`}>
@@ -925,14 +956,25 @@ export function Chat(): JSX.Element {
   const thread = useRef<HTMLDivElement>(null)
   const composer = useRef<ComposerHandle>(null)
   const stuck = useRef(true)
-  /** Something new arrived below while the person was reading further up. */
-  const [below, setBelow] = useState(false)
+  /** The person is reading further up: a pill offers the way back down, with how many messages arrived meanwhile. */
+  const [away, setAway] = useState(false)
+  /** Far enough up that the newest message is off screen, so the pill shows even with nothing new. */
+  const [far, setFar] = useState(false)
+  /** Every row that was in the chat when they left the bottom; null while they follow the newest message. */
+  const seenBelow = useRef<Set<string> | null>(null)
   const dragDepth = useRef(0)
 
   const [showEarlier, setShowEarlier] = useState(false)
   // Only the newest rows are drawn; Show earlier widens the window in steps, keeping the place on screen.
   const [drawn, setDrawn] = useState(THREAD_WINDOW)
   const keepPlace = useRef<number | null>(null)
+  /** Following the newest message again: the pill goes and its count starts over. */
+  const backToLatest = useCallback((): void => {
+    stuck.current = true
+    seenBelow.current = null
+    setAway(false)
+    setFar(false)
+  }, [])
   // Only this chat's rows: every other chat keeps running on its own and shows in the rail.
   const items = useMemo(() => itemsOfChat(allItems, openChat), [allItems, openChat])
   const all = useMemo(
@@ -982,11 +1024,10 @@ export function Chat(): JSX.Element {
 
   // Opening a chat starts at its newest message.
   useEffect(() => {
-    stuck.current = true
-    setBelow(false)
+    backToLatest()
     const el = thread.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [openChat])
+  }, [openChat, backToLatest])
 
   useEffect(() => {
     markSeen(openChat)
@@ -994,31 +1035,29 @@ export function Chat(): JSX.Element {
 
   // New rows (a helper's step, a reply) follow the newest message only while the person is at the bottom. Reading
   // further up, they stay where they are and a button says there is something new below.
-  const newest = items.length === 0 ? '' : `${items.length}:${items[items.length - 1]?.id ?? ''}`
   useEffect(() => {
     const el = thread.current
     if (el === null) return
     if (stuck.current) el.scrollTop = el.scrollHeight
   }, [items, running, loaded])
-  useEffect(() => {
-    if (!stuck.current && newest !== '') setBelow(true)
-  }, [newest])
+  // Only messages count (his and the agent's replies), never tool steps, helper events, cards or notices.
+  const newBelow = useMemo(() => (away && seenBelow.current !== null ? countNewMessages(items, seenBelow.current) : 0), [away, items])
 
   useEffect(() => {
     if (scrollToken === 0) return
     setShowEarlier(false)
-    stuck.current = true
+    backToLatest()
     const timer = window.setTimeout(() => {
       const el = thread.current
       if (el) el.scrollTop = el.scrollHeight
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [scrollToken])
+  }, [scrollToken, backToLatest])
 
   // Just before a message goes: follow it to the bottom.
   const onSend = useCallback((): void => {
-    stuck.current = true
-  }, [])
+    backToLatest()
+  }, [backToLatest])
 
   // A stretch widened with Show earlier keeps what was on screen where it was.
   useLayoutEffect(() => {
@@ -1138,8 +1177,18 @@ export function Chat(): JSX.Element {
         onScroll={() => {
           const el = thread.current
           if (!el) return
-          stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 56
-          if (stuck.current) setBelow(false)
+          const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+          if (gap < 56) {
+            if (!stuck.current || seenBelow.current !== null) backToLatest()
+            return
+          }
+          stuck.current = false
+          // The count starts from what was in the chat at the moment they left the bottom.
+          if (seenBelow.current === null) {
+            seenBelow.current = new Set(items.map((item) => item.id))
+            setAway(true)
+          }
+          setFar(gap > el.clientHeight * 0.6)
         }}
       >
         {!loaded ? (
@@ -1212,19 +1261,18 @@ export function Chat(): JSX.Element {
       </div>
 
       <div className="compose">
-        {below ? (
+        {away && (far || newBelow > 0) ? (
           <button
             type="button"
-            className="new-below"
+            className={`new-below${newBelow > 0 ? ' has-new' : ''}`}
             onClick={() => {
               const el = thread.current
               if (el) el.scrollTop = el.scrollHeight
-              stuck.current = true
-              setBelow(false)
+              backToLatest()
             }}
           >
             <Icon name="chevd" size={16} />
-            New below
+            <span aria-live="polite">{newBelowLabel(newBelow)}</span>
           </button>
         ) : null}
         <Composer ref={composer} chatId={openChat} onSend={onSend} />

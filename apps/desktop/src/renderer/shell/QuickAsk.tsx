@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 
 import { chat } from '../bridge'
+import { currentChat } from '../lib/current-chat'
+import { useDrafts } from '../state/useDrafts'
+import { toast } from '../state/useToast'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { Kbd } from '../ui/bits'
-import { Chip } from '../ui/Chip'
 import { Dialog } from '../ui/Dialog'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
@@ -30,7 +32,12 @@ export function QuickAsk(): JSX.Element | null {
     const value = text.trim()
     close()
     if (value === '') return
-    void chat.send(value)
+    const sentTo = currentChat()
+    chat.send(value, [], sentTo).catch(() => {
+      // It did not go: the words wait in that chat's box instead of vanishing.
+      useDrafts.getState().addWords(sentTo, value)
+      toast('That message did not go. It is in the chat box.')
+    })
     navigate({ page: 'chat' })
   }
 
@@ -57,10 +64,15 @@ export function QuickAsk(): JSX.Element | null {
       </div>
       <div className="ctx">
         <span className="eyebrow mute">USING</span>
-        <Chip active icon={<Icon name="bolt" size={14} />}>
-          {settings?.model.trim() || 'Your provider'}
-        </Chip>
-        <Chip icon={<Icon name="monitor" size={14} />}>This computer</Chip>
+        {/* Facts, not controls: plain labels, so nothing here looks pressable and does nothing. */}
+        <span className="chip on ctx-fact">
+          <Icon name="bolt" size={14} />
+          <span className="chip-t">{settings?.model.trim() || 'Your provider'}</span>
+        </span>
+        <span className="chip ctx-fact">
+          <Icon name="monitor" size={14} />
+          <span className="chip-t">This computer</span>
+        </span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <Kbd>Enter</Kbd> send <span aria-hidden="true">·</span> <Kbd>Esc</Kbd> close
         </span>

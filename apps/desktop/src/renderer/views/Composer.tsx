@@ -458,7 +458,7 @@ export const Composer = memo(
               aria-label="Stop"
               title="Stop this chat's work"
               onClick={() => {
-                void chat.stop(chatId)
+                void chat.stop(chatId).catch(() => toast('That did not stop. Try again.'))
               }}
             >
               <Icon name="stop" size={22} />
