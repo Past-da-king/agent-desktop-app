@@ -90,6 +90,14 @@
 
 /* ---- Swipe rows ---- */
 .oui-swipe{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:6px;scrollbar-width:thin;scrollbar-color:var(--outline-v) transparent;overscroll-behavior-x:contain}
+/* A swipe row scrolls inside itself and never widens the chat. Its edges fade where more cards wait, and the fade
+   follows the scroll, so the first and the last card sit clean against their edge. */
+@property --oui-fade-l{syntax:'<length>';inherits:false;initial-value:0px}
+@property --oui-fade-r{syntax:'<length>';inherits:false;initial-value:0px}
+@keyframes oui-swipe-edges{0%{--oui-fade-l:0px;--oui-fade-r:32px}12%{--oui-fade-l:32px;--oui-fade-r:32px}88%{--oui-fade-l:32px;--oui-fade-r:32px}100%{--oui-fade-l:32px;--oui-fade-r:0px}}
+@supports (animation-timeline:scroll()){
+  .oui-swipe{-webkit-mask-image:linear-gradient(to right,transparent,#000 var(--oui-fade-l),#000 calc(100% - var(--oui-fade-r)),transparent);mask-image:linear-gradient(to right,transparent,#000 var(--oui-fade-l),#000 calc(100% - var(--oui-fade-r)),transparent);animation:oui-swipe-edges linear both;animation-timeline:scroll(self inline)}
+}
 .oui-swipe-i{flex:0 0 min(86%,380px);scroll-snap-align:start;min-width:0;display:flex}
 .oui-swipe-i>*{flex:1}
 .oui-swipe.products .oui-swipe-i{flex-basis:clamp(168px,60%,250px)}
@@ -214,6 +222,7 @@
   .oui-hero-n{font-size:30px}
   .oui-title{font-size:20px}
   .oui-tile.big .oui-tile-v{font-size:26px}
+  .oui-tile{padding:12px 10px}
   .appr.ask{padding:0 0 16px}
   .oui-ask .oui-card-in{padding:16px 16px 6px}
   .appr.ask .free,.appr.ask .hint{padding:0 16px}

@@ -11,8 +11,16 @@
 .tb-work-n{font-variant-numeric:tabular-nums}
 @keyframes tb-pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){.tb-work-dot{animation:none}}
+/* A narrow window: the count stays, its word goes (the button's title and label still say it). */
+@media (max-width:520px){
+  .tb-work{padding:0 10px;gap:6px}
+  .tb-work-t{display:none}
+  .tb-work-wrap{margin-right:2px}
+}
 
 .work-menu{position:absolute;right:0;top:calc(100% + 8px);z-index:35;width:min(380px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 80px));display:flex;flex-direction:column;background:var(--s-lowest,var(--bg));border-radius:var(--r-lg);box-shadow:var(--elev-3,var(--shadow));overflow:hidden;animation:pop .32s var(--spatial);-webkit-app-region:no-drag;cursor:default;user-select:text}
+/* Where the title bar is crowded the button is no longer at the right edge, so the list hangs from the window. */
+@media (max-width:820px){.work-menu{position:fixed;top:52px;left:12px;right:12px;width:auto;max-height:calc(100vh - 150px)}}
 .work-menu-h{display:flex;align-items:center;justify-content:space-between;padding:10px 8px 6px 16px}
 .work-menu-h b{font:500 15px/1.2 var(--font)}
 .work-menu-b{overflow:auto;padding:4px 12px 14px;display:flex;flex-direction:column;gap:14px}
