@@ -37,18 +37,22 @@ import {
   type TriggerRow,
   accountById,
   defaultGoodFor,
+  isImageRoutingRefusal,
+  isUnsupportedImageRefusal,
   pickModel,
   rosterName,
   type ChatBrain,
 } from '@agent/core'
 
+import { keyFor } from '../accounts'
 import { listWhere, type DataStore } from './data'
 import { liveRuns } from './live-runs'
 import type { StepBudget } from './budget'
-import { chatBrainOf, isBrain, mainBrain, pickBrain, rosterFor, type Brain, type BrainDeps, type BrainLocks } from './brains'
+import { chatBrainOf, isBrain, mainBrain, pickBrain, providerForAccount, rosterFor, type Brain, type BrainDeps, type BrainLocks } from './brains'
 import type { HelperHost } from './helpers'
 import type { CliHost } from './cli-host'
 import { projectFolderOf } from './work-folder'
+import { FileVisionStores, MemoryVisionStores, VisionRouter, freshImageSession } from './vision'
 import type { RunGitHookLike } from './helpers'
 import { buildSystemPrompt, type ProjectContext } from './prompt'
 import type { CliId } from './cli-agent'
@@ -151,6 +155,11 @@ export interface RunnerDevices {
 
 export interface RunnerDeps {
   store: DataStore
+  /**
+   * The app's data folder. What the provider's catalogue says about pictures, and which models refused one, are kept
+   * there (pictures-catalogue.json, pictures-refused.json). Left out (tests, headless): memory only.
+   */
+  dataDir?: string
   settings: SettingsView
   secrets: SecretsView
   providerFactory: ProviderFactory
@@ -289,6 +298,8 @@ export class Runner {
   private readonly devices: RunnerDevices | undefined
   private readonly presence: RunnerDeps['presence']
   private readonly git: RunGitHookLike | null
+  /** Pictures in a turn: what each model can really do, a fresh routing session to retry on, and the one turn's switch. */
+  private readonly vision: VisionRouter
   /** The app is quitting: a turn cut off now keeps its lease running, so the next start resumes it. */
   private disposing = false
 
@@ -319,6 +330,11 @@ export class Runner {
     this.settings = deps.settings
     this.secrets = deps.secrets
     this.providerFactory = deps.providerFactory
+    this.vision = new VisionRouter({
+      stores: deps.dataDir === undefined || deps.dataDir.trim() === '' ? new MemoryVisionStores() : new FileVisionStores(deps.dataDir),
+      keyFor: (id) => keyFor({ get: (name) => this.secrets.get(name) }, id),
+      now: () => this.now(),
+    })
     this.tools = deps.tools
     this.notify = deps.notify ?? (() => undefined)
     this.notifyCard =
@@ -1460,7 +1476,8 @@ export class Runner {
       return undefined
     }
     if (brain.kind === 'plan') return this.runCliTurn(line, text, images, signal, brain)
-    const { provider, model } = brain
+    const { model } = brain
+    const provider = this.pictures(brain, chat)
     const current = this.settingsFor(chat)
 
     const memories = await this.store.list('memory')
@@ -1512,10 +1529,33 @@ export class Runner {
         await this.notice('Stopped', chat)
         return undefined
       }
-      const message = friendlyError(error)
+      const message = friendlyError(error, this.imageFacts(brain))
       await this.notice(message, chat)
       return message
     }
+  }
+
+  /**
+   * The provider for one turn, with pictures handled: a gateway refusal is retried on a fresh routing session, and a
+   * model that really takes no pictures is swapped for one turn (the chat's own model never changes).
+   */
+  private pictures(brain: Extract<Brain, { kind: 'api' }>, chat: string): LlmProvider {
+    this.vision.prepare(brain.account)
+    return this.vision.wrap(brain.provider, {
+      account: brain.account,
+      model: brain.model,
+      refresh: () => providerForAccount(this.brainDeps(), brain.account, brain.model, freshImageSession()) ?? brain.provider,
+      onSwitch: (other) => {
+        void this.notice(`Looked at the picture with ${other} for this turn.`, chat)
+      },
+    })
+  }
+
+  /** What the chat may say about pictures when a provider call fails: only what the catalogue or a refusal proved. */
+  private imageFacts(brain: Brain): ImageFacts {
+    if (brain.kind !== 'api') return {}
+    const support = this.vision.supportFor(brain.account, brain.model)
+    return { modelTakesNoImages: support.state === 'no' && (support.source === 'catalogue' || support.source === 'learned') }
   }
 
   // ---- running on an installed AI tool (the person's own plan) ---------------------------------
@@ -2124,8 +2164,14 @@ export class Runner {
 const PAUSED_NOTE =
   '[You were paused mid-step so you could read the message below. Whatever you were doing in that last step may not have finished: check before you redo it.]'
 
+/** What is really known about this turn's model and pictures, so a refusal is worded from data, not a guess. */
+export interface ImageFacts {
+  /** The provider's catalogue (or a learned refusal) says this model takes no images. */
+  modelTakesNoImages?: boolean
+}
+
 /** Plain words for the chat when a provider call fails. Ported from friendlyError in AgentRuntime.kt. */
-export function friendlyError(error: unknown): string {
+export function friendlyError(error: unknown, imageFacts?: ImageFacts): string {
   if (error instanceof ProviderException) {
     if (error.status === 401) return 'Your API key was rejected. Check it in Settings.'
     if (error.status === 429) {
@@ -2134,8 +2180,19 @@ export function friendlyError(error: unknown): string {
     // A provider that took too long says so (a helper's creator reads this as the reason it ended).
     if (error.status === 0 && /did not answer within/i.test(error.message)) return error.message
     if (error.status === 0) return 'I could not reach the AI provider. Check your connection.'
-    if (error.status === 400 && /image/i.test(error.message)) {
-      return "This model can't look at images. Pick a vision model in Settings, or send it as text."
+    // A real "this model does not do pictures": named only when the provider says so or its own catalogue does
+    // (never because one answer happened to contain the word image).
+    if (
+      (error.status === 400 && imageFacts?.modelTakesNoImages === true && /image/i.test(error.message)) ||
+      isUnsupportedImageRefusal(error)
+    ) {
+      return 'This model takes no pictures. I can switch this chat to one that does, or you can send the text.'
+    }
+    // A gateway that refused to ROUTE a picture says nothing about the model (OpenCode Go picks an engine from the
+    // session id, and one engine has no image input): the turn retried on a fresh session and switched, so say what
+    // really happened instead of blaming the model.
+    if (isImageRoutingRefusal(error)) {
+      return 'Your AI provider refused to route that picture (its gateway says image input is not available on this engine). Nothing was lost: try again, or set another model for this chat.'
     }
     return `Something went wrong: ${clip(error.message, 240)}`
   }

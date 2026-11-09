@@ -43,6 +43,11 @@ export interface AiAccount {
   /** With kind 'api': a key is stored for it. */
   hasKey: boolean
   allowHttp?: boolean
+  /**
+   * What this account does with a picture sent in a chat: 'auto' (try it, and fall back for one turn), 'on' (always
+   * send it) or 'off' (never send it; the model is told a picture was attached). Absent means 'auto'.
+   */
+  pictures?: 'auto' | 'on' | 'off'
 }
 
 /** The id of the account the old single-choice settings were turned into. */
@@ -298,6 +303,8 @@ export interface AiAccountDraft {
   baseUrl?: string
   model?: string
   allowHttp?: boolean
+  /** 'auto' | 'on' | 'off': what a picture sent in a chat does on this account (Settings > Pictures). */
+  pictures?: 'auto' | 'on' | 'off'
 }
 
 /** One slot of a chat as it runs: what it is set to, and what it actually runs on. */

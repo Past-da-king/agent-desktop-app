@@ -36,8 +36,11 @@ import { keyFor } from '../accounts'
 import type { CliId } from './cli-agent'
 import { listWhere, type DataStore } from './data'
 
-/** The same shape runtime/runner.ts has: a provider for these settings and this key, or null. */
-export type ProviderFactory = (settings: Settings, apiKey: string) => LlmProvider | null
+/**
+ * The same shape runtime/runner.ts has: a provider for these settings and this key, or null. A session id is how a
+ * provider that routes each request by it (OpenCode Go) is put on a fresh route: the same call, another engine.
+ */
+export type ProviderFactory = (settings: Settings, apiKey: string, sessionId?: string) => LlmProvider | null
 
 export type Brain =
   | { kind: 'plan'; cli: CliId; model: string; account: AiAccount }
@@ -127,14 +130,37 @@ export function brainFor(deps: Pick<BrainDeps, 'settings' | 'secrets' | 'provide
   const chosen = model || PROVIDERS.find((each) => each.id === provider)?.defaultModel || ''
   if (chosen === '') return { kind: 'none', message: `Choose a model for ${account.label} in Settings.` }
   if (provider === 'custom' && (account.baseUrl ?? '').trim() === '') return { kind: 'none', message: `Add the server address for ${account.label} in Settings.` }
-  let made: LlmProvider | null = null
-  try {
-    made = deps.providerFactory({ ...settings, provider, baseUrl: account.baseUrl ?? '', allowHttp: account.allowHttp === true, model: chosen, hasKey: true, mode: 'api_key' }, key)
-  } catch {
-    made = null
-  }
+  const made = providerForAccount(deps, account, chosen)
   if (made === null) return { kind: 'none', message: `${account.label} could not be set up. Check it in Settings.` }
   return { kind: 'api', provider: made, model: chosen, account }
+}
+
+/**
+ * A key account's provider for one model, on a fresh routing session when one is named. This is also how a turn
+ * retries a picture the gateway refused to route: same provider, same model, a new session id (runtime/vision.ts).
+ */
+export function providerForAccount(
+  deps: Pick<BrainDeps, 'settings' | 'secrets' | 'providerFactory'>,
+  account: AiAccount,
+  model: string,
+  sessionId?: string,
+): LlmProvider | null {
+  if (account.kind !== 'api') return null
+  const settings = deps.settings.get()
+  const key = keyFor(deps.secrets, account.id)
+  const provider = account.provider ?? 'anthropic'
+  const chosen = model.trim() || PROVIDERS.find((each) => each.id === provider)?.defaultModel || ''
+  if (key === '') return null
+  if (chosen === '') return null
+  try {
+    return deps.providerFactory(
+      { ...settings, provider, baseUrl: account.baseUrl ?? '', allowHttp: account.allowHttp === true, model: chosen, hasKey: true, mode: 'api_key' },
+      key,
+      ...(sessionId === undefined ? [] : [sessionId]),
+    )
+  } catch {
+    return null
+  }
 }
 
 /** The brain for the main thread's agent, routines and the memory pass. */

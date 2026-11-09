@@ -297,6 +297,8 @@ function accountFrom(raw: unknown): AiAccount | null {
     if (typeof o['baseUrl'] === 'string') account.baseUrl = clamp(o['baseUrl'].trim())
     if (o['allowHttp'] === true) account.allowHttp = true
   }
+  // Pictures: kept on any account kind (a plan's engine reads them too). 'auto' is what absent means, so it is not stored.
+  if (o['pictures'] === 'on' || o['pictures'] === 'off') account.pictures = o['pictures']
   return account
 }
 

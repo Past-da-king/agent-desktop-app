@@ -1005,12 +1005,15 @@ async function startServices(win: BrowserWindow): Promise<void> {
   })
   const learnedNames = (): Record<string, string> => Object.fromEntries(learned.apps().map((a) => [a.id, a.name]))
 
-  const factory = (current: ReturnType<SettingsStore['get']>, key: string): ReturnType<typeof providerFor> =>
+  // `sessionId` is how a turn retries a picture the provider's gateway refused to route (runtime/vision.ts): the
+  // same provider and model, a fresh session, which is what OpenCode Go picks its engine from.
+  const factory = (current: ReturnType<SettingsStore['get']>, key: string, sessionId?: string): ReturnType<typeof providerFor> =>
     providerFor({
       provider: current.provider,
       key,
       baseUrl: current.baseUrl.trim() || undefined,
       allowHttp: current.allowHttp,
+      ...(sessionId === undefined ? {} : { sessionId }),
     })
   const budget = new StepBudget()
   // Background workers (docs/workers-and-triggers.md): agent-written scripts the app keeps running. Their events
@@ -1140,6 +1143,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   }
   const helpers = (helperManager = new HelperManager({
     leases,
+    dataDir: dir,
     store,
     cli: cliHost,
     settings,
@@ -1337,6 +1341,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
   })
   runner = new Runner({
+    dataDir: dir,
     devices: {
       leases,
       shellFor: (chat) => offloadWire?.shellFor(chat),

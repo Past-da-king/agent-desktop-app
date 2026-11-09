@@ -95,6 +95,7 @@ export class AccountStore {
       if ((draft.baseUrl ?? '').trim() !== '') account.baseUrl = (draft.baseUrl ?? '').trim()
       if (draft.allowHttp === true) account.allowHttp = true
     }
+    if (draft.pictures === 'on' || draft.pictures === 'off') account.pictures = draft.pictures
     const next = [...list, account]
     this.settings.save({ accounts: next })
     return account
@@ -124,6 +125,10 @@ export class AccountStore {
       delete next.allowHttp
       next.hasKey = false
     }
+    // Pictures are the person's choice, whatever kind of account it is; 'auto' is stored as absent.
+    const pictures = patch.pictures === undefined ? current.pictures : patch.pictures
+    if (pictures === 'on' || pictures === 'off') next.pictures = pictures
+    else delete next.pictures
     this.settings.save({ accounts: list.map((account) => (account.id === id ? next : account)) })
     return next
   }
