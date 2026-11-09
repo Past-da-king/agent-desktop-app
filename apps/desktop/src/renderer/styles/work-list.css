@@ -1,0 +1,42 @@
+/* The running list (shell/HelpersPanel.tsx HelperCardList): the block's folding header, the project groups, and a
+   helper's own helpers folded under it. Kept in its own file, imported last. */
+.hp-head{display:flex;align-items:center;gap:8px;width:calc(100% + 16px);min-height:36px;margin:0 -8px;padding:6px 8px;border-radius:var(--r-sm);text-align:left;color:var(--on-bg);transition:background var(--t-fast,160ms) var(--effects)}
+.hp-head:hover{background:var(--s-low)}
+.hp-head{flex-wrap:wrap;row-gap:2px}
+.hp-head>.eyebrow{flex:1 0 auto;white-space:nowrap}
+.hp-head>.small{flex:0 1 auto;margin-left:auto;text-align:right}
+.hp-head>svg,.hp-group-h>svg,.hp-fold>svg{flex:none;color:var(--on-sv);transition:transform var(--t-fast,160ms) var(--effects)}
+.hp-head[aria-expanded="true"]>svg,.hp-group-h[aria-expanded="true"]>svg,.hp-fold[aria-expanded="true"]>svg{transform:rotate(90deg)}
+.hp-warn{color:var(--tert);font-weight:500}
+.hp.folded{gap:6px}
+.hp-groups{display:flex;flex-direction:column;gap:10px}
+.hp-groups:empty{display:none}
+.hp-group{display:flex;flex-direction:column;gap:6px;min-width:0}
+.hp-group-h{display:flex;align-items:center;gap:8px;width:calc(100% + 16px);min-height:32px;margin:0 -8px;padding:4px 8px;border-radius:var(--r-sm);text-align:left;color:var(--on-bg);transition:background var(--t-fast,160ms) var(--effects)}
+.hp-group-h:hover{background:var(--s-low)}
+.hp-group-h>b{flex:1;min-width:0;font:500 13px/1.3 var(--font);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hp-group-h>span{flex:none;font:400 12px/1.3 var(--font);color:var(--on-sv)}
+.hp-group-h>span.hp-warn{color:var(--tert);font-weight:500}
+
+/* A helper's own helpers, folded under it: the row that opens them, and their indent. */
+.hp-fold-li{display:flex}
+.hp-fold{display:inline-flex;align-items:center;gap:6px;min-height:28px;margin-left:44px;padding:4px 10px 4px 6px;border-radius:999px;color:var(--on-sv);font:500 12px/1.3 var(--font);transition:background var(--t-fast,160ms) var(--effects)}
+.hp-fold:hover{background:var(--s-mid);color:var(--on-bg)}
+.hp-nest{margin-left:16px;padding-left:10px;border-left:2px solid var(--outline-v)}
+.hp-nest.deep{margin-left:32px}
+.hp-sub.hp-nest{margin-left:32px}
+.hp-sub.hp-nest.deep{margin-left:48px}
+.hp-nest .hp-card{padding:8px 10px}
+.hp-fold-li.hp-sub,.hp-fold-li.hp-nest{border-left-color:transparent}
+@media (prefers-reduced-motion:reduce){.hp-head>svg,.hp-group-h>svg,.hp-fold>svg{transition:none}}
+
+/* The project page's working list sits in the page's own rhythm. */
+.pj-work .hp{margin:0}
+
+/* The title bar's button is the way to this list in a narrow window: there it keeps its count and drops its word. */
+@media (max-width:520px){.tb-work-t{display:none}.tb-work{padding:0 10px}}
+
+/* The plain title (the title bar's list, a project's page): the eyebrow stays on one line, the counts wrap under it. */
+.hp-title{flex-wrap:wrap;row-gap:2px}
+.hp-title>.eyebrow{white-space:nowrap}
+.hp-title>.small{margin-left:auto;text-align:right}

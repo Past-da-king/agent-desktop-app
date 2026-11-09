@@ -60,10 +60,11 @@ describe('finished cards and the side panel', () => {
 
     rows.chat_item = [projectCard('done', now), reply(now)]
     const done = renderToStaticMarkup(createElement(HelpersPanel))
-    expect(done).toContain('Shop Site')
-    expect(done).toContain('Your turn')
+    // It stays on the list. With nothing running the side panel's block folds by itself (9 Nov 2026): its header
+    // says the chat replied, and one tap on it shows the card (test/work-list-groups.test.ts).
+    expect(done).toContain('class="hp-head" aria-expanded="false"')
     expect(done).toContain('1 replied')
-    expect(done).toContain('Done. Checkout is fixed.')
+    expect(done).not.toContain('Your turn')
 
     // Nothing from its agent to read (it was stopped before it said anything): no card.
     rows.chat_item = [projectCard('stopped', now)]

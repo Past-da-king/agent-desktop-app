@@ -8,7 +8,7 @@ import { workBadge } from '../lib/work-badge'
 import { useWaiting } from '../state/useWaiting'
 import { Icon } from '../ui/Icon'
 import { helperHold } from '../../shared/helper-cards'
-import { HelperCardList, useMainCard, usePanelCards, useScopedCards } from './HelpersPanel'
+import { HelperCardList, useListGroups, useMainCard, useNeedsCards, usePanelCards, useScopedCards } from './HelpersPanel'
 import { NeedsYou } from './NeedsYou'
 import { usePanelShown } from './Panel'
 
@@ -55,6 +55,8 @@ function WorkMenu(): JSX.Element {
   const close = useUi((store) => store.closeOverlay)
   const mascot = useSettings((store) => store.settings?.mascot ?? 'scout')
   const { cards, main, current } = useScopedCards()
+  const needs = useNeedsCards()
+  const groups = useListGroups(current)
   const projects = useEntity('project')
   const box = useRef<HTMLDivElement>(null)
 
@@ -89,6 +91,8 @@ function WorkMenu(): JSX.Element {
           main={main}
           current={current}
           mascot={mascot}
+          needs={needs}
+          groups={groups}
           onOpen={(target) => {
             close()
             openTarget(target)

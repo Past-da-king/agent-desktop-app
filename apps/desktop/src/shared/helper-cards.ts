@@ -384,6 +384,148 @@ export function cardsForChat<T extends { owner: HelperCardOwner; projectChat: st
   return cards.filter((card) => (card.owner.kind === 'project' && card.owner.id === project.id) || project.chats.includes(card.projectChat) || project.chats.includes(card.parentChat))
 }
 
+/** The helper that started this one (`meta.parentHelper`), '' for a helper a chat started itself. */
+export function parentHelperOf(item: { meta: string }): string {
+  return metaText(metaOf(item), 'parentHelper')
+}
+
+export interface FoldedCard<T> {
+  card: T
+  /** 0 for a card of its own, 1 for a helper another helper on the list started, and so on. */
+  level: number
+  /** How many helpers on the list sit under it (the ones it started, and theirs). */
+  subs: number
+  /** Whether the helpers under it are shown. */
+  open: boolean
+}
+
+/**
+ * The cards with every helper another helper started folded under its parent: the parent comes first with a count,
+ * and its helpers follow only when it is in `open`. A card in `show` (one that waits on the person) is never hidden,
+ * whatever is closed above it. A helper whose parent is not on the list stands on its own.
+ */
+export function foldCards<T extends { id: string; row: { meta: string } }>(cards: T[], open: ReadonlySet<string> = new Set(), show: ReadonlySet<string> = new Set()): FoldedCard<T>[] {
+  const ids = new Set(cards.map((card) => card.id))
+  const kids = new Map<string, T[]>()
+  const roots: T[] = []
+  for (const card of cards) {
+    const parent = parentHelperOf(card.row)
+    if (parent === '' || parent === card.id || !ids.has(parent)) {
+      roots.push(card)
+      continue
+    }
+    const list = kids.get(parent)
+    if (list === undefined) kids.set(parent, [card])
+    else list.push(card)
+  }
+  const under = (id: string, seen: Set<string>): T[] => {
+    const out: T[] = []
+    for (const kid of kids.get(id) ?? []) {
+      if (seen.has(kid.id)) continue
+      seen.add(kid.id)
+      out.push(kid, ...under(kid.id, seen))
+    }
+    return out
+  }
+  const out: FoldedCard<T>[] = []
+  const done = new Set<string>()
+  // Every card a shown card stands for: itself and the helpers folded under it.
+  const reached = new Set<string>()
+  const emit = (card: T, level: number): void => {
+    if (done.has(card.id)) return
+    done.add(card.id)
+    const all = under(card.id, new Set([card.id]))
+    reached.add(card.id)
+    for (const each of all) reached.add(each.id)
+    const isOpen = open.has(card.id)
+    out.push({ card, level, subs: all.length, open: isOpen })
+    if (isOpen) for (const kid of kids.get(card.id) ?? []) emit(kid, level + 1)
+    else for (const each of all) if (show.has(each.id)) emit(each, level + 1)
+  }
+  for (const card of roots) emit(card, 0)
+  // A loop of parents (never written, but a list must not lose a card to one) stands on its own.
+  for (const card of cards) if (!reached.has(card.id)) emit(card, 0)
+  return out
+}
+
+/** The group of the main chat and its helpers, and the group of helpers no shown project holds. */
+export const MAIN_GROUP = 'main'
+export const OTHER_GROUP = 'other'
+
+export interface CardGroup<T> {
+  /** MAIN_GROUP, a project's id, or OTHER_GROUP. */
+  id: string
+  name: string
+  cards: T[]
+}
+
+/**
+ * The running list by project: the main chat's group, then one group per project (its chats with their helpers under
+ * them, in the list's own order), then the helpers no shown project holds. Every card lands in exactly one group, so
+ * no project is ever dropped. `first` (the group of the chat on screen) is moved to the top.
+ */
+export function groupCards<T extends { owner: HelperCardOwner }>(cards: T[], hasMain: boolean, first = ''): CardGroup<T>[] {
+  const groups = new Map<string, CardGroup<T>>()
+  const groupOf = (id: string, name: string): CardGroup<T> => {
+    const hit = groups.get(id)
+    if (hit !== undefined) return hit
+    const made: CardGroup<T> = { id, name, cards: [] }
+    groups.set(id, made)
+    return made
+  }
+  if (hasMain || cards.some((card) => card.owner.kind === 'main')) groupOf(MAIN_GROUP, 'Main chat')
+  for (const card of cards) {
+    if (card.owner.kind === 'main') groupOf(MAIN_GROUP, 'Main chat').cards.push(card)
+    else if (card.owner.kind === 'project') groupOf(card.owner.id, card.owner.name || 'Project').cards.push(card)
+  }
+  for (const card of cards) if (card.owner.kind !== 'main' && card.owner.kind !== 'project') groupOf(OTHER_GROUP, 'Other chats').cards.push(card)
+  const out = [...groups.values()]
+  const at = out.findIndex((group) => group.id === first)
+  if (at > 0) out.unshift(...out.splice(at, 1))
+  return out
+}
+
+/**
+ * The ids that wait on the person, as a card answers to them: a helper by its own id, a project chat by
+ * `chat:<its chat>` (a question or an approval its own agent asked).
+ */
+export function cardNeeds(card: { id: string; projectChat: string }, needs: ReadonlySet<string>): boolean {
+  return needs.has(card.id) || (card.projectChat !== '' && needs.has(`chat:${card.projectChat}`))
+}
+
+export interface WorkCounts {
+  /** Running now. */
+  working: number
+  /** Held by the queue or the low-memory guard: on the list, not started. */
+  held: number
+  /** Waiting on the person (a question, an approval). */
+  needs: number
+  /** Project chats that are done, their agent having spoken last. */
+  replied: number
+  text: string
+}
+
+/** A header's words: "3 working, 1 waiting to start, 1 needs you". The same words on the phone. */
+export function workLineText(working: number, held: number, needs: number, replied = 0): string {
+  const parts = [working > 0 ? `${working} working` : '', held > 0 ? `${held} waiting to start` : '', needs > 0 ? (needs === 1 ? '1 needs you' : `${needs} need you`) : '', replied > 0 ? `${replied} replied` : ''].filter((part) => part !== '')
+  return parts.length === 0 ? 'Nothing running' : parts.join(', ')
+}
+
+/** What a list (or one project's group) is doing, for its header. `main` is the main chat's card when it is on it. */
+export function workCounts<T extends { id: string; projectChat: string; state: HelperState; queued: boolean; summary: string; waiting: boolean }>(cards: T[], main: { waiting: boolean } | null, needs: ReadonlySet<string> = new Set()): WorkCounts {
+  let working = main !== null && !main.waiting ? 1 : 0
+  let held = 0
+  let asking = main !== null && main.waiting ? 1 : 0
+  let replied = 0
+  for (const card of cards) {
+    if (cardNeeds(card, needs)) asking += 1
+    else if (card.waiting) replied += 1
+    else if (helperHold(card) !== null) held += 1
+    else if (card.state === 'working') working += 1
+  }
+  return { working, held, needs: asking, replied, text: workLineText(working, held, asking, replied) }
+}
+
 function lastAgentLine(lines: ChatItem[]): ChatItem | undefined {
   for (let i = lines.length - 1; i >= 0; i--) if (lines[i]!.kind === 'agent') return lines[i]
   return undefined
@@ -586,6 +728,7 @@ export function cardInfo(card: HelperCard): HelperCardInfo {
     id: card.id,
     kind: card.kind,
     parentChat: card.parentChat,
+    parentHelper: card.kind === 'helper' ? parentHelperOf(card.row) : '',
     row: card.row.id,
     chat: chatOfRow(card.row),
     label: card.label,
