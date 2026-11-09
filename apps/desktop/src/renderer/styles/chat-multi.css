@@ -79,3 +79,42 @@
 .u-row .u-file.pic img{width:56px;height:56px;border-radius:9px;object-fit:cover;flex:none}
 .u-row .u-file svg{color:var(--on-sv);flex:none}
 .u-file-size{color:var(--on-sv);font-size:12px;flex:none}
+
+/* The way back down while reading further up. Quiet with nothing new; filled once messages arrived, with their count. */
+.compose .new-below{background:var(--sc);color:var(--on-sc);padding:0 16px 0 12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.compose .new-below:hover{background:color-mix(in srgb,var(--sc) 88%,var(--on-sc))}
+.compose .new-below.has-new{background:var(--pc);color:var(--on-pc)}
+.compose .new-below.has-new:hover{background:color-mix(in srgb,var(--pc) 88%,var(--on-pc))}
+.compose .new-below:focus-visible{outline:2px solid var(--p);outline-offset:2px}
+
+/* A waiting approval in the side panel says exactly what will happen, not only its one-line summary. */
+.ny-details{margin:0;max-height:132px;overflow:auto;padding:8px 10px;border-radius:10px;background:color-mix(in srgb,currentColor 8%,transparent);font:400 12.5px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:inherit}
+.ny-details:focus-visible{outline:2px solid currentColor;outline-offset:1px}
+.ny-fail,.appr .card-fail{font:500 13px/1.35 var(--font);color:inherit}
+.ny-fail::before,.appr .card-fail::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--err,currentColor);margin-right:8px}
+
+/* Quick ask: what it will use, as plain labels (they are facts, not buttons). */
+.chip.ctx-fact{cursor:default}
+.chip.ctx-fact:hover{background:transparent}
+.chip.on.ctx-fact:hover{background:var(--sc)}
+
+/* A step cut off before it finished (its chat neither works nor waits): no spinner, and it says so. */
+.tool.interrupted i{background:var(--s-high);color:var(--on-sv)}
+.tool-cut{flex:none;font:500 12px/1 var(--font);color:var(--on-sv);padding:4px 8px;border-radius:999px;background:var(--s-high)}
+
+/* The rest of a long run record could not be read: a quiet line with a way to read it again. */
+.run-missed{display:flex;align-items:center;gap:8px;padding:6px 12px 10px;font:400 13px/1.4 var(--font);color:var(--on-sv)}
+
+/* A decided approval: declined is neutral, and what exactly was decided stays one tap away. */
+.appr.done.no{background:var(--s-low);color:var(--on-bg)}
+.appr.done.no .eyebrow{color:var(--on-sv)}
+.appr-kept{min-width:0}
+.appr-kept>summary{list-style:none;cursor:pointer}
+.appr-kept>summary::-webkit-details-marker{display:none}
+.appr-kept>summary.appr-line{border-radius:10px}
+.appr-kept>summary.appr-line>svg{flex:none;transition:transform .2s var(--effects)}
+.appr-kept[open]>summary.appr-line>svg{transform:rotate(180deg)}
+.appr-kept>summary:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.appr-kept>pre{margin:4px 0 6px 34px;padding:10px 14px;border-radius:var(--r-md);background:var(--s-low);color:var(--on-bg);font:400 12.5px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:168px;overflow:auto}
+.appr-kept.in-card>summary{font:500 13px/1.4 var(--font);color:var(--on-sv);text-decoration:underline;text-underline-offset:2px}
+.appr-kept.in-card>pre{margin:8px 0 0}

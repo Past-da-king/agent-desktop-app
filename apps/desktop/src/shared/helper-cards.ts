@@ -728,6 +728,7 @@ export function cardInfo(card: HelperCard): HelperCardInfo {
     id: card.id,
     kind: card.kind,
     parentChat: card.parentChat,
+    parentHelper: card.kind === 'helper' ? parentHelperOf(card.row) : '',
     row: card.row.id,
     chat: chatOfRow(card.row),
     label: card.label,

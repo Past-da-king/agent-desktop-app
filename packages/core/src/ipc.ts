@@ -1312,6 +1312,8 @@ export interface HelperCardInfo {
   kind?: 'project-chat' | 'helper'
   /** For a helper working inside a project chat: that chat, which its view links to ('' otherwise). */
   parentChat?: string
+  /** For a helper another helper started: that helper's id ('' when a chat started it), so a list can fold it under its parent. Absent from an older computer. */
+  parentHelper?: string
   /** Its chat_item row id. */
   row: string
   /** The chat its row is in ("main" for the main thread and every project agent card). */

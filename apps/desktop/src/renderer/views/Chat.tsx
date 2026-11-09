@@ -1,5 +1,6 @@
 import { VoiceNote } from '../voice/VoiceNote'
 import { PROFILE_COLORS, fileSizeLabel, type Attachment, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
+import { useShallow } from 'zustand/react/shallow'
 import { Suspense, createContext, lazy, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
@@ -7,13 +8,16 @@ import { openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { helperHold } from '../../shared/helper-cards'
+import { chatIsIdle, helperStepRowsOf, mergeRows, rowsSelector, shownStepStatus, threadRowsOf } from '../lib/chat-rows'
+import { showWaitingCard } from '../lib/needs-you'
+import { countNewMessages, newBelowLabel } from '../lib/new-below'
 import { isDivider, threadItems, threadTitle } from '../lib/thread'
 import { branchFrom, openChat as openChatPage, startProjectChat } from '../lib/chat-actions'
 import { mentionNoticeOf, mentionReplyOf } from '../../shared/mentions'
 import { toneStyle } from '../lib/profiles'
 import { projectOfChat, viaIcon, viaOf } from '../lib/projects'
 import { ProjectTile } from '../ui/ProjectTile'
-import { chatTitleOf, isSideRun, itemsOfChat, routeLine } from '../lib/chats'
+import { chatTitleOf, isSideRun, routeLine } from '../lib/chats'
 import { MAIN_CHAT } from '@agent/core'
 import { startChatTracking, useChatRunning, useChats } from '../state/useChats'
 import { CopyButton } from '../ui/CopyButton'
@@ -21,7 +25,7 @@ import { metaStrings, metaText, parseMeta } from '../lib/meta'
 import { plainPreview, reportText } from '../lib/report'
 import { chatPlaces } from '../lib/chat-place'
 import { PlaceChip } from '../ui/PlaceChip'
-import { useEntity, useEntityLoaded } from '../state/useData'
+import { useData, useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
@@ -118,15 +122,16 @@ function MessageAttachment({ file }: { file: Attachment }): JSX.Element {
   )
 }
 
-function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
+function ActivityRow({ item, idle = false }: { item: ChatItem; /** Nothing is working or waiting where this step ran. */ idle?: boolean }): JSX.Element {
   const meta = parseMeta(item.meta)
   const tool = metaText(meta, 'tool')
-  const status = metaText(meta, 'status') || 'done'
+  // A step left "running" where nothing runs any more was cut off: it says so instead of spinning for ever.
+  const status = shownStepStatus(metaText(meta, 'status') || 'done', idle)
   const summary = metaText(meta, 'summary') || item.text
   // A command, program or file step shows what it actually ran, and opens to the full record.
   const run = runFromMeta(meta)
   if (run !== null) return <RunStep run={run} status={status} by={metaText(meta, 'by') || undefined} summary={summary} rowId={item.id} />
-  const icon: IconName = status === 'error' ? 'x' : status === 'running' ? toolIcon(tool) : 'check'
+  const icon: IconName = status === 'error' ? 'x' : status === 'interrupted' ? 'stop' : status === 'running' ? toolIcon(tool) : 'check'
   return (
     <div className={`tool ${status}`} title={tool === '' ? undefined : tool}>
       <i className={status === 'running' ? 'spin' : ''}>
@@ -134,6 +139,7 @@ function ActivityRow({ item }: { item: ChatItem }): JSX.Element {
       </i>
       <span className="tool-tag">{toolLabel(tool)}</span>
       <span className="tool-sum">{summary}</span>
+      {status === 'interrupted' ? <span className="tool-cut">Interrupted</span> : null}
     </div>
   )
 }
@@ -173,23 +179,35 @@ function segmentsOf(messages: ChatItem[]): Segment[] {
 function ApprovalLine({ item }: { item: ChatItem }): JSX.Element {
   const meta = parseMeta(item.meta)
   const approved = metaText(meta, 'decision') === 'approve'
-  return (
-    <div className={`appr-line${approved ? '' : ' no'}`}>
+  const details = metaText(meta, 'details').trim()
+  const line = (
+    <>
       <i>
         <Icon name={approved ? 'check' : 'x'} size={14} />
       </i>
       <span>
         <b>{approved ? 'Approved' : 'Declined'}</b> {metaText(meta, 'summary') || item.text}
       </span>
-    </div>
+    </>
+  )
+  if (details === '') return <div className={`appr-line${approved ? '' : ' no'}`}>{line}</div>
+  // What exactly was approved stays one tap away after the decision.
+  return (
+    <details className="appr-kept">
+      <summary className={`appr-line${approved ? '' : ' no'}`}>
+        {line}
+        <Icon name="chevd" size={14} />
+      </summary>
+      <pre>{details}</pre>
+    </details>
   )
 }
 
-function StepRow({ item }: { item: ChatItem }): JSX.Element {
-  return item.kind === 'approval' ? <ApprovalLine item={item} /> : <ActivityRow item={item} />
+function StepRow({ item, idle }: { item: ChatItem; idle: boolean }): JSX.Element {
+  return item.kind === 'approval' ? <ApprovalLine item={item} /> : <ActivityRow item={item} idle={idle} />
 }
 
-const ToolSteps = memo(function ToolSteps({ items, live }: { items: ChatItem[]; live: boolean }): JSX.Element {
+const ToolSteps = memo(function ToolSteps({ items, live, idle }: { items: ChatItem[]; live: boolean; /** The chat neither works nor waits on a card. */ idle: boolean }): JSX.Element {
   const [open, setOpen] = useState(false)
   const statuses = items.map((item) => (item.kind === 'approval' ? 'done' : metaText(parseMeta(item.meta), 'status') || 'done'))
   const running = live && statuses.includes('running')
@@ -214,12 +232,12 @@ const ToolSteps = memo(function ToolSteps({ items, live }: { items: ChatItem[]; 
   if (running && current !== undefined) {
     return (
       <div className="tool-live">
-        <StepRow item={current} />
+        <StepRow item={current} idle={idle} />
         {items.length > 1 ? <span className="tool-count">Step {items.length}</span> : null}
       </div>
     )
   }
-  if (items.length === 1 && items[0] !== undefined) return <StepRow item={items[0]} />
+  if (items.length === 1 && items[0] !== undefined) return <StepRow item={items[0]} idle={idle} />
   return (
     <div className="tool-group">
       <button type="button" className="tool-sum-row" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -233,13 +251,13 @@ const ToolSteps = memo(function ToolSteps({ items, live }: { items: ChatItem[]; 
       {open ? (
         <div className="tool-list">
           {items.map((item) => (
-            <StepRow key={item.id} item={item} />
+            <StepRow key={item.id} item={item} idle={idle} />
           ))}
         </div>
       ) : null}
     </div>
   )
-}, (a, b) => a.live === b.live && a.items.length === b.items.length && a.items.every((row, i) => sameItem(row, b.items[i] as ChatItem)))
+}, (a, b) => a.live === b.live && a.idle === b.idle && a.items.length === b.items.length && a.items.every((row, i) => sameItem(row, b.items[i] as ChatItem)))
 
 /** True while the side panel shows its list of what needs the person (it is on screen and not taken by a report or helper). */
 function useSidebarWaiting(): boolean {
@@ -264,13 +282,8 @@ function Waiting({ item, full }: { item: ChatItem; full: JSX.Element }): JSX.Ele
       className="wait-line"
       title="Show it in the side panel"
       onClick={() => {
-        // Brings the card into view in the side panel and points it out.
-        const card = document.querySelector<HTMLElement>(`.ny-card[data-item="${item.id}"]`)
-        if (card === null) return
-        card.scrollIntoView({ block: 'center' })
-        card.classList.remove('ny-flash')
-        void card.offsetWidth
-        card.classList.add('ny-flash')
+        // Brings the card into view in the side panel and points it out, unfolding the list when it is past "Show all".
+        showWaitingCard(item.id)
       }}
     >
       <i>
@@ -312,6 +325,7 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   const answered = typeof meta['answer'] === 'string' && meta['answer'] !== ''
   const [custom, setCustom] = useState('')
   const [sending, setSending] = useState(false)
+  const [failed, setFailed] = useState(false)
 
   if (answered) {
     return (
@@ -330,7 +344,12 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
     const clean = value.trim()
     if (clean === '' || sending) return
     setSending(true)
-    void chat.answer(item.id, clean).catch(() => setSending(false))
+    setFailed(false)
+    void chat.answer(item.id, clean).catch(() => {
+      // The answer did not get through: the card says so and can be answered again.
+      setSending(false)
+      setFailed(true)
+    })
   }
 
   // browser_handoff asks with these two options. Draw it as a handoff card, not a generic question.
@@ -356,6 +375,11 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
             </button>
           ) : null}
         </div>
+        {failed ? (
+          <div className="hint card-fail" role="alert">
+            That did not go through. Try again.
+          </div>
+        ) : null}
         <div className="hint">The page is yours while this card is open. Finish the step, then carry on.</div>
       </div>
     )
@@ -390,6 +414,11 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
           Answer
         </button>
       </form>
+      {failed ? (
+        <div className="hint card-fail" role="alert">
+          That did not go through. Try again.
+        </div>
+      ) : null}
       <div className="hint">The run waits until you answer.</div>
     </div>
   )
@@ -403,19 +432,28 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   const computer = meta['scope'] === 'computer'
   const save = useSettings((state) => state.save)
   const [sending, setSending] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const retry = (): void => {
+    // The answer did not get through: the card says so and can be pressed again.
+    setSending(false)
+    setFailed(true)
+  }
 
   if (decision === 'approve' || decision === 'decline') {
     const approved = decision === 'approve'
     return (
-      <div
-        className="appr done"
-        style={approved ? undefined : { background: 'var(--s-low)', color: 'var(--on-bg)' }}
-      >
-        <div className="eyebrow" style={approved ? undefined : { color: 'var(--on-sv)' }}>
+      <div className={`appr done${approved ? '' : ' no'}`}>
+        <div className="eyebrow">
           <Icon name={approved ? 'check' : 'x'} size={14} />
           {approved ? 'APPROVED' : 'DECLINED'}
         </div>
         <div className="tt">{summary}</div>
+        {details.trim() !== '' ? (
+          <details className="appr-kept in-card">
+            <summary>{approved ? 'What was approved' : 'What was declined'}</summary>
+            <pre>{details}</pre>
+          </details>
+        ) : null}
         <div className="hint">
           {approved ? 'The work can go ahead now.' : 'Nothing was done. Tell me what to change if you want another try.'}
         </div>
@@ -426,7 +464,8 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   const decide = (value: 'approve' | 'decline'): void => {
     if (sending) return
     setSending(true)
-    void chat.decide(item.id, value).catch(() => setSending(false))
+    setFailed(false)
+    void chat.decide(item.id, value).catch(retry)
   }
 
   return (
@@ -451,7 +490,8 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
               setSending(true)
               // Settings, Commands and files: Run without asking. The main process then lets this card and any
               // other waiting command, code or file card go ahead. Connected apps and anything sent still ask.
-              void save({ shell: 'always' }).catch(() => setSending(false))
+              setFailed(false)
+              void save({ shell: 'always' }).catch(retry)
             }}
           >
             Always allow on this computer
@@ -461,6 +501,11 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
           Decline
         </button>
       </div>
+      {failed ? (
+        <div className="hint card-fail" role="alert">
+          That did not go through. Try again.
+        </div>
+      ) : null}
       <div className="hint">
         {computer
           ? 'Always allow covers commands, code and files on this computer. Connected apps and anything sent in your name still ask. Change it in Settings.'
@@ -623,7 +668,7 @@ function SideRunRow({ helper, asked }: { helper: HelperView; asked: string }): J
           ) : (
             <div className="hacts">
               {helper.activity.map((activity) => (
-                <ActivityRow key={activity.id} item={activity} />
+                <ActivityRow key={activity.id} item={activity} idle={!live} />
               ))}
             </div>
           )}
@@ -697,7 +742,7 @@ function HelperRow({ helper }: { helper: HelperView }): JSX.Element {
           ) : (
             <div className="hacts">
               {helper.activity.map((activity) => (
-                <ActivityRow key={activity.id} item={activity} />
+                <ActivityRow key={activity.id} item={activity} idle={!live} />
               ))}
             </div>
           )}
@@ -834,7 +879,12 @@ function MentionReplyCard({ item }: { item: ChatItem }): JSX.Element | null {
     if (words === '') return
     setDraft('')
     setReplying(false)
-    void chat.send(words, [], reply.chat, { replyIn: here })
+    chat.send(words, [], reply.chat, { replyIn: here }).catch(() => {
+      // It did not go: the words come back in the box instead of vanishing.
+      setDraft((now) => (now.trim() === '' ? words : now))
+      setReplying(true)
+      toast(`That reply to ${reply.name} did not go. It is back in the box.`)
+    })
   }
   return (
     <div className="pf mention-reply" style={toneStyle(icon.color) as CSSProperties} aria-label={`Reply from ${reply.name}`}>
@@ -909,9 +959,12 @@ function EarlierRows({ above, earlier, onMore, onEarlier }: { above: number; ear
   return <EarlierChats count={earlier} onShow={onEarlier} />
 }
 
+const pickThread = rowsSelector(threadRowsOf)
+const pickSteps = rowsSelector(helperStepRowsOf)
+const NO_ROWS: ChatItem[] = []
+
 export function Chat(): JSX.Element {
   const settings = useSettings((state) => state.settings)
-  const allItems = useEntity('chat_item')
   const loaded = useEntityLoaded('chat_item')
   const scrollToken = useUi((state) => state.chatScroll)
   const openChat = useChats((state) => state.open)
@@ -925,16 +978,35 @@ export function Chat(): JSX.Element {
   const thread = useRef<HTMLDivElement>(null)
   const composer = useRef<ComposerHandle>(null)
   const stuck = useRef(true)
-  /** Something new arrived below while the person was reading further up. */
-  const [below, setBelow] = useState(false)
+  /** The person is reading further up: a pill offers the way back down, with how many messages arrived meanwhile. */
+  const [away, setAway] = useState(false)
+  /** Far enough up that the newest message is off screen, so the pill shows even with nothing new. */
+  const [far, setFar] = useState(false)
+  /** Every row that was in the chat when they left the bottom; null while they follow the newest message. */
+  const seenBelow = useRef<Set<string> | null>(null)
   const dragDepth = useRef(0)
 
   const [showEarlier, setShowEarlier] = useState(false)
   // Only the newest rows are drawn; Show earlier widens the window in steps, keeping the place on screen.
   const [drawn, setDrawn] = useState(THREAD_WINDOW)
   const keepPlace = useRef<number | null>(null)
+  /** Following the newest message again: the pill goes and its count starts over. */
+  const backToLatest = useCallback((): void => {
+    stuck.current = true
+    seenBelow.current = null
+    setAway(false)
+    setFar(false)
+  }, [])
   // Only this chat's rows: every other chat keeps running on its own and shows in the rail.
-  const items = useMemo(() => itemsOfChat(allItems, openChat), [allItems, openChat])
+  // Two selections of the window's rows (lib/chat-rows.ts): the conversation, and helper steps only while a side run
+  // is shown. A helper's step, or a row of another chat, changes neither, so the thread is not worked out again.
+  const threadRows = useData(useShallow((state) => pickThread(state.rows.chat_item, openChat)))
+  const showsSideRun = useMemo(() => threadRows.some(isSideRun), [threadRows])
+  const stepRows = useData(useShallow((state) => (showsSideRun ? pickSteps(state.rows.chat_item, openChat) : NO_ROWS)))
+  const items = useMemo(() => mergeRows(threadRows, stepRows), [threadRows, stepRows])
+  useEffect(() => {
+    if (!loaded) void useData.getState().load('chat_item')
+  }, [loaded])
   const all = useMemo(
     () => [...threadItems(items), ...items.filter(isSideRun)].sort((a, b) => a.createdAt - b.createdAt),
     [items],
@@ -946,7 +1018,8 @@ export function Chat(): JSX.Element {
   // Helper rows need the whole chat (their steps and results live in other rows); worked out once per change.
   const helperViews = useMemo(() => {
     const views = new Map<string, HelperView>()
-    for (const item of items) if (item.kind === 'helper') views.set(item.id, helperView(item, items))
+    // Only side runs are drawn in the thread; every other helper lives in the side panel.
+    for (const item of items) if (isSideRun(item)) views.set(item.id, helperView(item, items))
     return views
   }, [items])
   const segments = useMemo(() => segmentsOf(messages), [messages])
@@ -956,6 +1029,10 @@ export function Chat(): JSX.Element {
   const chatIds = useMemo(() => new Set(items.map((item) => item.id)), [items])
   const waiting = allWaiting.filter((item) => chatIds.has(item.id))
   const needsYou = waiting.length > 0 || cards.length > 0
+  const runsKnown = useChats((state) => state.runsKnown)
+  const alongside = useChats((state) => state.runs[openChat]?.alongside ?? 0)
+  // Nothing works here and nothing waits: a step still marked running was cut off (lib/chat-rows.ts shownStepStatus).
+  const idle = chatIsIdle({ known: runsKnown, running, alongside, waiting: waiting.length + cards.length })
   const agentName = settings?.agentName.trim() || 'Your agent'
   const startCall = useCall((state) => state.start)
   const projects = useEntity('project')
@@ -982,11 +1059,10 @@ export function Chat(): JSX.Element {
 
   // Opening a chat starts at its newest message.
   useEffect(() => {
-    stuck.current = true
-    setBelow(false)
+    backToLatest()
     const el = thread.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [openChat])
+  }, [openChat, backToLatest])
 
   useEffect(() => {
     markSeen(openChat)
@@ -994,31 +1070,29 @@ export function Chat(): JSX.Element {
 
   // New rows (a helper's step, a reply) follow the newest message only while the person is at the bottom. Reading
   // further up, they stay where they are and a button says there is something new below.
-  const newest = items.length === 0 ? '' : `${items.length}:${items[items.length - 1]?.id ?? ''}`
   useEffect(() => {
     const el = thread.current
     if (el === null) return
     if (stuck.current) el.scrollTop = el.scrollHeight
   }, [items, running, loaded])
-  useEffect(() => {
-    if (!stuck.current && newest !== '') setBelow(true)
-  }, [newest])
+  // Only messages count (his and the agent's replies), never tool steps, helper events, cards or notices.
+  const newBelow = useMemo(() => (away && seenBelow.current !== null ? countNewMessages(items, seenBelow.current) : 0), [away, items])
 
   useEffect(() => {
     if (scrollToken === 0) return
     setShowEarlier(false)
-    stuck.current = true
+    backToLatest()
     const timer = window.setTimeout(() => {
       const el = thread.current
       if (el) el.scrollTop = el.scrollHeight
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [scrollToken])
+  }, [scrollToken, backToLatest])
 
   // Just before a message goes: follow it to the bottom.
   const onSend = useCallback((): void => {
-    stuck.current = true
-  }, [])
+    backToLatest()
+  }, [backToLatest])
 
   // A stretch widened with Show earlier keeps what was on screen where it was.
   useLayoutEffect(() => {
@@ -1035,10 +1109,10 @@ export function Chat(): JSX.Element {
   const closeReport = usePanel((store) => store.closeReport)
   useEffect(() => {
     if (!narrow || panelReport === null) return
-    const row = allItems.find((item) => item.id === panelReport)
+    const row = useData.getState().rows.chat_item.find((item) => item.id === panelReport)
     closeReport()
     if (row !== undefined) setReader(row)
-  }, [narrow, panelReport, allItems, closeReport])
+  }, [narrow, panelReport, closeReport])
   // Beside the chat in the side panel; a window too narrow for the panel reads it in a dialog instead.
   const openReader = useCallback(
     (row: ChatItem): void => {
@@ -1138,8 +1212,18 @@ export function Chat(): JSX.Element {
         onScroll={() => {
           const el = thread.current
           if (!el) return
-          stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 56
-          if (stuck.current) setBelow(false)
+          const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+          if (gap < 56) {
+            if (!stuck.current || seenBelow.current !== null) backToLatest()
+            return
+          }
+          stuck.current = false
+          // The count starts from what was in the chat at the moment they left the bottom.
+          if (seenBelow.current === null) {
+            seenBelow.current = new Set(items.map((item) => item.id))
+            setAway(true)
+          }
+          setFar(gap > el.clientHeight * 0.6)
         }}
       >
         {!loaded ? (
@@ -1183,7 +1267,7 @@ export function Chat(): JSX.Element {
             />
             {segments.map((segment, index) =>
               segment.kind === 'tools' ? (
-                <ToolSteps key={segment.id} items={segment.items} live={running && index === segments.length - 1} />
+                <ToolSteps key={segment.id} items={segment.items} live={running && index === segments.length - 1} idle={idle} />
               ) : (
                 <Row
                   key={segment.item.id}
@@ -1212,19 +1296,18 @@ export function Chat(): JSX.Element {
       </div>
 
       <div className="compose">
-        {below ? (
+        {away && (far || newBelow > 0) ? (
           <button
             type="button"
-            className="new-below"
+            className={`new-below${newBelow > 0 ? ' has-new' : ''}`}
             onClick={() => {
               const el = thread.current
               if (el) el.scrollTop = el.scrollHeight
-              stuck.current = true
-              setBelow(false)
+              backToLatest()
             }}
           >
             <Icon name="chevd" size={16} />
-            New below
+            <span aria-live="polite">{newBelowLabel(newBelow)}</span>
           </button>
         ) : null}
         <Composer ref={composer} chatId={openChat} onSend={onSend} />

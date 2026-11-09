@@ -37,6 +37,10 @@
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]) .palette,:root:not([data-theme="light"]) .quick,:root:not([data-theme="light"]) .dialog:not(.quick-dialog){background:var(--s-high)}
 }
+/* Quick ask: what it uses is a plain label, not a chip that looks pressable; Send is off until there are words. */
+.quick .quick-fact{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:999px;background:var(--s-high);color:var(--on-sv);font:500 12px/1 var(--font);max-width:240px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.quick .quick-keys{margin-left:auto;display:inline-flex;gap:6px;align-items:center}
+.quick .send:disabled{opacity:.45;cursor:default}
 .pi{transition:background var(--t-fast) var(--effects)}
 .toast{box-shadow:var(--elev-3);animation:toast-in var(--t-slow) var(--spatial)}
 @keyframes toast-in{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
@@ -154,7 +158,7 @@ details.adv[open]>summary::before{transform:rotate(45deg)}
 .chip>svg{flex:none}
 
 /* ---------- routines: two roomy columns, never three cramped ones ---------- */
-.rtn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:14px}
+.rtn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(520px,100%),1fr));gap:14px}
 .rtn{min-height:92px}
 .rtn .rt span{display:block;line-height:1.4}
 .rtn .rt .rt-when{margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

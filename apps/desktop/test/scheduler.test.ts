@@ -202,6 +202,61 @@ describe('Scheduler', () => {
     expect(notices).toEqual(['Morning brief: Two bills are due.'])
   })
 
+  it('a routine that fails on a rate limit is not run on every slot: it waits, retries with growing waits, and says so once', async () => {
+    const LIMIT = 'Your Claude plan has reached its limit for now. It resets on its own; try again later.'
+    let clock = NOW
+    const runner = new FakeRunner()
+    runner.result = async () => ({ text: LIMIT, waiting: false, failed: true })
+    const { scheduler, notices } = makeScheduler(runner, () => clock)
+    const row = await store.upsert('trigger', trigger({ kind: 'interval', spec: '1', lastRunAt: NOW - HOUR }))
+    await scheduler.tick()
+    expect(runner.calls).toHaveLength(1)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('It is tried again in 5 min.')
+    // Due every minute, but it waits for the limit: four minutes of ticks start nothing.
+    for (let minute = 1; minute <= 4; minute += 1) {
+      clock = NOW + minute * 60_000
+      await scheduler.tick()
+    }
+    expect(runner.calls).toHaveLength(1)
+    // After 5 minutes one retry; it fails again, quietly, and the next wait is 15 minutes.
+    clock = NOW + 5 * 60_000
+    await scheduler.tick()
+    expect(runner.calls).toHaveLength(2)
+    clock = NOW + 19 * 60_000
+    await scheduler.tick()
+    expect(runner.calls).toHaveLength(2)
+    expect(notices).toHaveLength(1)
+    // The limit has reset: the retry runs, its result is told, and the routine is back on its own slots.
+    runner.result = async () => ({ text: 'All quiet.', waiting: false })
+    clock = NOW + 20 * 60_000
+    await scheduler.tick()
+    expect(runner.calls).toHaveLength(3)
+    expect(notices).toEqual([expect.stringContaining('tried again in 5 min'), 'Morning brief: All quiet.'])
+    clock = NOW + 21 * 60_000
+    await scheduler.tick()
+    expect(runner.calls).toHaveLength(4)
+    expect((await store.get('trigger', row.id))?.lastResult).toBe('All quiet.')
+  })
+
+  it('a one-off routine that hits a rate limit is not lost: it runs again after the wait', async () => {
+    let clock = NOW
+    const runner = new FakeRunner()
+    runner.result = async () => ({ text: 'The AI provider says we are sending too much right now (rate limit or out of credit). Try again shortly.', waiting: false, failed: true })
+    const { scheduler } = makeScheduler(runner, () => clock)
+    const row = await store.upsert('trigger', trigger({ kind: 'at', spec: new Date(NOW - 60_000).toISOString() }))
+    await scheduler.tick()
+    expect(runner.calls).toHaveLength(1)
+    runner.result = async () => ({ text: 'Reminder sent.', waiting: false })
+    clock = NOW + 5 * 60_000
+    await scheduler.tick()
+    expect(runner.calls).toHaveLength(2)
+    expect((await store.get('trigger', row.id))?.lastResult).toBe('Reminder sent.')
+    clock = NOW + 30 * 60_000
+    await scheduler.tick()
+    expect(runner.calls).toHaveLength(2)
+  })
+
   it('skips paused routines and routines that are not due', async () => {
     await save(trigger({ id: 'paused', spec: '09:50', enabled: false }))
     await save(trigger({ id: 'later', spec: '23:59', enabled: true }))

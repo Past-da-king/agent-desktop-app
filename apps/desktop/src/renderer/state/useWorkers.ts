@@ -1,38 +1,20 @@
-import type { WorkerInfo } from '@agent/core'
-import { useEffect, useState } from 'react'
+import { useSyncExternalStore } from 'react'
 
 import { agent } from '../bridge'
+import { createWorkersStore } from './workersStore'
+import type { WorkersSnapshot, WorkersStore } from './workersStore'
+
+let shared: WorkersStore | null = null
+function store(): WorkersStore {
+  shared ??= createWorkersStore(agent.workers)
+  return shared
+}
+const subscribe = (listener: () => void): (() => void) => store().subscribe(listener)
+const get = (): WorkersSnapshot => store().get()
+const reload = (): void => store().reload()
 
 /** The background workers, read again whenever the main process says something about them changed. */
-export function useWorkers(): { workers: WorkerInfo[]; loaded: boolean; reload: () => void } {
-  const [workers, setWorkers] = useState<WorkerInfo[]>([])
-  const [loaded, setLoaded] = useState(false)
-  const [tick, setTick] = useState(0)
-
-  useEffect(() => {
-    let alive = true
-    const read = (): void => {
-      void agent.workers
-        .list()
-        .then((list) => {
-          if (!alive) return
-          setWorkers(list)
-          setLoaded(true)
-        })
-        .catch(() => {
-          if (alive) setLoaded(true)
-        })
-    }
-    read()
-    const off = agent.workers.onChange(read)
-    // Uptime and "last line" move on their own; a slow refresh keeps them honest.
-    const timer = window.setInterval(read, 20_000)
-    return () => {
-      alive = false
-      off()
-      window.clearInterval(timer)
-    }
-  }, [tick])
-
-  return { workers, loaded, reload: () => setTick((n) => n + 1) }
+export function useWorkers(): WorkersSnapshot & { reload: () => void } {
+  const snapshot = useSyncExternalStore(subscribe, get)
+  return { ...snapshot, reload }
 }

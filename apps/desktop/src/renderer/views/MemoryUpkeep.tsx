@@ -43,9 +43,12 @@ function useUpkeep(): [UpkeepSummary | null, (next: UpkeepSummary) => void] {
       })
       .catch(() => undefined)
     const off = agent.memory.onUpkeep(() => {
-      void agent.memory.upkeep().then((value) => {
-        if (live) setSummary(value)
-      })
+      void agent.memory
+        .upkeep()
+        .then((value) => {
+          if (live) setSummary(value)
+        })
+        .catch(() => undefined)
     })
     return () => {
       live = false

@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react'
 
-import { chat } from '../bridge'
+import type { ChatBrain } from '@agent/core'
+
+import { agent, chat } from '../bridge'
+import { pickLine } from '../lib/ai'
+import { currentChat } from '../lib/current-chat'
+import { useDrafts } from '../state/useDrafts'
+import { toast } from '../state/useToast'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { Kbd } from '../ui/bits'
-import { Chip } from '../ui/Chip'
 import { Dialog } from '../ui/Dialog'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
@@ -22,15 +27,39 @@ export function QuickAsk(): JSX.Element | null {
     if (open) setText('')
   }, [open])
 
+  // What the open chat thinks with (its own pick, a project's over the main thread's), the same line its header shows.
+  const [brain, setBrain] = useState<ChatBrain | null>(null)
+  useEffect(() => {
+    if (!open) return
+    let live = true
+    setBrain(null)
+    agent.settings.accounts
+      .chatBrain(currentChat())
+      .then((next) => {
+        if (live) setBrain(next)
+      })
+      .catch(() => {
+        // The label falls back to a plain word; sending still goes to the open chat.
+      })
+    return () => {
+      live = false
+    }
+  }, [open, settings])
+
   if (!open) return null
 
   const agentName = settings?.agentName.trim() || 'your agent'
 
   const send = (): void => {
     const value = text.trim()
-    close()
     if (value === '') return
-    void chat.send(value)
+    close()
+    const sentTo = currentChat()
+    chat.send(value, [], sentTo).catch(() => {
+      // It did not go: the words wait in that chat's box instead of vanishing.
+      useDrafts.getState().addWords(sentTo, value)
+      toast('That message did not go. It is in the chat box.')
+    })
     navigate({ page: 'chat' })
   }
 
@@ -51,17 +80,22 @@ export function QuickAsk(): JSX.Element | null {
           autoComplete="off"
           aria-label={`Ask ${agentName}`}
         />
-        <button type="button" className="send" onClick={send} aria-label="Send">
+        <button type="button" className="send" onClick={send} aria-label="Send" title="Send" disabled={text.trim() === ''}>
           <Icon name="arrow" size={22} />
         </button>
       </div>
       <div className="ctx">
         <span className="eyebrow mute">USING</span>
-        <Chip active icon={<Icon name="bolt" size={14} />}>
-          {settings?.model.trim() || 'Your provider'}
-        </Chip>
-        <Chip icon={<Icon name="monitor" size={14} />}>This computer</Chip>
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        {/* Facts, not controls: plain labels, so nothing here looks pressable and does nothing. */}
+        <span className="quick-fact">
+          <Icon name="bolt" size={14} />
+          {(brain === null ? '' : pickLine(settings, brain.main.using)) || 'Your AI'}
+        </span>
+        <span className="quick-fact">
+          <Icon name="monitor" size={14} />
+          This computer
+        </span>
+        <span className="quick-keys">
           <Kbd>Enter</Kbd> send <span aria-hidden="true">·</span> <Kbd>Esc</Kbd> close
         </span>
       </div>

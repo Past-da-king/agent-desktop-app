@@ -22,6 +22,16 @@ export function openUserTasks(tasks: TaskRow[]): TaskRow[] {
   return userTasks(tasks).filter((task) => task.status !== 'done')
 }
 
+/** Still open and past its date. Shown in the error colour with the word, so it is not read as "due soon". */
+export function overdue(task: Pick<TaskRow, 'dueAt' | 'status'>, now = Date.now()): boolean {
+  return task.status !== 'done' && task.dueAt !== null && task.dueAt < now
+}
+
+/** The class of a due line: late, soon or nothing. */
+export function dueTone(task: Pick<TaskRow, 'dueAt' | 'status'>, now = Date.now()): '' | ' soon' | ' late' {
+  return overdue(task, now) ? ' late' : dueSoon(task, now) ? ' soon' : ''
+}
+
 /** A due date within the next day is shown in amber. */
 export function dueSoon(task: Pick<TaskRow, 'dueAt' | 'status'>, now = Date.now()): boolean {
   return task.status !== 'done' && task.dueAt !== null && task.dueAt - now < 86_400_000

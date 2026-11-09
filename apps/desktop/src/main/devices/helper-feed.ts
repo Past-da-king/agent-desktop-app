@@ -12,7 +12,7 @@
  */
 import { MAIN_CHAT, type ChatItem, type DataChange, type HelperCardsSnapshot, type ProjectRow } from '@agent/core'
 
-import { cardInfo, helperCards } from '../../shared/helper-cards'
+import { cardInfo, helperCards, helperState } from '../../shared/helper-cards'
 import type { Store } from '../db'
 
 const DEBOUNCE_MS = 250
@@ -43,6 +43,18 @@ function metaOf(row: ChatItem): Record<string, unknown> {
 function text(meta: Record<string, unknown>, key: string): string {
   const value = meta[key]
   return typeof value === 'string' ? value : ''
+}
+
+/**
+ * A helper row that can never make a card: one the main chat started that is no longer working (helper-cards.ts
+ * lists those only while they work). Nearly every helper there ever was is one of these. Holding them all and
+ * parsing each one again on every step of any helper was the feed's whole cost, and it grew with the history.
+ */
+function cardless(row: ChatItem): boolean {
+  const meta = metaOf(row)
+  if (text(meta, 'projectChat') !== '') return false
+  if ((text(meta, 'chat') || MAIN_CHAT) !== MAIN_CHAT) return false
+  return helperState(text(meta, 'state')) !== 'working'
 }
 
 /** Keeps a list of rows by id, oldest first, at most KEEP_LINES. */
@@ -84,6 +96,11 @@ export class HelperFeed {
     return this.last
   }
 
+  /** How many helper rows the feed holds in memory (the ones that can make a card). */
+  held(): number {
+    return this.helpers.size
+  }
+
   dispose(): void {
     this.disposed = true
     this.offChange?.()
@@ -114,13 +131,19 @@ export class HelperFeed {
     // Every reply and message (a chat that waits on the person may be old); steps only from the lookback.
     const all = async (kind: string): Promise<ChatItem[]> =>
       store.listWhere !== undefined ? store.listWhere('chat_item', { kind }) : (await store.list('chat_item')).filter((row) => row.kind === kind)
-    for (const row of helperRows) this.helpers.set(row.id, row)
+    for (const row of helperRows) if (!cardless(row)) this.helpers.set(row.id, row)
     for (const row of [...(await where('activity')), ...(await all('agent')), ...(await all('user'))]) this.index(row)
     this.projects = await store.list('project')
   }
 
   private index(row: ChatItem): boolean {
     if (row.kind === 'helper') {
+      if (cardless(row)) {
+        // It ended (or was never ours to show): let go of it and its steps. News only if it was on the list.
+        const had = this.helpers.delete(row.id)
+        this.steps.delete(text(metaOf(row), 'id') || row.id)
+        return had
+      }
       this.helpers.set(row.id, row)
       return true
     }

@@ -8,6 +8,7 @@ import { chatPlaces } from '../lib/chat-place'
 import { PlaceChip } from '../ui/PlaceChip'
 import { chatList, chatOf, chatStatus, STATUS_LABEL } from '../lib/chats'
 import { short, timeAgo } from '../lib/format'
+import { failText, orTell } from '../lib/tell'
 import { useChats } from '../state/useChats'
 import { useCalmEntity, useEntity, useEntityLoaded } from '../state/useData'
 import { useUi } from '../state/useUi'
@@ -44,12 +45,21 @@ function NoteDialog({ project, onClose }: { project: ProjectRow; onClose: () => 
   const [body, setBody] = useState('')
   const [kind, setKind] = useState<MemoryKind>('decision')
   const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
   const save = async (): Promise<void> => {
+    if (busy) return
     if (title.trim() === '') {
       setError('Give it a title.')
       return
     }
-    await agent.data.upsert('memory', { title: title.trim(), body: body.trim(), kind, topics: project.name.toLowerCase(), pinned: false, source: 'user', project: project.id })
+    setBusy(true)
+    try {
+      await agent.data.upsert('memory', { title: title.trim(), body: body.trim(), kind, topics: project.name.toLowerCase(), pinned: false, source: 'user', project: project.id })
+    } catch (cause: unknown) {
+      setError(failText(cause, 'It could not be saved. Try again.'))
+      setBusy(false)
+      return
+    }
     toast(`Added to ${project.name}'s memory`)
     onClose()
   }
@@ -87,11 +97,12 @@ function NoteDialog({ project, onClose }: { project: ProjectRow; onClose: () => 
           Cancel
         </Button>
         <Button
+          disabled={busy}
           onClick={() => {
             void save()
           }}
         >
-          Add to memory
+          {busy ? 'Adding...' : 'Add to memory'}
         </Button>
       </div>
     </Dialog>
@@ -122,7 +133,7 @@ function HiddenProjects({ projects }: { projects: ProjectRow[] }): JSX.Element {
               variant="tonal"
               size="sm"
               onClick={() => {
-                void agent.data.upsert('project', { id: project.id, hidden: false })
+                void orTell(agent.data.upsert('project', { id: project.id, hidden: false }), 'It could not be put back on the rail.')
               }}
             >
               Show on the rail
@@ -156,6 +167,7 @@ export function Project({ id }: { id: string }): JSX.Element {
   const [editing, setEditing] = useState(false)
   const [noting, setNoting] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [removing, setRemoving] = useState(false)
   const project = projects.find((each) => each.id === id)
 
   const chats = useMemo(() => {
@@ -219,7 +231,9 @@ export function Project({ id }: { id: string }): JSX.Element {
           </Button>
           <Button
             onClick={() => {
-              void startProjectChat(project).then(() => navigate({ page: 'chat' }))
+              void orTell(startProjectChat(project).then(() => true), 'The chat could not be started. Try again.').then((started) => {
+                if (started === true) navigate({ page: 'chat' })
+              })
             }}
           >
             <Icon name="plus" size={18} />
@@ -242,7 +256,9 @@ export function Project({ id }: { id: string }): JSX.Element {
               variant="tonal"
               size="sm"
               onClick={() => {
-                void startProjectChat(project).then(() => navigate({ page: 'chat' }))
+                void orTell(startProjectChat(project).then(() => true), 'The chat could not be started. Try again.').then((started) => {
+                if (started === true) navigate({ page: 'chat' })
+              })
               }}
             >
               Start a chat
@@ -322,11 +338,20 @@ export function Project({ id }: { id: string }): JSX.Element {
             </Button>
             <Button
               size="sm"
+              disabled={removing}
               onClick={() => {
-                void agent.data.remove('project', project.id).then(() => navigate({ page: 'home' }))
+                setRemoving(true)
+                void orTell(agent.data.remove('project', project.id).then(() => true), `${project.name} could not be deleted.`).then((done) => {
+                  if (done === true) {
+                    toast(`${project.name} is deleted.`)
+                    navigate({ page: 'home' }, { replace: true })
+                  } else {
+                    setRemoving(false)
+                  }
+                })
               }}
             >
-              Delete
+              {removing ? 'Deleting...' : 'Delete'}
             </Button>
           </>
         ) : (

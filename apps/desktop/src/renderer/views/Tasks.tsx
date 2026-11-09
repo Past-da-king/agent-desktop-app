@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 
 import { agent, chat } from '../bridge'
 import { dueLabel } from '../lib/format'
-import { dueSoon, userTasks } from '../lib/tasks'
+import { dueTone, overdue, userTasks } from '../lib/tasks'
 import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
@@ -96,7 +96,9 @@ export function Tasks(): JSX.Element {
         toast('To-do deleted.', {
           actionLabel: 'Undo',
           onAction: () => {
-            void agent.data.upsert('task', task)
+            void agent.data.upsert('task', task).catch((cause: unknown) => {
+              toast(cause instanceof Error ? cause.message : 'Could not bring that to-do back.')
+            })
           },
         })
       })
@@ -173,7 +175,10 @@ export function Tasks(): JSX.Element {
                       onClick={() => selectTask(task.id)}
                     >
                       <div className="tt">{task.title}</div>
-                      <div className={`dd${dueSoon(task) ? ' soon' : ''}`}>{dueLabel(task)}</div>
+                      <div className={`dd${dueTone(task)}`}>
+                        {overdue(task) ? 'Overdue · ' : ''}
+                        {dueLabel(task)}
+                      </div>
                     </button>
                   </div>
                 ))}
@@ -190,7 +195,8 @@ export function Tasks(): JSX.Element {
                 </div>
                 <div className="kv">
                   <span className="eyebrow mute">DUE</span>
-                  <span className="h3" style={dueSoon(selected) ? { color: 'var(--tert)' } : undefined}>
+                  <span className={`h3 due${dueTone(selected)}`}>
+                    {overdue(selected) ? 'Overdue · ' : ''}
                     {dueLabel(selected)}
                   </span>
                 </div>

@@ -1,5 +1,11 @@
 /* ---------- phone-width: same system, the phone layout ---------- */
 .mnav{display:none}
+/* Nothing may force the window wider than it is: the one column takes the window's width, and the title bar's
+   search box gives way (down to its icon) before anything is pushed off the edge. */
+.win{grid-template-columns:minmax(0,1fr)}
+.titlebar{min-width:0}
+.cmdbar{min-width:34px}
+.tb-brand,.tb-right{flex:none}
 @media (max-width:1180px){
   .shell.panel,.shell.panel-collapsed{grid-template-columns:76px minmax(0,1fr)}
   .shell.panel .panel-w,.shell.panel-collapsed .panel-w{display:none}
@@ -23,8 +29,10 @@
 @media (max-width:820px){
   body{padding-block:0;background:var(--bg)}
   .win{border-radius:0;box-shadow:none;min-height:0}
-  .titlebar{height:auto;padding:12px 4px 4px}
-  .tb-brand,.syncpill,.wc,.tb-btn.hide-m{display:none}
+  .titlebar{height:auto;padding:8px 4px 4px}
+  .tb-brand,.syncpill,.tb-btn.hide-m{display:none}
+  /* The window has no native frame, so minimise, maximise and close stay on screen at every width. */
+  .wc{width:40px;height:36px;border-radius:10px}
   .cmdbar{flex:1;margin:0}
   .tb-right{min-width:0}
   .win .shell,.win .shell.panel,.win .shell.panel-collapsed,.win .shell.col,.win .shell.col.panel,.win .shell.col.panel-collapsed,.win .shell:not(.col){grid-template-columns:minmax(0,1fr);padding:0;gap:0}
@@ -32,11 +40,11 @@
   .sheet{border-radius:var(--r-lg) var(--r-lg) 0 0}
   .page{padding:20px 16px 120px}
   .ph{margin-bottom:20px}
-  .mnav{display:flex;position:absolute;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));gap:10px;z-index:20;align-items:center}
-  .mnav .bar{display:flex;gap:4px;padding:6px;border-radius:999px;background:var(--pc);box-shadow:0 8px 24px rgba(0,0,0,.2)}
-  .mnav .bar button{width:48px;height:44px;border-radius:999px;display:grid;place-items:center;color:var(--on-pc)}
+  .mnav{display:flex;position:absolute;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));gap:10px;z-index:20;align-items:center;max-width:calc(100% - 16px)}
+  .mnav .bar{display:flex;gap:4px;padding:6px;border-radius:999px;background:var(--pc);box-shadow:0 8px 24px rgba(0,0,0,.2);min-width:0}
+  .mnav .bar button{flex:1 1 48px;min-width:36px;height:44px;border-radius:999px;display:grid;place-items:center;color:var(--on-pc)}
   .mnav .bar button.on{background:var(--bg);color:var(--on-bg)}
-  .mnav .talk{width:56px;height:56px;border-radius:20px;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;box-shadow:0 8px 24px rgba(0,0,0,.2)}
+  .mnav .talk{flex:none;width:56px;height:56px;border-radius:20px;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;box-shadow:0 8px 24px rgba(0,0,0,.2)}
   .now{padding:22px 20px;border-radius:var(--r-lg)}
   .now .nm{font-size:24px}
   .thread{padding:6px 16px 16px}
@@ -67,6 +75,29 @@
   .rtn{flex-wrap:wrap}
   .rtn .rt{flex:1 1 150px}
   .rtn-actions{margin-left:auto}
+}
+/* Settings rows (styles/settings.css loads later, hence .win): the words keep a readable column and the control
+   drops under them instead of squeezing them to one word a line. */
+@media (max-width:560px){
+  .win .setg .srow{flex-wrap:wrap;gap:10px 14px;padding:12px 10px}
+  .win .setg .srow .rt{flex:1 1 150px}
+  .win .setg .srow .end{flex:0 1 auto;max-width:100%;min-width:0;margin-left:auto}
+  .win .setg .srow.sub{padding-left:24px}
+  .win .setg .note{padding-left:10px}
+  .win .setg .inp,.win .setg .sel,.win .setg .range,.win .setg .seg{max-width:100%}
+  .win .setg .seg{flex-wrap:wrap;border-radius:var(--r-md)}
+}
+/* The narrowest windows (the minimum is 360 wide): the title bar keeps Back, search, the working count, light and
+   dark and the three window buttons, each a little tighter. */
+@media (max-width:520px){
+  .titlebar{gap:6px}
+  .cmdbar{padding:0 10px;gap:8px}
+  .cmdbar kbd{display:none}
+  .compose textarea::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+}
+@media (max-width:400px){
+  .titlebar .tb-btn{width:34px}
+  .wc{width:36px}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}

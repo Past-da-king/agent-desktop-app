@@ -271,7 +271,7 @@ export function ProfileDialog({
           setName(value.slice(0, 40))
           setError('')
         }}
-        placeholder="Strat Edge work"
+        placeholder="Work"
         autoComplete="off"
         onEnter={() => void save()}
       />

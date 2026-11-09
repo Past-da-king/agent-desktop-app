@@ -52,11 +52,18 @@ import { DEMO_CHATS } from './chats-demo'
 import { mockHotkeys } from './mock-hotkeys'
 import { readMode, seedFor, type DemoMode } from './seed'
 import { cardInfo, HELPER_STALE_MS, helperCards } from '../../shared/helper-cards'
+import { lightRow } from '../../shared/light-row'
 import { localRoutes } from '../../shared/route-target'
+import { repin } from '../../shared/miniapps'
 
 const mockRoutes = localRoutes()
 
 type RowStore = { [E in EntityName]: Array<EntityMap[E]> }
+
+/** The preview's way to see a failure state by eye: ?fail=decide (a card's answer is refused), ?fail=rest (a run's full record cannot be read). */
+function failing(what: string): boolean {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fail') === what
+}
 
 const mode: DemoMode =
   typeof window === 'undefined' ? 'fresh' : readMode(window.location.search)
@@ -839,12 +846,15 @@ export const mockAgent: AgentApi = {
 
   data: {
     async list<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
+      // ?fail=rest: rows are listed as the app lists them (only the head of long output), and reading the rest fails.
+      if (failing('rest')) return copy(rows[entity] as Array<EntityMap[E]>).map((row) => lightRow(entity, row))
       return copy(rows[entity] as Array<EntityMap[E]>)
     },
     async where<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>> {
       return copy(filterRows(rows[entity] as Array<EntityMap[E]>, where))
     },
     async get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null> {
+      if (failing('rest')) throw new Error('The preview refused it.')
       const row = (rows[entity] as Array<EntityMap[E]>).find((each) => each.id === id)
       return row === undefined ? null : (copy(row) as EntityMap[E])
     },
@@ -981,6 +991,8 @@ export const mockAgent: AgentApi = {
       }
     },
     async decide(itemId, decision: Decision) {
+      // ?fail=decide: the preview's way to see a card whose answer did not get through.
+      if (failing('decide')) throw new Error('The preview refused it.')
       patchCard(itemId, { decision })
     },
     async tap(itemId, label, message) {
@@ -1513,19 +1525,34 @@ export const mockAgent: AgentApi = {
     selfId: async () => 'mock-pc',
     devices: async () => [],
   },
-  // The browser preview has no main process to run an app's bridge: apps list from the rows, frames stay empty.
+  // The browser preview has no main process to run an app's bridge: frames stay empty, but pinning, ordering,
+  // allowing and deleting change the rows, so the Apps page and the sidebar behave as they do in the app.
   miniapps: {
     session: async () => null,
     send: async () => null,
     close: async () => undefined,
     onPush: () => () => undefined,
     onOpen: () => () => undefined,
-    pin: async () => undefined,
-    unpin: async () => undefined,
-    order: async () => undefined,
-    remove: async () => undefined,
+    pin: async (id, position) => {
+      const at = position ?? rows.miniapp.filter((app) => app.pinned > 0 && app.id !== id).length + 1
+      for (const change of repin(rows.miniapp, id, at)) upsertRow('miniapp', change)
+    },
+    unpin: async (id) => {
+      for (const change of repin(rows.miniapp, id, null)) upsertRow('miniapp', change)
+    },
+    order: async (ids) => {
+      ids.forEach((id, index) => upsertRow('miniapp', { id, pinned: index + 1 }))
+    },
+    remove: async (id) => {
+      rows.miniapp = rows.miniapp.filter((app) => app.id !== id)
+      emitData('miniapp')
+    },
     undo: async () => 'Not in the preview.',
-    allow: async () => undefined,
+    allow: async (id, key, on) => {
+      const app = rows.miniapp.find((row) => row.id === id)
+      if (app === undefined) return
+      upsertRow('miniapp', { id, allowed: on ? [...new Set([...app.allowed, key])] : app.allowed.filter((each) => each !== key) })
+    },
     check: async () => null,
     askChange: async () => undefined,
     info: async () => ({ engine: 'preview' }),

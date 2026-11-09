@@ -30,7 +30,7 @@ export const DEVELOPER_KEY = 'showDeveloperSettings'
 
 export const SECTIONS: readonly SectionSpec[] = [
   { id: 'account', name: 'Account and AI', line: 'Who you are, who your agent is, and what it thinks with.', icon: 'person' },
-  { id: 'profiles', name: 'Profiles and connections', line: 'Where your accounts live. Each row opens the page that owns it.', icon: 'grid' },
+  { id: 'profiles', name: 'Profiles and connections', line: 'Where your accounts live. They are kept on the Connections page.', icon: 'grid' },
   { id: 'devices', name: 'Devices', line: 'Your phone and other computers, one agent.', icon: 'server' },
   { id: 'agents', name: 'Agents and helpers', line: 'What helpers think with, how many work at once, and whether the app keeps running.', icon: 'bolt' },
   { id: 'voice', name: 'Voice and dictation', line: 'Talk to your agent, dictate anywhere, and hear replies.', icon: 'mic' },
@@ -86,7 +86,7 @@ export const ROWS: readonly RowSpec[] = [
   { key: 'userName', section: 'account', label: 'Your name', description: 'What your agent calls you, on the rail and in its replies.', control: 'field', icon: 'person', sample: 'Sam' },
   { key: 'agentName', section: 'account', label: "Your agent's name", description: 'The name on the rail, in chat and in its replies.', control: 'field', icon: 'bolt', sample: 'Nova' },
   { key: 'syncEmail', section: 'account', label: 'Signed in as', description: 'The account this computer syncs with. Keys never sync.', control: 'readonly', icon: 'mail', sample: 'sam@example.com' },
-  { key: 'signedIn', section: 'account', label: 'Signed in', description: 'Whether this computer has an account. Each device keeps its own keys.', control: 'readonly', icon: 'link', sample: true },
+  { key: 'signedIn', section: 'account', label: 'Sync status', description: 'Whether this computer is signed in, and when it last synced. Each device keeps its own keys.', control: 'readonly', icon: 'link', sample: true },
   { key: 'accounts', section: 'account', label: 'AI accounts', description: 'The plans and keys your agent may think with.', control: 'block', icon: 'key', sample: [{ id: 'work', label: 'Work key', kind: 'api', provider: 'openai', model: 'gpt-5.1', hasKey: true }], terms: ['openai', 'anthropic', 'gemini', 'plan', 'api'] },
   { key: 'ai', section: 'account', label: 'What thinks in the main chat', description: 'The account and model that answer in chat. Helpers can use another.', control: 'block', icon: 'sliders', sample: { main: { account: 'work', model: 'gpt-5.1' }, helpers: { account: '', model: '' } }, terms: ['model', 'brain', 'thinking'] },
 

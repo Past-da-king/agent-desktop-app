@@ -18,7 +18,7 @@ vi.mock('../src/renderer/bridge', () => ({
 import type { MainCard } from '../src/renderer/lib/card-open'
 import { readClosedGroups, readWorkListOpen, WORK_GROUPS_CLOSED_KEY, WORK_LIST_OPEN_KEY } from '../src/renderer/lib/work-list-pref'
 import { HelperCardList, type ListCollapse, type ListGroups } from '../src/renderer/shell/HelpersPanel'
-import { foldCards, groupCards, helperCards, MAIN_GROUP, workCounts, workLineText } from '../src/shared/helper-cards'
+import { cardInfo, foldCards, groupCards, helperCards, MAIN_GROUP, workCounts, workLineText } from '../src/shared/helper-cards'
 
 const NOW = 1_000_000
 
@@ -261,5 +261,15 @@ describe("a project's page lists that project's own", () => {
     expect(html).not.toContain('hp-group-h')
     expect(html).not.toContain('hp-head')
     expect(shownCards(html)).toEqual(['pa-pc1', 'h1', 'h2', 'pa-pc2', 'h3'])
+  })
+})
+
+describe('the feed a linked device hears', () => {
+  it('says which helper started a helper, so the phone can fold it under its parent', () => {
+    const infos = Object.fromEntries(all().map((card) => [card.id, cardInfo(card).parentHelper]))
+    expect(infos['h1a']).toBe('h1')
+    expect(infos['h1b']).toBe('h1')
+    expect(infos['h1']).toBe('')
+    expect(infos['pa-pc1']).toBe('')
   })
 })

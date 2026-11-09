@@ -1,4 +1,5 @@
 /* Settings > Vault (views/Vault.tsx): a searchable list of names, never values. */
+.vault-sec{margin-top:20px}
 .vault-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 8px 10px}
 .vault-search{flex:1 1 240px;height:46px;min-width:0}
 .vault-search input{flex:1;min-width:0;border:0;background:transparent;color:var(--on-bg);font:400 15px/1.3 var(--font);outline:none}
