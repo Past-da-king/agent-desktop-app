@@ -53,9 +53,10 @@ export function AppLogo({ name, logo, size = 'md' }: { name: string; logo?: stri
 }
 
 /** Live accounts, key state and learned apps, reloaded whenever the main process says they changed. */
-export function useApps(): { status: AppsStatus | null; learned: LearnedAppInfo[] | null } {
+export function useApps(): { status: AppsStatus | null; learned: LearnedAppInfo[] | null; learnedFailed: boolean; reload: () => void } {
   const [status, setStatus] = useState<AppsStatus | null>(null)
   const [learned, setLearned] = useState<LearnedAppInfo[] | null>(null)
+  const [learnedFailed, setLearnedFailed] = useState(false)
   const [tick, setTick] = useState(0)
 
   useEffect(() => {
@@ -71,10 +72,15 @@ export function useApps(): { status: AppsStatus | null; learned: LearnedAppInfo[
     agent.apps
       .learned()
       .then((next) => {
-        if (live) setLearned(next)
+        if (!live) return
+        setLearned(next)
+        setLearnedFailed(false)
       })
       .catch(() => {
-        if (live) setLearned([])
+        if (!live) return
+        // Keep what was shown; an empty list here would read as "nothing learned".
+        setLearned((now) => now ?? [])
+        setLearnedFailed(true)
       })
     return () => {
       live = false
@@ -83,7 +89,7 @@ export function useApps(): { status: AppsStatus | null; learned: LearnedAppInfo[
 
   useEffect(() => agent.apps.onChanged(() => setTick((n) => n + 1)), [])
 
-  return { status, learned }
+  return { status, learned, learnedFailed, reload: () => setTick((n) => n + 1) }
 }
 
 // ---- dialogs ------------------------------------------------------------------------------------
@@ -753,7 +759,7 @@ export function ConnectedAppsSection(): JSX.Element {
 
 /** Sites the agent taught itself, each with the profiles that may run it. */
 export function LearnedAppsSection({ bare = false }: { bare?: boolean }): JSX.Element {
-  const { learned } = useApps()
+  const { learned, learnedFailed, reload } = useApps()
   const profiles = useProfiles() ?? []
   const [removing, setRemoving] = useState<LearnedAppInfo | null>(null)
   return (
@@ -762,6 +768,23 @@ export function LearnedAppsSection({ bare = false }: { bare?: boolean }): JSX.El
       {learned === null ? (
         <div className="list" style={{ padding: 18 }}>
           <p className="small muted">Loading...</p>
+        </div>
+      ) : learnedFailed && learned.length === 0 ? (
+        <div className="apps-empty" role="alert">
+          <div className="apps-empty-head">
+            <div className="ri">
+              <Icon name="x" size={22} />
+            </div>
+            <div className="rt">
+              <b>Your learned apps could not be read</b>
+              <span>Nothing is lost. Try again in a moment.</span>
+            </div>
+          </div>
+          <div className="apps-empty-actions">
+            <Button variant="tonal" size="sm" onClick={reload}>
+              Try again
+            </Button>
+          </div>
         </div>
       ) : learned.length === 0 ? (
         <div className="apps-empty">
@@ -779,10 +802,20 @@ export function LearnedAppsSection({ bare = false }: { bare?: boolean }): JSX.El
           </div>
         </div>
       ) : (
-        <div className="agrp-list">
-          {learned.map((app) => (
-            <LearnedRow key={app.id} app={app} profiles={profiles} onRemove={() => setRemoving(app)} />
-          ))}
+        <div className="hub-card">
+          {learnedFailed ? (
+            <p className="small apps-note apps-warn">
+              The list could not be refreshed, so this may be out of date.{' '}
+              <Button variant="text" size="sm" onClick={reload}>
+                Try again
+              </Button>
+            </p>
+          ) : null}
+          <div className="agrp-list">
+            {learned.map((app) => (
+              <LearnedRow key={app.id} app={app} profiles={profiles} onRemove={() => setRemoving(app)} />
+            ))}
+          </div>
         </div>
       )}
       {removing !== null ? (

@@ -244,21 +244,6 @@ export function SignIn(): JSX.Element {
           <Icon name="arrow" size={20} />
         </Button>
 
-        <div className="or">or</div>
-
-        <div className="qr soon" aria-disabled="true">
-          <div className="qrbox" aria-hidden="true">
-            <Icon name="phone" size={30} />
-          </div>
-          <div className="qr-t">
-            <div className="qr-head">
-              <div className="h3">Sign in with your phone</div>
-              <span className="pill mute">Coming soon</span>
-            </div>
-            <p className="muted small">Scan a code from the Agent app on your phone. Nothing to type.</p>
-          </div>
-        </div>
-
         <Button
           variant="text"
           onClick={() => {

@@ -51,11 +51,6 @@
   background:linear-gradient(to bottom,color-mix(in srgb,var(--bg) 0%,transparent),var(--bg) 22px)}
 .ob-keyrow{display:flex;align-items:center;gap:14px;margin-top:-2px}
 .ob-keyrow span{font-size:12px;line-height:1.45;color:var(--on-sv)}
-.qr.soon{padding:14px 16px;gap:14px;background:var(--s-low)}
-.qr.soon .qrbox{width:52px;height:52px;border-radius:16px}
-.qr.soon .qr-t{display:flex;flex-direction:column;gap:4px;min-width:0}
-.qr.soon .qr-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.qr.soon p{margin:0;line-height:1.45}
 
 /* ---------- chat: the header is a surface, the thread scrolls under it ---------- */
 .chat-h{position:relative;z-index:3;background:var(--bg)}
@@ -80,7 +75,6 @@ input:focus-visible,textarea:focus-visible{outline:none}
 }
 
 /* The icon inside the coming-soon phone card is an icon, not the old QR plate. */
-.qr.soon .qrbox svg{width:30px;height:30px;padding:0;background:none;border-radius:0}
 
 /* Disclosures look like the app, not like a browser: a rotating chevron, a real hit area. */
 details.adv>summary{list-style:none;display:flex;align-items:center;gap:10px;cursor:pointer;-webkit-user-select:none;user-select:none}
@@ -191,7 +185,6 @@ button.model:hover{background:var(--s-highest)}
   .rowc>*{grid-column:2;justify-self:start;min-width:0}
   .rowc>:first-child{grid-column:1;grid-row:1}
   .rowc>:nth-child(2){grid-column:2;grid-row:1;justify-self:stretch}
-  .qr.soon .qr-head{flex-wrap:wrap;row-gap:4px}
   .rtn{display:grid;grid-template-columns:44px minmax(0,1fr);column-gap:14px;row-gap:8px;padding:16px 16px}
   .rtn .rtn-actions{grid-column:1 / -1;justify-self:end;margin:0}
   .hrow .hn b{display:block;margin:0 0 2px}
