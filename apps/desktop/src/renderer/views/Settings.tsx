@@ -95,7 +95,7 @@ export function Settings(): JSX.Element {
   // Another page asked for one section (Connections, Manage folders): open there, once.
   useEffect(() => {
     const asked = takeSettingsSection()
-    if (asked === null || !rail.some((section) => section.id === asked)) return undefined
+    if (asked === null || !rail.some((entry) => entry.section.id === asked)) return undefined
     const id = asked as SectionId
     setCurrent(id)
     const frame = window.requestAnimationFrame(() => document.getElementById(`set-${id}`)?.scrollIntoView({ block: 'start' }))
