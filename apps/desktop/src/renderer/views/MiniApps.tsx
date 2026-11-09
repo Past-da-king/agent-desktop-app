@@ -4,10 +4,11 @@
  * New apps come from asking his agent; the box at the top hands his words to it.
  */
 import { MAIN_CHAT, type MiniAppRow } from '@agent/core'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
 import { openedLine } from '../lib/miniapps'
+import { orTell } from '../lib/tell'
 import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { toast } from '../state/useToast'
@@ -35,6 +36,7 @@ export function MiniAppsSection({ bare = false }: { bare?: boolean }): JSX.Eleme
   const settings = useSettings((state) => state.settings)
   const navigate = useUi((state) => state.navigate)
   const [idea, setIdea] = useState('')
+  const [sending, setSending] = useState(false)
   const pinned = useMemo(() => pinnedApps(apps), [apps])
   const rest = useMemo(() => apps.filter((app) => app.pinned === 0).sort((a, b) => (b.openedAt || b.updatedAt) - (a.openedAt || a.updatedAt)), [apps])
   const [drag, setDrag] = useState<string | null>(null)
@@ -42,10 +44,15 @@ export function MiniAppsSection({ bare = false }: { bare?: boolean }): JSX.Eleme
   const ask = (): void => {
     const text = idea.trim()
     if (text === '') return
-    void agent.chat.send(`Make me a mini-app: ${text}`, [], MAIN_CHAT).then(() => {
-      setIdea('')
-      toast('Your agent is making it. It shows here when it is ready.')
-    })
+    if (sending) return
+    setSending(true)
+    void orTell(agent.chat.send(`Make me a mini-app: ${text}`, [], MAIN_CHAT).then(() => true), 'Your agent could not be reached. Try again.')
+      .then((sent) => {
+        if (sent !== true) return
+        setIdea('')
+        toast('Your agent is making it. It shows here when it is ready.', { actionLabel: 'Open chat', onAction: () => navigate({ page: 'chat', chat: MAIN_CHAT }) })
+      })
+      .finally(() => setSending(false))
   }
 
   const drop = (target: string): void => {
@@ -53,7 +60,7 @@ export function MiniAppsSection({ bare = false }: { bare?: boolean }): JSX.Eleme
     const ids = pinned.map((app) => app.id).filter((id) => id !== drag)
     ids.splice(ids.indexOf(target), 0, drag)
     setDrag(null)
-    void agent.miniapps.order(ids)
+    void orTell(agent.miniapps.order(ids), 'The order could not be saved.')
   }
 
   return (
@@ -87,8 +94,8 @@ export function MiniAppsSection({ bare = false }: { bare?: boolean }): JSX.Eleme
           placeholder="Describe an app: a week view of all my calendars, a tracker for my plan..."
           aria-label="Describe an app for your agent to make"
         />
-        <Button size="sm" type="submit" disabled={idea.trim() === ''}>
-          Make it
+        <Button size="sm" type="submit" disabled={idea.trim() === '' || sending}>
+          {sending ? 'Sending...' : 'Make it'}
         </Button>
       </form>
 
@@ -155,7 +162,24 @@ function AppCard({
   const [asking, setAsking] = useState(false)
   const [rights, setRights] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const menuBox = useRef<HTMLDivElement>(null)
   const pinned = app.pinned > 0
+  // The menu closes on a click anywhere else and on Escape, not only when the pointer leaves it.
+  useEffect(() => {
+    if (!menu) return
+    const away = (event: MouseEvent): void => {
+      if (menuBox.current !== null && !menuBox.current.contains(event.target as Node)) setMenu(false)
+    }
+    const key = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setMenu(false)
+    }
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', key)
+    }
+  }, [menu])
   const look = app.check.version !== app.version ? 'Checking' : app.check.ok ? null : 'Needs a fix'
   return (
     <div
@@ -169,7 +193,7 @@ function AppCard({
         <MiniAppTile icon={app.icon} size={44} />
         <span className="ma-card-text">
           <b>{app.name}</b>
-          <span className="muted">{app.description || 'No description'}</span>
+          {app.description === '' ? null : <span className="muted">{app.description}</span>}
           <span className="small muted">
             {openedLine(app.openedAt)} · v{app.version}
             {look !== null ? <span className={`pill ${look === 'Checking' ? 'mute' : 'warn'} ma-look`}>{look}</span> : null}
@@ -179,10 +203,10 @@ function AppCard({
       <div className="ma-card-actions">
         {pinned && place !== undefined && count !== undefined && count > 1 ? (
           <>
-            <button type="button" className="ib flip" title="Move up" aria-label={`Move ${app.name} up`} disabled={place === 1} onClick={() => void agent.miniapps.pin(app.id, place - 1)}>
+            <button type="button" className="ib flip" title="Move up" aria-label={`Move ${app.name} up`} disabled={place === 1} onClick={() => void orTell(agent.miniapps.pin(app.id, place - 1), 'It could not be moved.')}>
               <Icon name="chevd" size={16} />
             </button>
-            <button type="button" className="ib" title="Move down" aria-label={`Move ${app.name} down`} disabled={place === count} onClick={() => void agent.miniapps.pin(app.id, place + 1)}>
+            <button type="button" className="ib" title="Move down" aria-label={`Move ${app.name} down`} disabled={place === count} onClick={() => void orTell(agent.miniapps.pin(app.id, place + 1), 'It could not be moved.')}>
               <Icon name="chevd" size={16} />
             </button>
           </>
@@ -192,17 +216,17 @@ function AppCard({
           className={`chip${pinned ? ' on' : ''}`}
           aria-pressed={pinned}
           title={pinned ? 'Take it off the sidebar' : 'Pin it to the sidebar'}
-          onClick={() => void (pinned ? agent.miniapps.unpin(app.id) : agent.miniapps.pin(app.id))}
+          onClick={() => void orTell(pinned ? agent.miniapps.unpin(app.id) : agent.miniapps.pin(app.id), pinned ? 'It could not be taken off the sidebar.' : 'It could not be pinned.')}
         >
           <Icon name="pin" size={16} />
           {pinned ? 'Pinned' : 'Pin'}
         </button>
-        <div className="ma-menu-wrap">
-          <button type="button" className="ib" aria-label={`More for ${app.name}`} aria-expanded={menu} onClick={() => setMenu(!menu)}>
+        <div className="ma-menu-wrap" ref={menuBox}>
+          <button type="button" className="ib" title="More" aria-label={`More for ${app.name}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>
             <Icon name="sliders" size={18} />
           </button>
           {menu ? (
-            <div className="ma-menu" role="menu" onMouseLeave={() => setMenu(false)}>
+            <div className="ma-menu" role="menu">
               <button type="button" role="menuitem" onClick={() => { setMenu(false); onOpen() }}>
                 <Icon name="play" size={16} /> Open
               </button>
@@ -215,7 +239,9 @@ function AppCard({
                 disabled={app.history.length === 0}
                 onClick={() => {
                   setMenu(false)
-                  void agent.miniapps.undo(app.id).then((line) => toast(line))
+                  void orTell(agent.miniapps.undo(app.id), 'The last change could not be undone.').then((line) => {
+                    if (line !== undefined) toast(line)
+                  })
                 }}
               >
                 <Icon name="sync" size={16} /> Undo the last change
@@ -240,14 +266,20 @@ function AppCard({
 /** "Edit by asking": his words go to his agent, naming the app. */
 export function AskChange({ app, onClose }: { app: MiniAppRow; onClose: () => void }): JSX.Element {
   const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
   return (
     <Dialog label={`Change ${app.name}`} onClose={onClose}>
       <form
         className="ma-dialog"
         onSubmit={(event) => {
           event.preventDefault()
-          if (text.trim() === '') return
-          void agent.miniapps.askChange(app.id, text).then(() => {
+          if (text.trim() === '' || busy) return
+          setBusy(true)
+          void orTell(agent.miniapps.askChange(app.id, text.trim()).then(() => true), 'Your agent could not be reached. Try again.').then((sent) => {
+            if (sent !== true) {
+              setBusy(false)
+              return
+            }
             toast('Your agent is changing it.')
             onClose()
           })
@@ -260,8 +292,8 @@ export function AskChange({ app, onClose }: { app: MiniAppRow; onClose: () => vo
           <Button variant="text" size="sm" onClick={onClose}>
             Cancel
           </Button>
-          <Button size="sm" type="submit" disabled={text.trim() === ''}>
-            Ask
+          <Button size="sm" type="submit" disabled={text.trim() === '' || busy}>
+            {busy ? 'Asking...' : 'Ask'}
           </Button>
         </div>
       </form>
@@ -293,7 +325,7 @@ function Rights({ app, onClose }: { app: MiniAppRow; onClose: () => void }): JSX
               {row.reads ? (
                 <span className="pill ok">Allowed</span>
               ) : (
-                <Switch label="Without asking" on={app.allowed.includes(row.key)} onToggle={(on) => void agent.miniapps.allow(app.id, row.key, on)} />
+                <Switch label="Without asking" on={app.allowed.includes(row.key)} onToggle={(on) => void orTell(agent.miniapps.allow(app.id, row.key, on), 'That could not be saved.')} />
               )}
             </li>
           ))}
@@ -309,6 +341,7 @@ function Rights({ app, onClose }: { app: MiniAppRow; onClose: () => void }): JSX
 }
 
 export function DeleteApp({ app, onClose }: { app: MiniAppRow; onClose: (deleted: boolean) => void }): JSX.Element {
+  const [busy, setBusy] = useState(false)
   return (
     <Dialog label={`Delete ${app.name}`} onClose={() => onClose(false)}>
       <div className="ma-dialog">
@@ -321,14 +354,20 @@ export function DeleteApp({ app, onClose }: { app: MiniAppRow; onClose: (deleted
           <Button
             size="sm"
             className="danger"
-            onClick={() =>
-              void agent.miniapps.remove(app.id).then(() => {
+            disabled={busy}
+            onClick={() => {
+              setBusy(true)
+              void orTell(agent.miniapps.remove(app.id).then(() => true), `${app.name} could not be deleted.`).then((done) => {
+                if (done !== true) {
+                  setBusy(false)
+                  return
+                }
                 toast(`${app.name} is deleted.`)
                 onClose(true)
               })
-            }
+            }}
           >
-            Delete
+            {busy ? 'Deleting...' : 'Delete'}
           </Button>
         </div>
       </div>

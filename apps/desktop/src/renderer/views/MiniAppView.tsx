@@ -11,7 +11,8 @@ import type { MiniAppRow } from '@agent/core'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
-import { useEntity } from '../state/useData'
+import { orTell } from '../lib/tell'
+import { useEntity, useEntityLoaded } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { isDarkNow } from '../state/theme'
 import { toast } from '../state/useToast'
@@ -43,18 +44,30 @@ function useDark(): boolean {
 
 export function MiniAppView({ id }: { id: string }): JSX.Element {
   const apps = useEntity('miniapp')
+  const loaded = useEntityLoaded('miniapp')
   const app = apps.find((row) => row.id === id) ?? null
   const navigate = useUi((state) => state.navigate)
   const [gone, setGone] = useState(false)
   useEffect(() => {
     if (app !== null) setGone(false)
   }, [app])
+  // Until the rows are in, "no such app" would be a lie: a reload on an app's address lands here first.
+  if (app === null && !loaded) {
+    return (
+      <div className="ma-screen">
+        <div className="ma-wait" role="status">
+          <span className="ma-spin" aria-hidden="true" />
+          <p className="muted">Opening the app...</p>
+        </div>
+      </div>
+    )
+  }
   if (app === null) {
     return (
       <div className="page">
         <div className="empty">
-          <div className="h3">{gone ? 'This app was deleted' : 'No such app'}</div>
-          <p>It is not on this computer (any more).</p>
+          <div className="h3">{gone ? 'This app was deleted' : 'This app is not here'}</div>
+          <p>{gone ? 'It was deleted while it was open.' : 'It may have been deleted, or it has not synced to this computer yet.'}</p>
           <Button variant="tonal" size="sm" onClick={() => navigate({ page: 'apps' })}>
             All apps
           </Button>
@@ -110,7 +123,12 @@ function AppScreen({ app, onGone }: { app: MiniAppRow; onGone: () => void }): JS
             className={`chip${app.pinned > 0 ? ' on' : ''}`}
             aria-pressed={app.pinned > 0}
             title={app.pinned > 0 ? 'Take it off the sidebar' : 'Pin it to the sidebar'}
-            onClick={() => void (app.pinned > 0 ? agent.miniapps.unpin(app.id) : agent.miniapps.pin(app.id)).then(() => toast(app.pinned > 0 ? `${app.name} is off the sidebar.` : `${app.name} is on the sidebar.`))}
+            onClick={() => {
+              const was = app.pinned > 0
+              void orTell((was ? agent.miniapps.unpin(app.id) : agent.miniapps.pin(app.id)).then(() => true), was ? 'It could not be taken off the sidebar.' : 'It could not be pinned.').then((done) => {
+                if (done === true) toast(was ? `${app.name} is off the sidebar.` : `${app.name} is on the sidebar.`)
+              })
+            }}
           >
             <Icon name="pin" size={16} />
             <span className="hide-narrow">{app.pinned > 0 ? 'Pinned' : 'Pin'}</span>
@@ -146,7 +164,9 @@ function AppScreen({ app, onGone }: { app: MiniAppRow; onGone: () => void }): JS
                 <Button
                   size="sm"
                   onClick={() =>
-                    void agent.miniapps.askChange(app.id, `Its look check found:\n${app.check.issues.map((i) => `- ${i}`).join('\n')}\nFix these.`).then(() => toast('Your agent is on it.'))
+                    void orTell(agent.miniapps.askChange(app.id, `Its look check found:\n${app.check.issues.map((i) => `- ${i}`).join('\n')}\nFix these.`).then(() => true), 'Your agent could not be reached. Try again.').then((sent) => {
+                      if (sent === true) toast('Your agent is on it.')
+                    })
                   }
                 >
                   Ask your agent to fix it
@@ -174,6 +194,7 @@ function AppFrame({ app, dark, accent, onGone }: { app: MiniAppRow; dark: boolea
   const port = useRef<MessagePort | null>(null)
   const sessionRef = useRef<string | null>(null)
   const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   // The first paint is already right: the frame reads its theme from the address; later changes are posted.
   const src = useMemo(() => `miniapp://${app.id}/index.html?theme=${dark ? 'dark' : 'light'}&accent=${encodeURIComponent(accent)}`, [app.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const look = useRef({ dark, accent })
@@ -203,7 +224,7 @@ function AppFrame({ app, dark, accent, onGone }: { app: MiniAppRow; dark: boolea
       if (m.op === 'event' && m.topic === 'app.deleted') goneRef.current()
       port.current?.postMessage(message)
     })
-    void agent.miniapps.session(app.id).then((sid) => {
+    void agent.miniapps.session(app.id).catch(() => null).then((sid) => {
       if (!live) {
         if (sid !== null) void agent.miniapps.close(sid)
         return
@@ -222,7 +243,7 @@ function AppFrame({ app, dark, accent, onGone }: { app: MiniAppRow; dark: boolea
       if (sessionRef.current !== null) void agent.miniapps.close(sessionRef.current)
       sessionRef.current = null
     }
-  }, [app.id])
+  }, [app.id, attempt])
 
   useEffect(() => {
     port.current?.postMessage({ op: 'theme', dark, accent })
@@ -245,7 +266,17 @@ function AppFrame({ app, dark, accent, onGone }: { app: MiniAppRow; dark: boolea
     return (
       <div className="ma-wait">
         <div className="h3">This app cannot start</div>
-        <p className="muted">Its bridge did not open. Try again in a moment.</p>
+        <p className="muted">Its connection to the app did not open.</p>
+        <Button
+          variant="tonal"
+          size="sm"
+          onClick={() => {
+            setFailed(false)
+            setAttempt((n) => n + 1)
+          }}
+        >
+          Try again
+        </Button>
       </div>
     )
   }

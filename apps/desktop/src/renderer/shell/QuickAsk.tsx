@@ -52,8 +52,8 @@ export function QuickAsk(): JSX.Element | null {
 
   const send = (): void => {
     const value = text.trim()
-    close()
     if (value === '') return
+    close()
     const sentTo = currentChat()
     chat.send(value, [], sentTo).catch(() => {
       // It did not go: the words wait in that chat's box instead of vanishing.
@@ -80,22 +80,22 @@ export function QuickAsk(): JSX.Element | null {
           autoComplete="off"
           aria-label={`Ask ${agentName}`}
         />
-        <button type="button" className="send" onClick={send} aria-label="Send">
+        <button type="button" className="send" onClick={send} aria-label="Send" title="Send" disabled={text.trim() === ''}>
           <Icon name="arrow" size={22} />
         </button>
       </div>
       <div className="ctx">
         <span className="eyebrow mute">USING</span>
         {/* Facts, not controls: plain labels, so nothing here looks pressable and does nothing. */}
-        <span className="chip on ctx-fact">
+        <span className="quick-fact">
           <Icon name="bolt" size={14} />
-          <span className="chip-t">{(brain === null ? '' : pickLine(settings, brain.main.using)) || 'Your AI'}</span>
+          {(brain === null ? '' : pickLine(settings, brain.main.using)) || 'Your AI'}
         </span>
-        <span className="chip ctx-fact">
+        <span className="quick-fact">
           <Icon name="monitor" size={14} />
-          <span className="chip-t">This computer</span>
+          This computer
         </span>
-        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        <span className="quick-keys">
           <Kbd>Enter</Kbd> send <span aria-hidden="true">·</span> <Kbd>Esc</Kbd> close
         </span>
       </div>

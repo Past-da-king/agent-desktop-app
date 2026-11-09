@@ -34,6 +34,7 @@
 .pj-glyph:hover{background:var(--s-high);color:var(--on-bg)}
 .pj-glyph.on{background:var(--pc);color:var(--on-pc);box-shadow:inset 0 0 0 2px var(--primary)}
 .dialog .field .input.pj-emoji-in{width:96px;height:40px;text-align:center;font-size:18px;padding:0 8px}
+.dialog .field .input.pj-emoji-in::placeholder{font-size:14px}
 .pj-colors{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .pj-color{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--pf-solid);color:var(--bg)}
 .pj-color.on{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--pf-solid)}

@@ -4,7 +4,7 @@
 .ob-hero .h1{font-size:clamp(34px,3.6vw,52px);max-width:560px}
 .ob-hero .eyebrow{color:var(--on-pc)}
 .ob-hero p{color:color-mix(in srgb,var(--on-pc) 82%,transparent);font-size:17px;line-height:1.55;max-width:470px}
-.pair{display:flex;align-items:flex-end;gap:14px;margin-top:26px}
+.pair{display:flex;align-items:stretch;gap:14px;margin-top:26px}
 .pair .dev{background:var(--bg);color:var(--on-bg);border-radius:20px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.18)}
 .pair .phone{width:128px;border-radius:26px;padding:12px}
 .pair .desk{flex:1;max-width:340px}

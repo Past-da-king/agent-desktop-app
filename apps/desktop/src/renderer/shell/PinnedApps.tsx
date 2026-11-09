@@ -7,6 +7,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
+import { orTell } from '../lib/tell'
 import { fitPinned, pinnedBasis } from '../lib/miniapps'
 import { RAIL_PAD_SMALL, RAIL_TILE, RAIL_TILE_SMALL, type RailRoom } from '../lib/projects'
 import { useEntity } from '../state/useData'
@@ -65,7 +66,7 @@ export function PinnedApps({ collapsed }: { collapsed: boolean }): JSX.Element |
     const ids = pinned.map((app) => app.id).filter((id) => id !== drag)
     ids.splice(ids.indexOf(target), 0, drag)
     setDrag(null)
-    void agent.miniapps.order(ids)
+    void orTell(agent.miniapps.order(ids), 'The order could not be saved.')
   }
 
   return (
@@ -137,13 +138,13 @@ function RailMenu({ id, x, y, place, count, onClose, onOpen }: { id: string; x: 
         <button type="button" role="menuitem" onClick={() => act(onOpen)}>
           <Icon name="play" size={16} /> Open
         </button>
-        <button type="button" role="menuitem" className="flip" disabled={place <= 1} onClick={() => act(() => void agent.miniapps.pin(id, place - 1))}>
+        <button type="button" role="menuitem" className="flip" disabled={place <= 1} onClick={() => act(() => void orTell(agent.miniapps.pin(id, place - 1), 'It could not be moved.'))}>
           <Icon name="chevd" size={16} /> Move up
         </button>
-        <button type="button" role="menuitem" disabled={place >= count} onClick={() => act(() => void agent.miniapps.pin(id, place + 1))}>
+        <button type="button" role="menuitem" disabled={place >= count} onClick={() => act(() => void orTell(agent.miniapps.pin(id, place + 1), 'It could not be moved.'))}>
           <Icon name="chevd" size={16} /> Move down
         </button>
-        <button type="button" role="menuitem" onClick={() => act(() => void agent.miniapps.unpin(id))}>
+        <button type="button" role="menuitem" onClick={() => act(() => void orTell(agent.miniapps.unpin(id), 'It could not be unpinned.'))}>
           <Icon name="pin" size={16} /> Unpin
         </button>
       </div>

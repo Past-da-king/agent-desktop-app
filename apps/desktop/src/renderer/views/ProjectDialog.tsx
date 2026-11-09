@@ -2,6 +2,7 @@ import { PROFILE_COLORS, parseAliases, type AiPicks, type ProfileColor, type Pro
 import { useRef, useState, type CSSProperties } from 'react'
 
 import { agent } from '../bridge'
+import { orTell } from '../lib/tell'
 import { hasAccounts } from '../lib/ai'
 import { iconFromFile } from '../lib/icon-image'
 import { toneStyle } from '../lib/profiles'
@@ -99,7 +100,7 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
           className="input"
           value={aliases}
           onChange={(event) => setAliases(event.target.value)}
-          placeholder="Rumbler, the dictation app"
+          placeholder="The shop, storefront"
           autoComplete="off"
         />
         <span className="small muted pj-hint">What you call it out loud, split by commas. Search and your agent find it by these too.</span>
@@ -193,8 +194,8 @@ export function ProjectDialog({ project, onClose }: { project?: ProjectRow; onCl
             variant="tonal"
             size="sm"
             onClick={() => {
-              void agent.files.pickFolder().then((picked) => {
-                if (picked !== null) setPath(picked)
+              void orTell(agent.files.pickFolder(), 'The folder picker could not open.').then((picked) => {
+                if (picked !== null && picked !== undefined) setPath(picked)
               })
             }}
           >
