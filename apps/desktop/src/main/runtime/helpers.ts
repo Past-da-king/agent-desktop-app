@@ -40,6 +40,7 @@ import { siteFromCall, siteOf, stuckPhrase, urlFromResult, type ToolInFlight } f
 import { listWhere, type DataStore } from './data'
 import { helperHold, helperState } from '../../shared/helper-cards'
 import { liveRuns } from './live-runs'
+import { isLimitFailure, limitRetryLeft, limitWaitMs, waitWords } from './limit-backoff'
 import type { CliHost } from './cli-host'
 import { projectFolderOf } from './work-folder'
 import { brainFor, isBrain, pickFor, providerForAccount, rosterFor, type Brain, type BrainDeps } from './brains'
@@ -247,6 +248,8 @@ export interface HelperManagerDeps {
    * here instead (that brain did not have it, or is too old to answer). Default 30 s.
    */
   stopGraceMs?: number
+  /** How long a helper waits after its nth limit failure in a row before it goes back by itself (tests shorten it). */
+  limitWaitMs?: (hit: number) => number
   /** How often the orphan watch looks for cards left working with no run anywhere, in ms. Default one minute. */
   reapEveryMs?: number
   /** How long a card must show no sign of life (no run, no fresh lease) before it is ended as lost. Default 3 min. */
@@ -425,6 +428,8 @@ interface EndInput {
   restart?: boolean
   /** Cut off by a restart, and its lease sends it back to work by itself: the notice says so. */
   resuming?: boolean
+  /** Its card gets its end state but nobody is woken: a retry after a limit that failed again, or a desk its router paces. */
+  silent?: boolean
 }
 
 /** The result a helper hands back when it was stopped, which says nothing about what it had. */
@@ -534,6 +539,7 @@ export class HelperManager implements HelperHost {
   private readonly quietCheckMs: number
   private quietTimer: ReturnType<typeof setInterval> | null = null
   private readonly stopGraceMs: number
+  private readonly limitWait: (hit: number) => number
   private readonly reapEveryMs: number
   private readonly reapAfterMs: number
   private readonly queueLimitMs: number
@@ -543,6 +549,10 @@ export class HelperManager implements HelperHost {
   private reapTimer: ReturnType<typeof setInterval> | null = null
   /** Stops sent to the brain running a helper, each ended here if that brain does not end it in time. */
   private readonly pendingStops = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Helpers that stopped on the AI's limit and go back to work by themselves once it should have reset. */
+  private readonly limitTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Limit failures in a row per helper: each one waits longer, and after a few it is left failed. */
+  private readonly limitHits = new Map<string, number>()
   /** The app is quitting (shutdown): ends are left for the next start. */
   private closing = false
   /** Runs whose end notice went out from this process (`id:key`), so a race can never send a second one. */
@@ -600,6 +610,7 @@ export class HelperManager implements HelperHost {
             }
     this.quietCheckMs = deps.quietCheckMs ?? MINUTE_MS
     this.stopGraceMs = deps.stopGraceMs ?? STOP_GRACE_MS
+    this.limitWait = deps.limitWaitMs ?? limitWaitMs
     this.reapEveryMs = deps.reapEveryMs ?? MINUTE_MS
     this.reapAfterMs = deps.reapAfterMs ?? REAP_AFTER_MS
     this.queueLimitMs = deps.queueLimitMs ?? QUEUE_LIMIT_MS
@@ -623,6 +634,8 @@ export class HelperManager implements HelperHost {
     this.sweepTimer = null
     for (const timer of this.pendingStops.values()) clearTimeout(timer)
     this.pendingStops.clear()
+    for (const timer of this.limitTimers.values()) clearTimeout(timer)
+    this.limitTimers.clear()
   }
 
   /** Devices came up (or went away): placing helpers on other brains (runtime/offload.ts), or not. */
@@ -908,12 +921,21 @@ export class HelperManager implements HelperHost {
     return 'dropped'
   }
 
-  async push(id: string, message: string, options: { steerIds?: string[]; from?: SteerFrom } = {}): Promise<string> {
+  async push(id: string, message: string, options: { steerIds?: string[]; from?: SteerFrom; auto?: boolean } = {}): Promise<string> {
     if (this.runs.has(id)) return `Helper #${id} is still working. Wait for its result.`
     const row = await this.store.get('chat_item', id)
     if (row === null || row.kind !== 'helper') return `No helper #${id}.`
 
     const meta = parseMeta(row.meta)
+    // It stopped on the AI's limit (rate limit, plan limit): sent straight back it fails the same way, and an agent
+    // told "it failed, push it" did exactly that 30 times in a row. Until the wait is over only its own timed retry
+    // (auto) goes through; a routine's desk is paced by its router (workers/router.ts).
+    const limitLeft = numberField(meta['limitUntil']) - this.now()
+    if (options.auto !== true && options.from !== 'desk' && limitLeft > 0) {
+      const then = this.limitTimers.has(id) ? `It goes back to work by itself in about ${waitWords(limitLeft)}; its result will come as a message` : `Send it back in about ${waitWords(limitLeft)}, once`
+      return `Not sent. Helper #${id} stopped because the AI is at its limit (rate limit or plan limit), and sending it back now would fail the same way. ${then}. Do not keep pushing it.`
+    }
+    this.clearLimitTimer(id)
     // It ran on another brain (s12): it goes back to work there, where its session and steps are, while that brain
     // is up. A lease this brain holds (a takeover, a resume after a restart) always runs here.
     const link = this.link()
@@ -1175,6 +1197,9 @@ export class HelperManager implements HelperHost {
 
   /** `routed`: another brain sent this stop here, so it is never sent on again (no stop goes round in circles). */
   private async stopFrom(id: string, by: string, routed: boolean): Promise<boolean> {
+    // Stopped while it waited for the AI's limit to reset: it does not go back to work by itself.
+    this.clearLimitTimer(id)
+    this.limitHits.delete(id)
     // A routine run or background script: stopped at once, its process and tabs with it.
     if (!this.runs.has(id) && liveRuns.stop(id, by)) return true
     const run = this.runs.get(id)
@@ -1846,8 +1871,60 @@ export class HelperManager implements HelperHost {
     }
     const ending = this.reasonFor(run, state, result)
     const reason = unreadLine === '' ? ending : `${ending === '' ? '' : `${ending}. `}${unread.length === 1 ? 'A message' : `${unread.length} messages`} sent to it never reached it: ${unreadLine}`
-    await this.ended({ id: run.id, state, result, reason, key: run.token, run })
+    if (state === 'failed' && !this.closing && isLimitFailure(result)) {
+      await this.endedOnLimit(run, result, reason, away !== '')
+    } else {
+      this.limitHits.delete(run.id)
+      await this.ended({ id: run.id, state, result, reason, key: run.token, run })
+    }
     this.pump()
+  }
+
+  private clearLimitTimer(id: string): void {
+    const timer = this.limitTimers.get(id)
+    if (timer !== undefined) clearTimeout(timer)
+    this.limitTimers.delete(id)
+  }
+
+  /**
+   * A run failed because the AI is at its limit (rate limit, quota, plan limit). Sending it straight back fails the
+   * same way, so it waits for the limit to reset: it goes back to work by itself after 5 minutes, then 15, then an
+   * hour, and after that it is left failed. Its creator hears once when it first stops and once more at the end (its
+   * result, or that it gave up), never on every try, and helper_push is refused while it waits (push).
+   * A routine's desk is paced by its router, which keeps the events and tells the person once; a helper run here for
+   * another brain is left failed with the wait on its card, so that brain decides.
+   */
+  private async endedOnLimit(run: HelperRun, result: string, reason: string, away: boolean): Promise<void> {
+    const hit = (this.limitHits.get(run.id) ?? 0) + 1
+    this.limitHits.set(run.id, hit)
+    const wait = this.limitWait(hit)
+    const base = { id: run.id, state: 'failed' as const, result, reason, key: run.token, run }
+    if (run.desk === true) {
+      await this.ended({ ...base, silent: true })
+      return
+    }
+    const retry = !away && limitRetryLeft(hit)
+    const head = `[Helper #${run.id} "${run.label}" failed: ${reason}`
+    if (away) {
+      await this.ended(base)
+    } else if (!retry) {
+      this.limitHits.delete(run.id)
+      await this.ended({ ...base, note: `${head} It went back to work by itself ${hit - 1} times, with longer waits each time, and the limit had not reset. It is not running now and keeps what it found. Do not push it for at least ${waitWords(wait)}; tell the user if the work still matters.]` })
+    } else if (hit === 1) {
+      await this.ended({ ...base, note: `${head} It is waiting for the limit to reset and goes back to work by itself in about ${waitWords(wait)} (then at longer waits, a few times), keeping what it found. Do not push it or start it again: its result, or word that it gave up, will come as a message.]` })
+    } else {
+      await this.ended({ ...base, silent: true })
+    }
+    await this.updateMeta(run.id, { limitUntil: this.now() + wait, ...(retry ? { summary: clip(`Waiting for the AI limit to reset, then it carries on (try ${hit})`, 160) } : {}) }).catch(() => undefined)
+    if (!retry || this.closing) return
+    this.clearLimitTimer(run.id)
+    const timer = setTimeout(() => {
+      this.limitTimers.delete(run.id)
+      if (this.closing) return
+      void this.push(run.id, 'The AI limit that stopped you should have reset by now. Carry on from where you stopped.', { auto: true }).catch(() => undefined)
+    }, wait)
+    timer.unref?.()
+    this.limitTimers.set(run.id, timer)
   }
 
   /** Why a run that ran here ended, in plain words ('' when it simply finished). */
@@ -1925,6 +2002,7 @@ export class HelperManager implements HelperHost {
     // is handed its events again by its routine (workers/router.ts), so that is not news either.
     if (desk && state === 'done' && /^\s*QUIET\b/i.test(input.result)) return true
     if (desk && input.restart === true) return true
+    if (input.silent === true) return true
 
     const note =
       input.note ??
@@ -1959,8 +2037,10 @@ export class HelperManager implements HelperHost {
     const pushed = info.pushes > 0 ? ` (after ${info.pushes} push${info.pushes > 1 ? 'es' : ''})` : ''
     const first = info.result.trim().split(/(?<=[.!?])\s+|\n/)[0]?.slice(0, 300) ?? ''
     const gaveUp = info.state === 'done' && GAVE_UP.test(first)
+    // The AI at its limit is not a helper giving up: pushing it straight back fails the same way.
+    const limited = info.state === 'failed' && isLimitFailure(info.reason)
     const nudge =
-      (info.state === 'failed' || gaveUp) && info.pushes < 2
+      !limited && (info.state === 'failed' || gaveUp) && info.pushes < 2
         ? `\n\n(It says it couldn't do all of it${info.pushes > 0 ? `, after ${info.pushes} push${info.pushes > 1 ? 'es' : ''}` : ''}. Helpers usually can. Unless it's truly impossible, send it back with helper_push: name a concrete next thing to try and tell it you believe it can do it. Push at least twice before you accept it or tell the user.)`
         : ''
     if (info.state === 'done' && info.reason === '') {
@@ -1980,7 +2060,9 @@ export class HelperManager implements HelperHost {
     const next =
       info.state === 'done'
         ? ''
-        : '\n\nIt is not running now. helper_push sends it back to carry on from where it stopped (it keeps what it found); or tell the user, if the work still matters.'
+        : limited
+          ? '\n\nIt is not running now. The AI was at its limit, so sending it straight back fails the same way: wait for the limit to reset, then helper_push it once; or tell the user, if the work still matters.'
+          : '\n\nIt is not running now. helper_push sends it back to carry on from where it stopped (it keeps what it found); or tell the user, if the work still matters.'
     return `[Helper #${info.id} "${info.label}" ${verb}${pushed}: ${info.reason}, after ${took}.${step}]\n${what}${nudge}${next}`
   }
 
