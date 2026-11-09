@@ -8,6 +8,7 @@
 import type { TriggerRow } from '@agent/core'
 
 import type { DataStore } from './data'
+import { isLimitFailure, limitRetryLeft, limitWaitMs, waitWords } from './limit-backoff'
 import type { RoutineRunResult } from './runner'
 
 export interface RoutineRunner {
@@ -58,6 +59,12 @@ export class Scheduler {
   private readonly claim: ((trigger: TriggerRow) => Promise<boolean>) | null
   /** Slots another brain took (claim said no), by routine id, with the lastRunAt they were due at. */
   private readonly elsewhere = new Map<string, number | null>()
+  /**
+   * Routines whose last run failed because the AI is at its limit (rate limit, quota, plan limit): each is tried
+   * again once the wait is over (5 min, 15 min, an hour) instead of failing again on every slot, and the person is
+   * told once when it first fails and once if it gives up.
+   */
+  private readonly limited = new Map<string, { hits: number; retryAt: number }>()
 
   private timer: ReturnType<typeof setInterval> | null = null
   private chain: Promise<void> = Promise.resolve()
@@ -127,8 +134,24 @@ export class Scheduler {
       this.elsewhere.delete(trigger.id)
       if (trigger.lastResult !== '' && trigger.lastResult !== WAITING_RESULT) this.notifyRoutine(trigger.id, trigger.name, trigger.lastResult)
     }
+    for (const id of [...this.limited.keys()]) {
+      const row = triggers.find((trigger) => trigger.id === id)
+      // Deleted, or paused by the person while it waited (a one-off is switched off by its own run): no retry.
+      if (row === undefined || (!row.enabled && row.kind !== 'at')) this.limited.delete(id)
+    }
     for (const trigger of triggers) {
       if (this.stopped) return
+      const waiting = this.limited.get(trigger.id)
+      if (waiting !== undefined) {
+        // Its slots are not run while it waits for the limit to reset; the retry is its next run.
+        if (waiting.retryAt > now) continue
+        try {
+          await this.runExclusive(() => this.execute(trigger, true))
+        } catch {
+          // As below: one routine must not stop the pass.
+        }
+        continue
+      }
       if (isBuiltin(trigger) || !trigger.enabled || !isDue(trigger, now)) continue
       try {
         if (this.claim !== null && !(await this.claim(trigger))) {
@@ -170,13 +193,21 @@ export class Scheduler {
       outcome = {
         text: error instanceof Error ? error.message || 'The routine could not run.' : 'The routine could not run.',
         waiting: false,
+        failed: true,
       }
     }
 
+    const finishedAt = this.now()
+    // The run itself failed on the AI's limit: it is tried again after a wait, a few times, and said once.
+    const hitLimit = outcome.failed === true && outcome.stopped !== true && !isBuiltin(fresh) && fresh.kind !== 'event' && isLimitFailure(outcome.text)
+    const hits = hitLimit ? (this.limited.get(fresh.id)?.hits ?? 0) + 1 : 0
+    const retrying = hitLimit && limitRetryLeft(hits)
+    if (retrying) this.limited.set(fresh.id, { hits, retryAt: finishedAt + limitWaitMs(hits) })
+    else this.limited.delete(fresh.id)
+    const again = retrying ? ` It is tried again in ${waitWords(limitWaitMs(hits))}.` : ''
     const result = outcome.waiting
       ? WAITING_RESULT
-      : clip(outcome.text.trim(), LAST_RESULT_CHARS) || 'No result.'
-    const finishedAt = this.now()
+      : (clip(outcome.text.trim(), LAST_RESULT_CHARS - again.length) || 'No result.') + again
 
     await this.store.upsert('trigger', {
       id: fresh.id,
@@ -186,7 +217,8 @@ export class Scheduler {
       enabled: fresh.kind === 'at' ? false : fresh.enabled,
     })
 
-    if (!outcome.waiting) this.notifyRoutine(fresh.id, fresh.name, result)
+    // A retry that hit the limit again says nothing: the person was told at the first one.
+    if (!outcome.waiting && !(retrying && hits > 1)) this.notifyRoutine(fresh.id, fresh.name, result)
   }
 
   /** One queue for ticks and Run now, so two routines never run at the same time. */
