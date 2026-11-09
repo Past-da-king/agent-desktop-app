@@ -319,6 +319,10 @@ class PeerLink {
    */
   nudge(): void {
     this.dirty = true
+    // The peer could not be reached last time (switched off, away): the change waits for the next retry, which
+    // pushes it. Cutting the backoff short here made every local write a new connection attempt, so a node working
+    // beside a peer that is off dialled it several times a second for hours.
+    if (this.lastError !== null) return
     // A long poll is open: push beside it. Cutting the poll short closed its connection, and over a relayed VPN path
     // every new connection is a handshake that may time out (29 Oct 2026).
     if (this.polling !== null) {
