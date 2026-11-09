@@ -238,6 +238,8 @@
 
 /* ---------- tasks / memory / routines / connections / prefs ---------- */
 .list-detail{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:24px;align-items:start}
+/* The to-do detail inside its dialog on a narrow window: the dialog is the card. */
+.detail.in-dialog{background:none;border-radius:0;padding:0;position:static}
 .detail{background:var(--s-low);border-radius:var(--r-xl);padding:30px 32px;display:flex;flex-direction:column;gap:20px;position:sticky;top:0;min-width:0;overflow-wrap:anywhere}
 .detail .h2{font-size:28px}
 .kv{display:flex;flex-direction:column;gap:4px}
@@ -284,6 +286,8 @@
 .rtn .rt b{display:block;font:500 16px/1.3 var(--font);overflow-wrap:anywhere}
 .rtn .rt span{font-size:13px;color:var(--on-sv)}
 .rtn .rt b .pill{display:inline-flex;width:auto;height:20px;padding:0 8px;font-size:11px;margin-left:10px;vertical-align:2px}
+.rtn-when{display:grid;grid-template-columns:minmax(0,1fr) 120px;gap:10px}
+.time-field{font-variant-numeric:tabular-nums}
 .rtn-actions{display:flex;align-items:center;gap:2px;flex:none}
 .rtn-actions .ib{width:38px;height:38px}
 .sw2{width:52px;height:32px;border-radius:999px;background:var(--s-highest);border:2px solid var(--outline);position:relative;transition:background .25s var(--effects),border-color .25s;flex:none}

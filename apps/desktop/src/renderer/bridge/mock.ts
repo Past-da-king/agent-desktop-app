@@ -1606,6 +1606,10 @@ export const mockAgent: AgentApi = {
       return { report: mockUpkeep, lastRunAt: mockUpkeep?.at ?? 0, history: [] }
     },
     async history(memoryId: string) {
+      // The preview can show the failure state: set window.__mockFail = ['memory.history'] and open History.
+      if (typeof window !== 'undefined' && (window as { __mockFail?: string[] }).__mockFail?.includes('memory.history')) {
+        throw new Error('The memory store is busy.')
+      }
       return copy([...(mockVersions.get(memoryId) ?? [])].reverse())
     },
     async restoreVersion(memoryId: string, n: number) {
@@ -1847,8 +1851,8 @@ function mockWorkers(): AgentApi['workers'] {
     { at: now - 2 * 3_600_000, level: 'info', text: 'Started; catching up' },
     { at: now - 2 * 3_600_000 + 2000, level: 'info', text: 'connected' },
   ]
-  const listeners = new Set<() => void>()
-  const changed = (): void => listeners.forEach((cb) => cb())
+  const listeners = new Set<(workers: string[] | null) => void>()
+  const changed = (id?: string): void => listeners.forEach((cb) => cb(id === undefined ? null : [id]))
   const find = (id: string): WorkerInfo => {
     const w = workers.find((each) => each.id === id)
     if (w === undefined) throw new Error('No such worker.')
@@ -1860,25 +1864,25 @@ function mockWorkers(): AgentApi['workers'] {
     logs: async (id, limit) => (id === 'w_demo01' ? logs.slice(-(limit ?? 200)) : []),
     start: async (id) => {
       Object.assign(find(id), { state: 'running', enabled: true, upSince: Date.now() })
-      changed()
+      changed(id)
     },
     stop: async (id) => {
       Object.assign(find(id), { state: 'stopped', enabled: false, upSince: null, downSince: Date.now() })
-      changed()
+      changed(id)
     },
     restart: async (id) => {
       Object.assign(find(id), { state: 'running', upSince: Date.now() })
-      changed()
+      changed(id)
     },
     remove: async (id) => {
       const index = workers.findIndex((w) => w.id === id)
       if (index >= 0) workers.splice(index, 1)
-      changed()
+      changed(id)
     },
     setSecret: async (id, name) => {
       const w = find(id)
       if (!w.secretsSet.includes(name)) w.secretsSet.push(name)
-      changed()
+      changed(id)
     },
     openFolder: async () => undefined,
     onChange: (cb) => {

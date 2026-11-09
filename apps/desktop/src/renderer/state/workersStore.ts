@@ -10,7 +10,7 @@ export interface WorkersSnapshot {
 /** The part of the bridge the store needs, so a test can hand it a fake. */
 export interface WorkersSource {
   list(): Promise<WorkerInfo[]>
-  onChange(cb: () => void): () => void
+  onChange(cb: (workers: string[] | null) => void): () => void
 }
 
 export interface WorkersStore {
@@ -60,7 +60,7 @@ export function createWorkersStore(source: WorkersSource, refreshMs = WORKERS_RE
       listeners.add(listener)
       if (listeners.size === 1) {
         read()
-        off = source.onChange(read)
+        off = source.onChange(() => read())
         timer = setInterval(read, refreshMs)
       }
       return () => {
@@ -75,4 +75,9 @@ export function createWorkersStore(source: WorkersSource, refreshMs = WORKERS_RE
       }
     },
   }
+}
+
+/** Whether a change event is about this worker. No names (null) means any of them. */
+export function aboutWorker(changed: string[] | null, id: string): boolean {
+  return changed === null || changed.includes(id)
 }

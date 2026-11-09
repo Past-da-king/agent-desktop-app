@@ -1,3 +1,4 @@
+import { createWorkersChanged } from './workers/changed'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { hostname as osHostname } from 'node:os'
 import { basename, join } from 'node:path'
@@ -288,16 +289,8 @@ const wakeReports = new WakeDeviceReports()
 /** His recordings on disk (recordings/), and the pass that recovers, tells him and deletes old audio. */
 let recordingsStore: Recordings | null = null
 let recordingsUpkeep: Upkeep | null = null
-let workersChangedTimer: NodeJS.Timeout | null = null
-
-/** The Workers page reads again; a burst of events tells it once. */
-function workersChanged(): void {
-  if (workersChangedTimer !== null) return
-  workersChangedTimer = setTimeout(() => {
-    workersChangedTimer = null
-    broadcast(WORKER_EVENTS.changed, null)
-  }, 300)
-}
+/** The Workers page reads again; a burst of events tells it once, and says which workers (main/workers/changed.ts). */
+const workersChanged = createWorkersChanged((payload) => broadcast(WORKER_EVENTS.changed, payload))
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
 let hotkeys: HotkeyManager | null = null
@@ -1056,7 +1049,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       showNotification(`${worker.name} keeps failing`, `${worker.lastError || 'It stopped too often.'} Open Routines, Workers to restart it.`)
       void workerNotice(`Worker "${worker.name}" keeps failing and was stopped: ${worker.lastError || 'it exited too often'}. Restart it on the Routines page, Workers.`)
     },
-    onChange: workersChanged,
+    onChange: (workerId) => workersChanged(workerId),
   })
   const workerTools = { store: workers, supervisor }
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
@@ -1207,7 +1200,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     emitEvent: (input) => {
       const stored = workers.addEvent(input.source, input)
       if (stored !== null) void eventRouter?.offer(stored)
-      workersChanged()
+      workersChanged(input.source)
     },
     log: (message, detail) => logger.info(message, detail),
   })
@@ -1255,7 +1248,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       emitEvent: (input) => {
         const stored = workers.addEvent(input.source, input)
         if (stored !== null) void eventRouter?.offer(stored)
-        workersChanged()
+        workersChanged(input.source)
       },
       log: (message, detail) => logger.info(message, detail),
     })
@@ -1341,7 +1334,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     workers,
     desk: helpers,
     maxRuns: () => settings.get().routinesAtOnce,
-    onChange: workersChanged,
+    onChange: () => workersChanged(),
     workerName: (id) => {
       try {
         return workers.manifest(id)?.name ?? id

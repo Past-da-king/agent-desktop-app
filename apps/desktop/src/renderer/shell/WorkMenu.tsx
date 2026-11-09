@@ -4,6 +4,7 @@ import { dismissCard, openTarget } from '../lib/card-open'
 import { useEntity } from '../state/useData'
 import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
+import { workBadge } from '../lib/work-badge'
 import { useWaiting } from '../state/useWaiting'
 import { Icon } from '../ui/Icon'
 import { helperHold } from '../../shared/helper-cards'
@@ -29,6 +30,7 @@ export function WorkButton(): JSX.Element | null {
   // Held by the low-memory guard or the queue: on the list, but not working.
   const held = cards.filter((card) => helperHold(card) !== null).length
   const working = count - replied - held
+  const badge = workBadge({ working, held, replied, waiting: waiting.length })
   const label = [working > 0 ? `${working} working` : '', held > 0 ? `${held} waiting to start` : '', replied > 0 ? `${replied} replied` : '', waiting.length > 0 ? `${waiting.length} waiting for you` : ''].filter((part) => part !== '').join(', ')
   return (
     <div className="tb-work-wrap">
@@ -41,8 +43,8 @@ export function WorkButton(): JSX.Element | null {
         onClick={() => setOverlay(open ? null : 'work')}
       >
         <span className="tb-work-dot" aria-hidden="true" />
-        <span className="tb-work-n">{count + waiting.length}</span>
-        <span className="tb-work-t">{waiting.length > 0 ? 'Needs you' : working > 0 ? 'Working' : held > 0 ? 'Waiting' : 'Replied'}</span>
+        <span className="tb-work-n">{badge.n}</span>
+        <span className="tb-work-t">{badge.word}</span>
       </button>
       {open ? <WorkMenu /> : null}
     </div>
