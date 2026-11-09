@@ -291,7 +291,8 @@ export class DevicesService {
   async start(): Promise<void> {
     await this.reloadRows()
     this.offStore = this.deps.store.onChange((change) => {
-      if (change.entity === 'device') void this.reloadRows().then(() => this.uplink.tick())
+      // A device row that changes as the app closes finds the database shut: that is not an error to report.
+      if (change.entity === 'device') void this.reloadRows().then(() => this.uplink.tick()).catch(() => undefined)
     })
     if (this.enabled) {
       await this.switchOn()
