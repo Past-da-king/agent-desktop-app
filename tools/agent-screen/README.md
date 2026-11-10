@@ -42,7 +42,7 @@ One JSON object per line. Requests carry an `id` and an `op`; the answer carries
 | `unwatch` | `watch` | |
 | `capture` | `hwnd`, or `x y width height`; `maxWidth` | `{ width, height, how, png }` (base64) |
 | `input` | `on`, `keys`, `clickOn` | installs or removes the hooks; then `input` events |
-| `focus` | `hwnd` | `true` when that window has the keyboard now, `false` when it was left alone |
+| `focus` | `hwnd` | `true` when that window has the keyboard now, else the reason in a few words. For the moment of the hand-over the helper joins the input of the caller's window and of the target (AttachThreadInput): Windows refuses it otherwise. |
 | `quit` | | exits |
 
 Events: `{"event":"move","watch":1,"rect":{...}|null,"why":"moved|hidden|gone"}` and

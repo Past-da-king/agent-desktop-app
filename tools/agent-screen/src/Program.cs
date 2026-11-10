@@ -65,6 +65,8 @@ namespace AgentScreen
 
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
+        [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern IntPtr GetTopWindow(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
         [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
@@ -407,12 +409,35 @@ namespace AgentScreen
         private static string Focus(Dictionary<string, object> req)
         {
             IntPtr hwnd = Hwnd(req);
-            if (!Native.IsWindow(hwnd) || !Workable(hwnd)) return "false";
+            if (!Native.IsWindow(hwnd)) return "\"no such window\"";
+            if (!Workable(hwnd)) return "\"not a window a person works in\"";
             IntPtr fg = Native.GetForegroundWindow();
             if (fg != IntPtr.Zero && Native.GetAncestor(fg, Native.GA_ROOT) == hwnd) return "true";
             // Only when the caller's own window (or none) has the keyboard: a window he moved to himself is left alone.
-            if (fg != IntPtr.Zero && Native.IsWindowVisible(fg) && !IsExcluded(Native.GetAncestor(fg, Native.GA_ROOT))) return "false";
-            return Native.SetForegroundWindow(hwnd) ? "true" : "false";
+            if (fg != IntPtr.Zero && Native.IsWindowVisible(fg) && !IsExcluded(Native.GetAncestor(fg, Native.GA_ROOT))) return "\"another program has the keyboard\"";
+            // Windows lets only the thread that has the keyboard pass it on. The caller's own window has it, so this
+            // thread joins that window's input for the moment of the hand-over (seen on Windows 11: without this the
+            // request is refused even for a child of the foreground program).
+            uint pid;
+            uint owner = fg == IntPtr.Zero ? 0 : Native.GetWindowThreadProcessId(fg, out pid);
+            uint me = Native.GetCurrentThreadId();
+            uint theirs = Native.GetWindowThreadProcessId(hwnd, out pid);
+            bool joined = owner != 0 && owner != me && Native.AttachThreadInput(me, owner, true);
+            bool joinedTheirs = theirs != 0 && theirs != me && theirs != owner && Native.AttachThreadInput(owner != 0 ? owner : me, theirs, true);
+            bool given;
+            try
+            {
+                Native.BringWindowToTop(hwnd);
+                given = Native.SetForegroundWindow(hwnd);
+            }
+            finally
+            {
+                if (joinedTheirs) Native.AttachThreadInput(owner != 0 ? owner : me, theirs, false);
+                if (joined) Native.AttachThreadInput(me, owner, false);
+            }
+            IntPtr now = Native.GetForegroundWindow();
+            if (now != IntPtr.Zero && Native.GetAncestor(now, Native.GA_ROOT) == hwnd) return "true";
+            return given ? "\"Windows took the request and did not act on it\"" : (joined ? "\"Windows refused\"" : "\"Windows refused, and the keyboard's thread could not be joined\"");
         }
 
         private static string Hello()

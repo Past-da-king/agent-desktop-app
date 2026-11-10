@@ -439,7 +439,10 @@ export function createWindowsScreenReader(options: ScreenReaderOptions): NativeS
 
     async focus(hwnd: string): Promise<boolean> {
       try {
-        return (await call('focus', { hwnd }, 2_000)) === true
+        const answer = await call('focus', { hwnd }, 2_000)
+        // Anything but true is the helper's reason in a few words ("another program has the keyboard").
+        if (answer !== true) options.log?.('showme: the keyboard was not handed over', { why: typeof answer === 'string' ? answer.slice(0, 120) : 'no answer' })
+        return answer === true
       } catch {
         return false
       }
