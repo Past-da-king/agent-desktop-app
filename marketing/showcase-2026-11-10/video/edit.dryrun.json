@@ -1,0 +1,26 @@
+{
+  "_": "Dry run with stand-in footage (two poster stills), to judge the frame, captions and cards. Not the real call.",
+  "fps": 30,
+  "duration": 24,
+  "brand": { "name": "Agent", "tag": "Open source" },
+  "names": { "them": "Asanda", "voice": "Agent" },
+  "source": { "dir": "work/dryrun-frames", "fps": 30, "count": 360, "w": 1080, "h": 2337, "crop": { "top": 0, "bottom": 0 } },
+  "statusBar": { "bg": "#FAF8F4", "ink": "#1B1A1F", "changes": [ { "s0": 6, "bg": "#131218", "ink": "#E9E7EE" } ] },
+  "segments": [ { "out": 0, "src": 0, "len": 24, "speed": 0.5 } ],
+  "title": { "out": 3.0, "h1": ["It picks up", "the phone."], "sub": "A real WhatsApp voice call, placed by the agent from inside the phone app.", "note": "" },
+  "phoneIn": 4.4,
+  "chapters": [
+    { "t": 3.0, "step": "You ask", "ask": "Call Asanda and ask if Friday's shoot can move to 10", "typeFor": 1.5 },
+    { "t": 7.2, "step": "It opens WhatsApp in its own browser", "text": "And places the call." },
+    { "t": 10.4, "step": "A real person answers", "text": "It talks and listens, live." },
+    { "t": 17.6, "step": "The call ends", "text": "Every word is saved to your chat." }
+  ],
+  "sheet": { "in": 10.6, "out": 19.6, "who": "Asanda", "label": "Live transcript", "endLabel": "Call ended", "callStart": 10.9, "callEnd": 17.4 },
+  "lines": [
+    { "t": 11.2, "who": "them", "text": "Stand-in line, the real words go here", "dur": 1.2 },
+    { "t": 13.0, "who": "voice", "text": "Stand-in reply from the agent, word by word", "dur": 1.6 },
+    { "t": 15.4, "who": "them", "text": "Second stand-in line", "dur": 0.8 }
+  ],
+  "blurs": [],
+  "end": { "in": 20.4, "h1": ["One agent learns it.", "Every agent can use it."], "h1_9x16": ["One agent", "learns it.", "Every agent", "can use it."], "sub": "Calling is a learned app: a skill the agent wrote once and any of your agents can run.", "note": "No telephony service. No second device." }
+}

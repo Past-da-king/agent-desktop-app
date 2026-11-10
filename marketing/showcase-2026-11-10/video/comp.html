@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent showcase: WhatsApp call</title>
+<style>
+/* Same look as ../posters/posters.css (theme t-iris): the app's own tokens from apps/desktop tokens.css and shared/brand.ts. */
+@font-face{font-family:'Roboto Flex Variable';src:url('../../../apps/desktop/src/renderer/fonts/roboto-flex-latin-wght-normal.woff2') format('woff2-variations');font-weight:100 1000;font-display:block}
+:root{
+  --bg:#4A3FD1; --ink:#FBFAFF; --muted:#D8D3FF; --hair:rgba(251,250,255,.2); --shadow:rgba(18,10,80,.45); --bezel:#15122E;
+  /* the sheet and bubbles are the app's light surfaces */
+  --s-bg:#FAF8F4; --s-ink:#1B1A1F; --s-muted:#5F5C68; --s-high:#E9E7E2; --pc:#E4E0FF; --on-pc:#1C1466; --ok:#1E6B3A; --outline:#797683;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#000;overflow:hidden}
+#stage{position:relative;overflow:hidden;background:var(--bg);color:var(--ink);font-family:'Roboto Flex Variable','Roboto Flex',Roboto,system-ui,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}
+#glow{position:absolute;inset:0;background:radial-gradient(70% 50% at 50% 58%, rgba(124,112,255,.38), rgba(124,112,255,0) 72%)}
+.abs{position:absolute}
+
+/* brand line, as on the posters */
+.brand{display:flex;align-items:center;gap:.46em;font-weight:600;letter-spacing:-.01em}
+.brand svg{width:1.3em;height:1.3em;display:block}
+.brand .tag{margin-left:.38em;padding-left:.85em;border-left:1.5px solid var(--hair);font-size:.846em;font-weight:450;color:var(--muted);letter-spacing:0}
+
+/* phone: a thin bezel and the screen, nothing else (posters.css .phone) */
+#phone{width:var(--w);padding:calc(var(--w) * .021);border-radius:calc(var(--w) * .135);background:var(--bezel);
+  box-shadow:0 0 0 1.5px var(--hair),0 50px 90px -30px var(--shadow),0 18px 36px -18px var(--shadow);transform-origin:50% 60%}
+#screen{position:relative;border-radius:calc(var(--w) * .115);overflow:hidden;background:var(--sb)}
+#status{height:calc(var(--w) * .082);display:flex;align-items:flex-end;justify-content:space-between;padding:0 calc(var(--w) * .075) calc(var(--w) * .012);color:var(--sbink);font-size:calc(var(--w) * .034);font-weight:600;letter-spacing:.01em;background:var(--sb)}
+#status svg{height:calc(var(--w) * .03);width:auto;display:block;fill:var(--sbink)}
+#cam{position:absolute;left:50%;top:calc(var(--w) * .028);width:calc(var(--w) * .03);height:calc(var(--w) * .03);margin-left:calc(var(--w) * -.015);border-radius:50%;background:#0B0A0E;opacity:.9}
+#view{position:relative;overflow:hidden}
+#foot{position:absolute;left:0;display:block}
+.blur{position:absolute;backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur));background:rgba(140,140,150,.28)}
+.cover{position:absolute}
+
+/* chapter caption */
+#cap .step{font-size:var(--step);font-weight:500;color:var(--muted);margin-bottom:.55em}
+#cap .line{font-size:var(--cap);line-height:1.04;font-weight:600;letter-spacing:-.035em;text-wrap:balance}
+#cap .ask{display:inline-block;margin-top:.1em;font-size:var(--askf);line-height:1.25;font-weight:480;letter-spacing:-.01em;background:var(--s-bg);color:var(--s-ink);padding:.62em .95em;border-radius:1.1em 1.1em .3em 1.1em;box-shadow:0 18px 40px -18px var(--shadow);max-width:100%}
+
+/* transcript sheet: slides up, as every sheet on the phone does */
+#sheet{background:var(--s-bg);color:var(--s-ink);border-radius:var(--sr);box-shadow:0 0 0 1.5px rgba(27,26,31,.06),0 40px 90px -24px rgba(12,6,60,.6);padding:var(--sp);display:flex;flex-direction:column;overflow:hidden}
+#sheet .head{display:flex;align-items:center;gap:.5em;font-size:var(--sh);font-weight:560;color:var(--s-muted);flex:none}
+#sheet .dot{width:.6em;height:.6em;border-radius:50%;background:var(--ok)}
+#sheet .who{color:var(--s-ink)}
+#sheet .timer{margin-left:auto;font-variant-numeric:tabular-nums}
+#lines{position:relative;flex:1;margin-top:var(--sg);overflow:hidden}
+#linesIn{position:absolute;left:0;right:0;bottom:0;display:flex;flex-direction:column;gap:var(--gap)}
+.b{max-width:86%;padding:.5em .82em .56em;border-radius:1.05em;font-size:var(--bub);line-height:1.22;font-weight:460;letter-spacing:-.005em}
+.b .n{display:block;font-size:.6em;font-weight:600;letter-spacing:.01em;margin-bottom:.16em;opacity:.7}
+.b.them{align-self:flex-start;background:var(--s-high);border-bottom-left-radius:.3em}
+.b.voice{align-self:flex-end;background:var(--pc);color:var(--on-pc);border-bottom-right-radius:.3em}
+
+/* title and end cards */
+.card{position:absolute;inset:0;background:var(--bg);padding:var(--cpad)}
+.card .brand{position:absolute;left:var(--cpad);top:var(--ctop);font-size:var(--brandf)}
+.card .in{position:absolute;left:var(--cpad);right:var(--cpad);top:50%;transform:translateY(-54%)}
+.card h1{font-size:var(--h1);line-height:1;font-weight:600;letter-spacing:-.035em}
+.card h1 span{display:block}
+.card p{margin-top:.75em;font-size:var(--sub);line-height:1.32;font-weight:400;color:var(--muted);max-width:var(--subw);text-wrap:pretty}
+.card .note{margin-top:.6em;font-size:var(--sub);font-weight:500;color:var(--ink);opacity:.92}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="glow"></div>
+  <div id="mark" class="abs brand"></div>
+  <div id="cap" class="abs"><div class="step"></div><div class="line"></div><div class="ask"></div></div>
+  <div id="phone" class="abs"><div id="screen"><div id="status"><span>9:41</span><svg viewBox="0 0 46 14"><path d="M0 10h3v4H0zM5 7h3v7H5zM10 4h3v10h-3zM15 1h3v13h-3z"/><rect x="25" y="1.5" width="18" height="11" rx="3"/><rect x="44" y="5" width="2" height="4" rx="1"/></svg></div><div id="cam"></div><div id="view"><img id="foot" alt=""><div id="overlays"></div></div></div></div>
+  <div id="sheet" class="abs"><div class="head"><span class="dot"></span><span class="who"></span><span class="lbl"></span><span class="timer"></span></div><div id="lines"><div id="linesIn"></div></div></div>
+  <div id="title" class="card"><div class="brand"></div><div class="in"><h1></h1><p></p><p class="note"></p></div></div>
+  <div id="end" class="card"><div class="brand"></div><div class="in"><h1></h1><p></p><p class="note"></p></div></div>
+</div>
+<script>
+// The app's mark (Scout), the same outline the posters use (apps/desktop/src/renderer/ui/shapes.ts, cookie9).
+const MARK = "M50.0 4.5L52.4 4.7L54.8 5.3L57.0 6.3L59.0 7.7L60.9 9.2L63.0 10.5L65.3 11.4L67.7 11.9L70.1 12.0L72.6 12.1L74.9 12.6L77.2 13.6L79.3 14.9L81.1 16.5L82.6 18.4L83.8 20.5L84.6 22.8L85.1 25.2L85.7 27.6L86.8 29.8L88.1 31.8L89.9 33.5L91.7 35.1L93.3 37.0L94.6 39.0L95.4 41.3L95.9 43.7L96.0 46.2L95.7 48.6L94.9 50.9L93.8 53.1L92.7 55.2L92.0 57.6L91.6 60.0L91.7 62.4L92.0 64.8L92.2 67.3L92.0 69.7L91.3 72.0L90.3 74.2L88.9 76.2L87.2 78.0L85.2 79.4L83.0 80.5L80.7 81.3L78.6 82.5L76.7 84.0L75.0 85.9L73.7 87.9L72.4 90.0L70.7 91.7L68.8 93.2L66.7 94.4L64.3 95.2L61.9 95.5L59.5 95.5L57.1 95.0L54.8 94.2L52.4 93.6L50.0 93.4L47.6 93.6L45.2 94.2L42.9 95.0L40.5 95.5L38.1 95.5L35.7 95.2L33.3 94.4L31.2 93.2L29.3 91.7L27.6 90.0L26.3 87.9L25.0 85.9L23.3 84.0L21.4 82.5L19.3 81.3L17.0 80.5L14.8 79.4L12.8 78.0L11.1 76.2L9.7 74.2L8.7 72.0L8.0 69.7L7.8 67.3L8.0 64.8L8.3 62.4L8.4 60.0L8.0 57.6L7.3 55.2L6.2 53.1L5.1 50.9L4.3 48.6L4.0 46.2L4.1 43.7L4.6 41.3L5.4 39.0L6.7 37.0L8.3 35.1L10.1 33.5L11.9 31.8L13.2 29.8L14.3 27.6L14.9 25.2L15.4 22.8L16.2 20.5L17.4 18.4L18.9 16.5L20.7 14.9L22.8 13.6L25.1 12.6L27.4 12.1L29.9 12.0L32.3 11.9L34.7 11.4L37.0 10.5L39.1 9.2L41.0 7.7L43.0 6.3L45.2 5.3L47.6 4.7Z";
+const brandHtml = (b) => `<svg viewBox="0 0 100 100"><path fill="#FBFAFF" d="${MARK}"/><ellipse fill="#4A3FD1" cx="37.5" cy="49" rx="4.3" ry="6.4"/><ellipse fill="#4A3FD1" cx="62.5" cy="49" rx="4.3" ry="6.4"/></svg><span>${b.name}</span><span class="tag">${b.tag}</span>`;
+
+const $ = (s) => document.querySelector(s);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const prog = (t, t0, d) => clamp((t - t0) / d);
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const easeInOut = (x) => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const spring = (x) => { const c1 = 1.1, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const put = (el, r) => { for (const [k, p] of [['x', 'left'], ['y', 'top'], ['w', 'width'], ['h', 'height']]) if (r[k] != null) el.style[p] = r[k] + 'px'; };
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+// Every size in one place per format. ratio = footage height / width after the crop.
+const LAYOUTS = {
+  '9x16': (ratio) => {
+    const W = 1080, H = 1920, w = 640, sw = w * .958, phoneH = w * .042 + w * .082 + sw * ratio;
+    return { W, H, w, phone: { x: (W - w) / 2, y: 470 }, phoneH,
+      brand: { x: 72, y: 104, f: 30 }, cap: { x: 72, y: 196, w: W - 144, cap: 74, step: 28, ask: 38 },
+      sheet: { x: 56, w: W - 112, h: 600, yIn: H - 600 - 110, yOut: H + 60, sr: 48, sp: 36, sh: 30, bub: 40, gap: 16, sg: 22 },
+      card: { pad: 72, top: 104, brand: 30, h1: 128, sub: 40, subw: '860px' } };
+  },
+  '16x9': (ratio) => {
+    const W = 1920, H = 1080; const w = Math.round(930 / (.042 + .082 + .958 * ratio)); const sw = w * .958, phoneH = w * .042 + w * .082 + sw * ratio;
+    const px = 240, rx = px + w + 150;
+    return { W, H, w, phone: { x: px, y: (H - phoneH) / 2 }, phoneH,
+      brand: { x: rx, y: 92, f: 28 }, cap: { x: rx, y: 178, w: W - rx - 110, cap: 76, step: 26, ask: 34 },
+      sheet: { x: rx, w: W - rx - 110, h: 500, yIn: H - 500 - 76, yOut: H + 60, sr: 42, sp: 32, sh: 26, bub: 33, gap: 13, sg: 18 },
+      card: { pad: 150, top: 92, brand: 28, h1: 132, sub: 38, subw: '1100px' } };
+  },
+};
+
+let S, L, K, lastSrc = '';
+
+window.setup = async (spec, format) => {
+  S = spec;
+  const src = S.source, crop = src.crop || { top: 0, bottom: 0 };
+  const srcH = src.h - crop.top - (crop.bottom || 0);
+  L = LAYOUTS[format](srcH / src.w);
+  const st = $('#stage'); put(st, { w: L.W, h: L.H });
+  const r = document.documentElement.style, set = (k, v) => r.setProperty(k, v);
+  set('--w', L.w + 'px'); set('--sb', S.statusBar?.bg || '#FAF8F4'); set('--sbink', S.statusBar?.ink || '#1B1A1F');
+  set('--cap', L.cap.cap + 'px'); set('--step', L.cap.step + 'px'); set('--askf', L.cap.ask + 'px');
+  set('--sr', L.sheet.sr + 'px'); set('--sp', L.sheet.sp + 'px'); set('--sh', L.sheet.sh + 'px'); set('--bub', L.sheet.bub + 'px'); set('--gap', L.sheet.gap + 'px'); set('--sg', L.sheet.sg + 'px');
+  set('--cpad', L.card.pad + 'px'); set('--ctop', L.card.top + 'px'); set('--brandf', L.card.brand + 'px'); set('--h1', L.card.h1 + 'px'); set('--sub', L.card.sub + 'px'); set('--subw', L.card.subw);
+  put($('#phone'), L.phone);
+  const sw = L.w * .958; K = sw / src.w;
+  const view = $('#view'); view.style.height = (srcH * K) + 'px';
+  const foot = $('#foot'); foot.style.width = sw + 'px'; foot.style.top = -(crop.top * K) + 'px';
+  set('--blur', Math.max(12, Math.round(30 * K)) + 'px');
+  // privacy overlays in SOURCE pixels, each alive for a range of SOURCE seconds (s0..s1)
+  const ov = $('#overlays'); ov.innerHTML = '';
+  (S.blurs || []).forEach((b, i) => {
+    const d = document.createElement('div'); d.className = b.cover ? 'cover' : 'blur'; d.dataset.i = i;
+    if (b.cover) d.style.background = b.cover;
+    put(d, { x: b.x * K, y: (b.y - crop.top) * K, w: b.w * K, h: b.h * K }); ov.appendChild(d);
+  });
+  const m = $('#mark'); m.innerHTML = brandHtml(S.brand); m.style.fontSize = L.brand.f + 'px'; put(m, L.brand);
+  put($('#cap'), { x: L.cap.x, y: L.cap.y, w: L.cap.w });
+  put($('#sheet'), { x: L.sheet.x, y: L.sheet.yIn, w: L.sheet.w, h: L.sheet.h });
+  if (S.sheet) $('#sheet .who').textContent = S.sheet.who;
+  const li = $('#linesIn'); li.innerHTML = '';
+  (S.lines || []).forEach((ln) => {
+    const d = document.createElement('div'); d.className = 'b ' + (ln.who === 'them' ? 'them' : 'voice');
+    d.innerHTML = `<span class="n">${esc(ln.who === 'them' ? S.names.them : S.names.voice)}</span>` + ln.text.split(' ').map((w) => `<span class="w">${esc(w)}</span>`).join(' ');
+    li.appendChild(d);
+  });
+  for (const id of ['title', 'end']) {
+    const c = S[id], el = $('#' + id); if (!c) { el.style.display = 'none'; continue; }
+    el.querySelector('.brand').innerHTML = brandHtml(S.brand);
+    el.querySelector('h1').innerHTML = (c['h1_' + format] || c.h1).map((x) => `<span>${esc(x)}</span>`).join('');
+    const ps = el.querySelectorAll('p'); ps[0].textContent = c.sub || ''; ps[1].textContent = c.note || '';
+  }
+  await document.fonts.load("600 40px 'Roboto Flex Variable'"); await document.fonts.ready;
+  return { W: L.W, H: L.H };
+};
+
+// Output time to source time through the cut list.
+const srcTime = (t) => {
+  let last = null;
+  for (const s of S.segments) { const sp = s.speed || 1; if (t >= s.out && t < s.out + s.len) return s.src + (t - s.out) * sp; if (t >= s.out + s.len) last = s.src + s.len * sp - 1 / S.source.fps; }
+  return last == null ? S.segments[0].src : last;
+};
+
+const card = (el, t, tIn, tOut) => {
+  const a = (tIn == null ? 1 : easeInOut(prog(t, tIn, .5))) * (tOut == null ? 1 : 1 - easeInOut(prog(t, tOut - .45, .45)));
+  el.style.display = a > 0 ? 'block' : 'none'; el.style.opacity = a; if (a <= 0) return;
+  const t0 = tIn == null ? 0 : tIn + .25;
+  el.querySelectorAll('h1 span').forEach((s, i) => { const b = easeOut(prog(t, t0 + .1 + i * .14, .6)); s.style.opacity = b; s.style.transform = `translateY(${(1 - b) * 34}px)`; });
+  const ps = el.querySelectorAll('p'); ps.forEach((p, i) => { const b = easeOut(prog(t, t0 + .55 + i * .3, .6)); p.style.opacity = b * (i ? .92 : 1); p.style.transform = `translateY(${(1 - b) * 16}px)`; });
+  el.querySelector('.brand').style.opacity = easeOut(prog(t, t0 - .1, .5));
+};
+
+window.renderAt = async (t) => {
+  const st = srcTime(t), n = Math.max(1, Math.min(S.source.count, Math.floor(st * S.source.fps + 1e-6) + 1));
+  const url = `${S.source.dir}/${String(n).padStart(5, '0')}.jpg`;
+  const foot = $('#foot'); if (url !== lastSrc) { foot.src = url; lastSrc = url; await foot.decode(); }
+  document.querySelectorAll('#overlays > div').forEach((d) => { const b = S.blurs[+d.dataset.i]; d.style.display = (st >= (b.s0 ?? -1) && st < (b.s1 ?? 1e9)) ? 'block' : 'none'; });
+  // the drawn status bar takes the colour of whatever is under it
+  let sb = S.statusBar || {}; for (const c of (sb.changes || [])) if (st >= c.s0) sb = { ...sb, ...c };
+  if (sb.bg) { document.documentElement.style.setProperty('--sb', sb.bg); document.documentElement.style.setProperty('--sbink', sb.ink); }
+
+  // phone rises in after the ask
+  const pIn = S.phoneIn ?? 0, a = spring(prog(t, pIn, .9));
+  const ph = $('#phone'); ph.style.opacity = clamp(prog(t, pIn, .3));
+  ph.style.transform = `translateY(${(1 - a) * 140}px) scale(${.95 + .05 * a})`;
+
+  // chapter caption: the one whose time has come; a short cross-fade with a rise
+  const ch = S.chapters; let ci = -1; for (let i = 0; i < ch.length; i++) if (t >= ch[i].t) ci = i;
+  const cap = $('#cap');
+  if (ci < 0) cap.style.opacity = 0; else {
+    const c = ch[ci], next = ch[ci + 1], a1 = easeOut(prog(t, c.t, .45));
+    const out = next ? prog(t, next.t - .22, .22) : (S.end ? prog(t, S.end.in - .1, .3) : 0);
+    cap.querySelector('.step').textContent = c.step || ''; cap.querySelector('.line').textContent = c.text || '';
+    cap.querySelector('.line').style.display = c.text ? 'block' : 'none';
+    const ask = cap.querySelector('.ask'); ask.style.display = c.ask ? 'inline-block' : 'none';
+    if (c.ask) { // typed out, as in a message box
+      const k2 = Math.round(c.ask.length * prog(t, c.t + .35, c.typeFor || 1.6)); ask.textContent = c.ask.slice(0, Math.max(1, k2));
+      const b = easeOut(prog(t, c.t + .25, .35)); ask.style.opacity = b; ask.style.transform = `translateY(${(1 - b) * 14}px)`; }
+    cap.style.opacity = a1 * (1 - out); cap.style.transform = `translateY(${(1 - a1) * 22 - out * 10}px)`;
+  }
+
+  const sh = $('#sheet');
+  if (!S.sheet) sh.style.display = 'none'; else {
+    const a2 = spring(prog(t, S.sheet.in, .7)) * (1 - easeInOut(prog(t, S.sheet.out, .5)));
+    sh.style.display = (t >= S.sheet.in && t < S.sheet.out + .5) ? 'flex' : 'none';
+    sh.style.top = (L.sheet.yOut + (L.sheet.yIn - L.sheet.yOut) * a2) + 'px';
+    const ended = S.sheet.callEnd != null && t >= S.sheet.callEnd;
+    const el = Math.max(0, Math.min(S.sheet.callEnd ?? 1e9, t) - S.sheet.callStart);
+    $('#sheet .timer').textContent = t >= S.sheet.callStart ? `${Math.floor(el / 60)}:${String(Math.floor(el % 60)).padStart(2, '0')}` : '';
+    $('#sheet .dot').style.background = ended ? 'var(--outline)' : 'var(--ok)';
+    $('#sheet .lbl').textContent = ended ? S.sheet.endLabel : S.sheet.label;
+    document.querySelectorAll('#linesIn .b').forEach((d, i) => {
+      const ln = S.lines[i]; const on = t >= ln.t; d.style.display = on ? 'block' : 'none'; if (!on) return;
+      const a3 = easeOut(prog(t, ln.t, .3)); d.style.opacity = a3; d.style.transform = `translateY(${(1 - a3) * 14}px)`;
+      const ws = d.querySelectorAll('.w'), dur = ln.dur || 0;
+      ws.forEach((w, j) => { w.style.opacity = dur ? clamp(prog(t, ln.t + (dur * j) / ws.length, .12)) : 1; });
+    });
+  }
+  if (S.title) card($('#title'), t, null, S.title.out);
+  if (S.end) card($('#end'), t, S.end.in, null);
+};
+</script>
+</body>
+</html>
