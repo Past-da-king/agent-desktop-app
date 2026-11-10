@@ -75,11 +75,12 @@ import { planWindowOpen, popupSize } from './popup'
 import type { BrowserVault } from '../vault/browser-vault'
 import { attachVaultTo, debuggerLink } from './vault-link'
 import { formatUpload, uploadFiles, type UploadHost, type UploadTarget } from './upload'
-import type { BrandLook } from '../../shared/brand'
+import { brandLook, type BrandLook } from '../../shared/brand'
 import { formatGuide, GuideRuns, guideShowsFullSize, runGuide, type GuideHost } from './guide'
 import { evaluateIn, FrameSessions } from './guide-host'
 import { GuideLog, TAIL_MS } from './guide-log'
-import { dialogsScript, guideClearScript, guideRestyleScript, pickMarkScript } from './guide-page'
+import { dialogsScript, guideClearScript, guideModeScript, guideRestyleScript, pickMarkScript } from './guide-page'
+import { parseView, PrivateGuide, viewWatchScript, type PrivateOverlay, type ViewInfo } from './guide-private'
 import { alive, ifAlive, whileAlive } from '../alive'
 import { pickTab } from './tab-pick'
 import { siteTabPlan } from './site-tab'
@@ -200,6 +201,12 @@ export interface AgentBrowserOptions {
   sitesFile?: string | null
   /** The app's brand look now (his theme and accent setting): the guide's ring and label are drawn in it. */
   look?: () => BrandLook
+  /**
+   * Guides drawn in a window of their own that screen sharing leaves out (main/overlay/). `on` is his setting and
+   * what this computer can really hide, read live; `overlay` makes one overlay, called only when a ring is first
+   * drawn that way. Without this the page draws the ring itself, as before.
+   */
+  privateGuides?: { on: () => boolean; overlay: () => PrivateOverlay }
 }
 
 export class AgentBrowser implements BrowserDriver, BrowserProDriver {
@@ -266,6 +273,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** Guides showing now: each restyles its rings when his theme or accent changes (restyleGuides). */
   private readonly liveGuides = new Set<() => Promise<void>>()
   private readonly look: (() => BrandLook) | undefined
+  private readonly privateGuides: AgentBrowserOptions['privateGuides']
+  /** Guides showing now: each moves its drawing into or out of the page when his privacy setting changes. */
+  private readonly livePrivacy = new Set<() => Promise<void>>()
   /** Each tab's frames, cross-site ones included, for the guide (guide-host.ts). */
   private readonly frameSessions = new Map<string, FrameSessions>()
   /** The guided session running on each tab, and who started it. */
@@ -307,6 +317,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.onHandoffClosed = options.onHandoffClosed ?? (() => undefined)
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
     this.look = options.look
+    this.privateGuides = options.privateGuides
 
     const root = options.tempRoot ?? tmpdir()
     this.runDir = mkdtempSync(join(root, 'agent-browser-'))
@@ -1578,17 +1589,29 @@ ${await this.snapshot()}`
         link.onEvent((method, params) => {
           if (method === 'Page.javascriptDialogOpening') listener(String(params['message'] ?? ''))
         }),
+      onReport: (listener) => sessions.onReport(listener),
       loading: () => alive(wc) && wc.isLoading(),
       ready: (ms) => this.waitForDom(tab, ms),
     }
+    // Drawn in a window of its own when his setting says so, so a screen share never shows the ring.
+    const privately = this.privateGuide(tab, sessions)
     const lookNow = this.look
     const restyle = async (): Promise<void> => {
       if (lookNow === undefined || !alive(wc)) return
       const look = lookNow()
+      privately?.surface.refresh()
       const all = await withDeadline(sessions.frames(), 2_000).catch(() => [])
       await Promise.all(all.map((frame) => withDeadline(evaluateIn(sessions, frame.key, guideRestyleScript(look)), 2_000).catch(() => undefined)))
     }
     this.liveGuides.add(restyle)
+    const reprivate = async (): Promise<void> => {
+      if (privately === null || !alive(wc)) return
+      const outside = privately.surface.outside()
+      const all = await withDeadline(sessions.frames(), 2_000).catch(() => [])
+      await Promise.all(all.map((frame) => withDeadline(evaluateIn(sessions, frame.key, guideModeScript(outside)), 2_000).catch(() => undefined)))
+      privately.surface.refresh()
+    }
+    this.livePrivacy.add(reprivate)
     try {
       const timeoutMs = request.timeoutMs
       const result = await runGuide(host, request.steps, {
@@ -1596,6 +1619,7 @@ ${await this.snapshot()}`
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         signal: entry.abort.signal,
         token: session.id,
+        ...(privately === null ? {} : { surface: privately.surface }),
         clipboard: { read: () => systemClipboard.readText(), write: (text) => systemClipboard.writeText(text), clear: () => systemClipboard.clear() },
         pasteKey: process.platform === 'darwin' ? 'Cmd+V' : 'Ctrl+V',
         onStep: (event) => {
@@ -1626,6 +1650,9 @@ ${await this.snapshot()}`
       return formatGuide(result, session.id)
     } finally {
       this.liveGuides.delete(restyle)
+      this.livePrivacy.delete(reprivate)
+      // The overlay window goes with the guide, whatever ended it (done, skip, tab closed, run end, a newer guide).
+      privately?.stop()
       signal?.removeEventListener('abort', onOuter)
       this.guiding.finish(entry)
       if (alive(wc)) {
@@ -1640,6 +1667,87 @@ ${await this.snapshot()}`
   /** His theme or accent changed: a ring showing now takes the new look at once (the next one is drawn in it anyway). */
   async restyleGuides(): Promise<void> {
     await Promise.all([...this.liveGuides].map((restyle) => restyle().catch(() => undefined)))
+  }
+
+  /** His "hide guides from screen sharing" setting changed: a ring showing now moves into or out of the page at once. */
+  async refreshGuidePrivacy(): Promise<void> {
+    await Promise.all([...this.livePrivacy].map((apply) => apply().catch(() => undefined)))
+  }
+
+  /**
+   * The private drawing of one guide (guide-private.ts): keeps track of where the tab's page is in the app window
+   * and of the window itself, for as long as the guide runs. Null when private guides are not set up.
+   */
+  private privateGuide(tab: Tab, sessions: FrameSessions): { surface: PrivateGuide; stop: () => void } | null {
+    const options = this.privateGuides
+    const win = this.window
+    if (options === undefined || win === null || win.isDestroyed()) return null
+    let view: ViewInfo | null = null
+    let stopped = false
+    let topKey: string | null = null
+    const surface = new PrivateGuide({
+      outside: () => !stopped && options.on(),
+      overlay: options.overlay,
+      owner: win,
+      view: () => view,
+      window: () => {
+        try {
+          if (win.isDestroyed()) return null
+          const content = win.getContentBounds()
+          return { content: { x: content.x, y: content.y }, zoom: win.webContents.getZoomFactor(), visible: win.isVisible() && !win.isMinimized() }
+        } catch {
+          return null
+        }
+      },
+      look: () => this.look?.() ?? brandLook(),
+      frameBox: async (frame) => {
+        const box = await withDeadline(sessions.frameBox(frame.key), 2_000).catch(() => null)
+        if (box === null) return null
+        if (topKey === null) topKey = (await withDeadline(sessions.frames(), 2_000).catch(() => [])).find((each) => each.top)?.key ?? null
+        if (topKey === null) return null
+        const width = Number(
+          await withDeadline(evaluateIn(sessions, topKey, 'innerWidth'), 2_000).catch(() => {
+            topKey = null
+            return Number.NaN
+          }),
+        )
+        return Number.isFinite(width) && width > 0 ? { ...box, pageWidth: width } : null
+      },
+    })
+    // Where the page's view is in the window, heard in the frame it changes (the script waits for a change).
+    const watch = async (): Promise<void> => {
+      let prev = ''
+      while (!stopped && !win.isDestroyed()) {
+        if (!options.on()) {
+          prev = ''
+          await this.settle(300)
+          continue
+        }
+        const text = await withDeadline(win.webContents.executeJavaScript(viewWatchScript(tab.id, prev, 1_000)) as Promise<unknown>, 4_000).catch(() => null)
+        if (stopped) return
+        if (typeof text !== 'string') {
+          await this.settle(250)
+          continue
+        }
+        prev = text
+        view = parseView(text)
+        surface.refresh()
+      }
+    }
+    void watch().catch(() => undefined)
+    const onWindow = (): void => surface.refresh()
+    const events = ['move', 'resize', 'minimize', 'restore', 'show', 'hide', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen'] as const
+    for (const name of events) win.on(name as 'move', onWindow)
+    return {
+      surface,
+      stop: () => {
+        stopped = true
+        ifAlive('private guide off', () => {
+          if (!win.isDestroyed()) for (const name of events) win.removeListener(name as 'move', onWindow)
+        })
+        surface.dispose()
+      },
+    }
   }
 
   /** Hands the tab to the person for the guide and shows it to them; the returned function hands it back. */

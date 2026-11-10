@@ -15,16 +15,13 @@ import { BrowserWindow, screen } from 'electron'
 import type { BrandLook } from '../../shared/brand'
 import type { CapturePrivacy } from '../capture-privacy'
 import { GuideOverlay, type OverlayEvent, type OverlayHost, type OverlaySurface } from './guide-overlay'
-import { overlayHtml, overlaySetScript, overlayStyleScript, OVERLAY_READ_SCRIPT, parseOverlayEvent, type OverlayPageState } from './overlay-page'
+import { overlayHtml, overlaySetScript, overlayStyleScript, parseOverlayEvent, type OverlayPageState } from './overlay-page'
 import type { Rect } from './rect'
 
 export interface OverlayWindowOptions {
   /** Hides every overlay window from screen capture by the setting, live. Without it the windows are not hidden. */
   privacy?: CapturePrivacy | null
 }
-
-/** The overlay windows open now, for a proof or a check (never for drawing). */
-const open = new Set<BrowserWindow>()
 
 function makeSurface(options: OverlayWindowOptions, look: BrandLook, owner: BrowserWindow | undefined): OverlaySurface {
   const win = new BrowserWindow({
@@ -55,7 +52,6 @@ function makeSurface(options: OverlayWindowOptions, look: BrandLook, owner: Brow
       partition: 'guide-overlay',
     },
   })
-  open.add(win)
   if (owner === undefined) win.setAlwaysOnTop(true, 'screen-saver')
   win.setIgnoreMouseEvents(true, { forward: true })
   win.removeMenu()
@@ -86,10 +82,7 @@ function makeSurface(options: OverlayWindowOptions, look: BrandLook, owner: Brow
   // It is a drawing, never a browser: it goes nowhere and opens nothing.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
-  win.once('closed', () => {
-    open.delete(win)
-    listeners.clear()
-  })
+  win.once('closed', () => listeners.clear())
   void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml(look))}`).catch(() => undefined)
 
   return {
@@ -140,30 +133,4 @@ export function electronOverlayHost(options: OverlayWindowOptions = {}): Overlay
 /** A guide overlay on this computer's screens (API: guide-overlay.ts). One per ring: each guide makes its own. */
 export function createGuideOverlay(options: OverlayWindowOptions = {}): GuideOverlay {
   return new GuideOverlay(electronOverlayHost(options))
-}
-
-/**
- * What every open overlay window really shows, read from the windows themselves: bounds on the screen (DIPs), whether
- * each is visible and hidden from capture, and where its ring and label are drawn. A screen capture cannot see a
- * protected window, which is the point, so a proof reads this instead.
- */
-export async function inspectOverlays(privacy: CapturePrivacy | null = null): Promise<Array<{ bounds: Rect; content: Rect; visible: boolean; protected: boolean; page: unknown }>> {
-  const out: Array<{ bounds: Rect; content: Rect; visible: boolean; protected: boolean; page: unknown }> = []
-  for (const win of open) {
-    if (win.isDestroyed()) continue
-    const page = (await win.webContents.executeJavaScript(OVERLAY_READ_SCRIPT).catch(() => null)) as unknown
-    out.push({ bounds: win.getBounds(), content: win.getContentBounds(), visible: win.isVisible(), protected: privacy !== null && privacy.protects(win), page })
-  }
-  return out
-}
-
-/** A picture of each overlay window's own drawing (PNG), for a proof: the window's own pixels, not the screen's. */
-export async function captureOverlays(): Promise<Buffer[]> {
-  const out: Buffer[] = []
-  for (const win of open) {
-    if (win.isDestroyed() || !win.isVisible()) continue
-    const image = await win.webContents.capturePage().catch(() => null)
-    if (image !== null) out.push(image.toPNG())
-  }
-  return out
 }

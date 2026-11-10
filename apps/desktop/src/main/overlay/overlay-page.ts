@@ -66,6 +66,8 @@ const SCRIPT = `
     clip.style.left = s.clip.x + 'px'; clip.style.top = s.clip.y + 'px';
     clip.style.width = s.clip.width + 'px'; clip.style.height = s.clip.height + 'px';
     scale.style.transform = 'scale(' + k + ')';
+    // The drawing area is the clip, in drawing pixels: the label sizes itself against it as it does against a page.
+    scale.style.width = (s.clip.width / k) + 'px'; scale.style.height = (s.clip.height / k) + 'px';
     // Everything below is in drawing pixels, measured from the clip's corner.
     const r = { x: (s.ring.x - s.clip.x) / k, y: (s.ring.y - s.clip.y) / k, w: s.ring.width / k, h: s.ring.height / k };
     const cw = s.clip.width / k, ch = s.clip.height / k;
@@ -74,6 +76,7 @@ const SCRIPT = `
     tag.querySelector('.n').textContent = s.n || '';
     tag.querySelector('.t').textContent = s.label || '';
     tag.style.width = s.tag && s.tag.width > 0 ? (s.tag.width / k) + 'px' : '';
+    tag.style.maxWidth = s.tag && s.tag.width > 0 ? 'none' : Math.max(120, Math.min(380, cw - 16)) + 'px';
     let spot = s.tag ? { x: (s.tag.x - s.clip.x) / k, y: (s.tag.y - s.clip.y) / k } : null;
     if (!spot) {
       // No place given: beside the ring, never on it, inside the clip.

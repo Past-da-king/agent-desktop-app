@@ -21,6 +21,12 @@ export const GUIDE_WORLD = '__agent_guide_world'
 /** The attribute the overlay host carries; also how a snapshot number is handed over (data-agent-guide-pick). */
 export const GUIDE_ATTR = 'data-agent-guide'
 export const PICK_ATTR = 'data-agent-guide-pick'
+/**
+ * The function a frame's guide world calls with the target's place, when the ring is drawn outside the page (the
+ * private overlay window, 10 Nov 2026). A CDP binding (Runtime.addBinding) in the guide's world only: the site's own
+ * scripts never see it.
+ */
+export const GUIDE_REPORT_BINDING = '__agentGuideReport'
 
 export interface GuideQuery {
   name?: string
@@ -52,6 +58,25 @@ export interface GuideShowSpec {
   secret?: boolean
   /** The app's brand look (theme and accent) the ring and label are drawn in. Default: the light theme, iris. */
   look?: BrandLook
+  /**
+   * Draw nothing in the page: only say where the target and the label are, every time that changes, so the ring can be
+   * drawn in a window of its own that screen sharing leaves out. Everything else (finding and following the target,
+   * his click, typing and paste) is exactly the same.
+   */
+  report?: boolean
+}
+
+/** Where the target and its label are, in the frame's own viewport (CSS px), as the page reports it. */
+export interface GuideReport {
+  token: string
+  /** False while the target is not there to ring (re-rendering, zero size). */
+  shown: boolean
+  box?: { x: number; y: number; width: number; height: number }
+  /** The label's corner and size, placed by the same rules as when the page draws it. */
+  tag?: { x: number; y: number; width: number; height: number }
+  /** The frame's viewport (innerWidth, innerHeight). */
+  vw?: number
+  vh?: number
 }
 
 export interface FrameMatches {
@@ -176,6 +201,7 @@ ${PAGE_PRELUDE}
 ${FIND}
 const spec = ${JSON.stringify({ idleMs: 2000, earlyMs: 1500, ...spec, look: undefined })};
 const G = globalThis.__agentGuide || (globalThis.__agentGuide = { sessions: {}, recent: [], recorder: false });
+if (!G.reports) G.reports = {};
 const poolOf = () => { const m = guideMatches(spec.query); return spec.mode === 'partial' ? (m.partial || []) : (m.exact || []); };
 let el = poolOf()[spec.pick] || poolOf()[0] || null;
 if (!el) return { outcome: 'lost', at: Date.now(), target: '', role: '', name: '' };
@@ -217,9 +243,25 @@ host.setAttribute('${GUIDE_ATTR}', spec.token);
 host.style.cssText = 'all:initial;position:fixed;inset:0;width:100vw;height:100vh;margin:0;padding:0;border:0;background:transparent;overflow:visible;pointer-events:none;z-index:2147483647;display:block;color-scheme:normal';
 const topLayer = typeof host.showPopover === 'function';
 if (topLayer) host.setAttribute('popover', 'manual');
+// Drawn outside the page: this overlay stays laid out (the label is still placed by it) but is never painted and takes
+// no click, so a screen share of the page has nothing of the guide in it. A rule of its own, with !important: the
+// buttons reset every property of theirs, visibility included.
+let report = spec.report === true;
+const UNPAINTED = '.ring,.tag,.tag *{visibility:hidden !important;pointer-events:none !important;animation:none !important}';
+const paint = () => { host.style.visibility = report ? 'hidden' : 'visible'; const m = root && root.querySelector('style.m'); if (m) m.textContent = report ? UNPAINTED : ''; };
+let lastTold = '';
+const tell = (what) => {
+  what.token = spec.token;
+  const text = JSON.stringify(what);
+  if (text === lastTold) return;
+  lastTold = text;
+  G.reports[spec.token] = text;
+  try { if (typeof globalThis.${GUIDE_REPORT_BINDING} === 'function') globalThis.${GUIDE_REPORT_BINDING}(text); } catch (e) { /* read by asking instead */ }
+};
 const root = host.attachShadow({ mode: 'closed' });
 root.innerHTML = '<style>' + ${JSON.stringify(guideStyle(spec.look ?? brandLook()))}
-  + '</style><div class="ring" part="ring"></div><div class="tag" role="status" aria-live="polite"><span class="n"></span><span class="t"></span><button class="ok" type="button">I did it</button><button class="skip" type="button">Skip</button></div>';
+  + '</style><style class="m"></style><div class="ring" part="ring"></div><div class="tag" role="status" aria-live="polite"><span class="n"></span><span class="t"></span><button class="ok" type="button">I did it</button><button class="skip" type="button">Skip</button></div>';
+paint();
 const ring = root.querySelector('.ring');
 const tag = root.querySelector('.tag');
 root.querySelector('.n').textContent = spec.total > 1 ? (spec.step + '/' + spec.total) : '';
@@ -255,7 +297,7 @@ const place = () => {
       const next = again[spec.pick] || again[0];
       if (next) { el = next; lostSince = 0; }
     }
-    if (!el.isConnected || el.getBoundingClientRect().width === 0) { ring.style.display = 'none'; tag.style.visibility = 'hidden'; return; }
+    if (!el.isConnected || el.getBoundingClientRect().width === 0) { ring.style.display = 'none'; tag.style.visibility = 'hidden'; if (report) tell({ shown: false }); return; }
   }
   lostSince = 0;
   if (raise || modalOf(el) !== (parent === document.documentElement ? null : parent)) { raise = false; mount(); }
@@ -325,6 +367,10 @@ const place = () => {
     host.setAttribute('data-agent-guide-label', Math.round(spot.x) + ',' + Math.round(spot.y) + ',' + w + ',' + h);
     host.setAttribute('data-agent-guide-buttons', rect(root.querySelector('.ok')) + ';' + rect(root.querySelector('.skip')));
   }
+  if (report) {
+    const p = (n) => Math.round(n * 100) / 100;
+    tell({ shown: true, box: { x: p(r.left), y: p(r.top), width: p(r.width), height: p(r.height) }, tag: { x: Math.round(spot.x), y: Math.round(spot.y), width: w, height: h }, vw, vh });
+  }
 };
 
 return await new Promise((resolve) => {
@@ -350,10 +396,16 @@ return await new Promise((resolve) => {
     try { if (topLayer && host.matches(':popover-open')) host.hidePopover(); } catch (e) { /* gone */ }
     host.remove();
     delete G.sessions[spec.token];
+    delete G.reports[spec.token];
     resolve(out);
   };
   // restyle: the app's theme or accent changed while this ring shows (guideRestyleScript).
-  G.sessions[spec.token] = { end: (why) => finish(why || 'cancelled'), restyle: (css) => { const st = root.querySelector('style'); if (st) st.textContent = css; } };
+  // mode: his "hide guides from screen sharing" setting changed while this ring shows (guideModeScript).
+  G.sessions[spec.token] = {
+    end: (why) => finish(why || 'cancelled'),
+    restyle: (css) => { const st = root.querySelector('style'); if (st) st.textContent = css; },
+    mode: (outside) => { report = outside === true; paint(); lastTold = ''; if (!report) delete G.reports[spec.token]; place(); },
+  };
   let typed = false;
   // Listeners only watch: no preventDefault, no stopPropagation, so the page gets every event of his as usual.
   const onClick = (e) => {
@@ -470,4 +522,56 @@ let n = 0;
 if (G) for (const key of Object.keys(G.sessions)) { const s = G.sessions[key]; if (s && typeof s.restyle === 'function') { try { s.restyle(${JSON.stringify(guideStyle(look))}); n++; } catch (e) { /* gone */ } } }
 return n;
 })()`
+}
+
+/** The latest place a frame reported for a step, for a host with no binding (asked instead of told). */
+export function guideReportReadScript(token: string): string {
+  return `(() => { const G = globalThis.__agentGuide; return G && G.reports && typeof G.reports[${JSON.stringify(token)}] === 'string' ? G.reports[${JSON.stringify(token)}] : null; })()`
+}
+
+/** His press on the overlay window's I did it or Skip: the step in this frame ends with that outcome. */
+export function guideEndScript(token: string, outcome: 'done' | 'skipped'): string {
+  return `(() => { const G = globalThis.__agentGuide; const s = G && G.sessions[${JSON.stringify(token)}]; if (!s) return false; s.end(${JSON.stringify(outcome)}); return true; })()`
+}
+
+/** The setting changed while a guide shows: every ring in this frame is drawn outside the page (true) or in it (false). */
+export function guideModeScript(outside: boolean): string {
+  return `(() => {
+const G = globalThis.__agentGuide;
+let n = 0;
+if (G) for (const key of Object.keys(G.sessions)) { const s = G.sessions[key]; if (s && typeof s.mode === 'function') { try { s.mode(${outside ? 'true' : 'false'}); n++; } catch (e) { /* gone */ } } }
+return n;
+})()`
+}
+
+export function parseReport(value: unknown): GuideReport | null {
+  let raw: unknown = value
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw)
+    } catch {
+      return null
+    }
+  }
+  if (raw === null || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  if (typeof o['token'] !== 'string') return null
+  const rect = (v: unknown): { x: number; y: number; width: number; height: number } | undefined => {
+    if (v === null || typeof v !== 'object') return undefined
+    const r = v as Record<string, unknown>
+    const nums = [r['x'], r['y'], r['width'], r['height']]
+    if (!nums.every((n) => typeof n === 'number' && Number.isFinite(n))) return undefined
+    return { x: nums[0] as number, y: nums[1] as number, width: nums[2] as number, height: nums[3] as number }
+  }
+  const box = rect(o['box'])
+  const tag = rect(o['tag'])
+  const shown = o['shown'] === true && box !== undefined
+  return {
+    token: o['token'],
+    shown,
+    ...(box === undefined ? {} : { box }),
+    ...(tag === undefined ? {} : { tag }),
+    ...(typeof o['vw'] === 'number' ? { vw: o['vw'] } : {}),
+    ...(typeof o['vh'] === 'number' ? { vh: o['vh'] } : {}),
+  }
 }

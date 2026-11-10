@@ -14,6 +14,7 @@ import { VOICES } from '@agent/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
+import { chatHint, guidesHint } from '../../shared/capture-privacy'
 import type { Route } from '../state/route'
 import { accountsOf } from '@agent/core'
 import { kindLine } from '../lib/ai'
@@ -1183,6 +1184,29 @@ function PrivacySection({ settings, put, resetRow, navigate }: SectionProps): JS
             { value: 'always', label: 'Always' },
           ]}
           onChange={(value) => put({ recordingAudioKeep: value as SettingsValues['recordingAudioKeep'] })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
+        spec={{ ...row('hideGuidesFromCapture'), description: guidesHint(agent.platform) }}
+        changed={changedNow(row('hideGuidesFromCapture'), settings)}
+        onReset={() => resetRow(row('hideGuidesFromCapture'))}
+      >
+        <Switch
+          on={settings?.hideGuidesFromCapture ?? true}
+          label="Hide guides from screen sharing"
+          onToggle={(next) => put({ hideGuidesFromCapture: next })}
+        />
+      </SettingRow>
+      <SettingRow
+        spec={{ ...row('hideChatFromCapture'), description: chatHint(agent.platform) }}
+        changed={changedNow(row('hideChatFromCapture'), settings)}
+        onReset={() => resetRow(row('hideChatFromCapture'))}
+      >
+        <Switch
+          on={settings?.hideChatFromCapture ?? false}
+          label="Hide the chat from screen sharing"
+          onToggle={(next) => put({ hideChatFromCapture: next })}
         />
       </SettingRow>
       <div className="divider" />
