@@ -45,6 +45,17 @@ const until = async (fn, ms = 5000, step = 50) => {
 }
 // Plays real input (send-input.ps1) without blocking this process, so the events can arrive while it runs.
 const play = (actions) => new Promise((done) => spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(here, 'send-input.ps1'), '-Actions', actions], { stdio: 'inherit' }).once('exit', done))
+// Real input goes wherever the mouse is, so before any is played: is OUR window the one on top at that point?
+// If somebody else's window is in the way, the proof stops there instead of clicking into it.
+const onTop = async (hwnd, x, y) => {
+  const top = (await reader.windows()).find((w) => x >= w.bounds.x && x < w.bounds.x + w.bounds.width && y >= w.bounds.y && y < w.bounds.y + w.bounds.height)
+  return top?.hwnd === hwnd
+}
+const mustBeOnTop = async (hwnd, rect, what) => {
+  for (const [x, y] of [[rect.x + 2, rect.y + 2], [rect.x + rect.width - 3, rect.y + rect.height - 3], [rect.x + Math.round(rect.width / 2), rect.y + Math.round(rect.height / 2)]]) {
+    if (!(await onTop(hwnd, x, y))) throw new Error(`Another window covers the ${what}. Nothing was clicked. Run the proof again when that part of the screen is free.`)
+  }
+}
 const fmt = (r) => (r === null || r === undefined ? 'null' : `${r.x},${r.y} ${r.width}x${r.height}`)
 
 const reader = createScreenReader({ lookup: { dirs: [repo] }, keys: ['Escape', 'Enter', 'Tab'] })
@@ -74,9 +85,9 @@ try {
   const profile = mkdtempSync(join(tmpdir(), 'show-me-chrome-'))
   const primary = monitors.find((m) => m.primary) ?? monitors[0]
   const scale = primary.scale
-  // Aside, on the right of the primary screen.
+  // Aside, at the left of the primary screen.
   const winW = 820, winH = 720
-  const winX = Math.max(0, Math.round(primary.work.width / scale) - winW - 10), winY = 10
+  const winX = 10, winY = 10
   const chrome = spawn(chromePath, [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--disable-sync', '--remote-debugging-port=0',
     `--window-position=${winX},${winY}`, `--window-size=${winW},${winH}`, '--new-window', `${site}#/home`], { stdio: 'ignore' })
   started.push(chrome.pid)
@@ -148,6 +159,7 @@ try {
   check('Chrome: an element far down the page is found and marked off screen', deep !== null && deep.offscreen === true, `${deepMs} ms`)
 
   // ---- do the rectangles land on the true pixels? ----
+  await mustBeOnTop(hwnd, (await reader.find(hwnd, { name: 'Probe target' })).bounds, 'test page')
   const [shot, shotMs] = await timed(() => reader.capture({ displayId: 0 }))
   results.timings.captureDisplayMs = shotMs
   writeFileSync(join(outDir, 'screen.png'), shot)
@@ -167,9 +179,6 @@ try {
   check('capture of the Chrome window', winPng.width === chromeWin.bounds.width && boxOfColour(winPng, [255, 0, 170]) !== null, `${winPng.width}x${winPng.height}, ${winShot.length} bytes, ${winShotMs} ms`)
 
   // ---- following: scroll ----
-  const wheels = []
-  const offWheel = reader.onScroll((e) => wheels.push(e))
-  offWheel()
   const moves = []
   let stop = reader.watch(hwnd, probe, (r) => moves.push({ r, at: performance.now() }))
   await until(() => moves.length > 0, 3000, 10)
@@ -255,7 +264,11 @@ try {
     const off2 = reader.onInput((e) => events.push({ ...e, got: Date.now() }))
     await until(async () => (await rawHello()).hooks === true, 2000, 20)
     check('hooks are on only while someone listens (on)', (await rawHello()).hooks === true)
-    await play(`click:${cx},${cy};key:Escape;key:a;paste;key:Tab`)
+    await mustBeOnTop(hwnd, target.bounds, 'test page')
+    await play(`click:${cx},${cy}`)
+    // Keys go to whatever is in front: only once the click has made that our own window.
+    if ((await reader.activeWindow())?.hwnd !== hwnd) throw new Error('The test window did not come to the front after the click. No keys were sent.')
+    await play('key:Escape;key:a;paste;key:Tab')
     await sleep(400)
     const click = events.find((e) => e.kind === 'click')
     const state = await js('JSON.stringify(proofState)').then(JSON.parse)
@@ -268,6 +281,24 @@ try {
     const keysSeen = events.filter((e) => e.kind === 'key').map((e) => e.key)
     check('only the named keys are reported: Escape and Tab yes, the letter A no', keysSeen.includes('Escape') && keysSeen.includes('Tab') && keysSeen.length === 2 && !JSON.stringify(events).toLowerCase().includes('"a"'), keysSeen.join(', '))
     check('Ctrl+V arrives as paste', events.some((e) => e.kind === 'paste'))
+    // The wheel over a browser: the ring must not sit in the old place for the half second the browser takes to say where things went.
+    const wheelMoves = []
+    const wheels = []
+    const offWheel = reader.onScroll((e) => wheels.push({ ...e, got: performance.now() }))
+    const stopWheel = reader.watch(hwnd, target, (r) => wheelMoves.push({ r, at: performance.now() }))
+    await until(() => wheelMoves.length > 0, 3000, 10)
+    await mustBeOnTop(hwnd, { x: cx - 5, y: cy + 195, width: 10, height: 10 }, 'test page')
+    await play(`wheel:${cx},${cy + 200},-1`)
+    const rested = await until(() => wheelMoves.some((m) => m.r === null), 1500, 5)
+    const cameBack = await until(() => wheelMoves.at(-1).r !== null && wheelMoves.at(-1).r.y !== target.bounds.y, 3000, 10)
+    const wheelAt = wheels[0]?.got ?? 0
+    const nullAt = wheelMoves.find((m) => m.r === null)?.at ?? 0
+    results.timings.wheelRingRestsAfterMs = Math.round(nullAt - wheelAt)
+    results.timings.wheelRingBackAfterMs = Math.round(wheelMoves.at(-1).at - wheelAt)
+    check('wheel over a browser: the rectangle rests at once and comes back in the new place', wheels.length > 0 && rested && cameBack, `null ${Math.round(nullAt - wheelAt)} ms after the wheel, back ${Math.round(wheelMoves.at(-1).at - wheelAt)} ms after it, moved ${wheelMoves.at(-1).r ? wheelMoves.at(-1).r.y - target.bounds.y : '?'} px; events: ${wheelMoves.map((m) => (m.r ? m.r.y : 'null')).join(' ')}`)
+    stopWheel()
+    offWheel()
+    if (await onTop(hwnd, cx, cy + 200)) await play(`wheel:${cx},${cy + 200},3`)
     off2()
     await until(async () => (await rawHello()).hooks === false, 2000, 20)
     check('hooks are on only while someone listens (off again)', (await rawHello()).hooks === false)
@@ -312,7 +343,8 @@ try {
     const nStop = reader.watch(win.hwnd, select, (r) => nMoves.push({ r, at: performance.now() }))
     await until(() => nMoves.length > 0, 3000, 10)
     const nx = win.bounds.x + 90, ny = win.bounds.y + 50
-    await play(`move:${win.hwnd},${nx},${ny}`)
+    // It opened behind our own browser window: lift it above, without giving it the keyboard, and move it.
+    await play(`top:${win.hwnd};move:${win.hwnd},${nx},${ny}`)
     const moved = await until(() => nMoves.at(-1).r && nMoves.at(-1).r.x !== select.bounds.x, 3000, 10)
     const after = await reader.window(win.hwnd)
     const dx = after.bounds.x - win.bounds.x, dy = after.bounds.y - win.bounds.y
@@ -324,6 +356,7 @@ try {
       const events = []
       const offN = reader.onInput((e) => events.push({ ...e, got: Date.now() }))
       await until(async () => (await rawHello()).hooks === true, 2000, 20)
+      await mustBeOnTop(win.hwnd, { x: cx - 4, y: cy - 4, width: 8, height: 8 }, 'Character Map window')
       await play(`click:${cx},${cy}`)
       await sleep(300)
       offN()

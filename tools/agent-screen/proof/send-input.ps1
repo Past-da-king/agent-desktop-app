@@ -1,6 +1,6 @@
 # Proof only: plays a few real mouse and key events so proof.mjs can see them arrive through the hooks.
 # The product never does this; agent-screen.exe has no code that sends input.
-#   -Actions "click:812,304;key:Escape;key:a;paste;move:0x1234,700,60"
+#   -Actions "click:812,304;wheel:812,304,-1;key:Escape;key:a;paste;move:0x1234,700,60"
 param([string]$Actions)
 Add-Type -Namespace ProofInput -Name Api -MemberDefinition @'
 [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
@@ -24,6 +24,12 @@ foreach ($action in $Actions.Split(';')) {
     [ProofInput.Api]::mouse_event(0x2, 0, 0, 0, [UIntPtr]::Zero)
     Start-Sleep -Milliseconds 40
     [ProofInput.Api]::mouse_event(0x4, 0, 0, 0, [UIntPtr]::Zero)
+  } elseif ($kind -eq 'wheel') {
+    $x, $y, $notches = $arg.Split(',')
+    [void][ProofInput.Api]::SetCursorPos([int]$x, [int]$y)
+    Start-Sleep -Milliseconds 60
+    $data = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$notches * 120), 0)
+    [ProofInput.Api]::mouse_event(0x0800, 0, 0, $data, [UIntPtr]::Zero)
   } elseif ($kind -eq 'key') {
     $vk = [byte]$keys[$arg]
     [ProofInput.Api]::keybd_event($vk, 0, 0, [UIntPtr]::Zero)
@@ -33,6 +39,9 @@ foreach ($action in $Actions.Split(';')) {
     [ProofInput.Api]::keybd_event(0x56, 0, 0, [UIntPtr]::Zero)
     [ProofInput.Api]::keybd_event(0x56, 0, 2, [UIntPtr]::Zero)
     [ProofInput.Api]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
+  } elseif ($kind -eq 'top') {
+    # Our own test window above the others, without giving it the keyboard.
+    [void][ProofInput.Api]::SetWindowPos([IntPtr][Convert]::ToInt64($arg, 16), [IntPtr](-1), 0, 0, 0, 0, 0x0013)
   } elseif ($kind -eq 'move') {
     $h, $x, $y = $arg.Split(',')
     [void][ProofInput.Api]::SetWindowPos([IntPtr][Convert]::ToInt64($h, 16), [IntPtr]::Zero, [int]$x, [int]$y, 0, 0, 0x0015)

@@ -189,7 +189,7 @@ namespace AgentScreen
         public IUIAutomationElement Element;
         public string Name, Role;
         public int Nth;
-        public bool HasLast, LastNull;
+        public bool HasLast, LastNull, Browser;
         public int X, Y, W, H;
         public long LostAt, LastRefind;
     }
@@ -211,6 +211,9 @@ namespace AgentScreen
         private static Timer watchTimer;
         private static int watchBusy;
         private static bool selfElevated;
+        /** When the mouse wheel last turned (Clock ms); only known while the hooks are on. */
+        public static long WheelAt = -100000;
+        public static long ClockMs { get { return Clock.ElapsedMilliseconds; } }
 
         [MTAThread]
         private static int Main(string[] args)
@@ -1134,6 +1137,7 @@ namespace AgentScreen
             watch.Name = J.Get(req, "name") ?? "";
             watch.Role = J.Get(req, "role") ?? "";
             watch.Nth = Math.Max(1, J.Int(req, "nth", 1));
+            watch.Browser = BrowserClass(ClassOf(hwnd));
             string id = J.Get(req, "node") ?? "";
             lock (Elements) Elements.TryGetValue(id, out watch.Element);
             if (watch.Element == null && watch.Name.Length > 0)
@@ -1223,13 +1227,17 @@ namespace AgentScreen
                     catch (Exception) { }
                 }
             }
+            // A browser tells where things are about half a second after a scroll. Until then the old place is wrong,
+            // so while the wheel turns over a browser the element counts as out of sight; it comes back in its new place.
+            bool scrolling = !gone && !hidden && watch.Browser && now - Interlocked.Read(ref WheelAt) < 650;
+            if (scrolling) hidden = true;
             bool isNull = gone || hidden;
             if (watch.HasLast && watch.LastNull == isNull && (isNull || (watch.X == x && watch.Y == y && watch.W == w && watch.H == h))) return;
             watch.HasLast = true; watch.LastNull = isNull; watch.X = x; watch.Y = y; watch.W = w; watch.H = h;
             StringBuilder sb = new StringBuilder(128);
             sb.Append("{\"event\":\"move\",\"watch\":").Append(watch.Id).Append(",\"rect\":");
             if (isNull) sb.Append("null"); else J.Rect(sb, x, y, w, h);
-            sb.Append(",\"why\":\"").Append(gone ? "gone" : hidden ? "hidden" : "moved").Append("\",\"time\":").Append(NowMs()).Append('}');
+            sb.Append(",\"why\":\"").Append(gone ? "gone" : scrolling ? "scrolling" : hidden ? "hidden" : "moved").Append("\",\"time\":").Append(NowMs()).Append('}');
             Emit(sb.ToString());
         }
 
@@ -1339,23 +1347,44 @@ namespace AgentScreen
             return "{\"hooks\":true}";
         }
 
-        public static void ForegroundChanged(IntPtr hwnd)
+        private static IntPtr lastForeground;
+        private static int foregroundBusy;
+
+        /** Forget what was in front, so the first look after the hooks start reports nothing. */
+        public static void ForegroundReset()
         {
-            Task.Factory.StartNew(delegate ()
+            IntPtr fg = Native.GetForegroundWindow();
+            lastForeground = fg == IntPtr.Zero ? IntPtr.Zero : Native.GetAncestor(fg, Native.GA_ROOT);
+        }
+
+        /**
+         * Reports the window in front when it is another one than last time. Windows does not always say when a
+         * window comes to the front (a click on a window that opened in the background says nothing), so this is
+         * asked on its own clock while the hooks are on, and at once when Windows does say or a click lands.
+         */
+        public static void ForegroundCheck()
+        {
+            if (Interlocked.Exchange(ref foregroundBusy, 1) == 1) return;
+            try
             {
-                try
-                {
-                    IntPtr root = Native.GetAncestor(hwnd, Native.GA_ROOT);
-                    if (root == IntPtr.Zero) root = hwnd;
-                    if (IsExcluded(root)) return;
-                    // A window that is just opening comes to the front a moment before it is shown.
-                    for (int i = 0; i < 10 && !Native.IsWindowVisible(root); i++) Thread.Sleep(40);
-                    if (!Native.IsWindowVisible(root) || Native.GetAncestor(Native.GetForegroundWindow(), Native.GA_ROOT) != root) return;
-                    string window = ActiveWindowJson(root, true);
-                    if (window != null) Emit("{\"event\":\"input\",\"kind\":\"foreground\",\"window\":" + window + ",\"time\":" + NowMs() + "}");
-                }
-                catch (Exception) { }
-            });
+                IntPtr fg = Native.GetForegroundWindow();
+                if (fg == IntPtr.Zero) return;
+                IntPtr root = Native.GetAncestor(fg, Native.GA_ROOT);
+                if (root == IntPtr.Zero) root = fg;
+                if (root == lastForeground || !Native.IsWindowVisible(root)) return;
+                lastForeground = root;
+                // This app's own windows (the quick-ask box, the overlay) are never news.
+                if (IsExcluded(root)) return;
+                string window = ActiveWindowJson(root, true);
+                if (window != null) Emit("{\"event\":\"input\",\"kind\":\"foreground\",\"window\":" + window + ",\"time\":" + NowMs() + "}");
+            }
+            catch (Exception) { }
+            finally { Interlocked.Exchange(ref foregroundBusy, 0); }
+        }
+
+        public static void ForegroundSoon()
+        {
+            Task.Factory.StartNew(delegate () { ForegroundCheck(); Thread.Sleep(60); ForegroundCheck(); });
         }
     }
 
@@ -1373,6 +1402,7 @@ namespace AgentScreen
         private static volatile HashSet<int> watched = new HashSet<int>();
         private static volatile bool clickOnDown;
         private static long lastWheel;
+        private static Timer foregroundTimer;
         private static readonly object Gate = new object();
 
         public static bool Running { get { return thread != null; } }
@@ -1406,6 +1436,8 @@ namespace AgentScreen
             lock (Gate)
             {
                 if (thread != null) return;
+                Program.ForegroundReset();
+                foregroundTimer = new Timer(delegate (object state) { Program.ForegroundCheck(); }, null, 120, 120);
                 ManualResetEvent ready = new ManualResetEvent(false);
                 thread = new Thread(delegate () { Pump(ready); });
                 thread.IsBackground = true;
@@ -1420,6 +1452,7 @@ namespace AgentScreen
             lock (Gate)
             {
                 if (thread == null) return;
+                if (foregroundTimer != null) { foregroundTimer.Dispose(); foregroundTimer = null; }
                 Native.PostThreadMessage(threadId, Native.WM_QUIT, IntPtr.Zero, IntPtr.Zero);
                 thread.Join(1000);
                 thread = null;
@@ -1469,6 +1502,7 @@ namespace AgentScreen
                 {
                     // The wheel turned: one line at most every 50 ms, so a caller can let its ring rest while the page moves.
                     long now = Program.NowMs();
+                    Interlocked.Exchange(ref Program.WheelAt, Program.ClockMs);
                     if (now - lastWheel >= 50)
                     {
                         lastWheel = now;
@@ -1479,6 +1513,7 @@ namespace AgentScreen
                 {
                     int x = Marshal.ReadInt32(lParam, 0), y = Marshal.ReadInt32(lParam, 4);
                     int flags = Marshal.ReadInt32(lParam, 12);
+                    Program.ForegroundSoon();
                     Program.Emit("{\"event\":\"input\",\"kind\":\"click\",\"x\":" + x + ",\"y\":" + y + ",\"button\":\"" + button + "\",\"injected\":" + ((flags & 1) != 0 ? "true" : "false") + ",\"time\":" + Program.NowMs() + "}");
                 }
             }
@@ -1520,7 +1555,7 @@ namespace AgentScreen
 
         private static void OnForeground(IntPtr hook, uint evt, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint time)
         {
-            if (hwnd != IntPtr.Zero) Program.ForegroundChanged(hwnd);
+            Program.ForegroundSoon();
         }
     }
 }
