@@ -45,7 +45,7 @@ const WINDOW: WindowInfo = { content: { x: 40, y: 25 }, zoom: 1, visible: true }
 const TOP: GuideFrame = { key: '|top', url: 'https://example.test/', top: true }
 const look = brandLook({ theme: 'light', accent: 'teal' })
 
-function setup(over: { on?: boolean; frameBox?: () => Promise<{ x: number; y: number; width: number; height: number; pageWidth: number } | null> } = {}): {
+function setup(over: { on?: boolean; flightSettleMs?: number; frameBox?: () => Promise<{ x: number; y: number; width: number; height: number; pageWidth: number } | null> } = {}): {
   guide: PrivateGuide
   made: FakeOverlay[]
   state: { on: boolean; view: ViewInfo | null; window: WindowInfo | null }
@@ -68,6 +68,7 @@ function setup(over: { on?: boolean; frameBox?: () => Promise<{ x: number; y: nu
     look: () => look,
     frameBox: over.frameBox ?? (async () => null),
     frameEveryMs: 10,
+    flightSettleMs: over.flightSettleMs ?? 0,
   })
   const step = (frame: GuideFrame = TOP, token = 'g1-1'): GuideSurfaceStep => ({ token, frame, label: 'Click Save', n: 2, total: 3, act: (outcome) => acts.push(outcome) })
   return { guide, made, state, acts, step }
@@ -147,6 +148,35 @@ describe('private guide: when the overlay exists and where it draws', () => {
     guide.refresh()
     expect(overlay.shown!.area).toEqual({ x: 340, y: 105, width: 700, height: 700 })
     expect(made.length).toBe(1)
+  })
+
+  it('draws nothing while a fast scroll is in flight, and is back on the target when it comes to rest', async () => {
+    const { guide, made, step } = setup({ flightSettleMs: 40 })
+    guide.begin(step())
+    guide.report(told(400))
+    const overlay = made[0]!
+    expect(overlay.shown!.rect.y).toBe(505)
+    // A slow move (under FLIGHT_PX a report) is followed as it goes.
+    guide.report(told(390))
+    expect(overlay.shown!.rect.y).toBe(495)
+    // A jump: the ring would be drawn a frame behind the element, so it is not drawn at all until the page rests.
+    guide.report(told(300))
+    expect(overlay.shown).toBeNull()
+    guide.report(told(295))
+    expect(overlay.shown).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    guide.report(told(290))
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(overlay.shown, 'a move keeps it in flight').toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(overlay.shown!.rect.y).toBe(395)
+    // The step ending mid flight leaves nothing to come back.
+    guide.report(told(100))
+    expect(overlay.shown).toBeNull()
+    guide.end('g1-1')
+    await new Promise((resolve) => setTimeout(resolve, 70))
+    expect(overlay.shown).toBeNull()
+    guide.dispose()
   })
 
   it('is gone on every end path: step end, dispose, and nothing is drawn after', () => {
@@ -487,6 +517,35 @@ async function hostFor(page: Page): Promise<{ host: GuideHost; frames: FrameSess
     await expect.poll(() => lines.includes(`${OVERLAY_EVENT}{"type":"act","outcome":"done"}`)).toBe(true)
     await page.mouse.move(10, 10)
     await expect.poll(() => lines.includes(`${OVERLAY_EVENT}{"type":"hover","on":false}`)).toBe(true)
+    // A real press is said once, though both its release and its click arrive.
+    expect(lines.filter((line) => line.includes('"act"')).length).toBe(1)
+
+    // Windows hands this window the release of a real press without the press, so no click is made: the release
+    // alone, on a button the pointer came to with no button held, is the press. Said once.
+    const cdp = await page.context().newCDPSession(page)
+    const skip = (await read()).skip!
+    const at = { x: skip.x + skip.width / 2, y: skip.y + skip.height / 2 }
+    const count = (): number => lines.filter((line) => line.includes('"act"')).length
+    // No wait is needed between two presses on different buttons: each is its own press.
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, buttons: 0 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', buttons: 0, clickCount: 1 })
+    await expect.poll(() => lines.includes(`${OVERLAY_EVENT}{"type":"act","outcome":"skipped"}`)).toBe(true)
+    await page.waitForTimeout(150)
+    expect(count()).toBe(2)
+    // A drag that began elsewhere (in the page underneath) and is let go on a button is not a press.
+    await page.waitForTimeout(450)
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 10, y: 10, buttons: 0 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 20, y: 20, button: 'left', buttons: 1 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, button: 'left', buttons: 1 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', buttons: 0, clickCount: 1 })
+    await page.waitForTimeout(150)
+    expect(count()).toBe(2)
+    // A release of another button is not a press either.
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, buttons: 0 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'right', buttons: 0, clickCount: 1 })
+    await page.waitForTimeout(150)
+    expect(count()).toBe(2)
+    await cdp.detach()
     // A script's click is not his.
     const acts = lines.filter((line) => line.includes('"act"')).length
     await page.evaluate(() => (document.querySelector('.skip') as HTMLButtonElement).click())

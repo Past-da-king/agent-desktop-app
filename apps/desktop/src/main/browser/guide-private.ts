@@ -65,9 +65,18 @@ export interface PrivateGuideDeps {
   frameBox: (frame: GuideFrame) => Promise<(Rect & { pageWidth: number }) | null>
   /** How often a target inside a frame has its frame's place read again (the frame moves when its page scrolls). */
   frameEveryMs?: number
+  /** How long after the target last moved in a fast scroll the ring is drawn again. Default FLIGHT_SETTLE_MS; 0: it is never hidden for a scroll. */
+  flightSettleMs?: number
 }
 
 export const FRAME_EVERY_MS = 60
+/**
+ * A fast scroll: the page says where its target is a frame after it moved, so a ring that follows a target jumping
+ * this far (page px) between two reports would be drawn visibly behind it. While such a scroll is in flight nothing
+ * is drawn; the ring is back, on the target, this long after the target last moved.
+ */
+export const FLIGHT_PX = 24
+export const FLIGHT_SETTLE_MS = 90
 
 export class PrivateGuide implements GuideSurface {
   private overlay: PrivateOverlay | null = null
@@ -77,6 +86,7 @@ export class PrivateGuide implements GuideSurface {
   private timer: ReturnType<typeof setInterval> | null = null
   private reading = false
   private disposed = false
+  private flight: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly deps: PrivateGuideDeps) {}
 
@@ -86,6 +96,7 @@ export class PrivateGuide implements GuideSurface {
 
   begin(step: GuideSurfaceStep): void {
     this.stopFrame()
+    this.land()
     this.step = step
     this.last = null
     this.box = null
@@ -100,13 +111,33 @@ export class PrivateGuide implements GuideSurface {
 
   report(report: GuideReport): void {
     if (this.step === null || report.token !== this.step.token) return
+    const before = this.last
     this.last = report
+    const a = before !== null && before.shown ? before.box : undefined
+    const b = report.shown ? report.box : undefined
+    const moved = a !== undefined && b !== undefined ? Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) : 0
+    // In flight already: any further move keeps it so. Not yet: only a jump starts one.
+    const settle = this.deps.flightSettleMs ?? FLIGHT_SETTLE_MS
+    if (settle > 0 && (moved >= FLIGHT_PX || (this.flight !== null && moved > 0))) {
+      if (this.flight !== null) clearTimeout(this.flight)
+      this.flight = setTimeout(() => {
+        this.flight = null
+        this.draw()
+      }, settle)
+      this.flight.unref?.()
+    }
     this.draw()
+  }
+
+  private land(): void {
+    if (this.flight !== null) clearTimeout(this.flight)
+    this.flight = null
   }
 
   end(token: string): void {
     if (this.step === null || this.step.token !== token) return
     this.stopFrame()
+    this.land()
     this.step = null
     this.last = null
     this.box = null
@@ -122,6 +153,7 @@ export class PrivateGuide implements GuideSurface {
   dispose(): void {
     this.disposed = true
     this.stopFrame()
+    this.land()
     this.step = null
     this.last = null
     const overlay = this.overlay
@@ -168,6 +200,7 @@ export class PrivateGuide implements GuideSurface {
     const step = this.step
     const report = this.last
     if (this.disposed || step === null || report === null || !report.shown || report.box === undefined) return null
+    if (this.flight !== null) return null
     if (!this.deps.outside()) return null
     const view = this.deps.view()
     const win = this.deps.window()
@@ -207,6 +240,8 @@ export class PrivateGuide implements GuideSurface {
  * Runs in the APP WINDOW (not in the page): where the tab's <webview> is, what clips it, and whether it is the page
  * in front with nothing of the app over it. Resolves when that differs from `prev` (so the main process hears of a
  * move in the frame it happens), or after `waitMs` at the latest. Reads the DOM only; changes nothing.
+ * The visible part follows the page wherever the workspace puts it: beside or above a docked chat, under the slim
+ * bar, in full-screen browser mode, or in the side panel's card.
  * The markers it relies on are the browser card's own (renderer/shell/BrowserHost.tsx): `.br-page[data-tab]`,
  * `.br-host`, the classes `on` and `backstage`; test/guide-private.test.ts fails if they are renamed.
  */
@@ -219,16 +254,17 @@ export function viewWatchScript(tabId: string, prev: string, waitMs: number): st
     const host = wrap.closest('.br-host');
     const r = view.getBoundingClientRect();
     let left = Math.max(0, r.left), top = Math.max(0, r.top), right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
-    // An ancestor's overflow clips only what it contains: a fixed box (the page shown full size) escapes every
-    // ancestor up to one that contains fixed boxes, an absolute box every ancestor up to a positioned one.
-    let free = '';
-    for (let node = view, p = view.parentElement; p && p !== document.documentElement; node = p, p = p.parentElement) {
-      const own = getComputedStyle(node).position;
-      if (own === 'fixed') free = 'fixed'; else if (own === 'absolute' && free !== 'fixed') free = 'absolute';
+    // An ancestor clips only what it contains. A box taken out of the flow (the page in browser view is position
+    // fixed, though it is a child of the side panel's small card) is not clipped by the ancestors it escapes: a fixed
+    // box by none up to one that holds fixed boxes, an absolute box by none up to its positioned ancestor.
+    const holdsFixed = (s) => s.transform !== 'none' || s.perspective !== 'none' || s.filter !== 'none' || (s.backdropFilter || 'none') !== 'none' || /paint|layout|strict|content/.test(s.contain || '') || /transform|perspective|filter/.test(s.willChange || '') || (s.containerType || 'normal') !== 'normal';
+    const out = (s) => (s.position === 'fixed' ? 'fixed' : s.position === 'absolute' ? 'absolute' : '');
+    let free = out(getComputedStyle(view));
+    for (let p = view.parentElement; p && p !== document.documentElement; p = p.parentElement) {
       const s = getComputedStyle(p);
-      const holds = s.transform !== 'none' || s.filter !== 'none' || s.perspective !== 'none' || /paint|layout|strict|content/.test(s.contain) || /transform|filter|perspective/.test(s.willChange);
-      if (free === 'fixed') { if (!holds) continue; free = ''; }
-      else if (free === 'absolute') { if (s.position === 'static' && !holds) continue; free = ''; }
+      if (free === 'fixed' && !holdsFixed(s)) continue;
+      if (free === 'absolute' && s.position === 'static' && !holdsFixed(s)) continue;
+      free = out(s);
       if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
       const b = p.getBoundingClientRect();
       left = Math.max(left, b.left + p.clientLeft); top = Math.max(top, b.top + p.clientTop);
