@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Show me proof site</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0; background: #f6f5f1; color: #1c1b19; }
+  header { display: flex; gap: 16px; align-items: center; padding: 14px 24px; background: #fff; border-bottom: 1px solid #ddd; position: sticky; top: 0; }
+  header a { color: #1c1b19; text-decoration: none; padding: 6px 10px; border-radius: 8px; }
+  header a[aria-current] { background: #1c1b19; color: #fff; }
+  main { padding: 24px; max-width: 760px; }
+  button, select, input { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid #999; background: #fff; }
+  .row { display: flex; gap: 12px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+  /* One flat colour nobody else on the screen uses, so the proof can find this button's true pixels in a screenshot. */
+  #probe { background: #ff00aa; border: 0; color: #ff00aa; border-radius: 0; width: 173px; height: 41px; padding: 0; }
+  .spacer { height: 1400px; background: repeating-linear-gradient(#eceae4 0 40px, #f6f5f1 40px 80px); }
+  ul { padding: 0; list-style: none; }
+  li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #ddd; }
+  [role=listbox] { border: 1px solid #999; border-radius: 8px; background: #fff; width: 220px; }
+  [role=option] { padding: 6px 12px; cursor: pointer; }
+  [role=option][aria-selected=true] { background: #1c1b19; color: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <strong>Proof site</strong>
+  <a href="#/home" id="nav-home">Home</a>
+  <a href="#/pixels" id="nav-pixels">Pixels</a>
+  <a href="#/settings" id="nav-settings">Settings</a>
+</header>
+<main id="app"></main>
+<script>
+  // A small single-page app: every route draws the whole page again, the way real web apps do.
+  const state = { clicks: 0, pixels: [], name: '', kind: 'Web', plan: 'Starter', saved: false, tick: 0 }
+  window.proofState = state
+  const pages = {
+    home: () => `
+      <h1>Home</h1>
+      <p>Five steps: open Pixels, press Create pixel, type a name, pick a kind, press Save pixel.</p>
+      <div class="row"><button id="probe" aria-label="Probe target">.</button><span id="clicks">Probe clicks: ${state.clicks}</span></div>
+      <div class="row"><a href="#/pixels" id="go-pixels">Go to pixels</a></div>
+      <div class="spacer"></div>
+      <div class="row"><button id="deep">Deep button</button></div>
+      <div class="spacer"></div>`,
+    pixels: () => `
+      <h1>Pixels</h1>
+      <div class="row"><button id="create">Create pixel</button><span>Redraw ${state.tick}</span></div>
+      ${state.creating ? `
+        <div class="row"><label for="pname">Pixel name</label><input id="pname" value="${state.name}" placeholder="My pixel"></div>
+        <div class="row"><label for="kind">Pixel kind</label>
+          <select id="kind">${['Web', 'App', 'Offline'].map((k) => `<option${k === state.kind ? ' selected' : ''}>${k}</option>`).join('')}</select></div>
+        <div class="row"><span id="plan-label">Plan</span>
+          <div role="listbox" aria-labelledby="plan-label">${['Starter', 'Growth', 'Scale'].map((p) => `<div role="option" tabindex="0" aria-selected="${p === state.plan}" data-plan="${p}">${p}</div>`).join('')}</div></div>
+        <div class="row"><label><input type="checkbox" id="agree"${state.agree ? ' checked' : ''}> Send test events</label></div>
+        <div class="row"><label for="secret">Secret key</label><input id="secret" type="password" value="hunter2-never-read"></div>
+        <div class="row"><button id="save">Save pixel</button><button id="cancel">Cancel</button></div>` : ''}
+      <ul>${state.pixels.map((p) => `<li><span>${p.name} (${p.kind}, ${p.plan})</span><button data-del="${p.name}">Delete ${p.name}</button></li>`).join('')}</ul>`,
+    settings: () => `
+      <h1>Settings</h1>
+      <div class="row"><button id="rerender">Redraw the page</button><span>Redraw ${state.tick}</span></div>
+      <div class="row"><button id="mover" style="margin-left:${(state.tick % 4) * 60}px">Moving button</button></div>`,
+  }
+  function draw() {
+    const route = (location.hash.replace(/^#\//, '') || 'home')
+    document.querySelectorAll('header a').forEach((a) => a.toggleAttribute('aria-current', a.getAttribute('href') === `#/${route}`))
+    document.getElementById('app').innerHTML = (pages[route] ?? pages.home)()
+    document.title = `Show me proof site: ${route}`
+  }
+  addEventListener('hashchange', draw)
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('button, [role=option]')
+    if (!t) return
+    if (t.id === 'probe') { state.clicks++; state.lastClick = { x: e.screenX, y: e.screenY }; document.getElementById('clicks').textContent = `Probe clicks: ${state.clicks}`; return }
+    if (t.id === 'create') state.creating = true
+    if (t.id === 'cancel') state.creating = false
+    if (t.dataset.plan) state.plan = t.dataset.plan
+    if (t.id === 'save') { state.pixels.push({ name: state.name || 'Untitled', kind: state.kind, plan: state.plan }); state.creating = false; state.name = ''; state.saved = true }
+    if (t.dataset.del) state.pixels = state.pixels.filter((p) => p.name !== t.dataset.del)
+    if (t.id === 'rerender' || t.id === 'mover') state.tick++
+    draw()
+  })
+  document.addEventListener('input', (e) => {
+    if (e.target.id === 'pname') state.name = e.target.value
+    if (e.target.id === 'kind') state.kind = e.target.value
+    if (e.target.id === 'agree') state.agree = e.target.checked
+  })
+  window.redraw = () => { state.tick++; draw() }
+  draw()
+</script>
+</body>
+</html>
