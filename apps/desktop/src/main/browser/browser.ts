@@ -18,10 +18,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Script } from 'node:vm'
 
-import { app, BrowserWindow, clipboard as systemClipboard, screen, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard as systemClipboard, Menu, screen, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
 import type { DownloadItem, Session, WebContents, WebPreferences } from 'electron'
 
-import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
+import type { BrowserBounds, BrowserHandOver, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
+
+import { makeHandOver, pageMenuItems } from './hand-over'
 
 import { Cdp, KEY_NAMES } from './cdp'
 import { emailsIn } from './people'
@@ -195,6 +197,11 @@ export interface AgentBrowserOptions {
   onHandoffClosed?: () => void
   maxTabs?: number
   onState?: (state: BrowserState) => void
+  /**
+   * Hand a page to the agent (toolbar button, the page's right-click menu): where its note and picture are written,
+   * the name the person gave their agent (for the menu line), and where the result goes (the message box).
+   */
+  handOver?: { root: string; agentName: () => string; deliver: (page: BrowserHandOver) => void }
   openExternal?: (url: string) => Promise<void>
   tempRoot?: string
   /** Where what the browser learns about sites is kept (a JSON file under userData). Null keeps it in memory. */
@@ -306,6 +313,11 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** browser_open applies the site's view itself; navigation listeners leave it alone meanwhile. */
   private opening = false
   private expanded = false
+  /** Full screen: the page has the whole screen, with only the browser's toolbar. Only ever on with `expanded`. */
+  private fullScreen = false
+  private readonly handOverTo: AgentBrowserOptions['handOver']
+  /** Tabs the person handed to the agent (hand-over.ts): an agent may be told to carry on in one of these. */
+  private readonly handedTabs = new Set<string>()
 
   constructor(options: AgentBrowserOptions) {
     // Set by attach() below, which also guards the window's <webview>s.
@@ -315,6 +327,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.maxTabs = Math.max(1, options.maxTabs ?? MAX_TABS)
     this.onState = options.onState ?? (() => undefined)
     this.onHandoffClosed = options.onHandoffClosed ?? (() => undefined)
+    this.handOverTo = options.handOver
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
     this.look = options.look
     this.privateGuides = options.privateGuides
@@ -518,6 +531,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       needsUser: this.handoffReason !== '',
       handoffReason: this.handoffReason,
       expanded: this.expanded,
+      fullScreen: this.fullScreen && this.expanded,
       muted: this.sites.muted(),
       personPartition: this.current,
       audible: this.tabs.some((tab) => safeAudible(tab.wc)),
@@ -546,6 +560,103 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (this.expanded === on) return
     this.expanded = on
     this.emit()
+  }
+
+  /**
+   * Full screen for the browser: the window takes the whole screen and the page keeps only its own toolbar. Turning
+   * it on opens the page over the window first; leaving the browser view by any road leaves full screen too.
+   */
+  setFullScreen(on: boolean): void {
+    if (on && !this.hasPage()) return
+    if (this.fullScreen === on && (!on || this.expanded)) return
+    this.fullScreen = on
+    if (on) this.expanded = true
+    this.windowFullScreen(on)
+    this.emit()
+  }
+
+  private windowFullScreen(on: boolean): void {
+    try {
+      const win = this.window
+      if (win !== null && !win.isDestroyed() && win.isFullScreen() !== on) win.setFullScreen(on)
+    } catch {
+      // A window that cannot go full screen still shows the layout.
+    }
+  }
+
+  /**
+   * The person hands a page to the agent: the tab in front, or the one whose menu was used. Its address, title,
+   * selection, picture and tab id go to the message box (hand-over.ts). False when there is no page to hand over.
+   */
+  async handOverPage(tabId?: string, selection?: string): Promise<boolean> {
+    const to = this.handOverTo
+    const tab = tabId === undefined ? this.shownTab() : (this.tabs.find((each) => each.id === tabId) ?? null)
+    if (to === undefined || tab === null || tab.wc.isDestroyed()) return false
+    const page = await makeHandOver(to.root, {
+      tabId: tab.id,
+      url: safeUrl(tab.wc),
+      title: safeTitle(tab.wc),
+      selection: selection ?? (async () => String(await tab.wc.executeJavaScript('String(window.getSelection ? window.getSelection() : "")', true))),
+      capture: async () => {
+        const image = await withDeadline(tab.wc.capturePage(undefined, { stayHidden: true, stayAwake: true }), 6_000, 'The page capture')
+        return image.isEmpty() ? null : image.toPNG()
+      },
+    })
+    if (page === null) return false
+    this.handedTabs.add(tab.id)
+    try {
+      to.deliver(page)
+    } catch {
+      // A window that is closing has no message box to fill.
+    }
+    return true
+  }
+
+  /**
+   * browser_open with `tab`: the agent carries on in a tab the person handed over. Only a handed tab can be taken,
+   * and the person can take it back at any time, as with any tab an agent drives.
+   */
+  async takeHandedTab(id: string): Promise<string> {
+    const owner = currentOwner()
+    const tab = this.tabs.find((each) => each.id === id)
+    if (tab === undefined || tab.wc.isDestroyed()) return `There is no tab ${id} open. Open the address yourself with browser_open.`
+    if (!this.handedTabs.has(id)) return `The person has not handed ${id} to you. Only a tab they hand over (Hand to you, in the browser) can be taken; open the address yourself with browser_open.`
+    if (owner !== undefined) this.ownerTabs.set(owner, id)
+    // It stays the person's page: no run's end closes it, and the agent cannot close it either (run-tabs.ts).
+    this.runTabs.shared(id)
+    if (this.personTab === id) {
+      this.personTab = null
+      this.handoffReason = ''
+    }
+    for (const each of this.tabs) void this.refreshInputGuard(each)
+    this.emit()
+    return `You are now on ${id}, the tab the person handed you.\n\n${await this.snapshot()}`
+  }
+
+  /** The page's right-click menu: Back, Reload, Copy, Paste and the hand-over, in the person's own tab. */
+  private showPageMenu(tab: Tab, params: Electron.ContextMenuParams): void {
+    const win = this.window
+    if (win === null || win.isDestroyed() || tab.wc.isDestroyed()) return
+    const items = pageMenuItems({
+      agentName: this.handOverTo?.agentName() ?? '',
+      url: safeUrl(tab.wc),
+      canGoBack: tab.wc.navigationHistory.canGoBack(),
+      hasSelection: params.selectionText.trim() !== '',
+      editable: params.isEditable,
+    })
+    const run: Record<string, () => void> = {
+      back: () => tab.wc.navigationHistory.goBack(),
+      reload: () => tab.wc.reload(),
+      copy: () => tab.wc.copy(),
+      paste: () => tab.wc.paste(),
+      'hand-over': () => void this.handOverPage(tab.id, params.selectionText),
+    }
+    const menu = Menu.buildFromTemplate(
+      items
+        .filter((item) => item.id !== 'hand-over' || this.handOverTo !== undefined)
+        .map((item) => (item.id === 'separator' ? { type: 'separator' as const } : { label: item.label, enabled: item.enabled, click: () => run[item.id]?.() })),
+    )
+    menu.popup({ window: win })
   }
 
   /** The person's mute: every tab now and every tab opened later, until they turn it back on. */
@@ -615,6 +726,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.frameSessions.delete(tab.id)
     for (const [owner, tabId] of this.ownerTabs) if (tabId === tab.id) this.ownerTabs.delete(owner)
     this.runTabs.forget(tab.id)
+    this.handedTabs.delete(tab.id)
     this.idled.delete(tab.id)
     // A sign-in window the tab opened goes with it: nothing is left running for a page that is gone.
     for (const [popup, opener] of this.popupOpener) {
@@ -721,6 +833,14 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
     host.on('will-attach-webview', onWillAttach)
     this.windowCleanups.push(() => host.removeListener('will-attach-webview', onWillAttach))
+    // Full screen left by the system's own road (a key, the taskbar): the layout follows.
+    const onLeaveFull = (): void => {
+      if (!this.fullScreen) return
+      this.fullScreen = false
+      this.emit()
+    }
+    win.on('leave-full-screen', onLeaveFull)
+    this.windowCleanups.push(() => win.removeListener('leave-full-screen', onLeaveFull))
     this.layout()
     this.emit()
   }
@@ -2124,7 +2244,8 @@ ${await this.snapshot()}`
       const tab = id === undefined ? undefined : this.tabs.find((item) => item.id === id)
       // An agent that has not opened a page of its own has none: it never borrows another agent's tab, and a
       // tab from another profile's sign-ins is not reused either (the next open makes one in the right profile).
-      const usable = tab !== undefined && tab.partition === this.partitionNow() ? tab : null
+      // A tab the person handed over is the one exception: it keeps the sign-ins it was handed over with.
+      const usable = tab !== undefined && (tab.partition === this.partitionNow() || this.handedTabs.has(tab.id)) ? tab : null
       // Browsing again: its run is live, so its tabs are not due to close (the main agent's next turn).
       this.runTabs.used(owner)
       if (usable !== null) this.wakeTab(usable)
@@ -2473,14 +2594,30 @@ ${await this.snapshot()}`
     wc.on(
       'before-input-event',
       whileAlive(wc, 'tab key', (event: Electron.Event, input: Electron.Input) => {
-        // Escape shrinks the full-size page back into the panel, as the bar says.
-        if (this.expanded && input.type === 'keyDown' && input.key === 'Escape' && !input.shift && !input.control && !input.alt && !input.meta) {
+        const plain = input.type === 'keyDown' && !input.shift && !input.control && !input.alt && !input.meta
+        // F11, as in every browser: full screen and back, from inside the page too.
+        if (plain && input.key === 'F11') {
           event.preventDefault()
-          this.setExpanded(false)
+          this.setFullScreen(!(this.fullScreen && this.expanded))
+          return
+        }
+        // Escape leaves full screen first; then it shrinks the full-size page back into the panel, as the bar says.
+        if (this.expanded && plain && input.key === 'Escape') {
+          event.preventDefault()
+          if (this.fullScreen) this.setFullScreen(false)
+          else this.setExpanded(false)
           return
         }
         // A key the agent sends itself must still reach the page.
         if (tab.id !== this.personTab && !this.injectingInput) event.preventDefault()
+      }),
+    )
+
+    // Right-click in a page the person is using: the browser's own short menu, with the hand-over.
+    wc.on(
+      'context-menu',
+      whileAlive(wc, 'tab menu', (_event: Electron.Event, params: Electron.ContextMenuParams) => {
+        if (tab.id === this.personTab) this.showPageMenu(tab, params)
       }),
     )
 
@@ -2752,6 +2889,11 @@ ${await this.snapshot()}`
   }
 
   private emit(): void {
+    // The browser view closed (Escape, Done, the tab closed) while full screen: the window comes back with it.
+    if (this.fullScreen && !this.expanded) {
+      this.fullScreen = false
+      this.windowFullScreen(false)
+    }
     try {
       this.onState(this.state())
     } catch {

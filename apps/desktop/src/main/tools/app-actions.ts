@@ -153,6 +153,8 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'browser.openInSystem': free("Browser panel: open the page in the computer's own browser"),
   'browser.setView': free('Browser panel: desktop, phone or fit view', 'mode'),
   'browser.setExpanded': free('Browser panel: expand or shrink', 'on'),
+  'browser.setFullScreen': free('Browser: full screen on or off (only the browser toolbar and a way back)', 'on'),
+  'browser.handOver': free('Browser: hand the page in front to the agent (it lands in the message box with its address, selection, picture and tab id)'),
   'browser.frame': free('Browser panel: a picture of the page (data URL)'),
   'browser.go': free('Browser panel: go to an address', 'address'),
   'browser.newTab': free('Browser panel: new tab'),

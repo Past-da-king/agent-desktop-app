@@ -24,6 +24,7 @@ import type {
   ChatBrain,
   DataChange,
   BrowserState,
+  BrowserHandOver,
   ChatEvent,
   ChatRunInfo,
   Decision,
@@ -166,6 +167,15 @@ const api: AgentApi = {
     usePerson: (id: string) => call<void>(CHANNELS.browser.usePerson, id),
     signOut: (id: string) => call<void>(CHANNELS.browser.signOut, id),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
+    setFullScreen: (on) => call<void>(CHANNELS.browser.setFullScreen, on),
+    handOver: () => call<boolean>(CHANNELS.browser.handOver),
+    onHandOver: (callback) =>
+      on<BrowserHandOver>(EVENTS.browserHandOver, (page) => {
+        // The page's picture is shown on its chip like any file the person attached.
+        const paths = page.attachments.map((file) => file.path)
+        if (paths.length > 0) void call<void>(CHANNELS.files.register, paths)
+        callback(page)
+      }),
     attach: (tabId, guestId) => call<boolean>(CHANNELS.browser.attach, tabId, guestId),
   },
 

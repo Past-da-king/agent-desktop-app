@@ -45,7 +45,7 @@ const WINDOW: WindowInfo = { content: { x: 40, y: 25 }, zoom: 1, visible: true }
 const TOP: GuideFrame = { key: '|top', url: 'https://example.test/', top: true }
 const look = brandLook({ theme: 'light', accent: 'teal' })
 
-function setup(over: { on?: boolean; frameBox?: () => Promise<{ x: number; y: number; width: number; height: number; pageWidth: number } | null> } = {}): {
+function setup(over: { on?: boolean; flightSettleMs?: number; frameBox?: () => Promise<{ x: number; y: number; width: number; height: number; pageWidth: number } | null> } = {}): {
   guide: PrivateGuide
   made: FakeOverlay[]
   state: { on: boolean; view: ViewInfo | null; window: WindowInfo | null }
@@ -68,6 +68,7 @@ function setup(over: { on?: boolean; frameBox?: () => Promise<{ x: number; y: nu
     look: () => look,
     frameBox: over.frameBox ?? (async () => null),
     frameEveryMs: 10,
+    flightSettleMs: over.flightSettleMs ?? 0,
   })
   const step = (frame: GuideFrame = TOP, token = 'g1-1'): GuideSurfaceStep => ({ token, frame, label: 'Click Save', n: 2, total: 3, act: (outcome) => acts.push(outcome) })
   return { guide, made, state, acts, step }
@@ -147,6 +148,35 @@ describe('private guide: when the overlay exists and where it draws', () => {
     guide.refresh()
     expect(overlay.shown!.area).toEqual({ x: 340, y: 105, width: 700, height: 700 })
     expect(made.length).toBe(1)
+  })
+
+  it('draws nothing while a fast scroll is in flight, and is back on the target when it comes to rest', async () => {
+    const { guide, made, step } = setup({ flightSettleMs: 40 })
+    guide.begin(step())
+    guide.report(told(400))
+    const overlay = made[0]!
+    expect(overlay.shown!.rect.y).toBe(505)
+    // A slow move (under FLIGHT_PX a report) is followed as it goes.
+    guide.report(told(390))
+    expect(overlay.shown!.rect.y).toBe(495)
+    // A jump: the ring would be drawn a frame behind the element, so it is not drawn at all until the page rests.
+    guide.report(told(300))
+    expect(overlay.shown).toBeNull()
+    guide.report(told(295))
+    expect(overlay.shown).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    guide.report(told(290))
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(overlay.shown, 'a move keeps it in flight').toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(overlay.shown!.rect.y).toBe(395)
+    // The step ending mid flight leaves nothing to come back.
+    guide.report(told(100))
+    expect(overlay.shown).toBeNull()
+    guide.end('g1-1')
+    await new Promise((resolve) => setTimeout(resolve, 70))
+    expect(overlay.shown).toBeNull()
+    guide.dispose()
   })
 
   it('is gone on every end path: step end, dispose, and nothing is drawn after', () => {
@@ -487,11 +517,74 @@ async function hostFor(page: Page): Promise<{ host: GuideHost; frames: FrameSess
     await expect.poll(() => lines.includes(`${OVERLAY_EVENT}{"type":"act","outcome":"done"}`)).toBe(true)
     await page.mouse.move(10, 10)
     await expect.poll(() => lines.includes(`${OVERLAY_EVENT}{"type":"hover","on":false}`)).toBe(true)
+    // A real press is said once, though both its release and its click arrive.
+    expect(lines.filter((line) => line.includes('"act"')).length).toBe(1)
+
+    // Windows hands this window the release of a real press without the press, so no click is made: the release
+    // alone, on a button the pointer came to with no button held, is the press. Said once.
+    const cdp = await page.context().newCDPSession(page)
+    const skip = (await read()).skip!
+    const at = { x: skip.x + skip.width / 2, y: skip.y + skip.height / 2 }
+    const count = (): number => lines.filter((line) => line.includes('"act"')).length
+    // No wait is needed between two presses on different buttons: each is its own press.
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, buttons: 0 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', buttons: 0, clickCount: 1 })
+    await expect.poll(() => lines.includes(`${OVERLAY_EVENT}{"type":"act","outcome":"skipped"}`)).toBe(true)
+    await page.waitForTimeout(150)
+    expect(count()).toBe(2)
+    // A drag that began elsewhere (in the page underneath) and is let go on a button is not a press.
+    await page.waitForTimeout(450)
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 10, y: 10, buttons: 0 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 20, y: 20, button: 'left', buttons: 1 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, button: 'left', buttons: 1 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', buttons: 0, clickCount: 1 })
+    await page.waitForTimeout(150)
+    expect(count()).toBe(2)
+    // A release of another button is not a press either.
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, buttons: 0 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'right', buttons: 0, clickCount: 1 })
+    await page.waitForTimeout(150)
+    expect(count()).toBe(2)
+    await cdp.detach()
     // A script's click is not his.
     const acts = lines.filter((line) => line.includes('"act"')).length
     await page.evaluate(() => (document.querySelector('.skip') as HTMLButtonElement).click())
     await page.waitForTimeout(100)
     expect(lines.filter((line) => line.includes('"act"')).length).toBe(acts)
+    await page.close()
+  })
+
+  it('reads where the view is in the app window: clipped by its card, free of it when shown full size, covered, parked', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 500 } })
+    await page.setContent(`<body style="margin:0"><div class="win">
+<div class="panel" style="position:absolute;left:0;top:0;width:380px;height:500px;overflow:hidden">
+ <div class="br-view" style="position:relative;margin:100px 0 0 20px;width:340px;height:250px;overflow:hidden">
+  <div class="br-host card" id="host"><div class="br-page on" data-tab="tab-1" style="width:1000px;height:600px"><webview style="display:block;width:1000px;height:600px"></webview></div></div>
+ </div>
+</div>
+<div id="cover" hidden style="position:fixed;left:0;top:0;width:100%;height:100%"></div></div></body>`)
+    const read = async (prev = ''): Promise<{ text: string; view: ReturnType<typeof parseView> }> => {
+      const text = (await page.evaluate(viewWatchScript('tab-1', prev, 800))) as string
+      return { text, view: parseView(text) }
+    }
+    // In its card: the page is 1000 wide, the card shows 340 x 250 of it.
+    const card = await read()
+    expect(card.view).toEqual({ found: true, front: true, backstage: false, covered: false, view: { x: 20, y: 100, width: 1000, height: 600 }, clip: { x: 20, y: 100, width: 340, height: 250 } })
+    // Shown full size (a fixed box over the window): the card no longer clips it; only the window's edge does.
+    const waiting = read(card.text)
+    await page.waitForTimeout(100)
+    const at = Date.now()
+    await page.evaluate(() => { const host = document.getElementById('host')!; host.className = 'br-host full'; host.style.cssText = 'position:fixed;left:400px;top:50px;width:300px;height:200px' })
+    const full = await waiting
+    // Heard in the frame it changed, not at the end of the wait.
+    expect(Date.now() - at).toBeLessThan(500)
+    expect(full.view).toMatchObject({ front: true, backstage: false, view: { x: 400, y: 50, width: 1000, height: 600 }, clip: { x: 400, y: 50, width: 400, height: 450 } })
+    // Something of the app over it, another tab in front, parked behind the app, another tab's id.
+    await page.evaluate(() => { document.getElementById('cover')!.hidden = false })
+    expect((await read()).view?.covered).toBe(true)
+    await page.evaluate(() => { document.getElementById('cover')!.hidden = true; document.querySelector('.br-page')!.classList.remove('on'); document.getElementById('host')!.classList.add('backstage') })
+    expect((await read()).view).toMatchObject({ found: true, front: false, backstage: true, covered: false })
+    expect(parseView(await page.evaluate(viewWatchScript('tab-9', '', 100)))?.found).toBe(false)
     await page.close()
   })
 
