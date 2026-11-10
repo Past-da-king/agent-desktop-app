@@ -138,8 +138,8 @@ export interface Settings {
    */
   hideGuidesFromCapture: boolean
   /**
-   * The chat is hidden from screen sharing. A window can only be hidden whole: while the chat is part of the app
-   * window, the whole window is hidden; a chat in a window of its own is hidden alone. Off by default.
+   * The chat is hidden from screen sharing. A window can only be hidden whole and the chat is drawn in the app window
+   * (docked beside the browser too), so this hides the whole app window and the Quick ask box. Off by default.
    */
   hideChatFromCapture: boolean
   /**

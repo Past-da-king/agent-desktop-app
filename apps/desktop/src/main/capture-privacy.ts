@@ -4,9 +4,10 @@
  * shared/capture-privacy.ts; this file only holds the windows.
  *
  * Content protection is per window. A region of a window (the chat inside the app window) cannot be hidden by
- * itself: something that must be hidden alone needs a window of its own, registered here with its role. A docked
- * chat hosted in its own child window is registered as 'chat' with `docksMainChat: true`; from then on "hide the
- * chat" hides that window and no longer the whole app window.
+ * itself: something that must be hidden alone needs a window of its own, registered here with its role. Today the
+ * chat is drawn in the app window (on its own page, and docked beside the browser), so "hide the chat" hides the app
+ * window whole, and the setting's hint says so. If the chat ever gets a window of its own, it registers as 'chat'
+ * with `docksMainChat: true`, and from then on "hide the chat" hides that window and leaves the app window alone.
  */
 import { release as osRelease } from 'node:os'
 

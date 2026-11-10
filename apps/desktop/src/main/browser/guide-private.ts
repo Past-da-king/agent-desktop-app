@@ -207,6 +207,8 @@ export class PrivateGuide implements GuideSurface {
  * Runs in the APP WINDOW (not in the page): where the tab's <webview> is, what clips it, and whether it is the page
  * in front with nothing of the app over it. Resolves when that differs from `prev` (so the main process hears of a
  * move in the frame it happens), or after `waitMs` at the latest. Reads the DOM only; changes nothing.
+ * The visible part follows the page wherever the workspace puts it: beside or above a docked chat, under the slim
+ * bar, in full-screen browser mode, or in the side panel's card (test/guide-dock.test.ts).
  * The markers it relies on are the browser card's own (renderer/shell/BrowserHost.tsx): `.br-page[data-tab]`,
  * `.br-host`, the classes `on` and `backstage`; test/guide-private.test.ts fails if they are renamed.
  */
@@ -219,8 +221,17 @@ export function viewWatchScript(tabId: string, prev: string, waitMs: number): st
     const host = wrap.closest('.br-host');
     const r = view.getBoundingClientRect();
     let left = Math.max(0, r.left), top = Math.max(0, r.top), right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
+    // An ancestor clips only what it contains. A box taken out of the flow (the page in browser view is position
+    // fixed, though it is a child of the side panel's small card) is not clipped by the ancestors it escapes: a fixed
+    // box by none up to one that holds fixed boxes, an absolute box by none up to its positioned ancestor.
+    const holdsFixed = (s) => s.transform !== 'none' || s.perspective !== 'none' || s.filter !== 'none' || (s.backdropFilter || 'none') !== 'none' || /paint|layout|strict|content/.test(s.contain || '') || /transform|perspective|filter/.test(s.willChange || '') || (s.containerType || 'normal') !== 'normal';
+    const out = (s) => (s.position === 'fixed' ? 'fixed' : s.position === 'absolute' ? 'absolute' : '');
+    let free = out(getComputedStyle(view));
     for (let p = view.parentElement; p && p !== document.documentElement; p = p.parentElement) {
       const s = getComputedStyle(p);
+      if (free === 'fixed' && !holdsFixed(s)) continue;
+      if (free === 'absolute' && s.position === 'static' && !holdsFixed(s)) continue;
+      free = out(s);
       if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
       const b = p.getBoundingClientRect();
       left = Math.max(left, b.left + p.clientLeft); top = Math.max(top, b.top + p.clientTop);

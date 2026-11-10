@@ -47,10 +47,15 @@ export function guidesHint(platform: string): string {
   return 'Not available on this system: the highlight and its label are drawn in the page, so a screen share shows them.'
 }
 
-/** The line under "Hide the chat from screen sharing". */
+/**
+ * The line under "Hide the chat from screen sharing". The chat is drawn inside the app window, on its own page and
+ * docked beside the browser alike, so what this really hides is the app window, whole, and the Quick ask box (a
+ * window that shows only the chat). The line says exactly that and nothing more.
+ */
 export function chatHint(platform: string): string {
-  if (platform === 'win32') return 'A window can only be hidden whole. While the chat is part of the app window, this hides the whole window, the browser included. Needs Windows 10 version 2004 or newer.'
-  if (platform === 'darwin') return 'A window can only be hidden whole. While the chat is part of the app window, this hides the whole window, the browser included. Some recorders on macOS 15 and newer can still capture it.'
+  const what = 'Hides the whole app window from screen sharing, the browser and the chat beside it included, and the Quick ask box. A window can only be hidden whole, so the chat cannot be hidden by itself.'
+  if (platform === 'win32') return `${what} Needs Windows 10 version 2004 or newer.`
+  if (platform === 'darwin') return `${what} Some recorders on macOS 15 and newer can still capture it.`
   return 'Not available on this system: a screen share shows the chat.'
 }
 
@@ -66,7 +71,8 @@ export interface CaptureSettings {
  * Should a window of this role be hidden from capture now?
  *   - guide: the guide's own overlay window, by its setting.
  *   - chat: a window that shows only the chat (Quick ask; a docked chat once it has a window of its own).
- *   - main: the app window. It holds the chat today, so "hide the chat" can only hide all of it. The moment the main
+ *   - main: the app window. It holds the chat (its own page, and docked beside the browser), so "hide the chat"
+ *     can only hide all of it. The moment the main
  *     window's chat lives in a window of its own (`chatHasOwnWindow`), the app window is left alone.
  */
 export function shouldProtect(role: CaptureRole, settings: CaptureSettings, state: { chatHasOwnWindow: boolean }): boolean {

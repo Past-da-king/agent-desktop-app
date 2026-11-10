@@ -240,7 +240,16 @@ describe('capture privacy', () => {
     expect(guidesHint('linux')).toMatch(/screen share shows them/)
     expect(guidesHint('darwin')).toMatch(/can still capture/)
     expect(guidesHint('win32')).toMatch(/version 2004/)
-    expect(chatHint('win32')).toMatch(/whole window/)
+    // The chat is part of the app window, docked beside the browser too: the line says the whole window goes, the
+    // browser with it, and never that the chat alone is hidden.
+    expect(chatHint('win32')).toMatch(/whole app window/)
+    expect(chatHint('win32')).toMatch(/browser and the chat beside it included/)
+    expect(chatHint('win32')).toMatch(/cannot be hidden by itself/)
+    expect(chatHint('darwin')).toMatch(/whole app window/)
+    // No window in the app claims to be the chat alone except Quick ask: the app window keeps the 'main' rule.
+    const index = readFileSync(join(__dirname, '../src/main/index.ts'), 'utf8')
+    expect(index).not.toContain('docksMainChat')
+    expect(index).toContain("capturePrivacy?.register(window, 'chat')")
     expect(chatHint('linux')).toMatch(/Not available/)
   })
 
