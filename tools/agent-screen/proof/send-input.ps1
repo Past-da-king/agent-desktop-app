@@ -39,9 +39,6 @@ foreach ($action in $Actions.Split(';')) {
     [ProofInput.Api]::keybd_event(0x56, 0, 0, [UIntPtr]::Zero)
     [ProofInput.Api]::keybd_event(0x56, 0, 2, [UIntPtr]::Zero)
     [ProofInput.Api]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
-  } elseif ($kind -eq 'top') {
-    # Our own test window above the others, without giving it the keyboard.
-    [void][ProofInput.Api]::SetWindowPos([IntPtr][Convert]::ToInt64($arg, 16), [IntPtr](-1), 0, 0, 0, 0, 0x0013)
   } elseif ($kind -eq 'move') {
     $h, $x, $y = $arg.Split(',')
     [void][ProofInput.Api]::SetWindowPos([IntPtr][Convert]::ToInt64($h, 16), [IntPtr]::Zero, [int]$x, [int]$y, 0, 0, 0x0015)

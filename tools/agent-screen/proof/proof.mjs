@@ -342,9 +342,9 @@ try {
     const nMoves = []
     const nStop = reader.watch(win.hwnd, select, (r) => nMoves.push({ r, at: performance.now() }))
     await until(() => nMoves.length > 0, 3000, 10)
-    const nx = win.bounds.x + 90, ny = win.bounds.y + 50
-    // It opened behind our own browser window: lift it above, without giving it the keyboard, and move it.
-    await play(`top:${win.hwnd};move:${win.hwnd},${nx},${ny}`)
+    // Beside our own browser window, not under it.
+    const nx = chromeWin.bounds.x + chromeWin.bounds.width + 12, ny = win.bounds.y + 50
+    await play(`move:${win.hwnd},${nx},${ny}`)
     const moved = await until(() => nMoves.at(-1).r && nMoves.at(-1).r.x !== select.bounds.x, 3000, 10)
     const after = await reader.window(win.hwnd)
     const dx = after.bounds.x - win.bounds.x, dy = after.bounds.y - win.bounds.y
