@@ -81,9 +81,15 @@ export interface WalkTimings {
   /** The whole walk's limit. */
   timeoutMs: number
   maxReplans: number
+  /**
+   * How long the value stays on the clipboard after his paste was seen. The paste is seen as the key goes down, before
+   * the program has read the clipboard: putting his own clipboard back (or clearing a secret) at once would make the
+   * program paste that instead (seen on Windows, 10 Nov 2026: the field got what he had copied before).
+   */
+  pasteSettleMs: number
 }
 
-export const WALK_TIMINGS: WalkTimings = { firstFindMs: 1_200, nextFindMs: 1_800, pollMs: 60, settleMs: 350, recheckMs: 250, timeoutMs: 10 * 60_000, maxReplans: 2 }
+export const WALK_TIMINGS: WalkTimings = { firstFindMs: 1_200, nextFindMs: 1_800, pollMs: 60, settleMs: 350, recheckMs: 250, timeoutMs: 10 * 60_000, maxReplans: 2, pasteSettleMs: 250 }
 
 export interface WalkKeys {
   stop(): void
@@ -351,6 +357,8 @@ export class Walk {
         const label = missing ? (hint === null ? missingLabel(step) : scrollLabel(step, hint)) : n === 1 && (this.deps.keyHint ?? '') !== '' && !fills ? `${step.label} (${this.deps.keyHint})` : step.label
         const shownAt = this.now()
         const ended = await this.waitForHim(step, located, { label, n, fills, missing, still: gone > 3 })
+        // The program reads the clipboard a moment after the key went down: the value is left there until it has.
+        if (fills && this.fill !== null && ended.kind === 'pasted') await sleep(this.t.pasteSettleMs, this.abort.signal)
         const clip = fills && this.fill !== null ? await this.fill.settle() : undefined
         if (ended.kind === 'found') {
           // It was not there, and now it is (a slow page): the real ring takes the place of the apology.

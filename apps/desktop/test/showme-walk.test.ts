@@ -14,7 +14,7 @@ import type { ActiveWindow } from '../src/main/showme/screen'
 import { PLANNING_LABEL, REST_HINT_MS, Walk, formatWalk, matchNode, missingLabel, roleKey, scrollHintRect, scrollLabel, scrollWay, type WalkDeps, type WalkKeys, type WalkResult } from '../src/main/showme/walk'
 import { FakeClipboard, FakeModel, FakeOverlay, FakeScreen, WINDOW, column, node, pause, until } from './helpers/fake-screen'
 
-const FAST = { firstFindMs: 80, nextFindMs: 200, pollMs: 4, settleMs: 40, recheckMs: 20, timeoutMs: 8_000, maxReplans: 2 }
+const FAST = { firstFindMs: 80, nextFindMs: 200, pollMs: 4, settleMs: 40, recheckMs: 20, timeoutMs: 8_000, maxReplans: 2, pasteSettleMs: 30 }
 
 function step(name: string, extra: Partial<ShowStep> = {}): ShowStep {
   return { label: `Click ${name}`, name, ...extra }
@@ -294,6 +294,20 @@ describe('clipboard fill', () => {
     rig.screen.click('Save')
     const result = await rig.done
     expect(result.steps[0]).toMatchObject({ outcome: 'pasted', clipboard: 'restored' })
+  })
+
+  it('leaves the value on the clipboard until the program has had time to paste it', async () => {
+    const rig = start({ nodes: fields, steps: [{ label: 'Paste the pixel name', name: 'Pixel name', role: 'textbox', value: 'Northwind' }, step('Save')], deps: { timings: { ...FAST, pasteSettleMs: 120 } } })
+    rig.clipboard.text = 'what he had copied'
+    await ring(rig, 'Paste the pixel name')
+    // The key went down; the program reads the clipboard a few milliseconds later. It must still find the value.
+    rig.screen.paste()
+    await pause(40)
+    expect(rig.clipboard.text).toBe('Northwind')
+    await ring(rig, 'Click Save')
+    expect(rig.clipboard.text).toBe('what he had copied')
+    rig.walk.stop()
+    await rig.done
   })
 
   it('never shows a sensitive value, and clears the clipboard after his paste', async () => {
