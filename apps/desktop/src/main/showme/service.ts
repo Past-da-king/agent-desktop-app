@@ -66,6 +66,7 @@ export const NO_WINDOW = 'There is no window to show you on. Click the window yo
 export class ShowMeService {
   private readonly now: () => number
   private front: { window: ActiveWindow; at: number } | null = null
+  private asked: ActiveWindow | null = null
   private current: { walk: Walk; done: Promise<WalkResult> } | null = null
   private last: ShowMeState = { ...SHOWME_IDLE }
   readonly sessions = new GuideLog()
@@ -96,6 +97,11 @@ export class ShowMeService {
 
   running(): boolean {
     return this.current !== null
+  }
+
+  /** The window the last question from the bar was asked on, or null. */
+  askedOn(): ActiveWindow | null {
+    return this.asked
   }
 
   stop(): void {
@@ -144,6 +150,7 @@ export class ShowMeService {
       this.set({ ...SHOWME_IDLE, phase: 'ended', question: asked, message: ready.message })
       return ready
     }
+    this.asked = ready.window
     void this.run({ question: asked, owner: 'person' }, ready.window).catch((error) => {
       this.deps.log?.('Show me: the walk failed', { message: error instanceof Error ? error.message : String(error) })
     })

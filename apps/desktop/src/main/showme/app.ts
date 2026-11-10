@@ -127,7 +127,21 @@ export function startShowMe(deps: ShowMeAppDeps): ShowMeApp {
     const question = typeof raw === 'string' ? raw.slice(0, 600) : ''
     const started = await service.ask(question)
     // The bar steps aside so the window he asked about is in front again, with the ring on it.
-    if (started.ok) deps.hideBar()
+    if (started.ok) {
+      deps.hideBar()
+      // The bar had the keyboard, and hiding it gives the keyboard to nobody (seen on Windows: the hidden bar stayed
+      // the foreground window, so his next keys went nowhere). It goes back to the window he asked about.
+      const on = service.askedOn()
+      const focus = (reader as { focus?: (hwnd: string) => Promise<boolean> }).focus
+      if (on !== null && typeof focus === 'function') {
+        void focus
+          .call(reader, on.hwnd)
+          .then((given) => {
+            if (!given) deps.log('Show me: the keyboard was not given back to his window', { process: on.process })
+          })
+          .catch(() => undefined)
+      }
+    }
     return started
   })
   deps.ipcMain.handle(SHOWME_CHANNELS.stop, () => {

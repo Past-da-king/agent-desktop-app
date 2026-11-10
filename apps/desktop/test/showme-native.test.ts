@@ -138,6 +138,12 @@ describe('the reader, against a stand-in helper', () => {
     expect(typeof plain.find).toBe('function')
   })
 
+  it('gives the keyboard back to a window, and says when it could not', async () => {
+    expect(await reader.focus('0x10')).toBe(true)
+    expect(await reader.focus('0x77')).toBe(false)
+    expect(requests('focus').map((r) => r['hwnd'])).toEqual(['0x10', '0x77'])
+  })
+
   it('starts the helper only when first asked, with this process as its parent', async () => {
     expect(spawned).toHaveLength(0)
     expect(await reader.available()).toBe(true)

@@ -46,6 +46,7 @@ createInterface({ input: process.stdin })
     }
     if (op === 'hello') return ok(id, { version: '0.0.0-fake', pid: process.pid, elevated: false, idleMs: 4200, hooks })
     if (op === 'exclude') return ok(id, true)
+    if (op === 'focus') return ok(id, req.hwnd === '0x10')
     if (op === 'activeWindow') return ok(id, browser)
     if (op === 'window') return ok(id, req.hwnd === '0x20' ? left : req.hwnd === '0x10' ? browser : null)
     if (op === 'windows') return ok(id, [browser, left, { hwnd: '', bounds: null }])

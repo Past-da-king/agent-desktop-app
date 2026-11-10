@@ -67,6 +67,11 @@ export interface NativeScreenReader extends ScreenReader {
    * Like onInput, it keeps the hooks installed only while somebody listens.
    */
   onScroll(cb: (e: { x: number; y: number; time: number }) => void): () => void
+  /**
+   * Give the keyboard back to this window after the app's own box (the quick chat bar) closed. Nothing is typed or
+   * clicked; it only happens while one of the app's own windows, or none, has the keyboard. False when it did not.
+   */
+  focus(hwnd: string): Promise<boolean>
   /** Change which keys are reported while a walk runs. */
   setKeys(keys: string[]): void
   /** How long the person has not touched mouse or keyboard, ms; -1 when unknown. */
@@ -429,6 +434,14 @@ export function createWindowsScreenReader(options: ScreenReaderOptions): NativeS
       void syncHooks()
       return () => {
         if (wheelListeners.delete(cb) && !listening()) void syncHooks()
+      }
+    },
+
+    async focus(hwnd: string): Promise<boolean> {
+      try {
+        return (await call('focus', { hwnd }, 2_000)) === true
+      } catch {
+        return false
       }
     },
 

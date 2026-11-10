@@ -38,6 +38,7 @@ function unavailable(reason: string): NativeScreenReader {
     capture: refuse,
     onInput: () => () => undefined,
     onScroll: () => () => undefined,
+    focus: () => Promise.resolve(false),
     setKeys: () => undefined,
     idleMs: () => Promise.resolve(-1),
     helperState: () => Promise.resolve(null),

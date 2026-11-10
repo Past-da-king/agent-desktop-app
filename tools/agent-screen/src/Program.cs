@@ -64,6 +64,7 @@ namespace AgentScreen
         public delegate bool MonitorEnumProc(IntPtr monitor, IntPtr hdc, IntPtr rect, IntPtr data);
 
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern IntPtr GetTopWindow(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
         [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
@@ -393,8 +394,25 @@ namespace AgentScreen
                 case "unwatch": return StopWatch(req);
                 case "capture": return Capture(req);
                 case "input": return Input(req);
+                case "focus": return Focus(req);
                 default: throw new OpError("unknown", "Unknown request: " + op);
             }
+        }
+
+        /**
+         * Gives the keyboard back to the window he asked about, after the caller's own box (which had it) closed.
+         * Nothing is typed or clicked: the window is only brought to the front, as a click on its title would.
+         * Only a window a person works in, and never a minimised one.
+         */
+        private static string Focus(Dictionary<string, object> req)
+        {
+            IntPtr hwnd = Hwnd(req);
+            if (!Native.IsWindow(hwnd) || !Workable(hwnd)) return "false";
+            IntPtr fg = Native.GetForegroundWindow();
+            if (fg != IntPtr.Zero && Native.GetAncestor(fg, Native.GA_ROOT) == hwnd) return "true";
+            // Only when the caller's own window (or none) has the keyboard: a window he moved to himself is left alone.
+            if (fg != IntPtr.Zero && Native.IsWindowVisible(fg) && !IsExcluded(Native.GetAncestor(fg, Native.GA_ROOT))) return "false";
+            return Native.SetForegroundWindow(hwnd) ? "true" : "false";
         }
 
         private static string Hello()
