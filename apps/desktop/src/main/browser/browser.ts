@@ -196,17 +196,17 @@ export interface AgentBrowserOptions {
   onHandoffClosed?: () => void
   maxTabs?: number
   onState?: (state: BrowserState) => void
+  /**
+   * Hand a page to the agent (toolbar button, the page's right-click menu): where its note and picture are written,
+   * the name the person gave their agent (for the menu line), and where the result goes (the message box).
+   */
+  handOver?: { root: string; agentName: () => string; deliver: (page: BrowserHandOver) => void }
   openExternal?: (url: string) => Promise<void>
   tempRoot?: string
   /** Where what the browser learns about sites is kept (a JSON file under userData). Null keeps it in memory. */
   sitesFile?: string | null
   /** The app's brand look now (his theme and accent setting): the guide's ring and label are drawn in it. */
   look?: () => BrandLook
-  /**
-   * Hand a page to the agent (toolbar button, the page's right-click menu): where its note and picture are written,
-   * the name the person gave their agent (for the menu line), and where the result goes (the message box).
-   */
-  handOver?: { root: string; agentName: () => string; deliver: (page: BrowserHandOver) => void }
 }
 
 export class AgentBrowser implements BrowserDriver, BrowserProDriver {
@@ -317,9 +317,9 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.maxTabs = Math.max(1, options.maxTabs ?? MAX_TABS)
     this.onState = options.onState ?? (() => undefined)
     this.onHandoffClosed = options.onHandoffClosed ?? (() => undefined)
+    this.handOverTo = options.handOver
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
     this.look = options.look
-    this.handOverTo = options.handOver
 
     const root = options.tempRoot ?? tmpdir()
     this.runDir = mkdtempSync(join(root, 'agent-browser-'))
