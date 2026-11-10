@@ -31,6 +31,9 @@ import {
   type FrameDelta,
 } from './window-fit'
 import { brandLook } from '../shared/brand'
+import { guidesUseOverlay } from '../shared/capture-privacy'
+import { CapturePrivacy } from './capture-privacy'
+import { createGuideOverlay } from './overlay/overlay-window'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
 import { FileBrainLocks } from './brain-locks'
@@ -44,6 +47,7 @@ import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
 import { APP_ID, APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
 import { AgentBrowser } from './browser/browser'
+import type { GuideStep } from './browser/guide'
 import { HOST_WINDOW_PREFS, keepPagesAwake } from './browser/keep-awake'
 import { runTurnstileProbe } from './browser/turnstile-probe'
 import { fallbackUserAgent } from './browser/emulation'
@@ -260,6 +264,8 @@ let mainWindow: BrowserWindow | null = null
 let smokeTimer: NodeJS.Timeout | null = null
 let store: Store | null = null
 let settingsStore: SettingsStore | null = null
+/** Which windows are hidden from screen sharing, by the two privacy settings (capture-privacy.ts). */
+let capturePrivacy: CapturePrivacy | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
 /** The helpers, so quitting can leave the ones still working for the next start to report (HelperManager.restore). */
@@ -574,6 +580,8 @@ function createWindow(stateFile: string): BrowserWindow {
   })
 
   mainWindow = win
+  // The app window holds the chat: "hide the chat from screen sharing" hides it whole (capture-privacy.ts).
+  capturePrivacy?.register(win, 'main')
   if (saved.x !== null && saved.y !== null) {
     // Created frameless on a scaled screen, Windows makes it a few pixels bigger than asked (1200x700 opens as
     // 1206x707 at 125%); one setBounds puts it right. What it then reports, a pixel or two over, is the frame.
@@ -831,6 +839,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
   store.startReader({ log: (line, detail) => logger.warn(line, detail) })
   const settings = new SettingsStore(join(dir, 'settings.json'))
   settingsStore = settings
+  const privacy = new CapturePrivacy(() => settings.get())
+  capturePrivacy = privacy
+  if (mainWindow !== null && !mainWindow.isDestroyed()) privacy.register(mainWindow, 'main')
   // The main thread blocked for a second or more goes to main.log with its stacks (watchdog.ts).
   const watchMs = settings.get().watchdogMs
   watchdog = startWatchdog({
@@ -955,6 +966,13 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
     // The guide's ring and label wear the app's own look: his theme and accent, read live (shared/brand.ts).
     look: () => brandLook({ theme: settings.get().theme, accent: settings.get().accent, systemDark: nativeTheme.shouldUseDarkColors }),
+    // The ring and label in a window of their own that screen sharing leaves out, where this computer can do that.
+    privateGuides: {
+      // AGENT_GUIDE_PROBE_OVERLAY=1 (a layout proof on a system that cannot hide a window; never set in normal use)
+      // draws in the overlay window all the same. It hides nothing there, and the overlay's own state says so.
+      on: () => guidesUseOverlay(settings.get().hideGuidesFromCapture, privacy.exclusion) || (process.env['AGENT_GUIDE_PROBE_OVERLAY'] === '1' && settings.get().hideGuidesFromCapture),
+      overlay: () => createGuideOverlay({ privacy }),
+    },
   })
   agentBrowser.setVault(browserVault)
   // The human-verification regression probe: load a page with a Turnstile widget (or a managed challenge), read
@@ -983,6 +1001,21 @@ async function startServices(win: BrowserWindow): Promise<void> {
       void (async () => {
         console.log(`BROWSER PROBE opened\n${await browser.probeOpen(probeUrl)}`)
         if (process.env['AGENT_DEVTOOLS_PROBE'] === '1') await runDevtoolsProbe(browser)
+        // The guide proof: a guide on the probe page, its steps as JSON ([{ "target": { "selector": "#go" }, "label":
+        // "Click Check out" }]). It ends as any guide does: his click, I did it, Skip, or its time running out.
+        const guideProbe = process.env['AGENT_GUIDE_PROBE']?.trim() ?? ''
+        if (guideProbe !== '') {
+          void (async () => {
+            try {
+              const steps = JSON.parse(guideProbe) as GuideStep[]
+              const limit = Number(process.env['AGENT_GUIDE_PROBE_TIMEOUT_MS'] ?? '')
+              console.log(`GUIDE PROBE started ${steps.length}`)
+              console.log(`GUIDE PROBE result\n${await browser.guide({ steps, ...(Number.isFinite(limit) && limit > 0 ? { timeoutMs: limit } : {}) })}`)
+            } catch (error) {
+              console.log(`GUIDE PROBE failed ${error instanceof Error ? error.message : String(error)}`)
+            }
+          })()
+        }
         if (process.env['AGENT_BROWSER_PROBE_ACT'] !== '1') return
         // Trusted input by name, at desktop size and again at phone size (where the view is drawn scaled).
         console.log(`BROWSER PROBE click\n${await browser.act({ action: 'click', name: 'Press me' })}`)
@@ -1636,6 +1669,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     ...paths,
     devUrl: process.env['ELECTRON_RENDERER_URL'],
     keepOpen: () => dictation !== null && dictation.controller.phase !== 'idle',
+    onWindow: (window) => capturePrivacy?.register(window, 'chat'),
   })
   hotkeys = new HotkeyManager(
     globalShortcut,
@@ -1664,6 +1698,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
     if (changed.length > 0) logger.info('Settings changed', { keys: changed.join(',') })
     if (changed.includes('shell') && next.shell === 'always') void runner?.approveComputerCards()
     if (changed.includes('theme') || changed.includes('accent')) void agentBrowser?.restyleGuides()
+    if (changed.includes('hideGuidesFromCapture') || changed.includes('hideChatFromCapture')) {
+      capturePrivacy?.apply()
+      void agentBrowser?.refreshGuidePrivacy()
+    }
     applyLoginItem(next)
     applyHotkey(next)
     tray?.refresh()

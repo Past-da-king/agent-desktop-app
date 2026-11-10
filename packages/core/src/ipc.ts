@@ -132,6 +132,17 @@ export interface Settings {
    */
   recordingAudioKeep: 'today' | 'week' | 'always'
   /**
+   * Guided mode's highlight and label are drawn in a window of their own that screen sharing (Teams, Meet, Zoom)
+   * leaves out, so only he sees them. On by default. Where the system cannot hide a window from capture (Linux,
+   * Windows before 10 version 2004) the highlight is drawn in the page as before, whatever this says.
+   */
+  hideGuidesFromCapture: boolean
+  /**
+   * The chat is hidden from screen sharing. A window can only be hidden whole: while the chat is part of the app
+   * window, the whole window is hidden; a chat in a window of its own is hidden alone. Off by default.
+   */
+  hideChatFromCapture: boolean
+  /**
    * Wake-ups: this computer rings (full-screen alarm) for wake-ups sent to it. Agents may change this one and
    * wakeupsPauseHereUntil; the others only he changes, in Settings. Off stops new rings here; a wake already ringing
    * here rings on until he answers it, whoever switched it off.
@@ -252,6 +263,8 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceName: 'Kore',
   speakReplies: false,
   recordingAudioKeep: 'today',
+  hideGuidesFromCapture: true,
+  hideChatFromCapture: false,
   wakeupsRingHere: true,
   wakeupsPauseHereUntil: '',
   wakeupsPhoneOnlyWhenIdle: true,
