@@ -58,6 +58,9 @@ export type InputEvent =
   | { kind: 'paste'; time: number }
   | { kind: 'foreground'; window: ActiveWindow; time: number }
 
+/** What a watch's null (or new place) means, when the reader can tell. */
+export type WatchWhy = 'moved' | 'scrolling' | 'hidden' | 'gone'
+
 export interface ScreenReader {
   available(): Promise<boolean>
   /** The window in front. Never one of the Agent app's own windows, nor the overlay. */
@@ -65,8 +68,14 @@ export interface ScreenReader {
   /** A flat list of the visible, named elements that can be clicked or typed in. */
   tree(hwnd: string, opts?: { max?: number; interactiveOnly?: boolean }): Promise<UiNode[]>
   find(hwnd: string, q: { name: string; role?: string; nth?: number }): Promise<UiNode | null>
-  /** The rect follows scrolling and resizing; null when the element is gone. Returns a stop. */
-  watch(hwnd: string, node: UiNode, onMove: (r: Rect | null) => void): () => void
+  /**
+   * The rect follows scrolling and resizing; null when the element is gone. Returns a stop.
+   * `why` (added 10 Nov 2026, optional) says what a null means when the reader knows: 'scrolling' (the page is moving
+   * and the place will be reported again), 'hidden' (it exists but is out of sight) or 'gone'. Left out, null is gone.
+   * find() may answer an element with `offscreen: true` when the only match is out of sight: the engine reads that as
+   * "scroll to it" and never rings it.
+   */
+  watch(hwnd: string, node: UiNode, onMove: (r: Rect | null, why?: WatchWhy) => void): () => void
   /** A PNG, for the vision fallback. */
   capture(target: { hwnd: string } | { displayId: number }): Promise<Buffer>
   /** Global and passive: it never blocks or swallows the person's input. */

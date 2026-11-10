@@ -5,7 +5,7 @@
  *
  * All rectangles are physical screen pixels, as ../screen.ts says.
  */
-import type { ActiveWindow, InputEvent, Rect, ScreenReader, UiNode } from '../screen'
+import type { ActiveWindow, InputEvent, Rect, ScreenReader, UiNode, WatchWhy } from '../screen'
 import { ScreenReadError, ScreenSidecar } from './sidecar'
 import type { SidecarEvent, SpawnLike } from './sidecar'
 
@@ -179,10 +179,14 @@ export function parseInput(event: SidecarEvent, displays: ScreenDisplay[]): Inpu
   return null
 }
 
+function parseWhy(raw: unknown): WatchWhy | undefined {
+  return raw === 'moved' || raw === 'scrolling' || raw === 'hidden' || raw === 'gone' ? raw : undefined
+}
+
 interface WatchEntry {
   hwnd: string
   node: UiNode
-  onMove: (r: Rect | null) => void
+  onMove: (r: Rect | null, why?: WatchWhy) => void
   /** The helper's id for it, once it answered. */
   remote: number | null
   stopped: boolean
@@ -234,7 +238,7 @@ export function createWindowsScreenReader(options: ScreenReaderOptions): NativeS
       } else if (event.event === 'move') {
         const id = num(event['watch'])
         for (const watch of watches) {
-          if (watch.remote === id && !watch.stopped) watch.onMove(parseRect(event['rect']))
+          if (watch.remote === id && !watch.stopped) watch.onMove(parseRect(event['rect']), parseWhy(event['why']))
         }
       }
     },

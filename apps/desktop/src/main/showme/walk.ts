@@ -203,6 +203,36 @@ export function missingLabel(step: Pick<ShowStep, 'name'>): string {
 
 export const PLANNING_LABEL = 'Working out the steps'
 
+/** Which way a thing lies that exists but cannot be seen: above, below, or somewhere in a part that scrolls. */
+export type ScrollWay = 'up' | 'down' | 'to'
+
+/** The label while a step's element is out of sight: he scrolls, and the ring comes when the thing is in view. */
+export function scrollLabel(step: Pick<ShowStep, 'name'>, way: ScrollWay): string {
+  const name = step.name.length > 40 ? `${step.name.slice(0, 37)}...` : step.name
+  return way === 'to' ? `Scroll to "${name}"` : `Scroll ${way} to "${name}"`
+}
+
+/** Where an element that is out of sight lies, from its place and the window's. */
+export function scrollWay(bounds: Rect, window: Rect): ScrollWay {
+  if (!(bounds.width > 0) || !(bounds.height > 0)) return 'to'
+  const mid = bounds.y + bounds.height / 2
+  if (mid >= window.y + window.height - 2) return 'down'
+  if (mid <= window.y + 2) return 'up'
+  return 'to'
+}
+
+/** A short bar at the window's edge on the side to scroll to: what the label of a scroll hint is drawn beside. */
+export function scrollHintRect(window: Rect, way: ScrollWay): Rect {
+  const width = Math.round(Math.min(220, Math.max(60, window.width / 4)))
+  const x = Math.round(window.x + window.width / 2 - width / 2)
+  if (way === 'down') return { x, y: window.y + window.height - 36, width, height: 8 }
+  if (way === 'up') return { x, y: Math.round(window.y + Math.min(170, window.height * 0.2)), width, height: 8 }
+  return { x, y: Math.round(window.y + window.height / 2), width, height: 8 }
+}
+
+/** How long a ring that went out of sight rests before the label says which way to scroll. */
+export const REST_HINT_MS = 900
+
 export class Walk {
   private readonly reader: ScreenReader
   private readonly overlay: WalkOverlay
@@ -219,7 +249,9 @@ export class Walk {
   private replans = 0
   private ended: 'cancelled' | 'timeout' | null = null
   /** The step being waited on: how an input event ends it. */
-  private waiting: { step: ShowStep; located: Located; rect: Rect; typed: number; focused: boolean; resolve: (ended: Ended) => void } | null = null
+  private waiting: { step: ShowStep; located: Located; rect: Rect; typed: number; focused: boolean; resting: boolean; resolve: (ended: Ended) => void } | null = null
+  /** The step whose element exists but is out of sight (scrolled away), and which way it lies. */
+  private off: { step: ShowStep; way: ScrollWay } | null = null
   private foregroundWaiter: (() => void) | null = null
   /** The program the walk is in. Another program in front makes the ring wait, unless his own action opened it. */
   private homePid: number
@@ -298,7 +330,9 @@ export class Walk {
         let located = this.takeAhead(i)
         if (located === null) located = await this.locate(step, lastAct === null ? this.t.firstFindMs : this.t.nextFindMs, false)
         if (this.ended !== null) break
-        if (located === null && this.model !== null && this.replans < this.t.maxReplans) {
+        // It is there, only out of sight: he is told which way to scroll; no model is asked and nothing is re-planned.
+        const hint = located === null && this.off !== null && this.off.step === step ? this.off.way : null
+        if (located === null && hint === null && this.model !== null && this.replans < this.t.maxReplans) {
           // The screen is not what the route expected: plan what is left from what IS on screen.
           this.replans++
           const again = await this.plan({ done: this.steps.slice(0, i).map((each) => each.label), missing: step.name })
@@ -310,11 +344,11 @@ export class Walk {
           }
         }
         const missing = located === null
-        if (located === null) located = { node: null, rect: { ...this.win.bounds }, how: 'none', hwnd: this.win.hwnd }
+        if (located === null) located = { node: null, rect: hint === null ? { ...this.win.bounds } : scrollHintRect(this.win.bounds, hint), how: 'none', hwnd: this.win.hwnd }
         const fills = !missing && typeof step.value === 'string' && step.value !== ''
         if (fills && this.fill !== null) await this.fill.put(step.value!, step.sensitive === true)
         if (this.ended !== null) break
-        const label = missing ? missingLabel(step) : n === 1 && (this.deps.keyHint ?? '') !== '' && !fills ? `${step.label} (${this.deps.keyHint})` : step.label
+        const label = missing ? (hint === null ? missingLabel(step) : scrollLabel(step, hint)) : n === 1 && (this.deps.keyHint ?? '') !== '' && !fills ? `${step.label} (${this.deps.keyHint})` : step.label
         const shownAt = this.now()
         const ended = await this.waitForHim(step, located, { label, n, fills, missing, still: gone > 3 })
         const clip = fills && this.fill !== null ? await this.fill.settle() : undefined
@@ -420,7 +454,8 @@ export class Walk {
     const fills = typeof w.step.value === 'string' && w.step.value !== '' && w.located.how !== 'none'
     const at = this.now()
     if (event.kind === 'click') {
-      if (event.button !== 'left' || w.located.how === 'none') return
+      // While the ring rests (the page is scrolling, or the thing is out of sight) its last place means nothing.
+      if (event.button !== 'left' || w.located.how === 'none' || w.resting) return
       const inside = contains(w.rect, event.x, event.y, w.located.how === 'vision' ? 14 : 6)
       if (fills) {
         // His click into the field is not the step; what he puts in it is. Typing it himself counts once he leaves.
@@ -448,12 +483,14 @@ export class Walk {
       let stopWatch: (() => void) | null = null
       let recheck: ReturnType<typeof setTimeout> | null = null
       let seek: ReturnType<typeof setInterval> | null = null
+      let restTimer: ReturnType<typeof setTimeout> | null = null
       let settled = false
       const finish = (ended: Ended): void => {
         if (settled) return
         settled = true
         if (recheck !== null) clearTimeout(recheck)
         if (seek !== null) clearInterval(seek)
+        if (restTimer !== null) clearTimeout(restTimer)
         try {
           stopWatch?.()
         } catch {
@@ -464,29 +501,67 @@ export class Walk {
         if (ended.kind !== 'lost' && ended.kind !== 'found' && ended.kind !== 'cancelled' && ended.kind !== 'timeout') this.lastActAt = ended.at
         resolve(ended)
       }
-      const entry = { step, located, rect: { ...located.rect }, typed: 0, focused: false, resolve: finish }
+      const entry = { step, located, rect: { ...located.rect }, typed: 0, focused: false, resting: false, resolve: finish }
       if (this.ended !== null) return finish({ kind: this.ended, at: this.now() })
       this.waiting = entry
-      this.overlay.show({
-        rect: entry.rect,
-        label: show.label,
-        step: show.n,
-        of: this.steps.length,
-        ...(show.fills ? { fill: { field: step.name, ...(step.sensitive === true ? { sensitive: true } : { value: step.value! }) } } : {}),
-        onAct: (outcome) => finish({ kind: outcome, at: this.now() }),
-      })
+      const onAct = (outcome: 'done' | 'skipped'): void => finish({ kind: outcome, at: this.now() })
+      const draw = (): void =>
+        this.overlay.show({
+          rect: entry.rect,
+          label: show.label,
+          step: show.n,
+          of: this.steps.length,
+          ...(show.fills ? { fill: { field: step.name, ...(step.sensitive === true ? { sensitive: true } : { value: step.value! }) } } : {}),
+          onAct,
+        })
+      draw()
       this.deps.onStep?.({ kind: 'shown', n: show.n, total: this.steps.length, step })
+      // The thing is in sight again (or the page stopped moving): the ring is drawn where it is now.
+      const wake = (rect: Rect): void => {
+        if (restTimer !== null) clearTimeout(restTimer)
+        restTimer = null
+        entry.rect = { ...rect }
+        if (entry.resting) {
+          entry.resting = false
+          draw()
+        } else this.overlay.move(entry.rect)
+      }
+      // The page is scrolling under the ring, or the thing went out of sight: a ring in the old place would point at
+      // nothing, so it is taken down. It comes back with the next place the reader reports; when none comes, the label
+      // says which way to scroll, or the thing is looked for again when it is really gone.
+      const rest = (): void => {
+        if (!entry.resting) {
+          entry.resting = true
+          this.overlay.hide()
+        }
+        if (restTimer !== null) return
+        restTimer = setTimeout(() => {
+          restTimer = null
+          void this.probe(step, true).then((now) => {
+            if (settled || !entry.resting) return
+            if (now.hit !== null && now.hit.node !== null) {
+              entry.located = now.hit
+              follow(now.hit.node)
+              return wake(now.hit.rect)
+            }
+            if (now.way === null) return finish({ kind: 'lost', why: 'gone' })
+            this.overlay.show({ rect: scrollHintRect(this.win.bounds, now.way), label: scrollLabel(step, now.way), step: show.n, of: this.steps.length, onAct })
+          })
+        }, REST_HINT_MS)
+      }
       const follow = (node: UiNode): void => {
         try {
           stopWatch?.()
         } catch {
           // Already stopped.
         }
-        stopWatch = this.reader.watch(located.hwnd, node, (rect) => {
+        stopWatch = this.reader.watch(located.hwnd, node, (rect, why) => {
           if (settled) return
-          if (rect === null || !(rect.width > 0) || !(rect.height > 0)) return finish({ kind: 'lost', why: 'gone' })
-          entry.rect = { ...rect }
-          this.overlay.move(entry.rect)
+          if (rect === null || !(rect.width > 0) || !(rect.height > 0)) {
+            if (why === 'scrolling' || why === 'hidden') return rest()
+            return finish({ kind: 'lost', why: 'gone' })
+          }
+          wake(rect)
         })
       }
       if (located.node !== null && show.still !== true) follow(located.node)
@@ -562,15 +637,27 @@ export class Walk {
 
   /** One pass with no model and no waiting: the reader's own lookup, then a sure match on the element list. */
   private async locateCheap(step: ShowStep, fresh = false): Promise<Located | null> {
+    return (await this.probe(step, fresh)).hit
+  }
+
+  /**
+   * The cheap pass, and what it learned when it found nothing to ring: `way` is set when the reader knows the element
+   * but it is out of sight (scrolled away), so the walk can say which way to scroll instead of asking a model.
+   */
+  private async probe(step: ShowStep, fresh = false): Promise<{ hit: Located | null; way: ScrollWay | null }> {
     const hwnd = this.win.hwnd
+    let way: ScrollWay | null = null
     try {
       const node = await this.reader.find(hwnd, { name: step.name, ...(step.role === undefined ? {} : { role: step.role }), ...(step.nth === undefined ? {} : { nth: step.nth }) })
-      if (usable(node)) return { node, rect: { ...node.bounds }, how: 'find', hwnd }
+      const away = node !== null && node.offscreen ? scrollWay(node.bounds, this.win.bounds) : null
+      if (usable(node)) return { hit: { node, rect: { ...node.bounds }, how: 'find', hwnd }, way: null }
+      way = away
     } catch {
       // The reader could not look: the list is tried.
     }
     const match = matchNode(step, await this.tree(fresh))
-    return match !== null && match.sure ? { node: match.node, rect: { ...match.node.bounds }, how: 'match', hwnd } : null
+    if (match !== null && match.sure) return { hit: { node: match.node, rect: { ...match.node.bounds }, how: 'match', hwnd }, way: null }
+    return { hit: null, way }
   }
 
   /**
@@ -583,11 +670,17 @@ export class Walk {
     let unsure: UiNode | null = null
     let shape = ''
     let shapeSince = this.now()
+    this.off = null
     for (;;) {
       if (signal.aborted) return null
-      const hit = await this.locateCheap(step)
-      if (hit !== null) return hit
+      const probed = await this.probe(step)
+      if (probed.hit !== null) return probed.hit
       if (signal.aborted) return null
+      if (probed.way !== null) {
+        // It exists and is out of sight. No model can bring it into view: he scrolls, and the walk says which way.
+        this.off = { step, way: probed.way }
+        return null
+      }
       const nodes = await this.tree(true)
       const match = matchNode(step, nodes)
       if (match !== null) {

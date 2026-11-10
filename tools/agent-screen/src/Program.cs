@@ -196,7 +196,7 @@ namespace AgentScreen
 
     internal static class Program
     {
-        private const string Version = "0.1.0";
+        private const string Version = "0.1.1";
         private static readonly BlockingCollection<string> Out = new BlockingCollection<string>();
         private static readonly HashSet<uint> Excluded = new HashSet<uint>();
         private static readonly Dictionary<string, IUIAutomationElement> Elements = new Dictionary<string, IUIAutomationElement>();
@@ -211,8 +211,49 @@ namespace AgentScreen
         private static Timer watchTimer;
         private static int watchBusy;
         private static bool selfElevated;
-        /** When the mouse wheel last turned (Clock ms); only known while the hooks are on. */
+        /**
+         * When the page last scrolled under his hand (Clock ms): the wheel turned, a key that scrolls a page went down
+         * outside a text field, or the mouse was dragged with the button held (a scroll bar). Only known while the
+         * hooks are on.
+         */
         public static long WheelAt = -100000;
+
+        public static void ScrollNow()
+        {
+            Interlocked.Exchange(ref WheelAt, Clock.ElapsedMilliseconds);
+        }
+
+        private static int scrollKeyBusy;
+
+        /**
+         * A key that scrolls a page went down (PageUp, PageDown, Home, End, an arrow, Space). In a text field the same
+         * keys move the caret or type, so the control that has the keyboard is asked first; nothing is asked at all
+         * when no element is being followed.
+         */
+        public static void ScrollKey()
+        {
+            lock (Watches) { if (Watches.Count == 0) return; }
+            if (Interlocked.Exchange(ref scrollKeyBusy, 1) == 1) return;
+            Task.Factory.StartNew(delegate ()
+            {
+                try
+                {
+                    bool typing = false;
+                    try
+                    {
+                        IUIAutomationElement focused = Uia().GetFocusedElement();
+                        if (focused != null)
+                        {
+                            int type = focused.CurrentControlType;
+                            typing = type == TEdit || type == TComboBox || type == TSpinner;
+                        }
+                    }
+                    catch (Exception) { }
+                    if (!typing) ScrollNow();
+                }
+                finally { Interlocked.Exchange(ref scrollKeyBusy, 0); }
+            });
+        }
         public static long ClockMs { get { return Clock.ElapsedMilliseconds; } }
 
         [MTAThread]
@@ -1402,6 +1443,9 @@ namespace AgentScreen
         private static volatile HashSet<int> watched = new HashSet<int>();
         private static volatile bool clickOnDown;
         private static long lastWheel;
+        private static volatile bool leftDown;
+        private static int downX, downY;
+        private static volatile bool dragging;
         private static Timer foregroundTimer;
         private static readonly object Gate = new object();
 
@@ -1498,6 +1542,15 @@ namespace AgentScreen
                 if (message == (down ? 0x201 : 0x202)) button = "left";
                 else if (message == (down ? 0x204 : 0x205)) button = "right";
                 else if (message == (down ? 0x207 : 0x208)) button = "middle";
+                // A drag with the button held moves a scroll bar (or selects text): either way the page may be moving
+                // under a ring, and a browser says where things are only half a second later.
+                if (message == 0x201) { leftDown = true; dragging = false; downX = Marshal.ReadInt32(lParam, 0); downY = Marshal.ReadInt32(lParam, 4); }
+                else if (message == 0x200 && leftDown)
+                {
+                    if (!dragging && Math.Abs(Marshal.ReadInt32(lParam, 0) - downX) + Math.Abs(Marshal.ReadInt32(lParam, 4) - downY) > 6) dragging = true;
+                    if (dragging) Program.ScrollNow();
+                }
+                else if (message == 0x202) { if (dragging) Program.ScrollNow(); leftDown = false; dragging = false; }
                 if (message == 0x20A || message == 0x20E)
                 {
                     // The wheel turned: one line at most every 50 ms, so a caller can let its ring rest while the page moves.
@@ -1533,6 +1586,8 @@ namespace AgentScreen
                 if (message == 0x100 || message == 0x104)
                 {
                     int vk = Marshal.ReadInt32(lParam, 0);
+                    // PageUp, PageDown, End, Home, the arrows and Space scroll a page: noted here, never sent anywhere.
+                    if (((vk >= 0x21 && vk <= 0x28) || vk == 0x20) && !Held(0x12)) Program.ScrollKey();
                     // Only these leave the process: Ctrl+V or Shift+Insert as "paste", and the keys the caller named.
                     if ((vk == 0x56 && Held(0x11) && !Held(0x12)) || (vk == 0x2D && Held(0x10)))
                     {

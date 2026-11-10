@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ShowStep } from '../src/main/showme/planner'
 import type { ActiveWindow } from '../src/main/showme/screen'
-import { PLANNING_LABEL, Walk, formatWalk, matchNode, missingLabel, roleKey, type WalkDeps, type WalkKeys, type WalkResult } from '../src/main/showme/walk'
+import { PLANNING_LABEL, REST_HINT_MS, Walk, formatWalk, matchNode, missingLabel, roleKey, scrollHintRect, scrollLabel, scrollWay, type WalkDeps, type WalkKeys, type WalkResult } from '../src/main/showme/walk'
 import { FakeClipboard, FakeModel, FakeOverlay, FakeScreen, WINDOW, column, node, pause, until } from './helpers/fake-screen'
 
 const FAST = { firstFindMs: 80, nextFindMs: 200, pollMs: 4, settleMs: 40, recheckMs: 20, timeoutMs: 8_000, maxReplans: 2 }
@@ -120,6 +120,100 @@ describe('his click is the feedback', () => {
     await ring(rig, 'Click Beta')
     rig.walk.stop()
     expect((await rig.done).steps[0]).toMatchObject({ n: 1, outcome: 'clicked' })
+  })
+})
+
+describe('scrolling', () => {
+  it('takes the ring down while the page scrolls and draws it again where the thing is, as the same step', async () => {
+    const rig = start({ nodes: column(['Alpha', 'Beta']), steps: [step('Alpha'), step('Beta')] })
+    await ring(rig, 'Click Alpha')
+    const finds = rig.screen.calls.find.length
+    // The wheel turns: the reader says the place is unknown for now. Again and again, as a long scroll does.
+    for (let i = 0; i < 6; i++) rig.screen.rest('n1', 'scrolling')
+    expect(rig.overlay.current).toBeNull()
+    // A click where the ring used to be is not the step while it rests.
+    rig.screen.clickAt(280, 220)
+    await pause(30)
+    expect(rig.overlay.current).toBeNull()
+    // The page came to rest: the ring is back on the element, in its new place, with the same label.
+    rig.screen.move('n1', { x: 200, y: 520, width: 160, height: 40 })
+    expect(rig.overlay.current).toMatchObject({ label: 'Click Alpha', step: 1, rect: { x: 200, y: 520, width: 160, height: 40 } })
+    // It was never looked for again, and it is not frozen: it still follows.
+    expect(rig.screen.calls.find.length).toBe(finds)
+    rig.screen.move('n1', { x: 200, y: 400, width: 160, height: 40 })
+    expect(rig.overlay.current?.rect.y).toBe(400)
+    rig.screen.clickAt(280, 420)
+    await ring(rig, 'Click Beta')
+    rig.walk.stop()
+    const result = await rig.done
+    expect(result.steps[0]).toMatchObject({ n: 1, outcome: 'clicked' })
+    expect(result.modelCalls).toBe(0)
+  })
+
+  it('says which way to scroll when the thing stays out of sight, and rings it when it is in view again', async () => {
+    const rig = start({ nodes: column(['Alpha', 'Beta']), steps: [step('Alpha'), step('Beta')] })
+    await ring(rig, 'Click Alpha')
+    // He scrolled it off the top of the window.
+    rig.screen.nodes[0]!.offscreen = true
+    rig.screen.nodes[0]!.bounds = { x: 200, y: -300, width: 160, height: 40 }
+    rig.screen.rest('n1', 'hidden')
+    expect(rig.overlay.current).toBeNull()
+    await until('the scroll hint', () => rig.overlay.current?.label === scrollLabel({ name: 'Alpha' }, 'up'), REST_HINT_MS + 1_000)
+    expect(rig.overlay.current).toMatchObject({ step: 1, of: 2, rect: scrollHintRect(WINDOW.bounds, 'up') })
+    // A click on the hint's bar is not the step.
+    rig.screen.clickAt(WINDOW.bounds.width / 2, scrollHintRect(WINDOW.bounds, 'up').y + 2)
+    await pause(20)
+    expect(rig.overlay.current?.label).toBe(scrollLabel({ name: 'Alpha' }, 'up'))
+    rig.screen.nodes[0]!.offscreen = false
+    rig.screen.move('n1', { x: 200, y: 240, width: 160, height: 40 })
+    expect(rig.overlay.current).toMatchObject({ label: 'Click Alpha', rect: { y: 240 } })
+    rig.screen.clickAt(280, 260)
+    await ring(rig, 'Click Beta')
+    rig.walk.stop()
+    await rig.done
+  })
+
+  it('looks for the thing again when it is really gone after a rest', async () => {
+    const rig = start({ nodes: column(['Alpha', 'Beta']), steps: [step('Alpha'), step('Beta')] })
+    await ring(rig, 'Click Alpha')
+    rig.screen.rest('n1', 'hidden')
+    // The page drew itself again meanwhile: a new element of the same name, elsewhere. The old one never comes back.
+    rig.screen.set([node('x9', 'Alpha', 'button', { x: 640, y: 90, width: 100, height: 30 }), node('n2', 'Beta')])
+    await until('the ring on the new Alpha', () => rig.overlay.current?.label === 'Click Alpha' && rig.overlay.current.rect.x === 640, REST_HINT_MS + 1_000)
+    rig.screen.click('Alpha')
+    await ring(rig, 'Click Beta')
+    rig.walk.stop()
+    await rig.done
+  })
+
+  it('asks no model and plans nothing again for a step that is below the fold: it says scroll down, then rings it', async () => {
+    const below = node('n2', 'Beta', 'button', { x: 200, y: 1_600, width: 160, height: 40 }, { offscreen: true })
+    const rig = start({ nodes: [node('n1', 'Alpha', 'button', { x: 200, y: 200, width: 160, height: 40 }), below], steps: [step('Alpha'), step('Beta')] })
+    rig.model.plan = () => '{"steps":[{"label":"Click Gamma","name":"Gamma"}]}'
+    await ring(rig, 'Click Alpha')
+    const at = rig.screen.click('Alpha')
+    await ring(rig, scrollLabel({ name: 'Beta' }, 'down'))
+    const hintMs = rig.overlay.shows.at(-1)!.t - at
+    console.log(`[showme] click to the scroll hint for a step below the fold: ${hintMs.toFixed(1)} ms, model calls ${rig.model.calls.length}`)
+    expect(hintMs).toBeLessThan(250)
+    expect(rig.overlay.current).toMatchObject({ step: 2, of: 2, rect: scrollHintRect(WINDOW.bounds, 'down') })
+    expect(rig.model.calls).toHaveLength(0)
+    // He scrolls; it comes into view.
+    rig.screen.set([node('n1', 'Alpha', 'button', { x: 200, y: -900, width: 160, height: 40 }, { offscreen: true }), node('n2', 'Beta', 'button', { x: 200, y: 500, width: 160, height: 40 })])
+    await until('the real ring', () => rig.overlay.current?.label === 'Click Beta' && rig.overlay.current.rect.y === 500)
+    rig.screen.click('Beta')
+    const result = await rig.done
+    expect(result).toMatchObject({ outcome: 'done', completed: 2, replans: 0, modelCalls: 0 })
+  })
+
+  it('reads the way from where the thing is', () => {
+    const window = { x: 0, y: 0, width: 1_600, height: 1_000 }
+    expect(scrollWay({ x: 10, y: 1_400, width: 100, height: 30 }, window)).toBe('down')
+    expect(scrollWay({ x: 10, y: -400, width: 100, height: 30 }, window)).toBe('up')
+    expect(scrollWay({ x: 10, y: 400, width: 100, height: 30 }, window)).toBe('to')
+    expect(scrollWay({ x: 0, y: 0, width: 0, height: 0 }, window)).toBe('to')
+    expect(scrollLabel({ name: 'Add reviewer' }, 'down')).toBe('Scroll down to "Add reviewer"')
+    expect(scrollLabel({ name: 'Add reviewer' }, 'to')).toBe('Scroll to "Add reviewer"')
   })
 })
 

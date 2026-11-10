@@ -7,7 +7,7 @@ import { performance } from 'node:perf_hooks'
 
 import type { GuideModel } from '../../src/main/showme/guide-model'
 import { LOCATE_SYSTEM, PICK_SYSTEM, PLAN_SYSTEM } from '../../src/main/showme/planner'
-import type { ActiveWindow, InputEvent, Rect, ScreenReader, UiNode } from '../../src/main/showme/screen'
+import type { ActiveWindow, InputEvent, Rect, ScreenReader, UiNode, WatchWhy } from '../../src/main/showme/screen'
 import type { WalkOverlay } from '../../src/main/showme/walk'
 
 export function node(id: string, name: string, role = 'button', bounds: Rect = { x: 100, y: 100, width: 120, height: 40 }, extra: Partial<UiNode> = {}): UiNode {
@@ -25,7 +25,7 @@ export class FakeScreen implements ScreenReader {
   win: ActiveWindow
   private readonly lists = new Map<string, UiNode[]>()
   private readonly listeners = new Set<(event: InputEvent) => void>()
-  private readonly watchers = new Set<{ hwnd: string; id: string; onMove: (rect: Rect | null) => void }>()
+  private readonly watchers = new Set<{ hwnd: string; id: string; onMove: (rect: Rect | null, why?: WatchWhy) => void }>()
   private readonly reactions = new Map<string, () => void>()
   readonly calls = { tree: [] as string[], find: [] as string[], capture: 0 }
   isAvailable = true
@@ -59,6 +59,11 @@ export class FakeScreen implements ScreenReader {
     for (const watcher of [...this.watchers]) if (watcher.hwnd === this.win.hwnd && watcher.id === id) watcher.onMove({ ...bounds })
   }
 
+  /** The page scrolls under the element ('scrolling') or it went out of sight ('hidden'): the real reader says null and why. */
+  rest(id: string, why: 'scrolling' | 'hidden'): void {
+    for (const watcher of [...this.watchers]) if (watcher.hwnd === this.win.hwnd && watcher.id === id) watcher.onMove(null, why)
+  }
+
   /** What the program does when he clicks the element of this name. */
   after(name: string, reaction: () => void): void {
     this.reactions.set(name, reaction)
@@ -74,12 +79,14 @@ export class FakeScreen implements ScreenReader {
 
   find = async (hwnd: string, q: { name: string; role?: string; nth?: number }): Promise<UiNode | null> => {
     this.calls.find.push(`${hwnd}:${q.name}`)
-    const hits = (this.lists.get(hwnd) ?? []).filter((each) => each.name.trim().toLowerCase() === q.name.trim().toLowerCase() && !each.offscreen)
-    const hit = q.nth !== undefined ? hits[q.nth - 1] : hits.length === 1 ? hits[0] : undefined
+    const named = (this.lists.get(hwnd) ?? []).filter((each) => each.name.trim().toLowerCase() === q.name.trim().toLowerCase())
+    const hits = named.filter((each) => !each.offscreen)
+    // As the real reader: what can be seen comes first; a match that is out of sight is still answered, marked offscreen.
+    const hit = q.nth !== undefined ? hits[q.nth - 1] : hits.length === 1 ? hits[0] : hits.length === 0 ? named.find((each) => each.offscreen) : undefined
     return hit === undefined ? null : { ...hit, bounds: { ...hit.bounds } }
   }
 
-  watch(hwnd: string, target: UiNode, onMove: (rect: Rect | null) => void): () => void {
+  watch(hwnd: string, target: UiNode, onMove: (rect: Rect | null, why?: WatchWhy) => void): () => void {
     const entry = { hwnd, id: target.id, onMove }
     this.watchers.add(entry)
     return () => {
