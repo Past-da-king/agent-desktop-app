@@ -1,0 +1,70 @@
+/* Showcase posters, 10 Nov 2026. One template, the app's own tokens (apps/desktop tokens.css and shared/brand.ts). */
+@font-face {
+  font-family: 'Roboto Flex Variable';
+  src: url('../../../apps/desktop/src/renderer/fonts/roboto-flex-latin-wght-normal.woff2') format('woff2-variations');
+  font-weight: 100 1000;
+  font-display: block;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #000; }
+
+.poster {
+  position: relative;
+  width: 1080px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Roboto Flex Variable', 'Roboto Flex', Roboto, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+.sq { height: 1080px; }
+.tall { height: 1350px; }
+
+/* Themes: SURFACES and IRIS from brand.ts. */
+.t-light { --bg: #FAF8F4; --ink: #1B1A1F; --muted: #5F5C68; --accent: #4A3FD1; --hair: rgba(27, 26, 31, 0.10); --shadow: rgba(40, 32, 110, 0.22); --bezel: #16151B; }
+.t-dark { --bg: #0E0D12; --ink: #E9E7EE; --muted: #A29EAE; --accent: #C3BBFF; --hair: rgba(233, 231, 238, 0.12); --shadow: rgba(0, 0, 0, 0.6); --bezel: #24232B; }
+.t-iris { --bg: #4A3FD1; --ink: #FBFAFF; --muted: #D8D3FF; --accent: #FBFAFF; --hair: rgba(251, 250, 255, 0.2); --shadow: rgba(18, 10, 80, 0.45); --bezel: #15122E; }
+.t-lav { --bg: #E4E0FF; --ink: #1C1466; --muted: #4B4494; --accent: #4A3FD1; --hair: rgba(28, 20, 102, 0.12); --shadow: rgba(40, 32, 110, 0.28); --bezel: #16151B; }
+
+/* Brand line: the app's own mark, small, on nothing. */
+.brand { position: absolute; left: 72px; top: 64px; display: flex; align-items: center; gap: 12px; font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+.brand svg { width: 34px; height: 34px; display: block; }
+.brand .mark-body { fill: var(--accent); }
+.brand .mark-eye { fill: var(--bg); }
+.brand .tag { margin-left: 10px; padding-left: 22px; border-left: 1.5px solid var(--hair); font-size: 22px; font-weight: 450; color: var(--muted); letter-spacing: 0; }
+
+.copy { position: absolute; left: 72px; }
+h1 { font-weight: 600; letter-spacing: -0.035em; line-height: 1; text-wrap: balance; }
+h1 span { display: block; }
+.sub { margin-top: 30px; font-size: 30px; line-height: 1.32; font-weight: 400; color: var(--muted); letter-spacing: -0.005em; text-wrap: pretty; }
+.note { margin-top: 26px; font-size: 22px; line-height: 1.35; font-weight: 500; color: var(--muted); opacity: 0.85; }
+
+/* Square: words on the left, device on the right. */
+.sq .copy { top: 176px; bottom: 60px; width: 480px; display: flex; flex-direction: column; }
+.sq h1 { font-size: 80px; }
+.sq .sub { margin-top: auto; max-width: 430px; font-size: 28px; }
+.sq .note { margin-top: 20px; }
+/* Square with a wide device (a desktop window): words on top like the 4:5. */
+.sq.stack .copy { width: 936px; bottom: auto; display: block; }
+.sq.stack .sub { margin-top: 26px; max-width: 760px; }
+/* 4:5: words on top, device under them, running off the bottom. */
+.tall .copy { top: 170px; width: 936px; }
+.tall h1 { font-size: 100px; }
+.tall .sub { max-width: 760px; }
+
+/* A phone: a thin bezel and the screen, nothing else. */
+.phone { position: absolute; width: var(--w); padding: calc(var(--w) * 0.021); border-radius: calc(var(--w) * 0.135); background: var(--bezel);
+  box-shadow: 0 0 0 1.5px var(--hair), 0 50px 90px -30px var(--shadow), 0 18px 36px -18px var(--shadow); }
+.phone .screen { position: relative; border-radius: calc(var(--w) * 0.115); overflow: hidden; background: var(--sb); }
+.phone .status { height: calc(var(--w) * 0.082); display: flex; align-items: flex-end; justify-content: space-between; padding: 0 calc(var(--w) * 0.075) calc(var(--w) * 0.012);
+  color: var(--sbink); font-size: calc(var(--w) * 0.034); font-weight: 600; letter-spacing: 0.01em; }
+.phone .status svg { height: calc(var(--w) * 0.03); width: auto; display: block; fill: var(--sbink); }
+.phone .cam { position: absolute; left: 50%; top: calc(var(--w) * 0.028); width: calc(var(--w) * 0.03); height: calc(var(--w) * 0.03); margin-left: calc(var(--w) * -0.015); border-radius: 50%; background: #0B0A0E; opacity: 0.9; }
+.phone img { display: block; width: 100%; }
+
+/* A desktop window: the app draws its own title bar, so the frame is only a corner radius and a shadow. */
+.win { position: absolute; width: var(--w); height: calc(var(--w) * 868 / 1408); border-radius: calc(var(--w) * 22 / 1408); overflow: hidden;
+  box-shadow: 0 0 0 1.5px var(--hair), 0 60px 110px -40px var(--shadow), 0 20px 40px -20px var(--shadow); }
+.win img { position: absolute; width: calc(var(--w) * 1440 / 1408); left: calc(var(--w) * -16 / 1408); top: calc(var(--w) * -16 / 1408); display: block; }
