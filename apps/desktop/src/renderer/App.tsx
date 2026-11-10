@@ -12,6 +12,8 @@ import { readBootHint, writeBootHint } from './lib/boot-hint'
 import { applyAccent, applyTheme } from './state/theme'
 import { useData } from './state/useData'
 import { agent } from './bridge'
+import { useBrowserState, useWorkspaceLayout } from './state/useBrowserState'
+import { useHandOver } from './state/useHandOver'
 
 // Screens off the chat load when first opened, so the chat is on screen sooner; each is one small file on disk.
 const Onboarding = lazy(() => import('./onboarding/Onboarding').then((m) => ({ default: m.Onboarding })))
@@ -50,10 +52,13 @@ import { TitleBar } from './shell/TitleBar'
 import { TipLayer } from './ui/TipLayer'
 import { Toasts } from './ui/Toasts'
 
-function Page(): JSX.Element {
+function Page({ chatDocked }: { chatDocked: boolean }): JSX.Element {
   const route = useRoute()
   switch (route.page) {
     case 'chat':
+      // While the chat is docked beside the browser it is drawn there: one chat, never two. The same Shell either
+      // way, so the side panel (and the pages living in it) stays mounted.
+      if (chatDocked) return <Shell panel={<ChatPanel />} ownScroll>{null}</Shell>
       return (
         <Shell panel={<ChatPanel />} ownScroll>
           <Chat />
@@ -142,12 +147,16 @@ function Main({ route }: { route: Route }): JSX.Element {
   // An agent showed him a mini-app (miniapp_open): open it in the sheet.
   useEffect(() => agent.miniapps.onOpen((id) => useUi.getState().navigate({ page: 'miniapp', id })), [])
   const onboarding = route.page === 'onboarding'
+  // The browser view: the page has the window, the bar is slim (gone in full screen) and the chat docks beside it.
+  const layout = useWorkspaceLayout(useBrowserState())
+  const view = !onboarding && layout.view
+  useHandOver()
 
   return (
-    <div className="win">
+    <div className={`win${view ? ' bv' : ''}${view && layout.full ? ' bv-full' : ''}`}>
       <TitleBar onboarding={onboarding} />
-      <div className="stage">{onboarding ? <Loading><Onboarding step={route.step} /></Loading> : <Page />}</div>
-      {onboarding ? null : <BrowserStage />}
+      <div className="stage">{onboarding ? <Loading><Onboarding step={route.step} /></Loading> : <Page chatDocked={view && layout.dock !== 'closed'} />}</div>
+      {onboarding ? null : <BrowserStage chat={(dock) => <Chat dock={dock} />} />}
       {onboarding ? null : <HelperFloat />}
       <div className="overlay">
         <Palette />

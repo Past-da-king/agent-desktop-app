@@ -1,5 +1,5 @@
 import type { BrowserState, BrowserViewMode } from '@agent/core'
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 
 import { agent, chat } from '../bridge'
 import { skyHopDemo } from '../bridge/seed'
@@ -23,6 +23,11 @@ import { NeedsYou } from './NeedsYou'
 import { BrowserPeople, personOfTab, usePeople } from './BrowserPeople'
 import { toneStyle } from '../lib/profiles'
 import { setStageBox } from '../lib/browser-stage'
+import { DOCK_MAX_WIDTH, DOCK_MIN_WIDTH, escapeAction } from '../lib/workspace'
+import { canHandOver, handOverLabel } from '../../shared/hand-over'
+import { useBrowserState, useWorkspaceLayout } from '../state/useBrowserState'
+import { toast } from '../state/useToast'
+import { useWorkspace } from '../state/useWorkspace'
 
 const VIEW_CHOICES: Array<{ mode: Exclude<BrowserViewMode, 'fit'>; label: string; icon: IconName }> = [
   { mode: 'desktop', label: 'Desktop', icon: 'monitor' },
@@ -81,28 +86,33 @@ function useHandBack(): () => void {
   }
 }
 
-/** The main process pushes a fresh BrowserState on every change it notices. */
-function useBrowserState(): BrowserState | null {
-  const [state, setState] = useState<BrowserState | null>(null)
-
-  useEffect(() => {
-    let alive = true
+/**
+ * Hand to the agent: the page in front goes into the message box (its address, title, selection, picture and tab
+ * id), so the person can ask about it or tell the agent to take the tab over. The reverse of browser_handoff.
+ */
+function HandOverButton({ agentName, disabled, compact }: { agentName: string; disabled: boolean; compact: boolean }): JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const label = handOverLabel(agentName)
+  const hand = (): void => {
+    if (busy) return
+    setBusy(true)
     void agent.browser
-      .state()
-      .then((next) => {
-        if (alive) setState(next)
+      .handOver()
+      .then((handed) => {
+        if (!handed) toast('There is no page to hand over yet.')
       })
-      .catch(() => undefined)
-    const off = agent.browser.onState((next) => {
-      if (alive) setState(next)
-    })
-    return () => {
-      alive = false
-      off()
-    }
-  }, [])
-
-  return state
+      .catch(() => toast('That page could not be handed over. Try again.'))
+      .finally(() => setBusy(false))
+  }
+  if (compact) {
+    return <IconButton icon="handover" label={`${label}: put this page in your message`} size={18} className="br-hand" disabled={disabled || busy} onClick={hand} />
+  }
+  return (
+    <Button variant="tonal" size="sm" className="br-hand" disabled={disabled || busy} onClick={hand} title={`${label}: put this page in your message`} aria-label={label}>
+      <Icon name="handover" size={16} />
+      <span className="br-hand-t">{label}</span>
+    </Button>
+  )
 }
 
 /** The mock bridge shows the designed SkyHop page; Electron paints the real page over this slot. */
@@ -141,10 +151,13 @@ function BrowserChrome({
   state,
   agentName,
   full = false,
+  showTabs = true,
   actions,
 }: {
   state: BrowserState | null
   agentName: string
+  /** False in full screen with one tab: the strip would only take room. */
+  showTabs?: boolean
   /** In the full-size view: the expand button becomes a way back. */
   full?: boolean
   /** Extra controls at the end of the address row (the full-size view's status and buttons). */
@@ -253,6 +266,7 @@ function BrowserChrome({
             icon="code"
             label="Developer tools"
             size={18}
+            className="br-dev"
             disabled={!hasPage}
             onClick={() => {
               void agent.browser.devtools()
@@ -273,7 +287,7 @@ function BrowserChrome({
         {actions}
       </div>
 
-      {tabs.length > 0 ? (
+      {tabs.length > 0 && showTabs ? (
         <div className="br-tabs" role="tablist" aria-label="Browser tabs">
           {tabs.map((tab) => {
             const label = tab.title.trim() || displayUrl(tab.url) || 'Untitled'
@@ -520,6 +534,7 @@ function PanelBody({ parked = false }: { parked?: boolean }): JSX.Element {
             </span>
           </div>
           <div className="panel-h-actions">
+            {hasPage ? <HandOverButton agentName={agentName} disabled={!canHandOver(state?.url ?? '')} compact /> : null}
             {hasPage ? (
               state?.agentActive === false ? (
                 <Button
@@ -764,30 +779,63 @@ export function HelperFloat(): JSX.Element | null {
   )
 }
 
+/** What the docked chat needs from the browser view: how it is docked, and how to fold itself away. */
+export interface DockControls {
+  below: boolean
+  fold: () => void
+}
+
 /**
- * The page over the whole app window, for when the person helps out: a sign-in, a captcha, a fiddly
- * page. This draws the chrome and an empty page area; the card's own BrowserHost lays the same live page
- * over that area (nothing reloads, and the page is only ever in one place). While the person has control the
- * agent's own actions wait; Done, carry on hands the page back.
+ * The browser view: the page over the whole app window, as a place to work (10 Nov 2026). The app's own top bar
+ * folds to a slim strip, the rail and side panel are out of the way, and the chat docks beside the page (under it
+ * on a narrow window) as a panel the person can drag, fold and bring back. Full screen (the toolbar button, F11)
+ * keeps only this toolbar. It is also where the person helps out: a sign-in, a captcha, a fiddly page. This draws
+ * the chrome and an empty page area; the card's own BrowserHost lays the same live page over that area (nothing
+ * reloads, and the page is only ever in one place). While the person has control the agent's own actions wait;
+ * Done, carry on hands the page back, and Hand to the agent puts the page in the message box.
+ *
+ * `chat` draws the real chat for the dock (App passes it; the chat is never mounted twice).
  */
-export function BrowserStage(): JSX.Element | null {
+export function BrowserStage({ chat }: { chat?: (dock: DockControls) => ReactNode }): JSX.Element | null {
   const state = useBrowserState()
   const settings = useSettings((store) => store.settings)
   const navigate = useUi((store) => store.navigate)
   const handBack = useHandBack()
-  const expanded = state?.expanded === true && state.tabs.length > 0
+  const layout = useWorkspaceLayout(state)
+  const dockWidth = useWorkspace((store) => store.dockWidth)
+  const setDockWidth = useWorkspace((store) => store.setDockWidth)
+  const commitDock = useWorkspace((store) => store.commit)
+  const setDockOpen = useWorkspace((store) => store.setDockOpen)
+  const resetDockWidth = useWorkspace((store) => store.resetDockWidth)
+  const waiting = useWaiting().length
+  const drag = useRef<{ x: number; width: number } | null>(null)
+  const expanded = layout.view
+  const full = layout.full
+  const hasPage = state !== null && state.tabs.length > 0
 
+  // F11, as in every browser, from anywhere in the app while a page is open. Inside the page itself the main
+  // process hears the same keys (browser.ts), so they work wherever the cursor is.
   useEffect(() => {
-    if (!expanded) return
+    if (!hasPage) return
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
+      if (event.key === 'F11' && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
         event.preventDefault()
-        void agent.browser.setExpanded(false)
+        void agent.browser.setFullScreen(!full)
+        return
       }
+      if (!expanded || event.key !== 'Escape' || event.defaultPrevented) return
+      const target = event.target instanceof HTMLElement ? event.target : null
+      const inField = target !== null && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+      const overlayOpen = useUi.getState().overlay !== null || document.querySelector('.overlay [role="dialog"], .hp-float') !== null
+      const action = escapeAction({ inField, overlayOpen, full })
+      if (action === 'none') return
+      event.preventDefault()
+      if (action === 'leave-full') void agent.browser.setFullScreen(false)
+      else void agent.browser.setExpanded(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [expanded])
+  }, [expanded, full, hasPage])
 
   // A page no <webview> could host (it opened while the window was busy) is shown as a still, as the card does.
   const shownTab = state?.tabs.find((tab) => tab.active) ?? state?.tabs[0]
@@ -815,63 +863,158 @@ export function BrowserStage(): JSX.Element | null {
   const agentName = settings?.agentName.trim() || 'Your agent'
   const needsUser = state.needsUser
   const personDriving = state.agentActive === false
+  const docked = layout.dock !== 'closed' && chat !== undefined
+
+  const endDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (drag.current === null) return
+    drag.current = null
+    document.body.classList.remove('dock-dragging')
+    commitDock()
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch {
+      // The pointer may already be released.
+    }
+  }
+  const nudge = (by: number): void => {
+    setDockWidth(layout.dockWidth + by, window.innerWidth)
+    commitDock()
+  }
 
   return (
-    <div className="br-stage" role="dialog" aria-modal="true" aria-label="The agent's browser, full size">
-      <div className="br-stage-chrome">
-        <BrowserChrome
-          state={state}
-          agentName={agentName}
-          full
-          actions={
-            <div className="br-stage-actions">
-              <span className={`br-here${needsUser ? ' needs' : ''}`}>
-                {needsUser ? <Icon name="person" size={13} /> : <span className="br-dot" aria-hidden="true" />}
-                {needsUser ? `${agentName} needs you` : personDriving ? 'You have control' : `${agentName} is here`}
-              </span>
-              <ViewSwitch state={state} disabled={false} />
-              {personDriving ? (
-                <Button size="sm" onClick={handBack}>
-                  <Icon name="check" size={16} />
-                  Done, carry on
-                </Button>
-              ) : (
-                <Button
-                  variant="tonal"
-                  size="sm"
+    <div
+      className={`br-stage dock-${docked ? layout.dock : 'closed'}${full ? ' full' : ''}`}
+      style={{ '--dock-w': `${layout.dockWidth}px` } as CSSProperties}
+      role="dialog"
+      aria-label={full ? "The agent's browser, full screen" : "The agent's browser, full size"}
+    >
+      <div className="br-stage-main">
+        <div className="br-stage-chrome">
+          <BrowserChrome
+            state={state}
+            agentName={agentName}
+            full
+            showTabs={layout.showTabs}
+            actions={
+              <div className="br-stage-actions">
+                <span className={`br-here${needsUser ? ' needs' : ''}`}>
+                  {needsUser ? <Icon name="person" size={13} /> : <span className="br-dot" aria-hidden="true" />}
+                  {needsUser ? `${agentName} needs you` : personDriving ? 'You have control' : `${agentName} is here`}
+                </span>
+                <ViewSwitch state={state} disabled={false} />
+                <HandOverButton agentName={agentName} disabled={!canHandOver(state.url)} compact={false} />
+                {personDriving ? (
+                  <Button size="sm" onClick={handBack}>
+                    <Icon name="check" size={16} />
+                    Done, carry on
+                  </Button>
+                ) : (
+                  <Button
+                    variant="tonal"
+                    size="sm"
+                    onClick={() => {
+                      void agent.browser.takeOver()
+                    }}
+                  >
+                    Take over
+                  </Button>
+                )}
+                {chat === undefined ? null : (
+                  <span className="br-dock-toggle">
+                    <IconButton
+                      icon="chat"
+                      label={docked ? 'Fold the chat away' : `Chat with ${agentName} beside the page`}
+                      size={18}
+                      tonal={docked}
+                      aria-pressed={docked}
+                      onClick={() => setDockOpen(!docked)}
+                    />
+                    {!docked && waiting > 0 ? <i className="br-dock-dot" aria-hidden="true" /> : null}
+                  </span>
+                )}
+                <IconButton
+                  icon={full ? 'unfull' : 'full'}
+                  label={full ? 'Leave full screen (F11 or Esc)' : 'Full screen (F11)'}
+                  size={18}
+                  tonal={full}
+                  aria-pressed={full}
+                  className="br-full"
                   onClick={() => {
-                    void agent.browser.takeOver()
+                    void agent.browser.setFullScreen(!full)
                   }}
-                >
-                  Take over
-                </Button>
-              )}
-              <Button
-                variant="text"
-                size="sm"
-                onClick={() => {
-                  void agent.browser.setExpanded(false)
-                  navigate({ page: 'chat' })
-                }}
-              >
-                Back to chat
-                <span className="br-stage-kbd">Esc</span>
-              </Button>
+                />
+                <IconButton
+                  icon="x"
+                  label="Back to chat (Esc)"
+                  size={18}
+                  className="br-leave"
+                  onClick={() => {
+                    void agent.browser.setExpanded(false)
+                    navigate({ page: 'chat' })
+                  }}
+                />
+              </div>
+            }
+          />
+          {needsUser && state.handoffReason !== '' ? <p className="br-stage-reason">{state.handoffReason}</p> : null}
+        </div>
+        {/* Registered in the commit itself (a ref callback), so the live page lands here in the same frame. */}
+        <div className="br-stage-view" ref={setStageBox}>
+          {agent.platform === 'web' ? (
+            <div className="br-stage-mock">
+              <MockPage agentName={agentName} />
             </div>
-          }
-        />
-        {needsUser && state.handoffReason !== '' ? <p className="br-stage-reason">{state.handoffReason}</p> : null}
+          ) : offscreen && still !== null ? (
+            <img className="br-stage-still" src={still} alt="" />
+          ) : null}
+        </div>
       </div>
-      {/* Registered in the commit itself (a ref callback), so the live page lands here in the same frame. */}
-      <div className="br-stage-view" ref={setStageBox}>
-        {agent.platform === 'web' ? (
-          <div className="br-stage-mock">
-            <MockPage agentName={agentName} />
-          </div>
-        ) : offscreen && still !== null ? (
-          <img className="br-stage-still" src={still} alt="" />
-        ) : null}
-      </div>
+      {docked ? (
+        <aside className="br-dock" aria-label={`Chat with ${agentName}`}>
+          {layout.dock === 'side' ? (
+            <div
+              className="dock-resize"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize the chat"
+              aria-valuemin={DOCK_MIN_WIDTH}
+              aria-valuemax={DOCK_MAX_WIDTH}
+              aria-valuenow={layout.dockWidth}
+              tabIndex={0}
+              onPointerDown={(event) => {
+                drag.current = { x: event.clientX, width: layout.dockWidth }
+                // The live page under the pointer must not swallow the drag.
+                document.body.classList.add('dock-dragging')
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }}
+              onPointerMove={(event) => {
+                const start = drag.current
+                if (start === null) return
+                setDockWidth(start.width + (start.x - event.clientX), window.innerWidth)
+              }}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              onDoubleClick={resetDockWidth}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft') {
+                  event.preventDefault()
+                  nudge(16)
+                } else if (event.key === 'ArrowRight') {
+                  event.preventDefault()
+                  nudge(-16)
+                } else if (event.key === 'Home') {
+                  event.preventDefault()
+                  nudge(DOCK_MIN_WIDTH - dockWidth)
+                } else if (event.key === 'End') {
+                  event.preventDefault()
+                  nudge(DOCK_MAX_WIDTH - dockWidth)
+                }
+              }}
+            />
+          ) : null}
+          {chat({ below: layout.dock === 'below', fold: () => setDockOpen(false) })}
+        </aside>
+      ) : null}
     </div>
   )
 }

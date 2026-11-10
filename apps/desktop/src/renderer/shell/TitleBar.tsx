@@ -9,6 +9,7 @@ import { timeAgo } from '../lib/format'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
 import { BackButton, WorkButton } from './WorkMenu'
+import { useBrowserState, useWorkspaceLayout } from '../state/useBrowserState'
 
 function syncCopy(signedIn: boolean, syncing: boolean, error: string | null, lastSyncedAt: number | null, linked: string): string {
   if (!signedIn) return linked
@@ -27,6 +28,9 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
   const openPalette = useUi((state) => state.openPalette)
   const panelCollapsed = usePanel((state) => state.collapsed)
   const togglePanel = usePanel((state) => state.toggle)
+  // Browser view: the bar folds to a slim strip so the page gets the room; full screen takes it away.
+  const bar = useWorkspaceLayout(useBrowserState()).titleBar
+  const slim = !onboarding && bar !== 'normal'
 
   const agentName = settings?.agentName.trim() || 'your agent'
   const dark = isDarkNow()
@@ -41,9 +45,9 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
   }
 
   return (
-    <header className="titlebar">
+    <header className={`titlebar${slim ? ' slim' : ''}${!onboarding && bar === 'hidden' ? ' gone' : ''}`} aria-hidden={!onboarding && bar === 'hidden' ? true : undefined}>
       <div className="tb-brand">
-        <Mascot id={settings?.mascot ?? 'scout'} size={24} />
+        <Mascot id={settings?.mascot ?? 'scout'} size={slim ? 18 : 24} />
         <span>Agent</span>
       </div>
 
@@ -52,7 +56,7 @@ export function TitleBar({ onboarding = false }: { onboarding?: boolean }): JSX.
       {onboarding ? (
         <div style={{ flex: 1 }} />
       ) : (
-        <button type="button" className="cmdbar" onClick={openPalette} aria-label="Search or ask">
+        <button type="button" className="cmdbar" onClick={openPalette} aria-label="Search or ask" title={slim ? `Search, jump to, or ask ${agentName} (${modKey})` : undefined}>
           <Icon name="search" size={18} />
           <span>Search, jump to, or ask {agentName}</span>
           <kbd>{modKey}</kbd>

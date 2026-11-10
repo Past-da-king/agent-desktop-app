@@ -140,6 +140,9 @@ export interface BrowserControl {
   /** Optional so older fakes keep compiling; AgentBrowser has it. */
   setViewMode?(mode: BrowserViewMode): Promise<void>
   setExpanded?(on: boolean): void
+  setFullScreen?(on: boolean): void
+  /** The person hands the page in front to the agent; true when there was a page to hand over. */
+  handOverPage?(): Promise<boolean>
   frame?(): Promise<string | null>
   personOpen?(address: string): Promise<void>
   personNewTab?(): void
@@ -678,6 +681,11 @@ export function registerIpc(deps: IpcDeps): () => void {
     if (typeof rawOn !== 'boolean') throw new Error('expanded must be true or false')
     deps.browser?.setExpanded?.(rawOn)
   })
+  handle(CHANNELS.browser.setFullScreen, async (_event, rawOn) => {
+    if (typeof rawOn !== 'boolean') throw new Error('full screen must be true or false')
+    deps.browser?.setFullScreen?.(rawOn)
+  })
+  handle(CHANNELS.browser.handOver, async () => (await deps.browser?.handOverPage?.()) ?? false)
   handle(CHANNELS.browser.openInSystem, async () => {
     await deps.browser?.openInSystem()
   })
