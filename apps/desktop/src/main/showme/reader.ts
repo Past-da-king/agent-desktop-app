@@ -1,18 +1,15 @@
 /**
- * Where the app gets its screen reader ("show me how"). ONE line changes when the native layer lands:
- *
- *   import { createScreenReader } from './native'
- *   export function appScreenReader(options: ReaderOptions): ScreenReader { return createScreenReader(options) }
- *
- * Until then there is none, and a walk says so plainly instead of starting. The native layer may make that change
- * itself, here; nothing else in the engine or in main/index.ts needs to move.
+ * Where the app gets its screen reader ("show me how"): the native layer in ./native. On Windows that is the
+ * agent-screen helper (tools/agent-screen); anywhere else, or when the helper is missing from the install, the
+ * reader says it is not available and a walk says so plainly instead of starting.
  */
-import { noScreenReader, type ScreenReader } from './screen'
+import { createScreenReader } from './native'
+import type { ScreenReader } from './screen'
 
 export interface ReaderOptions {
   log?: (message: string, detail?: Record<string, unknown>) => void
 }
 
-export function appScreenReader(_options: ReaderOptions = {}): ScreenReader {
-  return noScreenReader()
+export function appScreenReader(options: ReaderOptions = {}): ScreenReader {
+  return createScreenReader(options)
 }

@@ -3,6 +3,8 @@
  * this computer. Windows has a real one (./windows.ts, through the agent-screen helper); anywhere else, or when
  * the helper is missing, it gives one that says it is not available and why, and never throws from available().
  */
+import { join } from 'node:path'
+
 import { findScreenSidecar, ScreenReadError } from './sidecar'
 import type { ScreenSidecarLookup } from './sidecar'
 import { createWindowsScreenReader } from './windows'
@@ -43,9 +45,17 @@ function unavailable(reason: string): NativeScreenReader {
   }
 }
 
+/** Where the helper is when nobody says: packed beside the app, else in the repo the app runs from. */
+function defaultLookup(): ScreenSidecarLookup {
+  const resourcesPath = (process as { resourcesPath?: string }).resourcesPath
+  const cwd = process.cwd()
+  return { ...(typeof resourcesPath === 'string' ? { resourcesPath } : {}), dirs: [cwd, join(cwd, '..', '..')] }
+}
+
 /**
- * The screen reader for this computer. In the app: createScreenReader({ lookup: { resourcesPath: process.resourcesPath,
- * dirs: [app.getAppPath(), process.cwd()] }, excludePids: () => [process.pid], displays }).
+ * The screen reader for this computer. With no options it finds the helper itself (the packed app's resources,
+ * then the repo in development) and leaves this process's own windows out. `displays` (the caller's display ids
+ * in physical pixels) is only needed for ActiveWindow.displayId and capture({ displayId }).
  */
 export function createScreenReader(options: CreateScreenReaderOptions = {}): NativeScreenReader {
   const platform = options.platform ?? process.platform
@@ -54,6 +64,6 @@ export function createScreenReader(options: CreateScreenReaderOptions = {}): Nat
   const { lookup, platform: _platform, ...rest } = options
   void _platform
   let found: string | null | undefined
-  const binary = rest.binary ?? ((): string | null => (found === undefined ? (found = findScreenSidecar(lookup ?? {})) : found))
+  const binary = rest.binary ?? ((): string | null => (found === undefined ? (found = findScreenSidecar(lookup ?? defaultLookup())) : found))
   return createWindowsScreenReader({ ...rest, binary })
 }
