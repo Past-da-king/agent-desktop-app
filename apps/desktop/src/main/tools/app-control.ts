@@ -105,6 +105,9 @@ export const SETTINGS_NEED_APPROVAL: ReadonlySet<string> = new Set([
   'model',
   'accounts',
   'ai',
+  // What a screen share shows of him: only he lowers it.
+  'hideGuidesFromCapture',
+  'hideChatFromCapture',
 ])
 
 function text(value: unknown): string {

@@ -125,6 +125,8 @@ export interface QuickAskOptions {
   devUrl?: string
   /** While true a lost focus does not close the box (a dictation is typing into it). */
   keepOpen?: () => boolean
+  /** Told of the box's window when it is made (it shows only the chat: capture-privacy.ts hides it by that setting). */
+  onWindow?: (window: BrowserWindow) => void
 }
 
 export class QuickAskWindow {
@@ -166,6 +168,7 @@ export class QuickAskWindow {
     })
 
     this.window = window
+    this.options.onWindow?.(window)
     window.setAlwaysOnTop(true, 'floating')
     this.place(window)
 
