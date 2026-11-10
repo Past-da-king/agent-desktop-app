@@ -508,14 +508,22 @@ namespace AgentScreen
                 if (root != IntPtr.Zero) fg = root;
                 if (!IsExcluded(fg) && Native.IsWindowVisible(fg) && !Native.IsIconic(fg)) return fg;
             }
+            // The caller's own window is in front (the quick-ask box): the window he was working in is the first one
+            // behind it. An always-on-top window (a browser's "is sharing your screen" bar, a pinned player) sits above
+            // that one without being it, so it only counts when there is nothing else.
             IntPtr hwnd = Native.GetTopWindow(IntPtr.Zero);
+            IntPtr pinned = IntPtr.Zero;
             int guard = 0;
             while (hwnd != IntPtr.Zero && guard++ < 4000)
             {
-                if (Workable(hwnd)) return hwnd;
+                if (Workable(hwnd))
+                {
+                    if ((Native.GetWindowLongPtr(hwnd, Native.GWL_EXSTYLE).ToInt64() & 0x8) == 0) return hwnd;
+                    if (pinned == IntPtr.Zero) pinned = hwnd;
+                }
                 hwnd = Native.GetWindow(hwnd, Native.GW_HWNDNEXT);
             }
-            return IntPtr.Zero;
+            return pinned;
         }
 
         /** Every window a person could be working in, front to back. */

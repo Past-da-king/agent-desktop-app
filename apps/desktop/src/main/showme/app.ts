@@ -104,6 +104,21 @@ export function startShowMe(deps: ShowMeAppDeps): ShowMeApp {
       deps.broadcast(SHOWME_EVENTS.state, state)
       // No route could be worked out: the bar comes back and says so, instead of nothing happening.
       if (state.phase === 'ended' && state.failed) deps.showBar?.()
+      // For support: after a walk the helper must hold no mouse or keyboard hook. Said once in the log, a moment later.
+      if (state.phase === 'ended') {
+        const helperState = (reader as { helperState?: () => Promise<{ version: string; hooks: boolean } | null> }).helperState
+        if (typeof helperState === 'function') {
+          const check = setTimeout(() => {
+            void helperState
+              .call(reader)
+              .then((helper) => {
+                if (helper !== null && !service.running()) deps.log('Show me: helper after the walk', { version: helper.version, hooks: helper.hooks })
+              })
+              .catch(() => undefined)
+          }, 400)
+          check.unref?.()
+        }
+      }
     },
     log: deps.log,
   })
