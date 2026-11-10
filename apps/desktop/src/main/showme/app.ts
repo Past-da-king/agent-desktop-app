@@ -128,19 +128,18 @@ export function startShowMe(deps: ShowMeAppDeps): ShowMeApp {
     const started = await service.ask(question)
     // The bar steps aside so the window he asked about is in front again, with the ring on it.
     if (started.ok) {
-      deps.hideBar()
-      // The bar had the keyboard, and hiding it gives the keyboard to nobody (seen on Windows: the hidden bar stayed
-      // the foreground window, so his next keys went nowhere). It goes back to the window he asked about.
+      // The bar has the keyboard, and hiding it gives the keyboard to nobody or to whatever window is next (seen on
+      // Windows: the hidden bar stayed the foreground window, or another program came forward). So the keyboard is
+      // handed to the window he asked about FIRST, while the bar still has it and Windows therefore allows it; the
+      // bar then steps aside. Never waits long: the ring matters more than the keyboard.
       const on = service.askedOn()
       const focus = (reader as { focus?: (hwnd: string) => Promise<boolean> }).focus
+      let given = true
       if (on !== null && typeof focus === 'function') {
-        void focus
-          .call(reader, on.hwnd)
-          .then((given) => {
-            if (!given) deps.log('Show me: the keyboard was not given back to his window', { process: on.process })
-          })
-          .catch(() => undefined)
+        given = await Promise.race([focus.call(reader, on.hwnd).catch(() => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 400))])
       }
+      deps.hideBar()
+      if (!given && on !== null) deps.log('Show me: the keyboard was not given back to his window', { process: on.process })
     }
     return started
   })

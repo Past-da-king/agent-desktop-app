@@ -231,7 +231,8 @@ export function scrollWay(bounds: Rect, window: Rect): ScrollWay {
 export function scrollHintRect(window: Rect, way: ScrollWay): Rect {
   const width = Math.round(Math.min(220, Math.max(60, window.width / 4)))
   const x = Math.round(window.x + window.width / 2 - width / 2)
-  if (way === 'down') return { x, y: window.y + window.height - 36, width, height: 8 }
+  // High enough above the bottom edge for the label under it to stay inside the window.
+  if (way === 'down') return { x, y: window.y + Math.max(0, window.height - 110), width, height: 8 }
   if (way === 'up') return { x, y: Math.round(window.y + Math.min(170, window.height * 0.2)), width, height: 8 }
   return { x, y: Math.round(window.y + window.height / 2), width, height: 8 }
 }
