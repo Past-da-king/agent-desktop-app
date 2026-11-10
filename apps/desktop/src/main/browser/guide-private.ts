@@ -65,9 +65,18 @@ export interface PrivateGuideDeps {
   frameBox: (frame: GuideFrame) => Promise<(Rect & { pageWidth: number }) | null>
   /** How often a target inside a frame has its frame's place read again (the frame moves when its page scrolls). */
   frameEveryMs?: number
+  /** How long after the target last moved in a fast scroll the ring is drawn again. Default FLIGHT_SETTLE_MS; 0: it is never hidden for a scroll. */
+  flightSettleMs?: number
 }
 
 export const FRAME_EVERY_MS = 60
+/**
+ * A fast scroll: the page says where its target is a frame after it moved, so a ring that follows a target jumping
+ * this far (page px) between two reports would be drawn visibly behind it. While such a scroll is in flight nothing
+ * is drawn; the ring is back, on the target, this long after the target last moved.
+ */
+export const FLIGHT_PX = 24
+export const FLIGHT_SETTLE_MS = 90
 
 export class PrivateGuide implements GuideSurface {
   private overlay: PrivateOverlay | null = null
@@ -77,6 +86,7 @@ export class PrivateGuide implements GuideSurface {
   private timer: ReturnType<typeof setInterval> | null = null
   private reading = false
   private disposed = false
+  private flight: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly deps: PrivateGuideDeps) {}
 
@@ -86,6 +96,7 @@ export class PrivateGuide implements GuideSurface {
 
   begin(step: GuideSurfaceStep): void {
     this.stopFrame()
+    this.land()
     this.step = step
     this.last = null
     this.box = null
@@ -100,13 +111,33 @@ export class PrivateGuide implements GuideSurface {
 
   report(report: GuideReport): void {
     if (this.step === null || report.token !== this.step.token) return
+    const before = this.last
     this.last = report
+    const a = before !== null && before.shown ? before.box : undefined
+    const b = report.shown ? report.box : undefined
+    const moved = a !== undefined && b !== undefined ? Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) : 0
+    // In flight already: any further move keeps it so. Not yet: only a jump starts one.
+    const settle = this.deps.flightSettleMs ?? FLIGHT_SETTLE_MS
+    if (settle > 0 && (moved >= FLIGHT_PX || (this.flight !== null && moved > 0))) {
+      if (this.flight !== null) clearTimeout(this.flight)
+      this.flight = setTimeout(() => {
+        this.flight = null
+        this.draw()
+      }, settle)
+      this.flight.unref?.()
+    }
     this.draw()
+  }
+
+  private land(): void {
+    if (this.flight !== null) clearTimeout(this.flight)
+    this.flight = null
   }
 
   end(token: string): void {
     if (this.step === null || this.step.token !== token) return
     this.stopFrame()
+    this.land()
     this.step = null
     this.last = null
     this.box = null
@@ -122,6 +153,7 @@ export class PrivateGuide implements GuideSurface {
   dispose(): void {
     this.disposed = true
     this.stopFrame()
+    this.land()
     this.step = null
     this.last = null
     const overlay = this.overlay
@@ -168,6 +200,7 @@ export class PrivateGuide implements GuideSurface {
     const step = this.step
     const report = this.last
     if (this.disposed || step === null || report === null || !report.shown || report.box === undefined) return null
+    if (this.flight !== null) return null
     if (!this.deps.outside()) return null
     const view = this.deps.view()
     const win = this.deps.window()

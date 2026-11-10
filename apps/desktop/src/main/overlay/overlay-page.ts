@@ -28,6 +28,9 @@ export interface OverlayPageState {
   label: string
 }
 
+/** A release and the click made of the same press arrive within this long: they are one press. */
+export const ACT_ONCE_MS = 400
+
 /** Space between the target and the ring, in drawing pixels (the in-page guide uses the same). */
 export const RING_PAD = 4
 
@@ -108,10 +111,32 @@ const SCRIPT = `
   };
   // The window lets the mouse through and only forwards its moves: over one of the two buttons the main process
   // makes the window take clicks, and gives them back to what is underneath the moment the pointer leaves.
-  addEventListener('mousemove', (e) => { mouse = { x: e.clientX, y: e.clientY }; check(); }, true);
-  document.addEventListener('mouseleave', () => { mouse = null; check(); }, true);
-  tag.querySelector('.ok').addEventListener('click', (e) => { if (e.isTrusted) send({ type: 'act', outcome: 'done' }); });
-  tag.querySelector('.skip').addEventListener('click', (e) => { if (e.isTrusted) send({ type: 'act', outcome: 'skipped' }); });
+  //
+  // His press on I did it or Skip. On Windows this window (never focused, click-through until the pointer is on a
+  // button) is handed the release of a real mouse press but not the press itself, so no click is made of the two
+  // (seen 10 Nov 2026 with a real mouse; input sent through the debugger does make a click). So a trusted release of
+  // the main button counts as the press, on a button the pointer came to with no button held: a drag that began in
+  // the page underneath and ends on a button is not a press. A click that does arrive is the same press, said once.
+  const buttonOf = (e) => { const el = e.target && e.target.closest ? e.target.closest('button') : null; return el && tag.contains(el) ? el : null; };
+  let armed = null;
+  let actedAt = -1e9;
+  const act = (button) => {
+    const now = performance.now();
+    if (now - actedAt < ${ACT_ONCE_MS}) return;
+    actedAt = now;
+    send({ type: 'act', outcome: button.classList.contains('ok') ? 'done' : 'skipped' });
+  };
+  addEventListener('mousemove', (e) => {
+    mouse = { x: e.clientX, y: e.clientY };
+    const button = buttonOf(e);
+    if (!button) armed = null; else if (e.buttons === 0) armed = button; else if (armed !== button) armed = null;
+    check();
+  }, true);
+  document.addEventListener('mouseleave', () => { mouse = null; armed = null; check(); }, true);
+  const release = (e) => { if (!e.isTrusted || e.button !== 0) return; const button = buttonOf(e); if (button && button === armed) act(button); };
+  addEventListener('mouseup', release, true);
+  addEventListener('pointerup', release, true);
+  for (const button of [tag.querySelector('.ok'), tag.querySelector('.skip')]) button.addEventListener('click', (e) => { if (e.isTrusted) act(button); });
   send({ type: 'ready' });
 })();
 `

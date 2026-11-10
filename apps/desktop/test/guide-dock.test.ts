@@ -50,6 +50,7 @@ function setup(first: ViewInfo): { guide: PrivateGuide; overlay: () => FakeOverl
     window: () => state.window,
     look: () => brandLook({ theme: 'light', accent: 'teal' }),
     frameBox: async () => null,
+    flightSettleMs: 0,
   })
   return { guide, overlay: () => made, state }
 }
