@@ -12,6 +12,11 @@ It reads other windows through Windows UI Automation (the COM client), so it wor
 - Reads a window's controls, finds one by name, follows its rectangle, captures a window or a screen
   area as PNG, and reports clicks, the wheel, and a few named keys.
 - It never clicks, types, blocks, delays or swallows input. There is no code in it that sends input.
+- One request changes which window has the keyboard: `focus` brings a window to the front, as a click on its title
+  would, and only while the caller's own window (or none) has the keyboard. Nothing is typed or clicked.
+- A followed element counts as out of sight for 650 ms after the page scrolled under it: the wheel, a key that
+  scrolls a page (PageUp, PageDown, Home, End, the arrows, Space, not while a text field has the keyboard), or a drag
+  with the button held (a scroll bar). These are noted inside the helper and never sent anywhere.
 - The mouse and keyboard hooks exist only between `{"op":"input","on":true}` and `{"op":"input","on":false}`.
   Each callback reads a few numbers and passes the event on. The only keys that leave the process are the
   names the caller asked for, and "paste" for Ctrl+V or Shift+Insert. Nothing typed is logged or stored.
@@ -37,6 +42,7 @@ One JSON object per line. Requests carry an `id` and an `op`; the answer carries
 | `unwatch` | `watch` | |
 | `capture` | `hwnd`, or `x y width height`; `maxWidth` | `{ width, height, how, png }` (base64) |
 | `input` | `on`, `keys`, `clickOn` | installs or removes the hooks; then `input` events |
+| `focus` | `hwnd` | `true` when that window has the keyboard now, `false` when it was left alone |
 | `quit` | | exits |
 
 Events: `{"event":"move","watch":1,"rect":{...}|null,"why":"moved|hidden|gone"}` and

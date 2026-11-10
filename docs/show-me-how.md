@@ -22,7 +22,10 @@ Advanced: "Skip a step shortcut" and "I did it shortcut"). They are held only wh
 ## How a walk works
 
 1. **The window.** The moment the shortcut fires, the window in front is noted (`ShowMeService.noteForeground`),
-   before the bar takes the focus.
+   before the bar takes the focus. When the reader answers late (it was not running yet), the window is the first
+   one behind the bar that is not always-on-top: a browser's "is sharing your screen" bar or a pinned player sits
+   above the window you were working in without being it. When the bar closes, the keyboard is given back to that
+   window (the helper's `focus` request), so a paste or a shortcut lands there without a click first.
 2. **The route.** A matching skill is looked up by the window's program, its title and, for a browser, the page
    address, together with the question (`skills.ts`). Sources: memory pages of kind `skill` or `how-to` that are
    open, and learned apps (their about text and start address). One model call turns question + skill + what is on
@@ -30,8 +33,17 @@ Advanced: "Skip a step shortcut" and "I did it shortcut"). They are held only wh
 3. **The loop** (`walk.ts`). For the current step: the screen reader's own lookup by name, then a match on the list
    of elements, then (only if those miss) the small model picks from the list, then a picture of the window as the
    last resort. The ring follows the element when the page scrolls.
+   While the page is moving (the wheel, PageUp or PageDown, Home or End, the arrows, Space, a drag on the scroll
+   bar) the ring is taken down, because a browser only says where things are about half a second after a scroll. It is
+   drawn again where the element is as soon as the reader reports the new place.
+   A step whose element exists but is out of sight (below the fold, or scrolled away under him) is not looked for by
+   a model and the route is not planned again: the label says `Scroll down to "..."` (or up) beside a short bar at
+   that edge of the window, and the ring comes the moment the element is in view.
 4. **Your click is the feedback.** A left click inside the ring advances. A click anywhere else does nothing and is
-   never blocked. A fill step advances on your paste (or on your own typing once you leave the field).
+   never blocked. A fill step advances on your paste (or on your own typing once you leave the field). The paste is
+   seen as the keys go down, before the program has read the clipboard, so the value stays on the clipboard for a
+   quarter of a second more; only then does your own clipboard come back (or a secret get cleared) and the next ring
+   appear.
 5. **The next ring is ready before you click.** While you are on step N, step N+1 is already looked up when its
    element is on screen, so your click puts the next ring up with no model call and no wait. When the element only
    appears after your click (a menu opening), the lookup is polled for a moment. A ring that was looked up ahead is
