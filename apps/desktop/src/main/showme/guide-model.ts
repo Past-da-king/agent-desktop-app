@@ -64,7 +64,10 @@ export function guideAccount(settings: Settings, secrets: { get(name: string): s
   if (main !== null && main.kind === 'api' && usable(main, secrets)) return main
   const keyed = accountsOf(settings).find((account) => account.kind === 'api' && usable(account, secrets))
   if (keyed !== undefined) return keyed
-  return main !== null && hasCli ? main : null
+  if (!hasCli) return null
+  // No key account at all: the plan (the main chat's, else any).
+  if (main !== null && main.kind !== 'api') return main
+  return accountsOf(settings).find((account) => account.kind !== 'api') ?? null
 }
 
 /** The models already named for an account in Settings (its own, and the picks that use it), for when it lists none. */

@@ -1514,6 +1514,13 @@ export const mockAgent: AgentApi = {
   ...mockHotkeys(() => settings),
   workers: mockWorkers(),
   vault: mockVault(),
+  // Show me how, in the preview: the bar shows its chip and its hint; there is no screen of his to guide on here.
+  showMe: {
+    start: async () => ({ ok: false, message: 'Showing you on screen needs the desktop app.' }),
+    stop: async () => undefined,
+    state: async () => ({ running: false, phase: 'idle' as const, question: '', step: 0, of: 0, label: '', message: '', failed: false, at: 0 }),
+    onState: () => () => undefined,
+  },
   git: {
     log: async () => [],
     report: async () => [],

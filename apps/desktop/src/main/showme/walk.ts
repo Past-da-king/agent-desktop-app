@@ -460,6 +460,8 @@ export class Walk {
           // The reader let go of it already.
         }
         if (this.waiting === entry) this.waiting = null
+        // Noted the moment he acts, so a window his action opens in the same breath is known to be his doing.
+        if (ended.kind !== 'lost' && ended.kind !== 'found' && ended.kind !== 'cancelled' && ended.kind !== 'timeout') this.lastActAt = ended.at
         resolve(ended)
       }
       const entry = { step, located, rect: { ...located.rect }, typed: 0, focused: false, resolve: finish }

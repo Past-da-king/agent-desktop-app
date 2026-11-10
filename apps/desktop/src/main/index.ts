@@ -1695,6 +1695,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       memories: () => showStore.list('memory'),
       apps: () => learned.apps(),
       holdKey: (accelerator, callback) => hotkeys?.hold(accelerator, callback) ?? null,
+      privacy: capturePrivacy,
       broadcast,
       hideBar: () => quickAsk?.hide(),
       showBar: () => quickAsk?.show(),
