@@ -3,8 +3,23 @@
 // owns it: change it here, additively, and say so in the commit message.
 //
 // Every rect is in PHYSICAL screen pixels with the virtual desktop's origin (the primary
-// display's top left is 0,0; a display to its left or above has negative coordinates). The
-// engine converts to Electron's DIP per display before it draws anything (./coords.ts).
+// display's top left is 0,0; a display to its left or above has negative coordinates). A click's
+// x and y are in the same pixels. The engine converts to Electron's DIP per display before it
+// draws anything (./coords.ts).
+//
+// How the app gets the native layer: ./native/index.ts exports
+//   export function createScreenReader(options?: { log?: (message: string, detail?: Record<string, unknown>) => void }): ScreenReader
+// and ./reader.ts (ONE line, see its comment) returns it. The native layer makes that one-line change itself when it
+// lands. Until then the service runs with no reader and says so plainly; nothing else in the engine changes.
+//
+// What the engine relies on, beyond the types:
+//   - find() matches the name exactly first (case and surrounding space ignored), then as a part; role is a hint in
+//     the engine's own words (button, link, textbox, checkbox, combobox, tab, menuitem, listitem) and may be ignored;
+//     nth is 1-based among the matches. It answers null rather than an offscreen or zero-size element when it can.
+//   - tree() and find() never give a password field's value. The engine sends no value to a model either.
+//   - onInput() reports a click AFTER the system delivered it (never held back), 'paste' for Ctrl+V or a paste from a
+//     menu, and 'foreground' when another window comes to the front. Events are only needed while a listener is on.
+//   - activeWindow() and 'foreground' never report the Agent app's own windows or the overlay.
 
 export interface Rect {
   x: number
@@ -57,4 +72,18 @@ export interface ScreenReader {
   /** Global and passive: it never blocks or swallows the person's input. */
   onInput(cb: (e: InputEvent) => void): () => void
   dispose(): void
+}
+
+/** What stands in while there is no native layer (another system, or the layer failed to load): nothing can be read. */
+export function noScreenReader(): ScreenReader {
+  return {
+    available: async () => false,
+    activeWindow: async () => null,
+    tree: async () => [],
+    find: async () => null,
+    watch: () => () => undefined,
+    capture: async () => Buffer.alloc(0),
+    onInput: () => () => undefined,
+    dispose: () => undefined,
+  }
 }

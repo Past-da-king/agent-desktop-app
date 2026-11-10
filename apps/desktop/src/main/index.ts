@@ -56,6 +56,7 @@ import { Logger } from './logger'
 import { onDestroyedSkip, safeSend, uncaughtHandler, whileAlive } from './alive'
 import { Notifier } from './notify'
 import { QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
+import { startShowMe, type ShowMeApp } from './showme/app'
 import { HotkeyManager } from './hotkeys'
 import { cachedLister, likelyHolder, listProcesses } from './hotkey-holders'
 import { createDictation, type DictationSetup } from './dictation/setup'
@@ -298,6 +299,8 @@ let recordingsUpkeep: Upkeep | null = null
 const workersChanged = createWorkersChanged((payload) => broadcast(WORKER_EVENTS.changed, payload))
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
+/** Show me how: a guided ring on whatever window he is on (showme/). */
+let showMe: ShowMeApp | null = null
 let hotkeys: HotkeyManager | null = null
 let hotkeyRetry: NodeJS.Timeout | null = null
 const runningProcesses = cachedLister(listProcesses)
@@ -728,7 +731,10 @@ async function explainBlockedHotkeys(): Promise<void> {
 }
 
 function openQuickAsk(): void {
-  quickAsk?.show()
+  // The window he is on is noted before the bar takes the focus, so "how do I..." is shown on it (showme/).
+  const noted = showMe?.service.noteForeground(150)
+  if (noted === undefined) quickAsk?.show()
+  else void noted.finally(() => quickAsk?.show())
 }
 
 function trayState(): { needsYou: number; routinesPaused: boolean } {
@@ -1138,6 +1144,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     calendar: () => presenceHandle?.calendar ?? null,
     miniappUi: () => miniappUi,
     git: { kv: gitKv, hook: () => gitHook },
+    showMe: () => showMe?.service ?? null,
   })
   // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
   // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
@@ -1285,6 +1292,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     for (const event of ['lock-screen', 'unlock-screen', 'resume'] as const) powerMonitor.on(event as 'resume', () => wakeupService?.kick())
   }
   const tools = buildToolset({
+    showMe: () => showMe?.service ?? null,
     git: { kv: gitKv, hook: () => gitHook },
     appControl: { ...appControl, update: selfUpdater },
     calendar: () => presenceHandle?.calendar ?? null,
@@ -1666,6 +1674,35 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // main window gains focus, and after sleep or unlock.
   hotkeyRetry = setInterval(retryHotkeys, 25_000)
 
+  // Show me how: "how do I..." in the quick chat bar, or an agent's screen_guide, rings the next thing to use on the
+  // window he is on. The ring is the shared guide overlay; the walk's keys are held only while it runs.
+  {
+    const showStore = store
+    const showRunner = runner
+    showMe = startShowMe({
+      ipcMain,
+      settings,
+      secrets,
+      providerFactory: factory,
+      hasCli: cliHost !== null,
+      planModels: (accountId) => showRunner.planModels(accountId),
+      planTurn: async (account, model, system, prompt, signal) => {
+        if (cliHost === null || account.kind === 'api') throw new Error('This build cannot run on a plan.')
+        const answer = await cliHost.turn({ cli: account.kind, thread: 'routine', tools: [], system, prompt, ...(model === '' ? {} : { model }), context: showRunner.deviceToolContext(signal), signal, onEvent: async () => undefined, onCall: async () => undefined, onResult: async () => undefined })
+        if (answer.error !== undefined) throw new Error(answer.error)
+        return answer.text
+      },
+      memories: () => showStore.list('memory'),
+      apps: () => learned.apps(),
+      holdKey: (accelerator, callback) => hotkeys?.hold(accelerator, callback) ?? null,
+      broadcast,
+      hideBar: () => quickAsk?.hide(),
+      showBar: () => quickAsk?.show(),
+      tmpDir: join(dir, 'showme'),
+      log: (message, detail) => logger.info(message, detail),
+    })
+  }
+
   let lastSettings = settings.get()
   disposeSettings = settings.onChange((next) => {
     // Which settings changed (names only, never values), so a setting that will not stick can be traced.
@@ -1981,6 +2018,8 @@ if (refuseToStart) {
     tray = null
     quickAsk?.destroy()
     quickAsk = null
+    showMe?.dispose()
+    showMe = null
     if (hotkeyRetry !== null) clearInterval(hotkeyRetry)
     hotkeyRetry = null
     hotkeys?.dispose()

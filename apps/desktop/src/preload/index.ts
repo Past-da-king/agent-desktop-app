@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 
+import { SHOWME_CHANNELS, SHOWME_EVENTS, type ShowMeStart, type ShowMeState } from '../shared/showme'
+
 import type {
   ModelListResult,
   AccountRules,
@@ -389,6 +391,12 @@ const api: AgentApi = {
     prefs: () => call<VaultPrefs>(VAULT_CHANNELS.prefs),
     setPrefs: (patch) => call<VaultPrefs>(VAULT_CHANNELS.setPrefs, patch),
     onChange: (callback) => on<null>(VAULT_EVENTS.changed, () => callback()),
+  },
+  showMe: {
+    start: (question) => call<ShowMeStart>(SHOWME_CHANNELS.start, question),
+    stop: () => call<void>(SHOWME_CHANNELS.stop),
+    state: () => call<ShowMeState>(SHOWME_CHANNELS.state),
+    onState: (callback) => on<ShowMeState>(SHOWME_EVENTS.state, callback),
   },
 }
 

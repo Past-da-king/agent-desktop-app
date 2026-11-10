@@ -256,6 +256,9 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     return number <= 0 ? 0 : Math.min(top, Math.round(number * 10) / 10)
   }
 
+  // Show me how: an account and a model, both '' for automatic.
+  if (key === 'guideModel') return pickFrom(value)
+
   const expected = DEFAULT_SETTINGS[key]
   if (typeof expected === 'boolean') return typeof value === 'boolean' ? value : INVALID
   if (typeof expected === 'string') {

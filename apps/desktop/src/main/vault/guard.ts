@@ -32,6 +32,8 @@ export const VAULT_FILL_TOOLS: ReadonlySet<string> = new Set([
   'webapp_run',
   'webapp_test',
   'browser_guide',
+  // The screen guide's clipboard fill: a {{vault:REF}} value is pasted by him, never shown.
+  'screen_guide',
 ])
 
 /** Tools that fill placeholders themselves (they need the value where only they know the shell or language). */
@@ -77,7 +79,7 @@ export function guardTool(tool: Tool, vault: VaultStore): Tool {
       let used: JsonObject = input
       if (!elsewhere && VAULT_FILL_TOOLS.has(name)) {
         // A guide step whose value is a Vault item is sensitive: never shown, kept or left on the clipboard.
-        const marked = name === 'browser_guide' ? markVaultSteps(input) : input
+        const marked = name === 'browser_guide' || name === 'screen_guide' ? markVaultSteps(input) : input
         const filled = fillInput(marked, run)
         if ('error' in filled) return filled.error
         used = filled.value as JsonObject
