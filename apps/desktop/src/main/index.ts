@@ -947,6 +947,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
     sitesFile: join(app.getPath('userData'), 'browser-sites.json'),
     // The person's own tabs keep their own sign-ins, apart from every agent's (apps/profiles.ts MINE_PARTITION).
     personPartition: MINE_PARTITION,
+    // Hand to the agent: the page's note and picture are ordinary attachments, and land in the message box.
+    handOver: {
+      root: join(app.getPath('userData'), 'attachments'),
+      agentName: () => settings.get().agentName,
+      deliver: (page) => broadcast(EVENTS.browserHandOver, page),
+    },
     // The guide's ring and label wear the app's own look: his theme and accent, read live (shared/brand.ts).
     look: () => brandLook({ theme: settings.get().theme, accent: settings.get().accent, systemDark: nativeTheme.shouldUseDarkColors }),
   })

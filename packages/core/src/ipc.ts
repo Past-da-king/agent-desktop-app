@@ -1255,6 +1255,23 @@ export interface BrowserState {
   personPartition?: string
   /** A tab is playing sound right now (heard or not). */
   audible?: boolean
+  /** Full screen: the page has the whole screen, with only the browser's own toolbar and a way back. */
+  fullScreen?: boolean
+}
+
+/**
+ * A page the person handed to the agent from the browser (the reverse of browser_handoff): which tab, its address
+ * and title, what they had selected, and the files that carry it into the message box (a note, and a picture of the
+ * visible page when one could be taken).
+ */
+export interface BrowserHandOver {
+  tabId: string
+  url: string
+  title: string
+  selection: string
+  attachments: Attachment[]
+  /** '' when the page was pictured, else why it was not, in plain words. */
+  problem: string
 }
 
 /**
@@ -1928,6 +1945,12 @@ export interface AgentApi {
     /** Signs one browser profile out of every site. */
     signOut(id: string): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
+    /** Full screen for the browser: only its toolbar and a way back. Turning it on opens the page over the window. */
+    setFullScreen(on: boolean): Promise<void>
+    /** Hands the page in front to the agent: it arrives through onHandOver, like one handed over from the page's own menu. */
+    handOver(): Promise<boolean>
+    /** A page was handed to the agent (toolbar button or the page's right-click menu): put it in the message box. */
+    onHandOver(cb: (page: BrowserHandOver) => void): Unsubscribe
     /** The renderer's <webview> for a tab is attached: hands its guest page to the main process. */
     attach(tabId: string, guestId: number): Promise<boolean>
   }
