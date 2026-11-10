@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { agent, chat } from '../bridge'
 import { formatAccelerator } from '../lib/hotkey'
+import { howToQuestion } from '../../shared/showme'
 import { useSettings } from '../state/useSettings'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
@@ -15,6 +16,10 @@ import '../voice/voice.css'
  * front. Enter sends the line into the one chat the main window shows (while the agent is busy it joins the run,
  * as it does from the main window), and the reply shows here in a line or two. Esc or a click elsewhere closes it.
  * Paste works as in any text box; the dictation shortcut types into it like into any app.
+ *
+ * Show me how (10 Nov 2026): a line that starts as a how-to ("how do I...", "show me how...") or is typed with the
+ * Show me chip on is not sent to the chat: the bar closes and the steps are ringed, one at a time, on the window he
+ * was on. The hint says which of the two Enter will do before he presses it, and Ctrl+Enter always sends to the chat.
  */
 export function QuickWindow(): JSX.Element {
   const settings = useSettings((state) => state.settings)
@@ -23,6 +28,7 @@ export function QuickWindow(): JSX.Element {
   const [waiting, setWaiting] = useState(false)
   const [answer, setAnswer] = useState('')
   const [problem, setProblem] = useState('')
+  const [showMode, setShowMode] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const sentAt = useRef(0)
 
@@ -62,8 +68,19 @@ export function QuickWindow(): JSX.Element {
       setAnswer('')
       setProblem('')
       setWaiting(false)
+      setShowMode(false)
       sentAt.current = 0
       input.current?.focus()
+      // A walk that could not start brought the bar back: it says why.
+      void agent.showMe
+        ?.state()
+        .then((state) => {
+          if (state.phase === 'ended' && state.failed && state.message !== '' && Date.now() - state.at < 15_000) {
+            setText(state.question)
+            setProblem(state.message)
+          }
+        })
+        .catch(() => undefined)
     })
 
     // The reply lands as a row change; the list is read only once the run ends, in case a change was missed.
@@ -97,9 +114,30 @@ export function QuickWindow(): JSX.Element {
 
   const dictating = useDictationDraft() !== null
 
-  const send = (): void => {
+  // What Enter will do with this line: show it on his screen, or send it to the chat.
+  const canShow = agent.showMe !== undefined
+  const walkQuestion = !canShow || text.trim() === '' ? null : showMode ? text.trim() : howToQuestion(text)
+
+  const showOnScreen = (question: string): void => {
+    setProblem('')
+    setAnswer('')
+    void agent.showMe
+      ?.start(question)
+      .then((started) => {
+        // Started: the bar is closed by the main process and the ring is on his window.
+        if (started.ok) setText('')
+        else setProblem(started.message)
+      })
+      .catch((error: unknown) => setProblem(error instanceof Error ? error.message : 'Could not start that.'))
+  }
+
+  const send = (toChat = false): void => {
     const value = text.trim()
     if (value === '') return
+    if (!toChat && walkQuestion !== null) {
+      showOnScreen(walkQuestion)
+      return
+    }
     setWaiting(true)
     setAnswer('')
     setProblem('')
@@ -123,15 +161,20 @@ export function QuickWindow(): JSX.Element {
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
               event.preventDefault()
-              send()
+              send(event.ctrlKey || event.metaKey)
             }
           }}
-          placeholder={`Message ${agentName}`}
+          placeholder={showMode ? 'What do you want to be shown?' : `Message ${agentName}`}
           aria-label={`Message ${agentName}`}
           autoComplete="off"
           spellCheck={false}
         />
-        <button type="button" className="send" onClick={send} aria-label="Send" disabled={text.trim() === ''}>
+        {canShow ? (
+          <button type="button" className={`chip${showMode ? ' on' : ''}`} aria-pressed={showMode} title="Show the steps on the window you were on" onClick={() => { setShowMode((on) => !on); input.current?.focus() }}>
+            Show me
+          </button>
+        ) : null}
+        <button type="button" className="send" onClick={() => send()} aria-label={walkQuestion !== null ? 'Show me on screen' : 'Send'} disabled={text.trim() === ''}>
           <Icon name="arrow" size={22} />
         </button>
       </div>
@@ -151,9 +194,12 @@ export function QuickWindow(): JSX.Element {
           </span>
         ) : answer !== '' ? (
           <span className="qw-answer">{answer}</span>
+        ) : walkQuestion !== null ? (
+          <span className="qw-hint">Enter shows you the steps on the window you were on. Ctrl+Enter sends it to your chat instead.</span>
         ) : (
           <span className="qw-hint">
             Enter sends to your chat. Esc closes.{dictateKeys === '' ? '' : ` ${dictateKeys} to dictate.`}
+            {canShow ? ' Start with "how do I" to be shown on screen.' : ''}
           </span>
         )}
       </div>

@@ -72,13 +72,13 @@ describe('the settings rows are the settings', () => {
     expect(rowsOfSection('account')).toHaveLength(6)
     expect(rowsOfSection('profiles')).toHaveLength(0)
     expect(rowsOfSection('devices')).toHaveLength(4)
-    expect(rowsOfSection('agents')).toHaveLength(11)
+    expect(rowsOfSection('agents')).toHaveLength(12)
     expect(rowsOfSection('voice')).toHaveLength(5)
     expect(rowsOfSection('notify')).toHaveLength(8)
     expect(rowsOfSection('appearance')).toHaveLength(4)
     expect(rowsOfSection('privacy')).toHaveLength(6)
     expect(rowsOfSection('git')).toHaveLength(4)
-    expect(rowsOfSection('advanced')).toHaveLength(12)
+    expect(rowsOfSection('advanced')).toHaveLength(14)
   })
 
   it('gives the eight keys that had no control a control, and names them in plain words', () => {

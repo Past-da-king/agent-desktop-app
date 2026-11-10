@@ -16,6 +16,7 @@ import { codeTools } from '../tools/code'
 import { browserTools } from '../tools/browser'
 import { browserProTools } from '../tools/browser-pro'
 import { browserGuideTools } from '../tools/browser-guide'
+import { screenGuideTools, type ScreenGuideHost } from '../tools/screen-guide'
 import { browserDevtoolsTools } from '../tools/browser-devtools'
 import { devtoolsOf } from '../browser/devtools'
 import { coreTools, type CoreToolDeps } from '../tools/core'
@@ -115,6 +116,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   miniappUi?: () => MiniAppUi | null
   /** The desktop window's list of files an agent has shown (media/shown.ts): show_media. Absent on a headless node. */
   media?: Omit<MediaToolDeps, 'store'>
+  /** Show me how (showme/service.ts): screen_guide, a guided ring on whatever window he is on. Absent on a headless node. */
+  showMe?: () => ScreenGuideHost | null
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -268,6 +271,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)).filter((tool) => tool.spec.name !== 'browser_eval' && tool.spec.name !== 'browser_network'), // webapp_*
     ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
     ...browserGuideTools({ browser: deps.browser, ...(deps.learned === undefined ? {} : { learned: deps.learned }) }), // browser_guide, browser_guide_log, browser_guide_save_app
+    ...(deps.showMe === undefined ? [] : screenGuideTools({ showMe: deps.showMe })), // screen_guide
     // The developer tools replace the learned apps' in-page network watcher: every tab records from the start.
     ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
     ...(deps.appControl?.invoker === undefined ? [] : appActionTools({ invoker: deps.appControl.invoker })), // app_actions, app_action: every button in the window

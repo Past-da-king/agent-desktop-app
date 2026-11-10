@@ -43,6 +43,7 @@ import { WakeLog } from './settings/WakeLog'
 import { SettingsRail, DEFAULT_SECTION } from './settings/Rail'
 import { DateTimeControl, HotkeyControl, NumberControl, SelectControl, SliderControl, TextControl, TimeControl } from './settings/Controls'
 import { SectionBlock, SettingRow } from './settings/Row'
+import { GuideModelRow, ShowMeKeyRows } from './settings/ShowMeSettings'
 import { PromptRulesSettings } from './PromptRules'
 import { takeSettingsSection } from '../lib/settings-jump'
 import { VaultSettings } from './Vault'
@@ -587,6 +588,7 @@ function AgentsSection({ settings, put, resetRow }: SectionProps): JSX.Element {
           Routines
         </Button>
       </SettingRow>
+      <GuideModelRow settings={settings} put={put} resetRow={resetRow} />
     </SectionBlock>
   )
 }
@@ -1392,6 +1394,7 @@ function AdvancedSection({ settings, put, resetRow }: SectionProps): JSX.Element
       >
         <HotkeyControl label="Quick chat shortcut" value={settings?.quickAskHotkey ?? ''} onSave={(next) => put({ quickAskHotkey: next })} />
       </SettingRow>
+      <ShowMeKeyRows settings={settings} put={put} resetRow={resetRow} />
       <SettingRow spec={row('syncUrl')} changed={changedNow(row('syncUrl'), settings)} onReset={() => resetRow(row('syncUrl'))}>
         <TextControl
           label="Sync server"

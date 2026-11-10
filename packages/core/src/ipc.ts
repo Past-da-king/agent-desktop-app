@@ -222,6 +222,16 @@ export interface Settings {
    * either way.
    */
   showDeveloperSettings: boolean
+  /**
+   * Show me how (10 Nov 2026): the account and model that walk the steps on his screen. '' account = automatic (the
+   * main chat's account when it is a key account, else the first key account), '' model = the smallest fast model
+   * that account lists. Never a hardcoded model (main/showme/guide-model.ts).
+   */
+  guideModel: AiPick
+  /** Show me how: the shortcut that skips a step, held only while a walk runs ('' = none). Esc always stops a walk. */
+  showMeSkipHotkey: string
+  /** Show me how: the shortcut that says "I did it", held only while a walk runs ('' = none). */
+  showMeDoneHotkey: string
 }
 
 /** The node row's `cap` for "no limit": older brains read cap <= 0 as "takes no work", so no limit is a big number. */
@@ -293,6 +303,9 @@ export const DEFAULT_SETTINGS: Settings = {
   helperBusyCpu: 90,
   watchdogMs: 1000,
   showDeveloperSettings: false,
+  guideModel: { account: '', model: '' },
+  showMeSkipHotkey: 'CommandOrControl+Alt+Right',
+  showMeDoneHotkey: 'CommandOrControl+Alt+Down',
 }
 
 export interface ModelOption {
@@ -2093,6 +2106,40 @@ export interface AgentApi {
    * pickers are not there.
    */
   remote?: { nodeName: string }
+
+  /** Show me how: a guided ring on whatever window he is on. Absent where there is no screen of his (the node's web UI). */
+  showMe?: ShowMeApi
+}
+
+/** Where a "show me how" walk is, for the quick chat bar. */
+export interface ShowMeState {
+  running: boolean
+  /** 'planning' while the steps are worked out, 'walking' while a ring is up, 'ended' after. */
+  phase: 'idle' | 'planning' | 'walking' | 'ended'
+  question: string
+  step: number
+  of: number
+  label: string
+  /** One plain line once it has ended, or why it could not start. */
+  message: string
+  /** It ended without a single step (no route could be worked out): the bar comes back to say so. */
+  failed: boolean
+  /** When this state began (ms). */
+  at: number
+}
+
+export interface ShowMeStart {
+  ok: boolean
+  /** Why not, in plain words, when it could not start. */
+  message: string
+}
+
+export interface ShowMeApi {
+  /** Start a walk for this question on the window that was in front before the bar opened. */
+  start(question: string): Promise<ShowMeStart>
+  stop(): Promise<void>
+  state(): Promise<ShowMeState>
+  onState(cb: (state: ShowMeState) => void): Unsubscribe
 }
 
 declare global {

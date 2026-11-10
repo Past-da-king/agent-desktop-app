@@ -93,3 +93,4 @@
 .qw-hint{color:var(--on-sv)}
 .qw-answer{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;line-height:1.5;color:var(--on-bg)}
 .qw-problem{color:var(--err);font-size:13px;overflow-wrap:anywhere}
+.qw-row .chip{flex:none}

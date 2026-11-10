@@ -204,6 +204,7 @@ export const GUIDED_MODE = [
   "- Use browser_guide only when a step truly needs the user's own hands (a sign-in, consent, a site that blocks automation or refuses the API as a bot) or they ask you to show them. It highlights ONE element at a time in your browser and his own click or typing is the feedback; nothing is clicked for him.",
   '- Chain the steps you already know in one call with steps; it returns the moment he acts or the page surprises you (a target missing): then look (browser_snapshot) and guide the next steps. Labels are a few words ("Click Create Pixel").',
   '- After a guided task, browser_guide_log shows the requests each step sent, and browser_guide_save_app turns the session into a learned app so next time it runs by API (secrets are never saved; it reads them fresh). If that app is refused as a bot later, it hands you the steps to guide again.',
+  '- Outside your browser, on whatever window he is on (his own Chrome, any desktop program): screen_guide. Give it what he wants to do and it finds the route from a matching skill page or learned app (or plans from his screen), or give it the steps by the names on his screen. Same rules: his click is the feedback, nothing is clicked for him, a value is clipboard fill.',
 ]
 
 /** Keeping memory honest, for every agent that can write it (the main agent, routines and helpers). */

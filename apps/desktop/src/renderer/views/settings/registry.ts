@@ -108,6 +108,7 @@ export const ROWS: readonly RowSpec[] = [
   { key: 'launchAtLogin', section: 'agents', label: 'Start when I sign in', description: 'So routines run without you opening anything.', control: 'switch', icon: 'play', sample: true, terms: ['login', 'startup'] },
   { key: 'closeToTray', section: 'agents', label: 'Keep running in the tray', description: 'Closing the window does not stop routines.', control: 'switch', icon: 'panel', sample: false, terms: ['background'] },
   { key: 'dailyMemoryAt', section: 'agents', label: 'End of day memory pass', description: 'When your agent tidies memory each day. Empty turns it off. A routine in Routines can do it too.', control: 'time', icon: 'memory', sample: '21:15', terms: ['memory', 'evening', 'tidy'] },
+  { key: 'guideModel', section: 'agents', label: 'Model that shows you how', description: 'Walks the steps on your screen when you ask to be shown how. Automatic picks the smallest fast model you have.', control: 'block', icon: 'bolt', sample: { account: 'a1b2c3d4', model: 'small-fast-model' }, terms: ['show me', 'guide', 'walk', 'steps', 'fast', 'small', 'screen'] },
 
   // ---- Voice and dictation ----
   { key: 'hasVoiceKey', section: 'voice', label: 'Voice key', description: 'Shows whether a Gemini key is stored. The key itself never appears here.', control: 'readonly', icon: 'key', sample: true, terms: ['gemini', 'key', 'stored'] },
@@ -148,6 +149,8 @@ export const ROWS: readonly RowSpec[] = [
 
   // ---- Advanced (shown only while Developer settings is on) ----
   { key: 'quickAskHotkey', section: 'advanced', label: 'Quick chat shortcut', description: 'A small message box over any app. Enter sends, Esc closes.', control: 'hotkey', icon: 'bolt', sample: 'CommandOrControl+Alt+Right', terms: ['shortcut', 'accelerator', 'keys', 'quick'] },
+  { key: 'showMeSkipHotkey', section: 'advanced', label: 'Skip a step shortcut', description: 'While you are being shown how, this skips the step. Esc always stops.', control: 'hotkey', icon: 'bolt', sample: 'CommandOrControl+Alt+K', terms: ['shortcut', 'show me', 'guide', 'skip', 'next'] },
+  { key: 'showMeDoneHotkey', section: 'advanced', label: 'I did it shortcut', description: 'While you are being shown how, this moves on when you did the step another way.', control: 'hotkey', icon: 'bolt', sample: 'CommandOrControl+Alt+J', terms: ['shortcut', 'show me', 'guide', 'done'] },
   { key: 'syncUrl', section: 'advanced', label: 'Sync server', description: 'Where your account lives. Empty means the default service.', control: 'field', icon: 'globe', sample: 'https://sync.example.com', terms: ['server', 'address', 'account'] },
   { key: 'watchdogMs', section: 'advanced', label: 'Log a frozen main thread', description: 'Writes the call stacks to main.log when the app stops responding for this long. 0 turns it off.', control: 'number', icon: 'doc', sample: 2000, terms: ['freeze', 'hang', 'log', 'slow'] },
   { key: 'mode', section: 'advanced', label: 'Legacy power mode', description: 'Kept for installs from before AI accounts. It follows your main account.', control: 'readonly', icon: 'key', sample: 'subscription', terms: ['stored'] },

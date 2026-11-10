@@ -34,6 +34,14 @@ extraResources:
     filter:
       - agent-net
       - agent-net.exe
+  # The screen reader behind "show me how" (tools/agent-screen, C#, Windows only). Its exe is committed
+  # (tools/agent-screen/bin/win-x64), so a build on Linux packs it too; the app finds it at
+  # <resources>/agent-screen/ (main/showme/native/sidecar.ts findScreenSidecar). No folder for the other systems:
+  # electron-builder warns and leaves it out, and the app says the feature is for Windows.
+  - from: ../../tools/agent-screen/bin/${os}-${arch}
+    to: agent-screen
+    filter:
+      - agent-screen.exe
 
 npmRebuild: false
 buildDependenciesFromSource: false
