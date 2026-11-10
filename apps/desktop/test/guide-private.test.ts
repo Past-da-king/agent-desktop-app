@@ -526,7 +526,7 @@ async function hostFor(page: Page): Promise<{ host: GuideHost; frames: FrameSess
     const skip = (await read()).skip!
     const at = { x: skip.x + skip.width / 2, y: skip.y + skip.height / 2 }
     const count = (): number => lines.filter((line) => line.includes('"act"')).length
-    await page.waitForTimeout(450)
+    // No wait is needed between two presses on different buttons: each is its own press.
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, buttons: 0 })
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.x, y: at.y, button: 'left', buttons: 0, clickCount: 1 })
     await expect.poll(() => lines.includes(`${OVERLAY_EVENT}{"type":"act","outcome":"skipped"}`)).toBe(true)

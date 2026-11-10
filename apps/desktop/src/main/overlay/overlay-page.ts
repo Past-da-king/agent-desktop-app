@@ -28,7 +28,7 @@ export interface OverlayPageState {
   label: string
 }
 
-/** A release and the click made of the same press arrive within this long: they are one press. */
+/** A release and the click made of the same press on a button arrive within this long: they are one press. */
 export const ACT_ONCE_MS = 400
 
 /** Space between the target and the ring, in drawing pixels (the in-page guide uses the same). */
@@ -119,13 +119,9 @@ const SCRIPT = `
   // the page underneath and ends on a button is not a press. A click that does arrive is the same press, said once.
   const buttonOf = (e) => { const el = e.target && e.target.closest ? e.target.closest('button') : null; return el && tag.contains(el) ? el : null; };
   let armed = null;
-  let actedAt = -1e9;
-  const act = (button) => {
-    const now = performance.now();
-    if (now - actedAt < ${ACT_ONCE_MS}) return;
-    actedAt = now;
-    send({ type: 'act', outcome: button.classList.contains('ok') ? 'done' : 'skipped' });
-  };
+  let released = null;
+  let releasedAt = -1e9;
+  const say = (button) => send({ type: 'act', outcome: button.classList.contains('ok') ? 'done' : 'skipped' });
   addEventListener('mousemove', (e) => {
     mouse = { x: e.clientX, y: e.clientY };
     const button = buttonOf(e);
@@ -133,10 +129,20 @@ const SCRIPT = `
     check();
   }, true);
   document.addEventListener('mouseleave', () => { mouse = null; armed = null; check(); }, true);
-  const release = (e) => { if (!e.isTrusted || e.button !== 0) return; const button = buttonOf(e); if (button && button === armed) act(button); };
-  addEventListener('mouseup', release, true);
-  addEventListener('pointerup', release, true);
-  for (const button of [tag.querySelector('.ok'), tag.querySelector('.skip')]) button.addEventListener('click', (e) => { if (e.isTrusted) act(button); });
+  addEventListener('mouseup', (e) => {
+    if (!e.isTrusted || e.button !== 0) return;
+    const button = buttonOf(e);
+    if (!button || button !== armed) return;
+    released = button; releasedAt = performance.now();
+    say(button);
+  }, true);
+  for (const button of [tag.querySelector('.ok'), tag.querySelector('.skip')]) button.addEventListener('click', (e) => {
+    if (!e.isTrusted) return;
+    // The click made of a press whose release was already counted.
+    const same = released === button && performance.now() - releasedAt < ${ACT_ONCE_MS};
+    released = null;
+    if (!same) say(button);
+  });
   send({ type: 'ready' });
 })();
 `
