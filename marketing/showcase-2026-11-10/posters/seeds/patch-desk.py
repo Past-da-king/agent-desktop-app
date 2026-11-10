@@ -85,4 +85,47 @@ for f in list(bridge.glob('*.ts')):
         new = new.replace(old, to)
     if new != text:
         f.write_text(new)
+
+# The licence slot in another chat is already approved, so the only card waiting is the quote.
+chats = (bridge / 'chats-demo.ts').read_text()
+chats = chats.replace("details: 'Fee: R 250, paid at the centre', decision: ''", "details: 'Fee: R 250, paid at the centre', decision: 'approve'")
+(bridge / 'chats-demo.ts').write_text(chats)
+
+# A neutral label on the model picker, and a demo page that fills the browser card.
+seed = (bridge / 'seed.ts').read_text()
+seed = seed.replace("label: 'Claude plan'", "label: 'Demo plan'").replace("main: { account: 'acc_claude', model: 'fable' }", "main: { account: 'acc_claude', model: 'standard' }")
+seed = seed.replace("    { time: '09:40', code: 'SH 157', fare: 'R 1,049', selected: false },\n", "    { time: '09:40', code: 'SH 157', fare: 'R 1,049', selected: false },\n"
+    "    { time: '11:15', code: 'SH 163', fare: 'R 1,180', selected: false },\n    { time: '12:40', code: 'LM 224', fare: 'R 1,240', selected: false },\n"
+    "    { time: '14:05', code: 'SH 169', fare: 'R 1,095', selected: false },\n    { time: '16:30', code: 'LM 230', fare: 'R 1,310', selected: false },\n"
+    "    { time: '18:20', code: 'SH 175', fare: 'R 990', selected: false },\n")
+(bridge / 'seed.ts').write_text(seed)
+
+panel = (root / 'shell/Panel.tsx').read_text()
+strip = '''      <div className="rt">{skyHopDemo.route}</div>
+      <div style={{ display: 'flex', gap: 6, margin: '2px 0 10px' }}>
+        {[['Thu 12', 'R 940'], ['Fri 13', 'R 899'], ['Sat 14', 'R 1,150'], ['Sun 15', 'R 1,020']].map(([day, from], i) => (
+          <div key={day} style={{ flex: 1, padding: '6px 8px', borderRadius: 8, border: i === 1 ? '1.5px solid #0B5FC9' : '1px solid #e2e2e8', background: i === 1 ? '#EEF4FF' : '#fff' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: i === 1 ? '#0B5FC9' : '#1b1a1f' }}>{day}</div>
+            <div style={{ fontSize: 10.5, color: '#55555e' }}>{from}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#55555e', margin: '0 2px 6px' }}>
+        <span>8 direct flights</span>
+        <span>Sorted by time</span>
+      </div>
+'''
+foot = '''      ))}
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e2e2e8', fontSize: 10.5, lineHeight: 1.5, color: '#77777f' }}>
+        Fares are for one adult and include taxes. Window seats are shown first.
+      </div>
+    </div>
+  )
+}
+
+function BrowserChrome({'''
+if 'Sorted by time' not in panel:
+    panel = panel.replace('      <div className="rt">{skyHopDemo.route}</div>\n', strip, 1)
+    panel = panel.replace('      ))}\n    </div>\n  )\n}\n\nfunction BrowserChrome({', foot, 1)
+(root / 'shell/Panel.tsx').write_text(panel)
 print('patched')

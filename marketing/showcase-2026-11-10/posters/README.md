@@ -1,6 +1,6 @@
 # Showcase posters, 10 Nov 2026
 
-Seven posters for the Agent app showcase, each as 1080 x 1080 and 1080 x 1350. One template (`posters.css`), one page per poster and size (`pages/`), rendered by `posters.mjs` with headless Chromium at 2x and scaled to 1080 wide.
+Eight posters for the Agent app showcase, each as 1080 x 1080 and 1080 x 1350. One template (`posters.css`), one page per poster and size (`pages/`), rendered by `posters.mjs` with headless Chromium at 2x and scaled to 1080 wide.
 
 Every screen is the real UI with an invented demo world (Sam, who runs a small photo studio, and an agent called Nova). Nothing in it is real data.
 
@@ -13,6 +13,7 @@ Every screen is the real UI with an invented demo world (Sam, who runs a small p
 5. Phone and desktop: "One agent. Phone and desktop."
 6. Browser: "Watch it work. Take over any time."
 7. Talk: "Or just talk to it."
+8. Projects: "A chat for every project."
 
 ## Render
 
@@ -20,7 +21,9 @@ Every screen is the real UI with an invented demo world (Sam, who runs a small p
 node posters.mjs --pw <folder with node_modules/playwright-core> --out <folder>
 ```
 
-`--only "Poster 1"` renders one, `--keep2x` also keeps the 2160 wide render. Fonts come from `apps/desktop/src/renderer/fonts`, colours from `apps/desktop/src/shared/brand.ts`.
+`--only "Poster 1"` renders one, `--keep2x` also keeps the 2160 wide render, `--feed` adds two sheets of every poster at 400 px wide (how a phone feed shows them).
+
+Posters 2 and 8 show a slide-up sheet over its page. The harness draws a sheet on an empty page, so `posters.mjs` puts two real renders together the way the app shows them: the page under a 50% scrim, the sheet cut from its own render on top. Fonts come from `apps/desktop/src/renderer/fonts`, colours from `apps/desktop/src/shared/brand.ts`.
 
 ## Where the stills come from
 

@@ -14,6 +14,8 @@ const SIGNAL = `<svg viewBox="0 0 46 14"><path d="M0 10h3v4H0zM5 7h3v7H5zM10 4h3
 // Devices: phone {img, sq, tall} with css box (w plus left/right/top), win the same for a desktop window.
 const P = (img, sq, tall) => ({ kind: 'phone', img: 'stills/phone/' + img, sq, tall })
 const W = (img, sq, tall) => ({ kind: 'win', img: 'stills/desk/' + img, sq, tall })
+// A slide-up sheet over the page it belongs to: both are real renders, put together the way the app shows them (page dimmed, sheet on top).
+const S = (img, sheet, anchor, sq, tall) => ({ kind: 'phone', img: 'stills/phone/' + img, sheet: 'stills/phone/' + sheet, anchor, sq, tall })
 const SQ = { w: 440, right: 64, top: 57 }       // whole phone, right side
 const TALL = { w: 600, left: 240, top: 600 }    // big phone, runs off the bottom
 
@@ -25,10 +27,10 @@ const posters = [
   { file: 'Poster 2 Learned apps', theme: 't-dark', h1: ['One agent learns it.', 'Every agent can use it.'],
     sub: 'Calling on WhatsApp is a learned app: a skill saved once, that any agent you run can call.',
     note: 'Next: agents sharing what they learn.', tallH1: 84,
-    devices: [P('05b-learned-open-dark.png', SQ, TALL)] },
+    devices: [S('05c-connections-dark.png', '05b-learned-open-dark.png', 'top', SQ, TALL)] },
   { file: 'Poster 3 Helpers', theme: 't-light', h1: ['Work happens', 'in the background.'],
     sub: 'Helpers run side by side, across your projects, and report back when they land.',
-    devices: [P('04-running-light.png', SQ, TALL)] },
+    devices: [P('04-running-chat-light.png', SQ, TALL)] },
   { file: 'Poster 4 Approvals', theme: 't-lav', h1: ['Nothing goes out', 'without your yes.'],
     sub: 'Anything sent in your name waits for you first, with the exact details in front of you.',
     devices: [P('07b-approval-chat-light.png', SQ, TALL)] },
@@ -41,6 +43,9 @@ const posters = [
   { file: 'Poster 7 Talk', theme: 't-light', h1: ['Or just', 'talk to it.'],
     sub: 'A voice call with your own agent, with live captions, while it does the work.',
     devices: [P('02-call-captions-dark.png', SQ, TALL)] },
+  { file: 'Poster 8 Projects', theme: 't-iris', side: true, h1: ['A chat for', 'every project.'],
+    sub: 'Each project keeps its own chat and helpers. Switch from the title and see what is running where.',
+    devices: [S('01-call-chat-dark.png', '06-switcher-dark.png', 'bottom', SQ, { w: 460, right: 64, top: 176 })] },
 ]
 
 const box = (b) => `--w:${b.w}px;` + ['left', 'right', 'top', 'bottom'].filter((k) => b[k] !== undefined).map((k) => `${k}:${b[k]}px;`).join('')
@@ -48,11 +53,16 @@ function device(d, size, colours) {
   const b = d[size]
   if (d.kind === 'win') return `<div class="win" style="${box(b)}"><img src="../${d.img}" alt=""></div>`
   const c = colours[d.img]
+  if (d.sheet) {
+    const s = sheets[d.sheet]; const u = (n) => `calc(var(--sw) * ${n} / 1170)`
+    const place = d.anchor === 'bottom' ? `bottom:0;height:${u(s.bottom - s.top + 84)};` : `top:${u(s.top)};bottom:0;`
+    return `<div class="phone" style="${box(b)}--sb:${c.dim};--sbink:#F2F0F7;"><div class="screen"><div class="status"><span>9:41</span>${SIGNAL}</div><div class="cam"></div><div class="stage"><img src="../${d.img}" alt=""><div class="scrim"></div><div class="sheet" style="${place}border-radius:${u(s.radius)} ${u(s.radius)} 0 0;background:${s.bg};"><img src="../${d.sheet}" alt="" style="margin-top:${u(-s.top)};"></div></div></div></div>`
+  }
   return `<div class="phone" style="${box(b)}--sb:${c.bg};--sbink:${c.ink};"><div class="screen"><div class="status"><span>9:41</span>${SIGNAL}</div><div class="cam"></div><img src="../${d.img}" alt=""></div></div>`
 }
 function page(p, size, colours) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${p.file} ${size}</title><link rel="stylesheet" href="../posters.css"></head><body>
-<div class="poster ${size} ${p.theme}${p.stack ? ' stack' : ''}">
+<div class="poster ${size} ${p.theme}${p.stack ? ' stack' : ''}${p.side ? ' side' : ''}">
   <div class="brand">${MARK}<span>Agent</span><span class="tag">Open source</span></div>
   <div class="copy"><h1${size === 'tall' && p.tallH1 ? ` style="font-size:${p.tallH1}px"` : ''}>${p.h1.map((l) => `<span>${l}</span>`).join('')}</h1><p class="sub">${p.sub}</p>${p.note ? `<p class="note">${p.note}</p>` : ''}</div>
   ${p.devices.map((d) => device(d, size, colours)).join('\n  ')}
@@ -73,9 +83,27 @@ for (const img of new Set(posters.flatMap((p) => p.devices.filter((d) => d.kind 
     const c = document.createElement('canvas'); c.width = im.width; c.height = 8; const g = c.getContext('2d'); g.drawImage(im, 0, 0)
     const [r, gg, b] = g.getImageData(Math.floor(im.width / 2), 2, 1, 1).data
     const lum = (0.2126 * r + 0.7152 * gg + 0.0722 * b) / 255
-    return { bg: `rgb(${r},${gg},${b})`, ink: lum > 0.55 ? '#1B1A1F' : '#F2F0F7' }
+    return { bg: `rgb(${r},${gg},${b})`, dim: `rgb(${Math.round(r * 0.5)},${Math.round(gg * 0.5)},${Math.round(b * 0.5)})`, ink: lum > 0.55 ? '#1B1A1F' : '#F2F0F7' }
   }, pathToFileURL(path.join(here, img)).href)
 }
+
+// Where each sheet starts and ends inside its still (the harness draws it on an empty page), and its corner radius.
+const sheets = {}
+for (const img of new Set(posters.flatMap((p) => p.devices.filter((d) => d.sheet).map((d) => d.sheet)))) {
+  sheets[img] = await page_.evaluate(async (src) => {
+    const im = new Image(); im.src = src; await im.decode()
+    const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(im, 0, 0)
+    const px = (x, y) => g.getImageData(x, y, 1, 1).data; const far = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > 5
+    const x0 = Math.floor(im.width / 4); const band = px(x0, 2); let top = 0
+    for (let y = 3; y < im.height; y++) if (far(px(x0, y), band)) { top = y; break }
+    const bg = px(x0, top + 8); let radius = 0
+    for (let x = 0; x < 300; x++) if (!far(px(x, top + 3), bg)) { radius = x + 6; break }
+    let bottom = im.height
+    for (let y = im.height - 1; y > top; y -= 2) { const row = g.getImageData(0, y, im.width, 1).data; let hit = false; for (let i = 0; i < row.length; i += 16) if (far([row[i], row[i + 1], row[i + 2]], bg)) { hit = true; break } if (hit) { bottom = y; break } }
+    return { top, bottom, radius, bg: `rgb(${bg[0]},${bg[1]},${bg[2]})` }
+  }, pathToFileURL(path.join(here, img)).href)
+}
+console.log('sheets', JSON.stringify(sheets))
 
 for (const p of posters) for (const [size, label, h] of [['sq', 'square', 1080], ['tall', '4x5', 1350]]) {
   if (only && !p.file.includes(only)) continue
@@ -92,5 +120,17 @@ for (const p of posters) for (const [size, label, h] of [['sq', 'square', 1080],
   }, { data: big.toString('base64'), w: 1080, h })
   fs.writeFileSync(path.join(out, `${p.file} ${label}.png`), Buffer.from(small, 'base64'))
   console.log(`${p.file} ${label}.png`)
+}
+// --feed: every poster at 400 px wide on one sheet per size, the way a phone feed shows them, for a look before shipping.
+if (args.includes('--feed')) {
+  const small = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 }); const sp = await small.newPage()
+  await sp.goto(pathToFileURL(path.join(here, 'posters.css')).href)
+  fs.mkdirSync(path.join(out, 'feed'), { recursive: true })
+  for (const [label, h] of [['square', 400], ['4x5', 500]]) {
+    const imgs = posters.map((p) => `<img src="${pathToFileURL(path.join(out, `${p.file} ${label}.png`)).href}" style="width:400px;height:${h}px;display:block">`).join('')
+    await sp.setViewportSize({ width: 1600, height: h * Math.ceil(posters.length / 4) })
+    await sp.evaluate((html) => { document.documentElement.innerHTML = `<body style="margin:0;display:flex;flex-wrap:wrap;background:#000">${html}</body>` }, imgs); await sp.waitForTimeout(600)
+    await sp.screenshot({ path: path.join(out, 'feed', `feed ${label}.png`) })
+  }
 }
 await browser.close()

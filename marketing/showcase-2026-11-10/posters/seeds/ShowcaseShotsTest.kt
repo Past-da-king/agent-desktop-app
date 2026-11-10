@@ -160,11 +160,16 @@ class ShowcaseShotsTest(private val dark: Boolean) {
     private val ids = RemoteIds()
     private fun ui(list: List<LiveCard>) = LiveCardsUi(list, { c -> LiveCards.view(c, ids) }, {})
     private fun fold(collapsed: Boolean) = RunningFold(null).apply { set(collapsed) }
-    @Test fun running() = shot("04-running", parts = true) { RunningBlock(ui(cards), current = "main", projects = projects, states = emptyMap(), fold = fold(false)) }
-    @Test fun runningInChat() = shot("04b-running-chat") { ChatScreen(listOf(
-        item("user", "Get Friday ready: flights, a second light, and keep an eye on that lens"),
-        item("agent", "On it. Three helpers are working and I'll come back when each one lands."),
-    ), AgentStatus(true, "Working", 3), "Nova", "Sam", false, "", {}, ChatActions(), live = ui(cards.take(5))) }
+    /** The chat as the app shows it with the list open (the fold choice is kept in the app's settings). */
+    @Test fun runningInChat() {
+        androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>().getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).edit().putString("agents_fold", "open").commit()
+        shot("04-running-chat") { ChatScreen(listOf(
+            item("user", "Get Friday ready: flights, a second light, and keep an eye on that lens"),
+            item("agent", "On it. I'll come back when each one lands."),
+        ), AgentStatus(true, "Working", 3), "Nova", "Sam", false, "", {}, ChatActions(), live = ui(cards)) }
+    }
+    /** The page the learned apps sheet slides up over. */
+    @Test fun connections() = shot("05c-connections") { com.past9.phoneaos.ui.screens.ConnectionsScreen(com.past9.phoneaos.ui.screens.ConnectionsState(learned = learned), ConnectionsActions()) }
 
     // ---------- 5. learned apps ----------
     private fun tool(name: String, about: String, writes: Boolean = false) = LearnedTool(name, about, js = "return 1", readOnly = !writes)

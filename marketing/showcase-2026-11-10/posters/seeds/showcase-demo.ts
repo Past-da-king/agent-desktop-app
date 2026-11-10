@@ -43,7 +43,7 @@ function helper(id: string, at: number, now: number, label: string, brief: strin
       createdAt: at,
       kind: 'helper',
       text: brief,
-      meta: JSON.stringify({ id, label, state, summary, queued: false, startedAt: at, ...(state === 'done' ? { endedAt: now - 40_000, result } : {}), model: 'opus', modelName: 'Claude plan · opus' }),
+      meta: JSON.stringify({ id, label, state, summary, queued: false, startedAt: at, ...(state === 'done' ? { endedAt: now - 40_000, result } : {}), model: 'fast', modelName: 'Demo plan · fast' }),
     },
     {
       id: `${id}-s`,

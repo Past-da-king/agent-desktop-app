@@ -39,13 +39,13 @@ html, body { background: #000; }
 h1 { font-weight: 600; letter-spacing: -0.035em; line-height: 1; text-wrap: balance; }
 h1 span { display: block; }
 .sub { margin-top: 30px; font-size: 30px; line-height: 1.32; font-weight: 400; color: var(--muted); letter-spacing: -0.005em; text-wrap: pretty; }
-.note { margin-top: 26px; font-size: 22px; line-height: 1.35; font-weight: 500; color: var(--muted); opacity: 0.85; }
+.note { margin-top: 22px; font-size: 28px; line-height: 1.32; font-weight: 500; color: var(--ink); opacity: 0.92; }
 
 /* Square: words on the left, device on the right. */
 .sq .copy { top: 176px; bottom: 60px; width: 480px; display: flex; flex-direction: column; }
 .sq h1 { font-size: 80px; }
 .sq .sub { margin-top: auto; max-width: 430px; font-size: 28px; }
-.sq .note { margin-top: 20px; }
+.sq .note { margin-top: 16px; }
 /* Square with a wide device (a desktop window): words on top like the 4:5. */
 .sq.stack .copy { width: 936px; bottom: auto; display: block; }
 .sq.stack .sub { margin-top: 26px; max-width: 760px; }
@@ -53,6 +53,11 @@ h1 span { display: block; }
 .tall .copy { top: 170px; width: 936px; }
 .tall h1 { font-size: 100px; }
 .tall .sub { max-width: 760px; }
+
+/* 4:5 with a whole phone (a sheet that sits at the bottom of the screen): words beside it, like the square. */
+.tall.side .copy { top: 176px; bottom: 150px; width: 474px; display: flex; flex-direction: column; }
+.tall.side h1 { font-size: 68px; }
+.tall.side .sub { margin-top: auto; max-width: 400px; }
 
 /* A phone: a thin bezel and the screen, nothing else. */
 .phone { position: absolute; width: var(--w); padding: calc(var(--w) * 0.021); border-radius: calc(var(--w) * 0.135); background: var(--bezel);
@@ -62,7 +67,12 @@ h1 span { display: block; }
   color: var(--sbink); font-size: calc(var(--w) * 0.034); font-weight: 600; letter-spacing: 0.01em; }
 .phone .status svg { height: calc(var(--w) * 0.03); width: auto; display: block; fill: var(--sbink); }
 .phone .cam { position: absolute; left: 50%; top: calc(var(--w) * 0.028); width: calc(var(--w) * 0.03); height: calc(var(--w) * 0.03); margin-left: calc(var(--w) * -0.015); border-radius: 50%; background: #0B0A0E; opacity: 0.9; }
+.phone { --sw: calc(var(--w) * 0.958); }
 .phone img { display: block; width: 100%; }
+/* A sheet over its page: the page dimmed by the app's scrim, the sheet cut from its own render. */
+.phone .stage { position: relative; overflow: hidden; }
+.phone .scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); }
+.phone .sheet { position: absolute; left: 0; right: 0; overflow: hidden; }
 
 /* A desktop window: the app draws its own title bar, so the frame is only a corner radius and a shadow. */
 .win { position: absolute; width: var(--w); height: calc(var(--w) * 868 / 1408); border-radius: calc(var(--w) * 22 / 1408); overflow: hidden;
