@@ -219,8 +219,16 @@ export function viewWatchScript(tabId: string, prev: string, waitMs: number): st
     const host = wrap.closest('.br-host');
     const r = view.getBoundingClientRect();
     let left = Math.max(0, r.left), top = Math.max(0, r.top), right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
-    for (let p = view.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+    // An ancestor's overflow clips only what it contains: a fixed box (the page shown full size) escapes every
+    // ancestor up to one that contains fixed boxes, an absolute box every ancestor up to a positioned one.
+    let free = '';
+    for (let node = view, p = view.parentElement; p && p !== document.documentElement; node = p, p = p.parentElement) {
+      const own = getComputedStyle(node).position;
+      if (own === 'fixed') free = 'fixed'; else if (own === 'absolute' && free !== 'fixed') free = 'absolute';
       const s = getComputedStyle(p);
+      const holds = s.transform !== 'none' || s.filter !== 'none' || s.perspective !== 'none' || /paint|layout|strict|content/.test(s.contain) || /transform|filter|perspective/.test(s.willChange);
+      if (free === 'fixed') { if (!holds) continue; free = ''; }
+      else if (free === 'absolute') { if (s.position === 'static' && !holds) continue; free = ''; }
       if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
       const b = p.getBoundingClientRect();
       left = Math.max(left, b.left + p.clientLeft); top = Math.max(top, b.top + p.clientTop);

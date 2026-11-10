@@ -47,7 +47,6 @@ import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
 import { APP_ID, APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
 import { AgentBrowser } from './browser/browser'
-import type { GuideStep } from './browser/guide'
 import { HOST_WINDOW_PREFS, keepPagesAwake } from './browser/keep-awake'
 import { runTurnstileProbe } from './browser/turnstile-probe'
 import { fallbackUserAgent } from './browser/emulation'
@@ -962,9 +961,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     look: () => brandLook({ theme: settings.get().theme, accent: settings.get().accent, systemDark: nativeTheme.shouldUseDarkColors }),
     // The ring and label in a window of their own that screen sharing leaves out, where this computer can do that.
     privateGuides: {
-      // AGENT_GUIDE_PROBE_OVERLAY=1 (a layout proof on a system that cannot hide a window; never set in normal use)
-      // draws in the overlay window all the same. It hides nothing there, and the overlay's own state says so.
-      on: () => guidesUseOverlay(settings.get().hideGuidesFromCapture, privacy.exclusion) || (process.env['AGENT_GUIDE_PROBE_OVERLAY'] === '1' && settings.get().hideGuidesFromCapture),
+      on: () => guidesUseOverlay(settings.get().hideGuidesFromCapture, privacy.exclusion),
       overlay: () => createGuideOverlay({ privacy }),
     },
   })
@@ -995,21 +992,6 @@ async function startServices(win: BrowserWindow): Promise<void> {
       void (async () => {
         console.log(`BROWSER PROBE opened\n${await browser.probeOpen(probeUrl)}`)
         if (process.env['AGENT_DEVTOOLS_PROBE'] === '1') await runDevtoolsProbe(browser)
-        // The guide proof: a guide on the probe page, its steps as JSON ([{ "target": { "selector": "#go" }, "label":
-        // "Click Check out" }]). It ends as any guide does: his click, I did it, Skip, or its time running out.
-        const guideProbe = process.env['AGENT_GUIDE_PROBE']?.trim() ?? ''
-        if (guideProbe !== '') {
-          void (async () => {
-            try {
-              const steps = JSON.parse(guideProbe) as GuideStep[]
-              const limit = Number(process.env['AGENT_GUIDE_PROBE_TIMEOUT_MS'] ?? '')
-              console.log(`GUIDE PROBE started ${steps.length}`)
-              console.log(`GUIDE PROBE result\n${await browser.guide({ steps, ...(Number.isFinite(limit) && limit > 0 ? { timeoutMs: limit } : {}) })}`)
-            } catch (error) {
-              console.log(`GUIDE PROBE failed ${error instanceof Error ? error.message : String(error)}`)
-            }
-          })()
-        }
         if (process.env['AGENT_BROWSER_PROBE_ACT'] !== '1') return
         // Trusted input by name, at desktop size and again at phone size (where the view is drawn scaled).
         console.log(`BROWSER PROBE click\n${await browser.act({ action: 'click', name: 'Press me' })}`)

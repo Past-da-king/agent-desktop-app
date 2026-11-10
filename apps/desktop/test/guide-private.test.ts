@@ -495,6 +495,40 @@ async function hostFor(page: Page): Promise<{ host: GuideHost; frames: FrameSess
     await page.close()
   })
 
+  it('reads where the view is in the app window: clipped by its card, free of it when shown full size, covered, parked', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 500 } })
+    await page.setContent(`<body style="margin:0"><div class="win">
+<div class="panel" style="position:absolute;left:0;top:0;width:380px;height:500px;overflow:hidden">
+ <div class="br-view" style="position:relative;margin:100px 0 0 20px;width:340px;height:250px;overflow:hidden">
+  <div class="br-host card" id="host"><div class="br-page on" data-tab="tab-1" style="width:1000px;height:600px"><webview style="display:block;width:1000px;height:600px"></webview></div></div>
+ </div>
+</div>
+<div id="cover" hidden style="position:fixed;left:0;top:0;width:100%;height:100%"></div></div></body>`)
+    const read = async (prev = ''): Promise<{ text: string; view: ReturnType<typeof parseView> }> => {
+      const text = (await page.evaluate(viewWatchScript('tab-1', prev, 800))) as string
+      return { text, view: parseView(text) }
+    }
+    // In its card: the page is 1000 wide, the card shows 340 x 250 of it.
+    const card = await read()
+    expect(card.view).toEqual({ found: true, front: true, backstage: false, covered: false, view: { x: 20, y: 100, width: 1000, height: 600 }, clip: { x: 20, y: 100, width: 340, height: 250 } })
+    // Shown full size (a fixed box over the window): the card no longer clips it; only the window's edge does.
+    const waiting = read(card.text)
+    await page.waitForTimeout(100)
+    const at = Date.now()
+    await page.evaluate(() => { const host = document.getElementById('host')!; host.className = 'br-host full'; host.style.cssText = 'position:fixed;left:400px;top:50px;width:300px;height:200px' })
+    const full = await waiting
+    // Heard in the frame it changed, not at the end of the wait.
+    expect(Date.now() - at).toBeLessThan(500)
+    expect(full.view).toMatchObject({ front: true, backstage: false, view: { x: 400, y: 50, width: 1000, height: 600 }, clip: { x: 400, y: 50, width: 400, height: 450 } })
+    // Something of the app over it, another tab in front, parked behind the app, another tab's id.
+    await page.evaluate(() => { document.getElementById('cover')!.hidden = false })
+    expect((await read()).view?.covered).toBe(true)
+    await page.evaluate(() => { document.getElementById('cover')!.hidden = true; document.querySelector('.br-page')!.classList.remove('on'); document.getElementById('host')!.classList.add('backstage') })
+    expect((await read()).view).toMatchObject({ found: true, front: false, backstage: true, covered: false })
+    expect(parseView(await page.evaluate(viewWatchScript('tab-9', '', 100)))?.found).toBe(false)
+    await page.close()
+  })
+
   it('report mode is asked for only when drawing outside; the plain script is untouched', () => {
     const base = { token: 't', query: { name: 'Go' }, mode: 'exact' as const, pick: 0, label: 'Click Go', step: 1, total: 1 }
     expect(guideShowScript(base)).not.toContain('"report":true')
