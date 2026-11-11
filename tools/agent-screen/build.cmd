@@ -24,7 +24,7 @@ if not exist obj\Interop.UIA.dll (
 )
 "%FW%\csc.exe" /nologo /target:exe /platform:x64 /optimize+ /debug- /warn:4 ^
   /win32manifest:src\app.manifest /link:obj\Interop.UIA.dll ^
-  /r:System.Drawing.dll /r:System.Web.Extensions.dll ^
-  /out:bin\win-x64\agent-screen.exe src\Program.cs
+  /r:System.Drawing.dll /r:System.Web.Extensions.dll /r:System.Management.dll ^
+  /out:bin\win-x64\agent-screen.exe src\Program.cs src\Act.cs
 if errorlevel 1 exit /b 1
 for %%F in (bin\win-x64\agent-screen.exe) do echo bin\win-x64\agent-screen.exe %%~zF bytes

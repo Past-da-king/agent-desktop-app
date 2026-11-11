@@ -197,9 +197,9 @@ namespace AgentScreen
         public long LostAt, LastRefind;
     }
 
-    internal static class Program
+    internal static partial class Program
     {
-        private const string Version = "0.1.1";
+        private const string Version = "0.2.0";
         private static readonly BlockingCollection<string> Out = new BlockingCollection<string>();
         private static readonly HashSet<uint> Excluded = new HashSet<uint>();
         private static readonly Dictionary<string, IUIAutomationElement> Elements = new Dictionary<string, IUIAutomationElement>();
@@ -347,7 +347,7 @@ namespace AgentScreen
         private static void Dispatch(Dictionary<string, object> req, string op)
         {
             int id = J.Int(req, "id", 0);
-            int timeout = J.Int(req, "timeoutMs", op == "capture" ? 15000 : 8000);
+            int timeout = J.Int(req, "timeoutMs", op == "capture" ? 15000 : op == "act" || op == "inject" ? 60000 : 8000);
             int answered = 0;
             Stopwatch sw = Stopwatch.StartNew();
             Task.Factory.StartNew(delegate ()
@@ -388,7 +388,7 @@ namespace AgentScreen
                 case "exclude": return Exclude(req);
                 case "activeWindow": return ActiveWindowJson(PickActiveWindow(), true) ?? "null";
                 case "window": return ActiveWindowJson(Hwnd(req), true) ?? "null";
-                case "windows": return Windows();
+                case "windows": return Windows(J.Bool(req, "minimised", false));
                 case "monitors": return Monitors();
                 case "tree": return Tree(req);
                 case "find": return Find(req);
@@ -397,6 +397,11 @@ namespace AgentScreen
                 case "capture": return Capture(req);
                 case "input": return Input(req);
                 case "focus": return Focus(req);
+                case "act": return Act(req);
+                case "probe": return Probe(req);
+                case "place": return PlaceOf(req);
+                case "presence": return Presence();
+                case "inject": return Inject(req);
                 default: throw new OpError("unknown", "Unknown request: " + op);
             }
         }
@@ -541,6 +546,15 @@ namespace AgentScreen
             return r.Right - r.Left > 40 && r.Bottom - r.Top > 40;
         }
 
+        /** A minimised window a person works in (its controls can still be read and used, it has no place on screen). */
+        private static bool WorkableMinimised(IntPtr hwnd)
+        {
+            if (!Native.IsWindowVisible(hwnd) || Cloaked(hwnd) || IsExcluded(hwnd)) return false;
+            long ex = Native.GetWindowLongPtr(hwnd, Native.GWL_EXSTYLE).ToInt64();
+            if ((ex & Native.WS_EX_TOOLWINDOW) != 0 || (ex & Native.WS_EX_NOACTIVATE) != 0) return false;
+            return TitleOf(hwnd).Length > 0;
+        }
+
         /** The window in front; when that is the caller's own (the quick-ask box, the overlay), the one behind it. */
         private static IntPtr PickActiveWindow()
         {
@@ -570,14 +584,14 @@ namespace AgentScreen
         }
 
         /** Every window a person could be working in, front to back. */
-        private static string Windows()
+        private static string Windows(bool withMinimised)
         {
             List<string> all = new List<string>();
             IntPtr hwnd = Native.GetTopWindow(IntPtr.Zero);
             int guard = 0;
             while (hwnd != IntPtr.Zero && guard++ < 4000 && all.Count < 100)
             {
-                if (Workable(hwnd))
+                if (Workable(hwnd) || (withMinimised && Native.IsIconic(hwnd) && WorkableMinimised(hwnd)))
                 {
                     string window = ActiveWindowJson(hwnd, false);
                     if (window != null) all.Add(window);
@@ -650,6 +664,7 @@ namespace AgentScreen
             J.Str(sb, TitleOf(hwnd));
             sb.Append(",\"className\":");
             J.Str(sb, cls);
+            if (Native.IsIconic(hwnd)) sb.Append(",\"minimized\":true");
             sb.Append(",\"bounds\":");
             J.Rect(sb, r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
             IntPtr monitor = Native.MonitorFromWindow(hwnd, 2);
@@ -1435,6 +1450,7 @@ namespace AgentScreen
             {
                 foreach (object item in (object[])raw) if (item is string) keys.Add((string)item);
             }
+            Hooks.Activity = J.Bool(req, "activity", false);
             Hooks.Start(keys, (J.Get(req, "clickOn") ?? "up") == "down");
             return "{\"hooks\":true}";
         }
@@ -1501,6 +1517,20 @@ namespace AgentScreen
         private static readonly object Gate = new object();
 
         public static bool Running { get { return thread != null; } }
+        /** Report that he touched the mouse or keyboard (never what he did): one line at most every 40 ms, only for input that is his own. */
+        public static volatile bool Activity;
+        private static long lastActivity;
+
+        /** A mouse or key event that no program made: his own hand. Real input in flight stops on it. */
+        private static void HisOwn()
+        {
+            if (Program.Injecting) Program.InjectAbort = true;
+            if (!Activity) return;
+            long now = Program.NowMs();
+            if (now - Interlocked.Read(ref lastActivity) < 40) return;
+            Interlocked.Exchange(ref lastActivity, now);
+            Program.Emit("{\"event\":\"input\",\"kind\":\"activity\",\"time\":" + now + "}");
+        }
 
         private static readonly Dictionary<string, int> KeyCodes = BuildKeys();
         private static readonly Dictionary<int, string> KeyNames = new Dictionary<int, string>();
@@ -1588,6 +1618,8 @@ namespace AgentScreen
             if (code >= 0)
             {
                 int message = wParam.ToInt32();
+                // LLMHF_INJECTED (bit 0): made by a program, not by his hand.
+                if ((Marshal.ReadInt32(lParam, 12) & 1) == 0) HisOwn();
                 bool down = clickOnDown;
                 string button = null;
                 if (message == (down ? 0x201 : 0x202)) button = "left";
@@ -1634,6 +1666,8 @@ namespace AgentScreen
             if (code >= 0)
             {
                 int message = wParam.ToInt32();
+                // LLKHF_INJECTED (0x10): made by a program, not by his hand.
+                if ((Marshal.ReadInt32(lParam, 8) & 0x10) == 0) HisOwn();
                 if (message == 0x100 || message == 0x104)
                 {
                     int vk = Marshal.ReadInt32(lParam, 0);
