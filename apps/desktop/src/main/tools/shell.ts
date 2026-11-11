@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { int, resultLimitOf, schema, str, type Tool } from '@agent/core'
 
 import type { JsonObject, ToolContext } from '@agent/core'
+import { refuseRealInput } from '../agent-cursor/real-input-guard'
 import type { RunState } from '../../shared/run-record'
 import type { EnvironmentFs, ResolvedCommand } from '../runtime/environment'
 import { spawnResolved, type SpawnResolvedOptions } from '../runtime/spawn'
@@ -255,6 +256,11 @@ function shellRunTool(deps: ShellToolDeps): Tool {
     run: async (input, ctx) => {
       const asked = text(input['command']).trim()
       if (asked === '') return 'Pass the command to run.'
+      const real = refuseRealInput(asked)
+      if (real !== null) {
+        recordRun(input, declinedRun(asked, real))
+        return real
+      }
       let command = asked
 
       // A helper another computer placed here works with that computer's choice (ctx.shell).

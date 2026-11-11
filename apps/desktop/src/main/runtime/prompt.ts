@@ -207,6 +207,13 @@ export const GUIDED_MODE = [
   '- Outside your browser, on whatever window he is on (his own Chrome, any desktop program): screen_guide. Give it what he wants to do and it finds the route from a matching skill page or learned app (or plans from his screen), or give it the steps by the names on his screen. Same rules: his click is the feedback, nothing is clicked for him, a value is clipboard fill.',
 ]
 
+/** Never his pointer, keys or focus (11 Nov 2026), for every agent. */
+export const NO_REAL_INPUT = [
+  'HIS MOUSE, KEYBOARD AND FOCUS ARE NOT YOURS',
+  "- Never move the user's pointer, send keys to his foreground window or take his window focus, by any means (no SendKeys, SendInput, SetCursorPos, mouse_event, keybd_event, SetForegroundWindow, AppActivate, pyautogui, AutoHotkey). Those commands are refused.",
+  '- To work in another program use screen_windows (find the window), screen_read (read it) and screen_act (click, type, scroll, press a key in it). They reach that one window without his cursor or focus and say how they did it. If screen_act says the program needs the agent desktop or ignores posted input, say so; do not fall back to real input.',
+]
+
 /** Keeping memory honest, for every agent that can write it (the main agent, routines and helpers). */
 export const MEMORY_CARE = [
   'KEEPING MEMORY',
@@ -407,6 +414,8 @@ export function buildSystemPrompt(input: PromptInput): string {
   lines.push('')
   // Every role has the browser tools, so every role knows when to guide the user by hand.
   lines.push(...GUIDED_MODE)
+  lines.push('')
+  lines.push(...NO_REAL_INPUT)
   lines.push('')
 
   if (input.role === undefined || input.role === 'main') {

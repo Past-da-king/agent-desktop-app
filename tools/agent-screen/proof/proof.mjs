@@ -44,7 +44,7 @@ const until = async (fn, ms = 5000, step = 50) => {
   }
 }
 // Plays real input (send-input.ps1) without blocking this process, so the events can arrive while it runs.
-const play = (actions) => new Promise((done) => spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(here, 'send-input.ps1'), '-Actions', actions], { stdio: 'inherit' }).once('exit', done))
+const play = (actions) => process.env.AGENT_PROOF_REAL_INPUT !== '1' ? Promise.reject(new Error('This step sends real mouse and keyboard input. Run it only when nobody is using the PC: set AGENT_PROOF_REAL_INPUT=1.')) : new Promise((done) => spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(here, 'send-input.ps1'), '-Actions', actions], { stdio: 'inherit' }).once('exit', done))
 // Real input goes wherever the mouse is, so before any is played: is OUR window the one on top at that point?
 // If somebody else's window is in the way, the proof stops there instead of clicking into it.
 const onTop = async (hwnd, x, y) => {
