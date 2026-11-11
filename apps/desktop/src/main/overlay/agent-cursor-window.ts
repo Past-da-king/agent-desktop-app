@@ -115,3 +115,6 @@ export function electronCursorHost(privacy: CapturePrivacy | null): CursorHost {
 export function createAgentCursors(options: AgentCursorOptions): AgentCursors {
   return new AgentCursors(electronCursorHost(options.privacy ?? null), { enabled: options.enabled, look: options.look })
 }
+
+/** For the proof harness (apps/desktop/proof/agent-cursor-ui). */
+export const makeSurfaceFor = makeSurface

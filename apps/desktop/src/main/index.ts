@@ -37,6 +37,7 @@ import { createGuideOverlay } from './overlay/overlay-window'
 import { createAgentCursors } from './overlay/agent-cursor-window'
 import type { AgentCursors } from './overlay/agent-cursor'
 import { onRunEnded } from './browser/run-tabs'
+import { setAgentCursors } from './agent-cursor/cursor'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
 import { FileBrainLocks } from './brain-locks'
@@ -954,6 +955,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     enabled: () => settings.get().agentCursor !== false,
   })
   onRunEnded((owner) => agentCursors?.hide(owner))
+  setAgentCursors(agentCursors)
   agentBrowser = new AgentBrowser({
     window: win,
     cursors: agentCursors,
