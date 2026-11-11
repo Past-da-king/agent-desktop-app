@@ -296,15 +296,38 @@ export function joinSegment(text: string, segment: string): string {
 }
 
 /**
- * A hint for the language: the app's locale when Google lists that English, British English for other English
- * locales (South Africa, Australia), and automatic detection for everything else.
+ * The languages to tell the speech model about (11 Nov 2026).
+ *
+ * It used to send 'en-GB' for every English that was not en-US or en-IN, so a South African told Gemini he speaks
+ * British English, and the isiZulu he mixes into the same sentence was never mentioned at all. Now the list comes from
+ * the person's own system: their languages, English first, at most three. South African English goes up with isiZulu
+ * beside it, because those two are spoken in the same breath here and the model switches between them by itself. An
+ * empty list is fine: the model detects the language, and code-switching, on its own.
  */
-export function languageHint(locale: string): string[] {
-  const tag = locale.trim().replace('_', '-')
-  if (!/^en\b/i.test(tag)) return []
-  if (/^en-US$/i.test(tag)) return ['en-US']
-  if (/^en-IN$/i.test(tag)) return ['en-IN']
-  return ['en-GB']
+export function speechLanguages(system: string[], locale: string): string[] {
+  const tags: string[] = []
+  const push = (raw: string): void => {
+    const tag = normaliseTag(raw)
+    if (tag !== null && !tags.some((have) => have.toLowerCase() === tag.toLowerCase())) tags.push(tag)
+  }
+  for (const raw of system) push(raw)
+  push(locale)
+  const english = tags.filter((tag) => /^en\b/i.test(tag))
+  const others = tags.filter((tag) => !/^en\b/i.test(tag))
+  const ordered = [...english, ...others]
+  // South African English, with the isiZulu that runs through it.
+  if (english.some((tag) => /^en-ZA$/i.test(tag)) && !ordered.some((tag) => /^(zu|af|xh)-/i.test(tag))) ordered.splice(english.length, 0, 'zu-ZA')
+  return ordered.slice(0, 4)
+}
+
+/** A language tag as a BCP-47 one: en_US and EN-za both become en-US, junk becomes null. */
+export function normaliseTag(raw: string): string | null {
+  const cleaned = raw.trim().replace(/_/g, '-')
+  const match = /^([a-zA-Z]{2,3})(?:-([a-zA-Z]{2}|[0-9]{3}))?$/.exec(cleaned)
+  if (match === null) return null
+  const language = (match[1] ?? '').toLowerCase()
+  const region = match[2] ?? ''
+  return region === '' ? language : `${language}-${region.toUpperCase()}`
 }
 
 function textField(value: unknown): string | null {

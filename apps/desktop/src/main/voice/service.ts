@@ -147,14 +147,33 @@ export class VoiceService {
    * One recording to text in one call. Always bounded: `timeoutMs` (by default scaled to the recording, at most
    * TRANSCRIBE_MAX_MS) or `signal`, whichever comes first, ends it with a plain error instead of a wait that never ends.
    */
-  async transcribe(pcm: Buffer, options: { names?: string[]; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<VoiceResult<{ text: string }>> {
+  async transcribe(
+    pcm: Buffer,
+    options: {
+      names?: string[]
+      /** The languages he speaks, so the speech model does not have to guess (voice/gemini.ts). */
+      languageCodes?: string[]
+      /** 'smart' tidies fillers and formatting; 'verbatim' keeps every word as said. */
+      mode?: 'verbatim' | 'smart'
+      signal?: AbortSignal
+      timeoutMs?: number
+    } = {},
+  ): Promise<VoiceResult<{ text: string }>> {
     if (this.key() === null) return { ok: false, error: 'Add a Gemini key in Settings to talk.' }
     if (pcm.length === 0) return { ok: true, text: '' }
     if (pcm.length > MAX_DICTATION_BYTES) return { ok: false, error: 'That recording is too long. Keep it under five minutes.' }
     const timeout = AbortSignal.timeout(options.timeoutMs ?? transcribeLimitMs(pcm.length))
     const signal = options.signal === undefined ? timeout : AbortSignal.any([options.signal, timeout])
     try {
-      return { ok: true, text: await transcribeAudio(this.gemini(), pcm, this.choice, { names: options.names ?? [], signal }) }
+      return {
+        ok: true,
+        text: await transcribeAudio(this.gemini(), pcm, this.choice, {
+          names: options.names ?? [],
+          ...(options.languageCodes === undefined ? {} : { languageCodes: options.languageCodes }),
+          ...(options.mode === undefined ? {} : { mode: options.mode }),
+          signal,
+        }),
+      }
     } catch (error) {
       return { ok: false, error: explain(error) }
     }

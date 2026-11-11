@@ -71,6 +71,7 @@ import { startShowMe, type ShowMeApp } from './showme/app'
 import { HotkeyManager } from './hotkeys'
 import { cachedLister, likelyHolder, listProcesses } from './hotkey-holders'
 import { createDictation, type DictationSetup } from './dictation/setup'
+import { speechLanguages } from './dictation/transcriber'
 import { Recordings } from './recordings/store'
 import { recoveredNoticeText, startRecordingsUpkeep, type Upkeep } from './recordings/upkeep'
 import { chatTag } from './runtime/chat-lines'
@@ -1890,6 +1891,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     hotkeys: () => hotkeys,
     pill: { ...quickAskPaths(__dirname), devUrl: process.env['ELECTRON_RENDERER_URL'] },
     locale: app.getLocale(),
+    // His own languages, from the system: the speech model is told them instead of being left to guess (en-ZA + isiZulu).
+    languages: () => speechLanguages(app.getPreferredSystemLanguages(), app.getLocale()),
     log: (message, fields) => logger.info(message, fields),
     vocabulary: async () => (store === null ? EMPTY_VOCABULARY : vocabularyFrom(await store.list('memory'))),
     extraWords: async () => {

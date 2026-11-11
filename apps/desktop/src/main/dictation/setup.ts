@@ -27,7 +27,7 @@ import { dictationTarget, type DictationSurface } from './target'
 import { BoxDelivery, dictationRoute, type BoxTarget } from './box'
 import { EVENTS } from '../../shared/channels'
 import { safeSend } from '../alive'
-import { LiveTranscriber, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, languageHint, replayRecording } from './transcriber'
+import { LiveTranscriber, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, speechLanguages } from './transcriber'
 
 export interface DictationSetup {
   controller: DictationController
@@ -46,8 +46,8 @@ export interface DictationSetup {
   dispose(): void
 }
 
-/** A kept recording up to this long is sent again through the live model; longer ones in one call. */
-const REPLAY_MAX_BYTES = 16_000 * 2 * 60
+/** A recording up to this long goes to the speech model in one request (a base64 wav of it still fits inline). */
+const WHOLE_MAX_BYTES = 16_000 * 2 * 60 * 3
 
 export interface DictationSetupDeps {
   voice: VoiceService
@@ -55,6 +55,8 @@ export interface DictationSetupDeps {
   hotkeys: () => HotkeyManager | null
   pill: PillOptions
   locale: string
+  /** The person's own languages, English first (transcriber.ts speechLanguages); the app's system list. */
+  languages?: () => string[]
   log: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** The names memory knows and their mis-hearings (memory/vocabulary.ts). */
   vocabulary?: () => Promise<Vocabulary>
@@ -94,6 +96,8 @@ function testLimitMs(): number | null {
 
 export function createDictation(deps: DictationSetupDeps): DictationSetup {
   const pill = new PillWindow(deps.pill)
+  // His own languages, from the system when the app can read them (index.ts hands them in), else its locale.
+  const languages = (): string[] => deps.languages?.() ?? speechLanguages([], deps.locale)
   const keys = keySenderFor(process.platform)
   const board = electronClipboard(clipboard, (entries) => new ClipboardItem(entries as ConstructorParameters<typeof ClipboardItem>[0]))
   const key = (): string | null => {
@@ -192,7 +196,7 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
         key: key() ?? '',
         model: TRANSCRIBE_LIVE_MODELS[0] ?? 'gemini-3.5-transcribe-live',
         socket: nodeSocket,
-        languageCodes: languageHint(deps.locale),
+        languageCodes: languages(),
         // No name list: a recogniser biased towards names says them for unclear speech and into quiet stretches.
         // Names are spelled right afterwards (fixNames), and only for words that were said.
         onUpdate: handlers.onUpdate,
@@ -249,30 +253,26 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     return result.ok ? { ok: true, text: spellNames(result.text, names) } : result
   }
 
+  /**
+   * The recording itself, through Google's speech model (11 Nov 2026).
+   *
+   * This, not the live captions, is what he gets typed: the same audio, read in one go by the model made for
+   * transcribing, with his languages and his own names and projects. The live session is only what he watches while he
+   * speaks. Nothing is sent through the live model a second time (that was the old fallback, and it is the same weaker
+   * transcriber that got the words wrong in the first place).
+   */
   async function batchRaw(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
-    // A short recording goes through the live model again (quick); a long one, or one the
-    // live model will not take, in one call. Both stop when `signal` aborts.
-    if (pcm.length <= REPLAY_MAX_BYTES) {
-      try {
-        const text = await replayRecording({
-          url: liveUrl(),
-          key: key() ?? '',
-          model: TRANSCRIBE_LIVE_MODELS[0] ?? 'gemini-3.5-transcribe-live',
-          socket: nodeSocket,
-          languageCodes: languageHint(deps.locale),
-          pcm,
-          signal,
-          ...(onUpdate === undefined ? {} : { onUpdate }),
-        })
-        if (text.trim() !== '') return { ok: true, text }
-      } catch (error) {
-        if (signal.aborted) return { ok: false, error: 'Cancelled.' }
-        deps.log('Dictation replay failed', { reason: error instanceof Error ? error.message : 'unknown' })
-      }
+    const speech = { names: words, languageCodes: languages(), mode: 'verbatim' as const }
+    // Up to about three minutes goes up as one request in one piece (a wav of it fits the inline limit); longer ones
+    // in two-minute pieces cut at quiet moments, a couple at a time.
+    if (pcm.length <= WHOLE_MAX_BYTES) {
+      const whole = await deps.voice.transcribe(pcm, { ...speech, signal })
+      if (whole.ok) return { ok: true, text: whole.text }
+      if (signal.aborted) return { ok: false, error: 'Cancelled.' }
+      deps.log('Dictation whole transcribe failed', { reason: whole.error })
+      return { ok: false, error: whole.error }
     }
-    if (pcm.length <= REPLAY_MAX_BYTES) return deps.voice.transcribe(pcm, { signal })
-    // A long recording in 30-second pieces, a few at once: one call with all of it can outlast the finishing limit.
-    return transcribeInChunks(pcm, (piece, pieceSignal) => deps.voice.transcribe(piece, { signal: pieceSignal }), {
+    return transcribeInChunks(pcm, (piece, pieceSignal) => deps.voice.transcribe(piece, { ...speech, signal: pieceSignal }), {
       signal,
       ...(onUpdate === undefined ? {} : { onUpdate }),
       log: deps.log,

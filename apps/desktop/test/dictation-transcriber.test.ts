@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { LiveTranscriber, cleanVocabulary, joinSegment, languageHint, replayRecording, setupMessage } from '../src/main/dictation/transcriber'
+import { LiveTranscriber, cleanVocabulary, joinSegment, normaliseTag, replayRecording, setupMessage, speechLanguages } from '../src/main/dictation/transcriber'
 import type { SocketLike } from '../src/main/voice/live'
 import { startFakeLive, type FakeLive } from './fake-live'
 
@@ -55,12 +55,27 @@ describe('the live transcription setup', () => {
     expect(joinSegment('Hello ', 'you')).toBe('Hello you')
   })
 
-  it('hints English from the locale and lets other languages be detected', () => {
-    expect(languageHint('en-ZA')).toEqual(['en-GB'])
-    expect(languageHint('en-US')).toEqual(['en-US'])
-    expect(languageHint('en_IN')).toEqual(['en-IN'])
-    expect(languageHint('en')).toEqual(['en-GB'])
-    expect(languageHint('af-ZA')).toEqual([])
+  it('tells the model the languages he actually speaks, from his own system', () => {
+    // South African English goes up with the isiZulu that runs through it, instead of being called British English.
+    expect(speechLanguages([], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA'])
+    expect(speechLanguages(['en-ZA', 'zu-ZA'], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA'])
+    expect(speechLanguages(['en-ZA', 'af-ZA'], 'en-ZA')).toEqual(['en-ZA', 'af-ZA'])
+    // Nothing is invented for a language he does not speak, and English stays first.
+    expect(speechLanguages(['en-US'], 'en-US')).toEqual(['en-US'])
+    expect(speechLanguages(['af-ZA'], 'af-ZA')).toEqual(['af-ZA'])
+    expect(speechLanguages(['zu-ZA', 'en-ZA'], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA'])
+    // Any English that is not South African is just itself: no guessing at isiZulu.
+    expect(speechLanguages([], 'en-GB')).toEqual(['en-GB'])
+    expect(speechLanguages([], '')).toEqual([])
+    expect(speechLanguages(['not a language', 'en_ZA'], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA'])
+  })
+
+  it('normalises a language tag and drops what is not one', () => {
+    expect(normaliseTag('en_us')).toBe('en-US')
+    expect(normaliseTag(' EN-za ')).toBe('en-ZA')
+    expect(normaliseTag('zu')).toBe('zu')
+    expect(normaliseTag('')).toBeNull()
+    expect(normaliseTag('English (South Africa)')).toBeNull()
   })
 })
 

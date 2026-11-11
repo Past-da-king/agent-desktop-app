@@ -174,10 +174,10 @@ describe('a dictation that stopped after quiet', () => {
 })
 
 describe('a long recording in pieces', () => {
-  it('cuts at quiet moments, never longer than 30 s, and loses no audio', () => {
-    const pcm = speech(89)
+  it('cuts at quiet moments, never longer than two minutes, and loses no audio', () => {
+    const pcm = speech(300)
     const pieces = splitAtQuiet(pcm)
-    expect(pieces.length).toBe(4)
+    expect(pieces.length).toBe(3)
     expect(pieces.every((piece) => piece.length <= CHUNK_MAX_BYTES && piece.length % 2 === 0)).toBe(true)
     expect(pieces.reduce((sum, piece) => sum + piece.length, 0)).toBe(pcm.length)
     // Each cut lands in a quiet gap.
@@ -186,13 +186,16 @@ describe('a long recording in pieces', () => {
       offset += piece.length
       expect(pcm.readInt16LE(offset - (offset % 2))).toBe(0)
     }
-    // No quiet at all: hard cuts at 30 s.
-    expect(splitAtQuiet(speech(65, 1000, 0)).map((piece) => piece.length)).toEqual([30 * SECOND, 30 * SECOND, 5 * SECOND].map((n, i) => (i < 2 ? n - 1600 : n + 3200)))
+    // No quiet at all: hard cuts at two minutes.
+    const hard = splitAtQuiet(speech(290, 1000, 0)).map((piece) => piece.length)
+    expect(hard.length).toBe(3)
+    expect(hard[0]).toBeLessThanOrEqual(CHUNK_MAX_BYTES)
+    expect(hard.reduce((sum, bytes) => sum + bytes, 0)).toBe(290 * SECOND)
   })
 
-  it('89 s that took 74 s in one call comes back well inside the finishing limit, in order, with words as they arrive', async () => {
-    const pcm = speech(89)
-    // The model takes 0.8 s per second of audio (what 29 Oct measured: 74 s for 89 s in one call).
+  it('230 s that would take 184 s in one call comes back inside the finishing limit, in order', async () => {
+    const pcm = speech(230)
+    // A piece takes 0.8 s per second of audio (what 29 Oct measured: 74 s for 89 s in one call).
     const one = (piece: Buffer, signal: AbortSignal): Promise<BatchResult> =>
       new Promise((resolve, reject) => {
         const timer = setTimeout(() => resolve({ ok: true, text: `[${Math.round(piece.length / SECOND)}s]` }), (piece.length / SECOND) * 800)
@@ -209,10 +212,10 @@ describe('a long recording in pieces', () => {
     const result = await done
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.text.split(' ').length).toBe(4)
+    expect(result.text.split(' ').length).toBe(2)
     expect(updates.at(-1)).toBe(result.text)
-    expect(updates[0]?.split(' ').length).toBeLessThan(4)
-    // All four pieces in at most two rounds of three: about 48 s against a 74 s limit (and 71 s for one call).
+    expect(updates[0]?.split(' ').length).toBeLessThan(2)
+    // Two pieces side by side: about 92 s of work against the limit.
     expect(Date.now() - started).toBeLessThanOrEqual(limit)
   })
 
@@ -226,15 +229,15 @@ describe('a long recording in pieces', () => {
       return { ok: true, text: 'ok' }
     }
     const logs: string[] = []
-    const retried = await transcribeInChunks(speech(70), flaky, { signal: new AbortController().signal, log: (message) => logs.push(message) })
+    const retried = await transcribeInChunks(speech(250), flaky, { signal: new AbortController().signal, log: (message) => logs.push(message) })
     expect(retried).toEqual({ ok: true, text: 'ok ok ok' })
     expect(logs).toContain('Dictation piece failed')
 
-    const broken = await transcribeInChunks(speech(70), async () => ({ ok: false, error: 'Gemini is busy.' }), { signal: new AbortController().signal })
+    const broken = await transcribeInChunks(speech(250), async () => ({ ok: false, error: 'Gemini is busy.' }), { signal: new AbortController().signal })
     expect(broken).toEqual({ ok: false, error: 'Gemini is busy.' })
 
     const stop = new AbortController()
     stop.abort()
-    expect(await transcribeInChunks(speech(70), async () => ({ ok: true, text: 'x' }), { signal: stop.signal })).toEqual({ ok: false, error: 'Cancelled.' })
+    expect(await transcribeInChunks(speech(250), async () => ({ ok: true, text: 'x' }), { signal: stop.signal })).toEqual({ ok: false, error: 'Cancelled.' })
   })
 })
