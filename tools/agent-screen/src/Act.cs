@@ -67,6 +67,7 @@ namespace AgentScreen
         [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")] public static extern IntPtr SendMessageTimeoutText(IntPtr hwnd, uint msg, IntPtr wParam, string lParam, uint flags, uint timeout, out IntPtr result);
         [DllImport("user32.dll")] public static extern bool GetGUIThreadInfo(uint thread, ref GUITHREADINFO info);
         [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint mapType);
+        [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int cmd);
         [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc proc, IntPtr data);
         [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr hwnd);
         [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out Native.RECT rect);
@@ -1107,6 +1108,21 @@ namespace AgentScreen
                         Thread.Sleep(40);
                         fgAfter = Native.GetForegroundWindow();
                         gaveBack = fgAfter == fgBefore;
+                    }
+                    if (!gaveBack && fgAfter != IntPtr.Zero && fgAfter != fgBefore && Native.IsWindow(fgBefore))
+                    {
+                        // The program will not let go: minimise it for a moment (Windows then activates the window behind it, his), and put it back without activating.
+                        IntPtr top = Native.GetAncestor(fgAfter, Native.GA_ROOT);
+                        if (top == IntPtr.Zero) top = fgAfter;
+                        Native2.ShowWindow(top, 7);
+                        Thread.Sleep(150);
+                        fgAfter = Native.GetForegroundWindow();
+                        if (fgAfter != fgBefore && fgAfter != IntPtr.Zero && fgAfter != top) { GiveBack(fgBefore, fgAfter); Thread.Sleep(40); }
+                        Native2.ShowWindow(top, 4);
+                        Thread.Sleep(80);
+                        fgAfter = Native.GetForegroundWindow();
+                        gaveBack = fgAfter == fgBefore;
+                        if (gaveBack) note = "That program would not let go of his window, so it was minimised for a moment and put back; his window has the keyboard again.";
                     }
                 }
             }
