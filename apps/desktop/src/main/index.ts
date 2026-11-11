@@ -40,6 +40,7 @@ import { onRunEnded } from './browser/run-tabs'
 import { setAgentCursors } from './agent-cursor/cursor'
 import { createScreenControl } from './agent-cursor/wire'
 import { makeCdpRung } from './agent-cursor/cdp-rung'
+import { runTypingProbe } from './browser/typing-probe'
 import { disposeAgentDesktop } from './tools/agent-desktop'
 import type { ScreenControl } from './agent-cursor/control'
 import type { NativeScreenReader } from './showme/native'
@@ -1056,6 +1057,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
       void (async () => {
         console.log(`BROWSER PROBE opened\n${await browser.probeOpen(probeUrl)}`)
         if (process.env['AGENT_DEVTOOLS_PROBE'] === '1') await runDevtoolsProbe(browser)
+        // The typist proof (browser/typing-probe.ts): fills a form while a script types elsewhere. Never set in normal use.
+        const typingProbe = process.env['AGENT_TYPING_PROBE']?.trim() ?? ''
+        if (typingProbe !== '') await runTypingProbe(browser, typingProbe).catch((error: unknown) => console.log(`TYPING PROBE failed ${error instanceof Error ? error.message : String(error)}`))
         // The guide proof: a guide on the probe page, its steps as JSON ([{ "target": { "selector": "#go" }, "label":
         // "Click Check out" }]). It ends as any guide does: his click, I did it, Skip, or its time running out.
         const guideProbe = process.env['AGENT_GUIDE_PROBE']?.trim() ?? ''
