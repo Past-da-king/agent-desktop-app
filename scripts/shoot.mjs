@@ -67,12 +67,31 @@ const GROUPS = {
     ['quick', '?demo=1', '#/home', [[D, 'light']], 'Control+Shift+Space'],
   ],
   chat: [['chat-full', '?demo=1', '#/chat', DESK], ['chat-empty', '?demo=empty', '#/chat', DESK]],
+  // His Live voice assistant: one collapsed call block per session (hand-offs folded inside), then opened.
+  live: [['live-call', '?demo=1&live=1', '#/chat', [[D, 'light'], [D, 'dark']], null, liveFlow]],
   // The commands the agent ran: folded rows, then the step opened with one run disclosed (long output folded).
   runs: [['runs-open', '?demo=1', '#/chat', DESK, null, runsFlow]],
   data: [
     ['home-empty', '?demo=empty', '#/home', DESK], ['tasks-empty', '?demo=empty', '#/tasks', DESK], ['memory-empty', '?demo=empty', '#/memory', DESK], ['routines-empty', '?demo=empty', '#/routines', DESK],
     ['home-big', '?demo=big', '#/home', DESK], ['tasks-big', '?demo=big', '#/tasks', DESK], ['memory-big', '?demo=big', '#/memory', DESK], ['routines-big', '?demo=big', '#/routines', DESK],
   ],
+}
+
+async function liveFlow(page, tag, vp, theme) {
+  const blocks = page.locator('.call-row')
+  await blocks.first().waitFor()
+  const count = await blocks.count()
+  if (count < 2) throw new Error(`expected the saved Live call and the one still going, found ${count} call blocks`)
+  if ((await page.locator('.u-msg', { hasText: 'Update the EOD report' }).count()) !== 0) throw new Error('a hand-off drew as a standalone bubble')
+  await blocks.first().scrollIntoViewIfNeeded()
+  await page.evaluate(() => { const el = document.querySelectorAll('.call-row'); el[0]?.scrollIntoView({ block: 'center' }) })
+  await page.waitForTimeout(200)
+  await page.screenshot({ path: path.join(outDir, `live-collapsed-${vp.w}-${theme}.png`) })
+  await blocks.first().locator('.call-row-h').click()
+  await blocks.last().locator('.call-row-h').click()
+  await page.waitForTimeout(400)
+  await page.evaluate(() => { const el = document.querySelectorAll('.call-row'); el[0]?.scrollIntoView({ block: 'start' }) })
+  await page.waitForTimeout(200)
 }
 
 // Shoots the folded run rows first, then opens the step and the failing test run for the main screenshot.

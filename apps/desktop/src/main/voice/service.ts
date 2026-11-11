@@ -245,15 +245,18 @@ export class VoiceService {
     const lines = call.lines.map((line, index) => ({ id: `d${index}`, who: line.who, text: line.text, at: line.at }))
     const row = await this.deps.store.upsert('chat_item', {
       kind: 'call',
-      text: callText(lines.length, call.durationMs),
+      text: callText(lines.length, call.durationMs, call.source === 'live'),
       createdAt: call.startedAt,
       meta: JSON.stringify({
         durationMs: call.durationMs,
         endedAt: call.startedAt + call.durationMs,
         lines: lines.map((line) => ({ who: line.who, text: line.text, at: line.at })),
         visuals: 0,
-        handoffs: 0,
+        handoffs: call.handoffs?.length ?? 0,
         device: true,
+        ...(call.source === 'live' ? { source: 'live' } : {}),
+        ...(call.session === undefined ? {} : { session: call.session }),
+        ...(call.handoffs === undefined ? {} : { handoffList: call.handoffs.map((h) => ({ request: h.request, ...(h.spoken === undefined ? {} : { spoken: h.spoken }), at: h.at })) }),
       }),
     })
     return { itemId: row.id }
@@ -476,10 +479,11 @@ function recentChat(items: ChatItem[]): ChatItem[] {
 }
 
 /** "Call, 3 min" in the chat; the row expands to the full transcript. */
-export function callText(lines: number, durationMs: number): string {
+export function callText(lines: number, durationMs: number, live = false): string {
   const minutes = Math.round(durationMs / 60_000)
   const length = minutes < 1 ? `${Math.max(1, Math.round(durationMs / 1000))} s` : `${minutes} min`
-  return lines === 0 ? `Call, ${length}, nothing said` : `Call, ${length}`
+  const name = live ? 'Live voice' : 'Call'
+  return lines === 0 ? `${name}, ${length}, nothing said` : `${name}, ${length}`
 }
 
 /** Tools on a call run without chat activity rows or cards: the call view is where it shows. */

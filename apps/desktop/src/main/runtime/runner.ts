@@ -70,6 +70,7 @@ import {
 } from './chat-route'
 import { describeRun, finishRun, runStarted } from './run-detail'
 import { viaLabel, type ChatVia } from '../tools/projects'
+import { callVia, liveFromInput, liveLabel } from '../../shared/sender'
 import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
 import { replyText } from '../notify'
@@ -487,7 +488,11 @@ export class Runner {
     if (clean === '' && attachments.length === 0) return
     // The person handed these files over: the agent may open them without asking again.
     if (attachments.length > 0) this.allowFiles(attachments.map((attachment) => attachment.path))
-    const prepared = await prepareMessage(clean, attachments)
+    // A hand-off from his Live voice assistant (shared/sender.ts): not his words, so it is a call's hand-off (never his
+    // bubble) and the agent reads what it is.
+    const live = liveFromInput({ live: (origin as { live?: unknown } | undefined)?.live })
+    const prepared = await prepareMessage(live === null ? clean : liveLabel(live) + clean, attachments)
+    if (live !== null && via === undefined) via = callVia(typeof (origin as { name?: unknown } | undefined)?.name === 'string' ? String((origin as { name: string }).name) : '')
     // Which device it was sent from (docs/devices-protocol.md s8): the wire caller's, else this node's own.
     // Not the person's own words (a call handing over its work): the row says who, so no window draws it as his.
     const meta: JsonObject = {
@@ -495,6 +500,7 @@ export class Runner {
       ...chatTag(chat),
       ...this.originMeta(origin as JsonObject | undefined),
       ...(via === undefined ? {} : { via: via as unknown as JsonObject }),
+      ...(live === null ? {} : { live: live as unknown as JsonObject }),
     }
     const line = this.line(chat)
 

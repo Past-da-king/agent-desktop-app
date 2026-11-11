@@ -68,7 +68,7 @@ import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
 import type { SettingsStore } from './settings'
 import { CHANNELS, EVENTS } from '../shared/channels'
-import { messageOrigin } from './devices/origin'
+import { messageOrigin, originWithLive } from './devices/origin'
 import { dismissCard } from './runtime/card-dismiss'
 import type { MessageOrigin } from './devices/types'
 
@@ -474,7 +474,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     const text = requireString(rawText, 'message', MAX_MESSAGE)
     const attachments = requireAttachments(rawAttachments)
     const target = optionalChat(rawChat)
-    const origin = messageOrigin(event)
+    const origin = originWithLive(messageOrigin(event), rawOptions)
     // A reply on a project's card: to that project chat, and its answer back to the chat the card is in.
     const replyIn = typeof rawOptions === 'object' && rawOptions !== null ? optionalChat((rawOptions as Record<string, unknown>)['replyIn']) : undefined
     if (replyIn !== undefined && target !== undefined && deps.chat !== undefined) {
@@ -495,7 +495,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     const attachments = requireAttachments(input['attachments'] ?? [])
     const target = optionalChat(input['chat'])
     const replyIn = optionalChat(input['replyIn'])
-    const origin = messageOrigin(event)
+    const origin = originWithLive(messageOrigin(event), input)
     return sendOnceGate(
       { sendId: input['sendId'], sentAt: input['sentAt'], fresh: input['fresh'] === true, isOpen: wireOf(event)?.isOpen },
       async () => {

@@ -1676,6 +1676,12 @@ export interface DeviceCall {
   startedAt: number
   durationMs: number
   lines: Array<{ who: 'you' | 'agent'; text: string; at: number }>
+  /** 'live' for a Live voice assistant session (a call that can see); absent for a plain voice call. */
+  source?: 'live'
+  /** The phone's id for the session: its hand-off rows carry the same id, so they fold into this call. */
+  session?: string
+  /** What the assistant handed to the agent, in its own words, with his spoken words when known. */
+  handoffs?: Array<{ request: string; spoken?: string; at: number }>
 }
 
 /** Someone a call can talk to on this computer: the main agent, a project (with its chats) or a helper at work. */
