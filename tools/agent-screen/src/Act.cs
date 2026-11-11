@@ -1096,7 +1096,19 @@ namespace AgentScreen
             {
                 guard.Finish();
                 times = guard.Taken; lostMs = guard.LostMs; tookOn = guard.TookOn;
-                if (times > 0) { took = true; gaveBack = guard.Restored > 0; fgAfter = Native.GetForegroundWindow(); }
+                if (times > 0)
+                {
+                    took = true;
+                    gaveBack = guard.Restored > 0;
+                    fgAfter = Native.GetForegroundWindow();
+                    for (int again = 0; again < 6 && !gaveBack && Native.IsWindow(fgBefore) && fgAfter != fgBefore && fgAfter != IntPtr.Zero; again++)
+                    {
+                        gaveBack = GiveBack(fgBefore, fgAfter);
+                        Thread.Sleep(40);
+                        fgAfter = Native.GetForegroundWindow();
+                        gaveBack = fgAfter == fgBefore;
+                    }
+                }
             }
             if (!took && fgAfter != fgBefore && fgBefore != IntPtr.Zero && fgAfter != IntPtr.Zero)
             {
@@ -1209,6 +1221,24 @@ namespace AgentScreen
         /** The target brought itself to the front because of what was sent: the window he was in gets the keyboard back. */
         private static bool GiveBack(IntPtr his, IntPtr taker)
         {
+            return GiveBackOnce(his, taker, false) || GiveBackOnce(his, taker, true);
+        }
+
+        /** both = join the input of his window as well as the taker's (some programs only let go then). */
+        private static bool GiveBackOnce(IntPtr his, IntPtr taker, bool both)
+        {
+            if (both)
+            {
+                uint pidB;
+                uint takerThread = Native.GetWindowThreadProcessId(taker, out pidB);
+                uint hisThread = Native.GetWindowThreadProcessId(his, out pidB);
+                uint meB = Native.GetCurrentThreadId();
+                bool a = takerThread != 0 && takerThread != meB && Native.AttachThreadInput(meB, takerThread, true);
+                bool b = hisThread != 0 && hisThread != meB && hisThread != takerThread && Native.AttachThreadInput(meB, hisThread, true);
+                try { Native.BringWindowToTop(his); Native.SetForegroundWindow(his); }
+                finally { if (b) Native.AttachThreadInput(meB, hisThread, false); if (a) Native.AttachThreadInput(meB, takerThread, false); }
+                return Native.GetForegroundWindow() == his;
+            }
             uint pid;
             uint owner = Native.GetWindowThreadProcessId(taker, out pid);
             uint me = Native.GetCurrentThreadId();
