@@ -1,4 +1,4 @@
-import type { ChatEvent } from '@agent/core'
+import type { CallEvent, CallState, ChatEvent } from '@agent/core'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 import { agent, chat } from '../bridge'
@@ -31,6 +31,12 @@ export function QuickWindow(): JSX.Element {
   const [showMode, setShowMode] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const sentAt = useRef(0)
+  // A Live voice session (the call, which sees): while it runs the bar is just a bubble in this same window. Clicking
+  // it opens the full bar and the session carries on.
+  const [live, setLive] = useState<CallState | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [muted, setMuted] = useState(false)
+  const compact = live !== null && !expanded
 
   const agentName = settings?.agentName.trim() || 'Your agent'
   const dictateKeys = formatAccelerator(settings?.dictateHotkey ?? '', agent.platform).join('+')
@@ -42,6 +48,19 @@ export function QuickWindow(): JSX.Element {
       .then((state) => setRunning(state.running))
       .catch(() => undefined)
   }, [])
+
+  useEffect(
+    () =>
+      agent.voice.onCall((event: CallEvent) => {
+        if (event.type !== 'state') return
+        if (event.state === 'ended' || event.state === 'error') {
+          setLive(null)
+          setExpanded(false)
+          setMuted(false)
+        } else setLive(event.state)
+      }),
+    [],
+  )
 
   useEffect(() => {
     const refresh = async (): Promise<void> => {
@@ -64,6 +83,8 @@ export function QuickWindow(): JSX.Element {
     }
 
     const offQuick = agent.window.onQuickAsk(() => {
+      // His shortcut during a session opens the full bar too.
+      setExpanded(true)
       setText('')
       setAnswer('')
       setProblem('')
@@ -178,6 +199,22 @@ export function QuickWindow(): JSX.Element {
     input.current?.focus()
   }
 
+  const liveWords: Record<CallState, string> = {
+    connecting: 'Connecting',
+    listening: 'Listening',
+    thinking: 'Working on it',
+    speaking: 'Speaking',
+    waiting: 'Needs you',
+    ended: '',
+    error: '',
+  }
+  const quickKeys = formatAccelerator(settings?.quickAskHotkey ?? '', agent.platform).join('+')
+  const toggleMute = (): void => {
+    const next = !muted
+    setMuted(next)
+    void agent.voice.callMute(next).catch(() => undefined)
+  }
+
   const showing = walkQuestion !== null
   const sentOrBusy = waiting || running
   // Help only where it is needed: nothing while he types a plain ask, one short line for the mode he is in.
@@ -199,8 +236,9 @@ export function QuickWindow(): JSX.Element {
     </span>
   ) : null
 
+  const talking = live === 'listening' || live === 'speaking'
   return (
-    <div className={`qo${showing ? ' show' : ''}${dictating ? ' listening' : ''}`}>
+    <div className={`qo${showing ? ' show' : ''}${dictating || (talking && !muted) ? ' listening' : ''}${compact ? ' compact' : ''}${live !== null ? ' live' : ''}`}>
       <div className="qo-row">
         <button
           type="button"
@@ -212,7 +250,7 @@ export function QuickWindow(): JSX.Element {
           onPointerUp={onOrbUp}
           onPointerCancel={onOrbUp}
         >
-          {dictating ? (
+          {dictating || (talking && !muted) ? (
             <>
               <i className="qo-ring" />
               <i className="qo-ring late" />
@@ -223,15 +261,38 @@ export function QuickWindow(): JSX.Element {
               <path d="M5 4l6.5 16 2.4-6.9L21 10.6z" />
             </svg>
           ) : (
-            <Mascot id={settings?.mascot ?? 'scout'} size={38} busy={sentOrBusy || dictating} />
+            <Mascot id={settings?.mascot ?? 'scout'} size={38} busy={sentOrBusy || dictating || live === 'speaking' || live === 'thinking'} />
           )}
-          {waiting ? (
+          {live !== null ? <i className="qo-live-dot" title="Live voice" aria-label="Live voice" /> : null}
+          {waiting && live === null ? (
             <span className="qo-badge">
               <Icon name="check" size={12} />
             </span>
           ) : null}
         </button>
 
+        {compact ? (
+          <div className="qo-pill qo-livebar" role="group" aria-label="Live voice">
+            <button
+              type="button"
+              className="qo-live-main"
+              title={quickKeys === '' ? 'Open the full box' : `Open the full box (${quickKeys})`}
+              onClick={() => {
+                setExpanded(true)
+                window.setTimeout(() => input.current?.focus(), 0)
+              }}
+            >
+              <b>LIVE</b>
+              <span role="status">{muted ? 'Muted' : liveWords[live ?? 'listening']}</span>
+            </button>
+            <button type="button" className={`qo-icon${muted ? ' on' : ''}`} aria-pressed={muted} aria-label={muted ? 'Unmute' : 'Mute'} title={muted ? 'Unmute' : 'Mute'} onClick={toggleMute}>
+              <Icon name="mic" size={18} />
+            </button>
+            <button type="button" className="qo-icon" aria-label="End the live session" title="End the live session" onClick={() => void agent.voice.callEnd().catch(() => undefined)}>
+              <Icon name="x" size={18} />
+            </button>
+          </div>
+        ) : (
         <div className="qo-pill">
           <input
             ref={input}
@@ -293,9 +354,10 @@ export function QuickWindow(): JSX.Element {
             </svg>
           </button>
         </div>
+        )}
       </div>
 
-      {bubble !== null ? <div className="qo-bubble">{bubble}</div> : null}
+      {bubble !== null && !compact ? <div className="qo-bubble">{bubble}</div> : null}
     </div>
   )
 }

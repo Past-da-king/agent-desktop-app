@@ -135,3 +135,13 @@ html.quick-own,html.quick-own body,html.quick-own #root{background:transparent !
 .qo-problem{color:var(--err)}
 .qo-dict{display:block;min-width:0}
 @keyframes qo-in{from{opacity:0;transform:translateY(-4px)}}
+
+/* Live voice: the bar shrinks to the orb and a small pill inside the same window; the orb is still the drag handle. */
+.qo-live-dot{position:absolute;right:-1px;top:-1px;width:14px;height:14px;border-radius:50%;background:var(--err);border:2px solid var(--s-low);animation:qo-live 1.4s ease-in-out infinite}
+@keyframes qo-live{50%{opacity:.35}}
+.qo-pill.qo-livebar{flex:none;width:auto;min-width:200px;padding:0 10px 0 6px;animation:none}
+.qo-live-main{flex:1;min-width:0;height:44px;display:flex;align-items:center;gap:10px;padding:0 12px 0 14px;border:0;border-radius:999px;background:transparent;color:var(--on-bg);font:inherit;font-size:14px;cursor:pointer;text-align:left}
+.qo-live-main:hover{background:var(--s-mid)}
+.qo-live-main b{font:700 11px/16px var(--font);letter-spacing:.14em;color:var(--err)}
+.qo.live:not(.compact) .qo-orb{box-shadow:0 0 0 2px var(--err)}
+@media (prefers-reduced-motion:reduce){.qo-live-dot,.qo-ring{animation:none}}

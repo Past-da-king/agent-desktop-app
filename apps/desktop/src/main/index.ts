@@ -315,6 +315,8 @@ let recordingsUpkeep: Upkeep | null = null
 const workersChanged = createWorkersChanged((payload) => broadcast(WORKER_EVENTS.changed, payload))
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
+/** A Live voice session runs on this computer (the quick ask bar is its bubble). */
+let liveCallActive = false
 /** Show me how: a guided ring on whatever window he is on (showme/). */
 let showMe: ShowMeApp | null = null
 /** Screen tools (screen_windows, screen_read, screen_act): other programs without his mouse, keyboard or focus (agent-cursor/). */
@@ -1749,7 +1751,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   quickAsk = new QuickAskWindow({
     ...paths,
     devUrl: process.env['ELECTRON_RENDERER_URL'],
-    keepOpen: () => dictation !== null && dictation.controller.phase !== 'idle',
+    keepOpen: () => liveCallActive || (dictation !== null && dictation.controller.phase !== 'idle'),
     onWindow: (window) => capturePrivacy?.register(window, 'chat'),
     spotsFile: join(app.getPath('userData'), 'quick-ask-spots.json'),
   })
@@ -1879,7 +1881,20 @@ async function startServices(win: BrowserWindow): Promise<void> {
     settings,
     store,
     runner,
-    emit: (event) => broadcast(EVENTS.voiceCall, event),
+    emit: (event) => {
+      broadcast(EVENTS.voiceCall, event)
+      // A Live voice session on this computer: the quick ask bar opens as a bubble (it shrinks inside the same window,
+      // renderer/shell/QuickWindow.tsx) and stays while the session runs; it goes when the session ends.
+      if (event.type !== 'state') return
+      const live = event.state !== 'ended' && event.state !== 'error'
+      if (live && !liveCallActive) {
+        liveCallActive = true
+        quickAsk?.show(true)
+      } else if (!live && liveCallActive) {
+        liveCallActive = false
+        quickAsk?.hide()
+      }
+    },
     platform: process.platform,
     environment: () => environment.current(),
     notesDir: join(app.getPath('userData'), 'voice-notes'),

@@ -52,6 +52,12 @@ function onEvent(event: CallEvent): void {
     case 'state':
       set({ state: event.state, message: event.message ?? '' })
       if (event.state === 'error') stopAudio()
+      // Ended from the quick ask bubble: this window holds the microphone and the speaker, so it lets go.
+      if (event.state === 'ended' && useCall.getState().open) {
+        stopAudio()
+        set({ open: false })
+        refreshEntity('chat_item')
+      }
       return
     case 'audio':
       if (player === null) player = new Player()

@@ -267,10 +267,20 @@ export class QuickAskWindow {
     }
   }
 
-  show(): void {
+  /**
+   * Opens the bar. `quiet` (a Live voice session started: the bar is only a bubble) does not take focus from what he
+   * is doing and does not tell the bar to reset itself.
+   */
+  show(quiet = false): void {
     const existing = this.window
     if (existing !== null && !existing.isDestroyed()) {
+      if (quiet && existing.isVisible()) return
       this.place(existing)
+      if (quiet) {
+        existing.showInactive()
+        existing.setAlwaysOnTop(true, 'floating')
+        return
+      }
       existing.show()
       existing.setAlwaysOnTop(true, 'floating')
       existing.focus()
@@ -311,6 +321,11 @@ export class QuickAskWindow {
     window.once(
       'ready-to-show',
       whileAlive(window, 'quick ask show', () => {
+        if (quiet) {
+          window.showInactive()
+          window.setAlwaysOnTop(true, 'floating')
+          return
+        }
         window.show()
         window.setAlwaysOnTop(true, 'floating')
         window.focus()

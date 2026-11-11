@@ -69,12 +69,29 @@ const GROUPS = {
   chat: [['chat-full', '?demo=1', '#/chat', DESK], ['chat-empty', '?demo=empty', '#/chat', DESK]],
   // His Live voice assistant: one collapsed call block per session (hand-offs folded inside), then opened.
   live: [['live-call', '?demo=1&live=1', '#/chat', [[D, 'light'], [D, 'dark']], null, liveFlow]],
+  // The quick ask bar while a Live voice session runs: just the orb and a LIVE pill, then opened into the full bar.
+  quicklive: [['quick-live', '?demo=1', '#/quick-window', [[D, 'light'], [D, 'dark']], null, quickLiveFlow]],
   // The commands the agent ran: folded rows, then the step opened with one run disclosed (long output folded).
   runs: [['runs-open', '?demo=1', '#/chat', DESK, null, runsFlow]],
   data: [
     ['home-empty', '?demo=empty', '#/home', DESK], ['tasks-empty', '?demo=empty', '#/tasks', DESK], ['memory-empty', '?demo=empty', '#/memory', DESK], ['routines-empty', '?demo=empty', '#/routines', DESK],
     ['home-big', '?demo=big', '#/home', DESK], ['tasks-big', '?demo=big', '#/tasks', DESK], ['memory-big', '?demo=big', '#/memory', DESK], ['routines-big', '?demo=big', '#/routines', DESK],
   ],
+}
+
+async function quickLiveFlow(page, tag, vp, theme) {
+  await page.evaluate(async () => { await window.__previewAgent.voice.callStart() })
+  await page.waitForSelector('.qo.compact', { timeout: 5000 })
+  if ((await page.locator('.qo.compact input').count()) !== 0) throw new Error('the compact bubble has an input')
+  await page.waitForTimeout(900)
+  await page.screenshot({ path: path.join(outDir, `quick-live-bubble-${vp.w}-${theme}.png`) })
+  await page.locator('.qo-live-main').click()
+  await page.waitForSelector('.qo:not(.compact) input')
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: path.join(outDir, `quick-live-expanded-${vp.w}-${theme}.png`) })
+  await page.evaluate(async () => { await window.__previewAgent.voice.callEnd() })
+  await page.waitForSelector('.qo:not(.live)')
+  await page.waitForTimeout(200)
 }
 
 async function liveFlow(page, tag, vp, theme) {
