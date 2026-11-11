@@ -115,7 +115,7 @@ namespace AgentScreen
         };
 
         /** Why posted input cannot work on this window, or null when nothing says it cannot. code: elevated | raw_input. */
-        private static string NeedsOwnDesktop(IntPtr hwnd, out string code)
+        private static string NeedsOwnDesktop(IntPtr hwnd, Dictionary<string, object> req, out string code)
         {
             code = null;
             uint pid;
@@ -126,16 +126,29 @@ namespace AgentScreen
                 return "That window runs as administrator and this app does not, so Windows blocks every message and every read from here.";
             }
             string process = ProcessName(pid).ToLowerInvariant();
-            foreach (string name in RawInputProcesses)
+            foreach (string name in ListFrom(req, "rawProcesses", RawInputProcesses))
             {
                 if (process == name) { code = "raw_input"; return "That program (" + process + ") reads the mouse and keyboard below window messages (a remote viewer, virtual machine or stream), so input sent to its window never reaches what it shows."; }
             }
             string cls = ClassOf(hwnd);
-            foreach (string name in RawInputClasses)
+            foreach (string name in ListFrom(req, "rawClasses", RawInputClasses))
             {
                 if (cls == name) { code = "raw_input"; return "That window (" + cls + ") is drawn by a game or 3D engine that reads raw input, so input sent to its window is ignored."; }
             }
             return null;
+        }
+
+        /** The caller's list (the app keeps ONE list of such programs in a data file and sends it); the built-in one when none came. */
+        private static IEnumerable<string> ListFrom(Dictionary<string, object> req, string key, string[] fallback)
+        {
+            object raw;
+            if (req != null && req.TryGetValue(key, out raw) && raw is object[])
+            {
+                List<string> list = new List<string>();
+                foreach (object item in (object[])raw) if (item is string) list.Add(((string)item).ToLowerInvariant() == (string)item ? (string)item : (string)item);
+                return list;
+            }
+            return fallback;
         }
 
         private static string CommandLineOf(uint pid)
@@ -223,7 +236,7 @@ namespace AgentScreen
             uint pid;
             Native.GetWindowThreadProcessId(hwnd, out pid);
             string code;
-            string why = NeedsOwnDesktop(hwnd, out code);
+            string why = NeedsOwnDesktop(hwnd, req, out code);
             string cls = ClassOf(hwnd);
             StringBuilder sb = new StringBuilder(256);
             sb.Append("{\"hwnd\":\"").Append(HwndText(hwnd)).Append("\",\"pid\":").Append(pid).Append(",\"process\":");
@@ -730,6 +743,8 @@ namespace AgentScreen
             public uint Pid;
             public int WaitMs;
             public HashSet<string> Only;
+            public HashSet<string> Avoid = new HashSet<string>();
+            public volatile string Trying;
             public List<Tried> Tried = new List<Tried>();
             public string Rung, Evidence;
 
@@ -742,6 +757,8 @@ namespace AgentScreen
         /** One rung: do it, look for the effect. True when the effect was seen. */
         private static bool Attempt(ActRun run, string rung, IUIAutomationElement watch, Step step)
         {
+            if (run.Avoid.Contains(rung)) { run.Tried.Add(new Tried(rung, "skipped (it took his window focus on this program before)")); return false; }
+            run.Trying = rung;
             Snap before = Before(run.Hwnd, run.Pid, watch, true);
             string problem = Call(step, 1500);
             if (problem != null && problem != "still running")
@@ -781,7 +798,7 @@ namespace AgentScreen
             string action = (J.Get(req, "action") ?? "click").ToLowerInvariant();
             string text = J.Get(req, "text") ?? "";
             string code;
-            string blocked = NeedsOwnDesktop(hwnd, out code);
+            string blocked = NeedsOwnDesktop(hwnd, req, out code);
             if (blocked != null) throw new OpError(code, blocked + " It needs the agent's own desktop.");
             bool hasPoint = req.ContainsKey("x") && req.ContainsKey("y");
             if (Native.IsIconic(hwnd) && (hasPoint || action == "double_click" || action == "right_click")) throw new OpError("minimised", "That window is minimised, so nothing in it has a place to click. Act on an element by name, or ask him to restore it.");
@@ -791,9 +808,22 @@ namespace AgentScreen
             IntPtr fgBefore = Native.GetForegroundWindow();
 
             ActRun run = new ActRun();
+            FocusGuard guard = fgBefore == IntPtr.Zero || Native.GetAncestor(fgBefore, Native.GA_ROOT) == hwnd ? null : new FocusGuard(fgBefore, pid, run);
+            try { return ActInner(req, run, guard, hwnd, pid, fgBefore, cursorBefore, action, text); }
+            finally { if (guard != null) guard.Finish(); }
+        }
+
+        private static string ActInner(Dictionary<string, object> req, ActRun run, FocusGuard guard, IntPtr hwnd, uint pid, IntPtr fgBefore, Native.POINT cursorBefore, string action, string text)
+        {
+            bool hasPoint = req.ContainsKey("x") && req.ContainsKey("y");
             run.Hwnd = hwnd;
             run.Pid = pid;
             run.WaitMs = Math.Max(100, Math.Min(5000, J.Int(req, "waitMs", 900)));
+            object avoid;
+            if (req.TryGetValue("avoid", out avoid) && avoid is object[])
+            {
+                foreach (object item in (object[])avoid) if (item is string) run.Avoid.Add(((string)item).ToLowerInvariant());
+            }
             object only;
             if (req.TryGetValue("rungs", out only) && only is object[])
             {
@@ -877,6 +907,15 @@ namespace AgentScreen
                 case "set_value":
                     {
                         bool append = J.Bool(req, "append", false);
+                        IntPtr edit = element != null || hasPoint ? child : FocusOf(hwnd);
+                        // A program that is not in front is reached by a window message first: the value pattern can bring it to the front.
+                        IntPtr frontNow = Native.GetForegroundWindow();
+                        bool inFront = frontNow != IntPtr.Zero && Native.GetAncestor(frontNow, Native.GA_ROOT) == hwnd;
+                        bool msgFirst = !inFront && ClassicEdit(edit) && run.Allowed("msg");
+                        for (int pass = 0; pass < 2 && !done; pass++)
+                        {
+                            if (pass == (msgFirst ? 1 : 0))
+                            {
                         if (element != null && run.Allowed("uia"))
                         {
                             IUIAutomationValuePattern value = Pattern(element, PatValue) as IUIAutomationValuePattern;
@@ -895,7 +934,9 @@ namespace AgentScreen
                                 if (range != null && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number)) done = Attempt(run, "uia:range", element, delegate () { range.SetValue(number); });
                             }
                         }
-                        IntPtr edit = element != null || hasPoint ? child : FocusOf(hwnd);
+                            }
+                            else
+                            {
                         if (!done && run.Allowed("msg") && ClassicEdit(edit))
                         {
                             IntPtr result;
@@ -908,6 +949,8 @@ namespace AgentScreen
                                 });
                             }
                             else done = Attempt(run, "msg:settext", element, delegate () { Native2.SendMessageTimeoutText(edit, Native2.WM_SETTEXT, IntPtr.Zero, text, 2, 1500, out result); });
+                        }
+                            }
                         }
                         if (!done && run.Allowed("post") && action == "type")
                         {
@@ -1048,7 +1091,14 @@ namespace AgentScreen
             Native2.GetCursorPos(out cursorAfter);
             IntPtr fgAfter = Native.GetForegroundWindow();
             bool took = false, gaveBack = false;
-            if (fgAfter != fgBefore && fgBefore != IntPtr.Zero && fgAfter != IntPtr.Zero)
+            int times = 0; long lostMs = 0; string tookOn = null;
+            if (guard != null)
+            {
+                guard.Finish();
+                times = guard.Taken; lostMs = guard.LostMs; tookOn = guard.TookOn;
+                if (times > 0) { took = true; gaveBack = guard.Restored > 0; fgAfter = Native.GetForegroundWindow(); }
+            }
+            if (!took && fgAfter != fgBefore && fgBefore != IntPtr.Zero && fgAfter != IntPtr.Zero)
             {
                 uint nowPid;
                 Native.GetWindowThreadProcessId(fgAfter, out nowPid);
@@ -1086,8 +1136,74 @@ namespace AgentScreen
             if (note != null) { sb.Append(",\"note\":"); J.Str(sb, note); }
             sb.Append(",\"cursor\":{\"before\":{\"x\":").Append(cursorBefore.X).Append(",\"y\":").Append(cursorBefore.Y).Append("},\"after\":{\"x\":").Append(cursorAfter.X).Append(",\"y\":").Append(cursorAfter.Y).Append("}}");
             sb.Append(",\"foreground\":{\"before\":\"").Append(HwndText(fgBefore)).Append("\",\"after\":\"").Append(HwndText(fgAfter)).Append("\",\"taken\":").Append(took ? "true" : "false")
-                .Append(",\"givenBack\":").Append(gaveBack ? "true" : "false").Append("}}");
+                .Append(",\"givenBack\":").Append(gaveBack ? "true" : "false").Append(",\"times\":").Append(times).Append(",\"lostMs\":").Append(lostMs);
+            if (tookOn != null) { sb.Append(",\"tookOn\":"); J.Str(sb, tookOn); }
+            sb.Append("}}");
             return sb.ToString();
+        }
+
+        /**
+         * Watches the foreground window while one action runs (and 180 ms after). The moment the target's own program takes the
+         * keyboard from the window he was in, that window gets it back, and the rung that did it is named so the caller
+         * never uses it on that program again. It stands down if he touches the mouse or keyboard himself.
+         */
+        private sealed class FocusGuard
+        {
+            public int Taken, Restored;
+            public long LostMs;
+            public string TookOn;
+            private readonly IntPtr his;
+            private readonly uint targetPid;
+            private readonly ActRun run;
+            private readonly uint startInput;
+            private readonly Thread thread;
+            private volatile bool stop;
+
+            public FocusGuard(IntPtr his, uint targetPid, ActRun run)
+            {
+                this.his = his; this.targetPid = targetPid; this.run = run;
+                startInput = LastInput();
+                thread = new Thread(Loop);
+                thread.IsBackground = true;
+                thread.Start();
+            }
+
+            private static uint LastInput()
+            {
+                Native.LASTINPUTINFO last = new Native.LASTINPUTINFO();
+                last.cbSize = (uint)Marshal.SizeOf(typeof(Native.LASTINPUTINFO));
+                return Native.GetLastInputInfo(ref last) ? last.dwTime : 0;
+            }
+
+            private void Loop()
+            {
+                Stopwatch lost = new Stopwatch();
+                Stopwatch tail = null;
+                for (;;)
+                {
+                    if (stop && tail == null) tail = Stopwatch.StartNew();
+                    if (tail != null && tail.ElapsedMilliseconds > 180) break;
+                    IntPtr fg = Native.GetForegroundWindow();
+                    if (fg != his && fg != IntPtr.Zero && Native.IsWindow(his))
+                    {
+                        uint pid;
+                        Native.GetWindowThreadProcessId(fg, out pid);
+                        if (pid == targetPid && LastInput() == startInput)
+                        {
+                            if (!lost.IsRunning) { lost.Restart(); Taken++; if (TookOn == null) TookOn = run.Trying; }
+                            if (GiveBack(his, fg)) { Restored++; LostMs += lost.ElapsedMilliseconds; lost.Reset(); }
+                        }
+                    }
+                    Thread.Sleep(3);
+                }
+                if (lost.IsRunning) LostMs += lost.ElapsedMilliseconds;
+            }
+
+            public void Finish()
+            {
+                stop = true;
+                thread.Join(1500);
+            }
         }
 
         /** The target brought itself to the front because of what was sent: the window he was in gets the keyboard back. */
