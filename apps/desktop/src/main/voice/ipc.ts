@@ -26,13 +26,22 @@ export function registerVoiceIpc(
   ipcMain: IpcMainLike & Partial<IpcMainOnLike>,
   /** Where a paired device's call hands its work (voice.callTargets, voice.callHandoff). */
   handoff?: CallHandoffDeps,
+  /**
+   * How a linked device's recording is written down: dictation's own transcription, which carries the person's names
+   * and languages, rather than the plain one here (11 Nov 2026: a phone's dictation reached the desktop with no
+   * vocabulary at all, so his names came back as whatever the model guessed).
+   */
+  transcribeDevice?: (pcm: Buffer) => Promise<{ ok: boolean; text?: string; error?: string }>,
 ): void {
   ipcMain.handle(CHANNELS.voice.setKey, async (_event, key) => {
     if (typeof key !== 'string' || key.length > MAX_KEY) throw new Error('key must be text')
     voice.setKey(key)
   })
   ipcMain.handle(CHANNELS.voice.check, async () => voice.check())
-  ipcMain.handle(CHANNELS.voice.transcribe, async (_event, pcm) => voice.transcribe(bytes(pcm, MAX_DICTATION)))
+  ipcMain.handle(CHANNELS.voice.transcribe, async (_event, pcm) => {
+    const audio = bytes(pcm, MAX_DICTATION)
+    return transcribeDevice === undefined ? voice.transcribe(audio) : transcribeDevice(audio)
+  })
   ipcMain.handle(CHANNELS.voice.speak, async (_event, text) => {
     if (typeof text !== 'string' || text.length > MAX_SPEAK) throw new Error('text must be text')
     return voice.speak(text)

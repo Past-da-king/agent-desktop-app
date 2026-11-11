@@ -104,6 +104,7 @@ import { createTray, type TrayHandle } from './tray'
 import { startUpdates } from './updates'
 import { EVENTS } from '../shared/channels'
 import { registerVoiceIpc } from './voice/ipc'
+import { transcribeLimitMs } from './voice/service'
 import { HelperFeed } from './devices/helper-feed'
 import { ChatIndex } from './memory/chat-index'
 import { EMPTY_VOCABULARY, dictationWordsFromProjects, vocabularyFrom } from './memory/vocabulary'
@@ -1881,6 +1882,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     state: (chat) => callRunner.state(chat),
     agentName: () => settings.get().agentName,
     delegated: (chat, project, brief) => projectAgents.delegated(chat, project, brief),
+  }, (pcm) => {
+    // A linked phone's recording goes through dictation, so it gets his names and languages like his own mic does.
+    if (dictation !== null) return dictation.transcribe(pcm, AbortSignal.timeout(transcribeLimitMs(pcm.length)))
+    const service = voice
+    return service === null ? Promise.resolve({ ok: false, text: '', error: 'Voice is not ready.' }) : service.transcribe(pcm)
   })
 
   // Dictation anywhere: the pill window holds the microphone, the words are typed into the app in front.

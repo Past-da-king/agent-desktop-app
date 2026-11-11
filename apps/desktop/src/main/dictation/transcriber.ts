@@ -299,10 +299,13 @@ export function joinSegment(text: string, segment: string): string {
  * The languages to tell the speech model about (11 Nov 2026).
  *
  * It used to send 'en-GB' for every English that was not en-US or en-IN, so a South African told Gemini he speaks
- * British English, and the isiZulu he mixes into the same sentence was never mentioned at all. Now the list comes from
- * the person's own system: their languages, English first, at most three. South African English goes up with isiZulu
- * beside it, because those two are spoken in the same breath here and the model switches between them by itself. An
- * empty list is fine: the model detects the language, and code-switching, on its own.
+ * British English. Now the list is the person's own system languages, English first, at most four.
+ *
+ * It deliberately does NOT add isiZulu for South African English, which was the first thing tried and measured worse:
+ * with zu-ZA in the list his "My guy" came back as "Shumayela" and once as "Shame, my guy"; with en-ZA alone the same
+ * recording came back word for word. The model detects the language and switches between languages inside a sentence
+ * by itself, so a language he actually has set on his machine still goes up, and isiZulu that he mixes into English is
+ * still written as isiZulu, without biasing the English towards it. An empty list is fine too.
  */
 export function speechLanguages(system: string[], locale: string): string[] {
   const tags: string[] = []
@@ -314,10 +317,7 @@ export function speechLanguages(system: string[], locale: string): string[] {
   push(locale)
   const english = tags.filter((tag) => /^en\b/i.test(tag))
   const others = tags.filter((tag) => !/^en\b/i.test(tag))
-  const ordered = [...english, ...others]
-  // South African English, with the isiZulu that runs through it.
-  if (english.some((tag) => /^en-ZA$/i.test(tag)) && !ordered.some((tag) => /^(zu|af|xh)-/i.test(tag))) ordered.splice(english.length, 0, 'zu-ZA')
-  return ordered.slice(0, 4)
+  return [...english, ...others].slice(0, 4)
 }
 
 /** A language tag as a BCP-47 one: en_US and EN-za both become en-US, junk becomes null. */

@@ -56,18 +56,19 @@ describe('the live transcription setup', () => {
   })
 
   it('tells the model the languages he actually speaks, from his own system', () => {
-    // South African English goes up with the isiZulu that runs through it, instead of being called British English.
-    expect(speechLanguages([], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA'])
-    expect(speechLanguages(['en-ZA', 'zu-ZA'], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA'])
+    // South African English is sent as en-ZA instead of being called British English (11 Nov 2026).
+    expect(speechLanguages([], 'en-ZA')).toEqual(['en-ZA'])
+    // No isiZulu is invented for it: measured worse on his own recordings (see speechLanguages).
+    expect(speechLanguages(['en-ZA'], 'en-ZA')).toEqual(['en-ZA'])
     expect(speechLanguages(['en-ZA', 'af-ZA'], 'en-ZA')).toEqual(['en-ZA', 'af-ZA'])
-    // Nothing is invented for a language he does not speak, and English stays first.
-    expect(speechLanguages(['en-US'], 'en-US')).toEqual(['en-US'])
-    expect(speechLanguages(['af-ZA'], 'af-ZA')).toEqual(['af-ZA'])
+    // A language he does have set on his machine does go up, with English still first.
     expect(speechLanguages(['zu-ZA', 'en-ZA'], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA'])
-    // Any English that is not South African is just itself: no guessing at isiZulu.
+    expect(speechLanguages(['af-ZA'], 'af-ZA')).toEqual(['af-ZA'])
+    expect(speechLanguages(['en-US'], 'en-US')).toEqual(['en-US'])
     expect(speechLanguages([], 'en-GB')).toEqual(['en-GB'])
     expect(speechLanguages([], '')).toEqual([])
-    expect(speechLanguages(['not a language', 'en_ZA'], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA'])
+    expect(speechLanguages(['not a language', 'en_ZA'], 'en-ZA')).toEqual(['en-ZA'])
+    expect(speechLanguages(['en-US', 'fr-FR', 'de-DE', 'es-ES', 'it-IT'], 'en-US')).toHaveLength(4)
   })
 
   it('normalises a language tag and drops what is not one', () => {
