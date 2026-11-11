@@ -138,6 +138,11 @@ export interface Settings {
    */
   hideGuidesFromCapture: boolean
   /**
+   * The agent shows its own cursor, a branded pointer with a small label of the step, where it acts (in its browser and on
+   * other windows), so it never has to use his mouse. On by default. It is click-through and follows hideGuidesFromCapture.
+   */
+  agentCursor: boolean
+  /**
    * The chat is hidden from screen sharing. A window can only be hidden whole and the chat is drawn in the app window
    * (docked beside the browser too), so this hides the whole app window and the Quick ask box. Off by default.
    */
@@ -274,6 +279,7 @@ export const DEFAULT_SETTINGS: Settings = {
   speakReplies: false,
   recordingAudioKeep: 'today',
   hideGuidesFromCapture: true,
+  agentCursor: true,
   hideChatFromCapture: false,
   wakeupsRingHere: true,
   wakeupsPauseHereUntil: '',

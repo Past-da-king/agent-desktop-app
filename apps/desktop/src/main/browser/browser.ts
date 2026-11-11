@@ -78,6 +78,9 @@ import type { BrowserVault } from '../vault/browser-vault'
 import { attachVaultTo, debuggerLink } from './vault-link'
 import { formatUpload, uploadFiles, type UploadHost, type UploadTarget } from './upload'
 import { brandLook, type BrandLook } from '../../shared/brand'
+import type { AgentCursors } from '../overlay/agent-cursor'
+import { browserCursorAt, cursorLabel } from './agent-cursor-link'
+import { keepFocus, RESTORE_ACTIVE_JS, SAVE_ACTIVE_JS, type FocusProbe } from './focus-keeper'
 import { formatGuide, GuideRuns, guideShowsFullSize, runGuide, type GuideHost } from './guide'
 import { evaluateIn, FrameSessions } from './guide-host'
 import { GuideLog, TAIL_MS } from './guide-log'
@@ -156,6 +159,13 @@ function appLocale(): string {
 }
 
 const MAX_TABS = 5
+/** How long the agent cursor takes to glide to a click (agent-cursor-page.ts): a click waits for it. */
+const GLIDE_MS = 300
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 const EMPTY_BOUNDS: BrowserBounds = { x: 0, y: 0, width: 0, height: 0, visible: false }
 
 /** A tab whose <webview> the renderer is creating; it becomes a Tab once the guest is handed over. */
@@ -214,6 +224,8 @@ export interface AgentBrowserOptions {
    * drawn that way. Without this the page draws the ring itself, as before.
    */
   privateGuides?: { on: () => boolean; overlay: () => PrivateOverlay }
+  /** The agent's own cursor (overlay/agent-cursor.ts): shown where a tool acts, so it never needs his pointer. */
+  cursors?: AgentCursors
 }
 
 export class AgentBrowser implements BrowserDriver, BrowserProDriver {
@@ -281,6 +293,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   private readonly liveGuides = new Set<() => Promise<void>>()
   private readonly look: (() => BrandLook) | undefined
   private readonly privateGuides: AgentBrowserOptions['privateGuides']
+  private readonly cursors: AgentCursors | undefined
   /** Guides showing now: each moves its drawing into or out of the page when his privacy setting changes. */
   private readonly livePrivacy = new Set<() => Promise<void>>()
   /** Each tab's frames, cross-site ones included, for the guide (guide-host.ts). */
@@ -331,6 +344,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
     this.look = options.look
     this.privateGuides = options.privateGuides
+    this.cursors = options.cursors
 
     const root = options.tempRoot ?? tmpdir()
     this.runDir = mkdtempSync(join(root, 'agent-browser-'))
@@ -1429,6 +1443,7 @@ ${await this.snapshot()}`
     if (action === 'press') {
       const key = (request.key ?? '').trim()
       if (key === '') return `Pass the key, for example Enter, Tab, Escape, ArrowDown or ctrl+a. Known: ${KEY_NAMES.join(', ')}.`
+      await this.showCursor(tab, null, 'press', key)
       const ok = await this.trusted(tab, async () => tab.cdp.press(key))
       if (ok !== true) {
         if (!['Enter', 'Tab', 'Escape'].includes(key)) return `I do not know the key "${key}".`
@@ -1456,6 +1471,7 @@ ${await this.snapshot()}`
     if (request.at !== undefined) {
       const at = request.at
       const label = `the point ${Math.round(at.x)},${Math.round(at.y)}`
+      await this.showCursor(tab, at, action, label, action !== 'hover' && action !== 'scroll')
       const done = await this.trusted(tab, async () => {
         if (action === 'drag') {
           if (request.to === undefined) return 'Pass to:{x,y} for a drag.'
@@ -1522,12 +1538,48 @@ ${await this.snapshot()}`
     }
   }
 
+  /**
+   * The agent's own cursor for one action: glides to where the click or typing goes in the page, with a label of the
+   * step, and follows the page if the window moves. All input still goes in by the debugger, so his pointer, keys and
+   * focus are never used; this is only the drawing. `point` is in page CSS px. Waits for the glide (a moment) so the
+   * click lands where the cursor is; never throws, and does nothing with the cursor switched off.
+   */
+  private async showCursor(tab: Tab, point: { x: number; y: number } | null, action: string, targetLabel: string, pulse = false): Promise<void> {
+    const cursors = this.cursors
+    const win = this.window
+    if (cursors === undefined || win === null || win.isDestroyed() || tab.id === this.personTab) return
+    try {
+      const id = currentOwner() ?? 'person'
+      const label = cursorLabel(action, targetLabel)
+      const owner = id === 'person' ? '' : ownerLabel(id)
+      if (point === null) {
+        cursors.label(id, label)
+        return
+      }
+      const pageWidth = Math.max(1, Number(await withDeadline(this.run(tab, 'innerWidth', 1_500), 2_000).catch(() => 0)) || this.bounds.width)
+      const locate = async (): Promise<ReturnType<typeof browserCursorAt>> => {
+        if (win.isDestroyed()) return null
+        const view = parseView(await withDeadline(win.webContents.executeJavaScript(viewWatchScript(tab.id, '', 50)), 1_500).catch(() => null))
+        const content = win.getContentBounds()
+        return browserCursorAt({ point, pageWidth, view, window: { content: { x: content.x, y: content.y }, zoom: win.webContents.getZoomFactor(), visible: win.isVisible() && !win.isMinimized() } })
+      }
+      await cursors.show(id, { locate, label, who: owner, owner: win })
+      if (pulse) {
+        await sleep(GLIDE_MS)
+        cursors.click(id)
+      }
+    } catch {
+      // A drawing must never stop an action.
+    }
+  }
+
   private async actOn(tab: Tab, target: Resolved, request: ActRequest, scale: number): Promise<string> {
     const wc = tab.wc
     const point = { x: target.x * this.zoomOf(tab), y: target.y * this.zoomOf(tab) }
     const covered = target.covered === '' ? '' : `\nWARNING: ${target.covered} is on top of it, so the click may have landed there. If nothing changed, hide the overlay with browser_fix css or close it first.`
     const action = request.action
     const cdpOk = tab.cdp.ensure()
+    await this.showCursor(tab, point, action, target.label, action !== 'hover' && action !== 'scroll' && action !== 'focus')
 
     if (action === 'select') {
       const option = request.text ?? ''
@@ -1981,6 +2033,9 @@ ${await this.snapshot()}`
     // Chromium only runs such scripts while the Page domain is on.
     if (tab.ready) {
       await tab.cdp.send('Page.enable').catch(() => undefined)
+      // The page believes it has focus, so it never asks the browser for the real one (no activation, no taking the
+      // keyboard from another app or from the chat box). Never `Page.bringToFront`.
+      await tab.cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined)
       await tab.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PRESENCE_SCRIPT }).catch(() => undefined)
       // The guide keeps every cross-site frame's session from the start, so none is missed when the Vault turns
       // auto-attach on just below.
@@ -2197,10 +2252,31 @@ ${await this.snapshot()}`
     this.injectingInput = true
     const tab = this.activeTab()
     if (tab !== null) this.lastGesture.set(tab.id, Date.now())
+    const keep = await keepFocus(this.focusProbe())
     try {
       return await action()
     } finally {
       this.injectingInput = false
+      await keep()
+    }
+  }
+
+  /** What focus-keeper.ts needs to know about the app window: it only reads, and gives the keyboard back. */
+  private focusProbe(): FocusProbe {
+    const win = this.window
+    const live = (): BrowserWindow | null => (win !== null && !win.isDestroyed() ? win : null)
+    return {
+      appFocused: () => live()?.isFocused() === true,
+      hostFocused: () => live()?.webContents.isFocused() === true,
+      saveActive: async () => {
+        await live()?.webContents.executeJavaScript(SAVE_ACTIVE_JS)
+      },
+      restoreHost: async () => {
+        const w = live()
+        if (w === null) return
+        w.webContents.focus()
+        await w.webContents.executeJavaScript(RESTORE_ACTIVE_JS)
+      },
     }
   }
 
@@ -2688,6 +2764,8 @@ ${await this.snapshot()}`
     const size = popupSize(features)
     const child = new BrowserWindow({
       ...options,
+      // Shown only by ready-to-show below, and then without taking his focus.
+      show: false,
       parent: this.window ?? undefined,
       width: size.width,
       height: size.height,
@@ -2746,8 +2824,14 @@ ${await this.snapshot()}`
     child.once(
       'ready-to-show',
       whileAlive(child, 'popup show', () => {
-        child.show()
-        child.focus()
+        // Never takes his window focus: a sign-in window an AGENT's click opened is shown behind whatever he is
+        // doing (showInactive); only a window his own click opened is brought forward and focused.
+        if (this.personTab === opener.id) {
+          child.show()
+          child.focus()
+        } else {
+          child.showInactive()
+        }
       }),
     )
     return wc

@@ -1190,6 +1190,14 @@ function PrivacySection({ settings, put, resetRow, navigate }: SectionProps): JS
       </SettingRow>
       <div className="divider" />
       <SettingRow
+        spec={row('agentCursor')}
+        changed={changedNow(row('agentCursor'), settings)}
+        onReset={() => resetRow(row('agentCursor'))}
+      >
+        <Switch on={settings?.agentCursor ?? true} label="Show the agent cursor" onToggle={(next) => put({ agentCursor: next })} />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
         spec={{ ...row('hideGuidesFromCapture'), description: guidesHint(agent.platform) }}
         changed={changedNow(row('hideGuidesFromCapture'), settings)}
         onReset={() => resetRow(row('hideGuidesFromCapture'))}

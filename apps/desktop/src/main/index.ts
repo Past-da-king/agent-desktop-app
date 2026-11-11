@@ -34,6 +34,9 @@ import { brandLook } from '../shared/brand'
 import { guidesUseOverlay } from '../shared/capture-privacy'
 import { CapturePrivacy } from './capture-privacy'
 import { createGuideOverlay } from './overlay/overlay-window'
+import { createAgentCursors } from './overlay/agent-cursor-window'
+import type { AgentCursors } from './overlay/agent-cursor'
+import { onRunEnded } from './browser/run-tabs'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
 import { FileBrainLocks } from './brain-locks'
@@ -267,6 +270,8 @@ let store: Store | null = null
 let settingsStore: SettingsStore | null = null
 /** Which windows are hidden from screen sharing, by the two privacy settings (capture-privacy.ts). */
 let capturePrivacy: CapturePrivacy | null = null
+/** The agent's own cursor (overlay/agent-cursor.ts): the one drawing every tool that acts for the agent shows through. */
+let agentCursors: AgentCursors | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
 /** The helpers, so quitting can leave the ones still working for the next start to report (HelperManager.restore). */
@@ -940,8 +945,18 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const updates = startUpdates()
   logger.info('Updates', { status: updates.status })
 
+  // The agent's own cursor and label, drawn in a click-through window that screen sharing leaves out (like the guides).
+  // A run ending takes its cursor away at once. Nothing here ever moves his pointer or takes his focus.
+  agentCursors?.destroyAll()
+  agentCursors = createAgentCursors({
+    privacy: capturePrivacy,
+    look: () => brandLook({ theme: settings.get().theme, accent: settings.get().accent, systemDark: nativeTheme.shouldUseDarkColors }),
+    enabled: () => settings.get().agentCursor !== false,
+  })
+  onRunEnded((owner) => agentCursors?.hide(owner))
   agentBrowser = new AgentBrowser({
     window: win,
+    cursors: agentCursors,
     onState: (state) => broadcast(EVENTS.browser, state),
     // Closing the tab an agent handed over answers its "needs you in the browser" card, so nothing waits forever.
     onHandoffClosed: () => {
@@ -1736,6 +1751,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     if (changed.length > 0) logger.info('Settings changed', { keys: changed.join(',') })
     if (changed.includes('shell') && next.shell === 'always') void runner?.approveComputerCards()
     if (changed.includes('theme') || changed.includes('accent')) void agentBrowser?.restyleGuides()
+    if (changed.includes('theme') || changed.includes('accent')) agentCursors?.restyle()
+    if (changed.includes('agentCursor')) agentCursors?.refresh()
     if (changed.includes('hideGuidesFromCapture') || changed.includes('hideChatFromCapture')) {
       capturePrivacy?.apply()
       void agentBrowser?.refreshGuidePrivacy()
