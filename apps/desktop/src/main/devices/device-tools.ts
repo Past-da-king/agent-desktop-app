@@ -53,6 +53,8 @@ export const DEFAULT_SHARE: Readonly<Record<DeviceToolGroup, boolean>> = {
 export const DEFAULT_DEADLINE_MS = 120_000
 export const BROWSER_DEADLINE_MS = 600_000
 const QUEUE_TTL_MS = 10 * 60_000
+/** How long a caller waits on an offline device before it is told so (the job stays queued). */
+export const OFFLINE_STATUS_MS = 25_000
 /**
  * Another node heard from this recently counts as online even with no link from this side: a computer that dials in
  * to a server the server cannot dial back (a firewall, a userspace VPN) still replicates its commands both ways.
@@ -168,6 +170,8 @@ export interface DeviceToolHubDeps {
   imageDir?: string
   /** Tests shorten how long the agent waits; the device still gets the real deadline. */
   waitMs?: number
+  /** Tests shorten the wait after which an offline device is reported to the caller. */
+  offlineStatusMs?: number
   now?: () => number
   /** The tick's period (tests shorten it). */
   tickMs?: number
@@ -195,6 +199,9 @@ export class DeviceToolHub {
    */
   private readonly queued = new Set<string>()
   private ticks = 0
+  private seenOnce = false
+  /** Devices seen connected at the last refresh, to spot a reconnect. */
+  private readonly wasConnected = new Set<string>()
 
   constructor(private readonly deps: DeviceToolHubDeps) {
     this.now = deps.now ?? Date.now
@@ -236,7 +243,14 @@ export class DeviceToolHub {
   /** Keep each connected device's advertised tools on its row, and this node's own. */
   async refresh(): Promise<void> {
     const rows = await this.deps.store.list('device')
+    const first = !this.seenOnce
+    this.seenOnce = true
     for (const row of rows) {
+      const connected = row.id !== this.deps.selfId() && this.host?.isConnected(row.id) === true
+      const returned = connected && !this.wasConnected.has(row.id) && !first
+      if (connected) this.wasConnected.add(row.id)
+      else this.wasConnected.delete(row.id)
+      if (returned) await this.resendSent(row.id).catch(() => undefined)
       let tools: DeviceTool[] | null = null
       if (row.id === this.deps.selfId()) {
         const local = this.deps.localTools?.() ?? []
@@ -248,6 +262,20 @@ export class DeviceToolHub {
       if (tools === null) continue
       if (JSON.stringify(tools) === JSON.stringify(toolsOfRow(row))) continue
       await this.deps.store.upsert('device', { id: row.id, tools } as Partial<DeviceRow> & { id: string })
+    }
+  }
+
+  /**
+   * A device that dropped after it was sent a command may never have got it, or may have lost its answer: send the
+   * unanswered ones again with the same id. The phone dedupes by id and resends its answer, so it runs exactly once.
+   */
+  async resendSent(deviceId: string): Promise<void> {
+    const host = this.host
+    if (host === null || !host.isConnected(deviceId)) return
+    const rows = await listWhere(this.deps.store, 'device_command', { statuses: ['sent'] })
+    for (const row of rows) {
+      if (row.kind !== 'tool' || row.target !== deviceId || row.expiresAt <= this.now()) continue
+      host.emit(row.target, 'device.command', toolPayload(row))
     }
   }
 
@@ -368,7 +396,7 @@ export class DeviceToolHub {
       expiresAt: at + QUEUE_TTL_MS + deadlineMs,
       updatedAt: at,
     } as Partial<DeviceCommandRow> & { target: string })
-    const answer = this.wait(command.id, this.deps.waitMs ?? deadlineMs, ctx?.signal)
+    const answer = this.wait(command.id, this.deps.waitMs ?? deadlineMs, ctx?.signal, this.deps.offlineStatusMs ?? OFFLINE_STATUS_MS, () => !this.isOnline(row))
     if (this.host?.isConnected(row.id) === true) await this.deliver(command)
     const done = await answer
     if (done === null) {
@@ -379,7 +407,7 @@ export class DeviceToolHub {
         device: row.name,
         text: online
           ? `${row.name} is still working on ${tool}. Its result will come to you as a message when it arrives.`
-          : `${row.name} is offline. ${tool} will run when it connects (within 10 minutes) and its result will come to you as a message.`,
+          : `${row.name} is offline, retrying; ${tool} (call ${command.id}) queued since ${hhmm(at)}. It stays queued and runs once when ${row.name} reconnects, within 10 minutes; its result then comes to you as a message. If it stays offline you get a final note that ${row.name} stayed offline and ${tool} was not run.`,
       }
     }
     return this.outcome(done, row.name)
@@ -413,10 +441,12 @@ export class DeviceToolHub {
     await this.deps.store.upsert('device_command', { id: row.id, status: 'sent', updatedAt: this.now() })
   }
 
-  private wait(id: string, ms: number, signal?: AbortSignal): Promise<DeviceCommandRow | null> {
+  /** Waits for the answer; every `probeMs` it asks `offline()` and gives up early (null) while the device is away. */
+  private wait(id: string, ms: number, signal?: AbortSignal, probeMs?: number, offline?: () => boolean): Promise<DeviceCommandRow | null> {
     return new Promise((resolve) => {
       const finish = (row: DeviceCommandRow | null): void => {
         clearTimeout(timer)
+        if (probe !== null) clearInterval(probe)
         signal?.removeEventListener('abort', onAbort)
         this.waiters.delete(id)
         resolve(row)
@@ -424,6 +454,13 @@ export class DeviceToolHub {
       const onAbort = (): void => finish(null)
       const timer = setTimeout(() => finish(null), ms)
       timer.unref?.()
+      const probe =
+        probeMs !== undefined && offline !== undefined && probeMs < ms
+          ? setInterval(() => {
+              if (offline()) finish(null)
+            }, probeMs)
+          : null
+      probe?.unref?.()
       signal?.addEventListener('abort', onAbort, { once: true })
       this.waiters.set(id, { resolve: (row) => finish(row) })
     })
@@ -491,6 +528,11 @@ export class DeviceToolHub {
       return null
     }
   }
+}
+
+function hhmm(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 export function toolPayload(row: DeviceCommandRow): Record<string, unknown> {
