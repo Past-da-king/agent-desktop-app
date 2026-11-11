@@ -40,7 +40,7 @@ Wired as rung 5 via the one `AgentSurface` seam. The viewer UI is built only if 
 - Branch `feat/agent-cursor` already contains the merge of `feat/agent-desktop`. `git pull --rebase` before every push; small commits, push often.
 - Windows-input builder owns: tools/agent-screen (Act.cs focus guard, `avoid`, reorder `type` per the ladder; rebuild with build.cmd on
   Windows, recommit the exe), apps/desktop/src/main/agent-cursor/{control,cdp-rung,input-lock}.ts, tools/screen-control.ts, toolset,
-  read-only, vault guard, prompt line, shell guard, the grep test, the lock, settings `agentRealInput`, `agentRealInputIdleSeconds`.
+  read-only, vault guard, prompt line, shell guard, the grep test, the lock, settings `agentRealInput`, `inputLockIdleSeconds`.
 - Cursor and browser builder owns: agent-cursor/{cursor,cursor-page,cursor-window}.ts, setting `agentCursor` (ipc.ts, settings.ts,
   registry.ts, Settings.tsx), main/browser/* and guide*.ts audit and CDP input, browser tool cursor events.
 - Interface between them: `cursor.ts` exports `agentCursor.show({owner, rect, label})`, `.click(owner)`, `.hide(owner)`; `control.ts` calls it with

@@ -160,6 +160,9 @@ export function parseScreenWindow(raw: unknown): ScreenWindow | null {
   return { hwnd: w['hwnd'], pid: num(w['pid']), title: text(w['title'], 300), process, className, rect: rectOf(w['bounds']), minimised: w['minimized'] === true || w['minimised'] === true, integrity: elevated ? 'elevated' : 'normal', needs }
 }
 
+const UWP_CLASSES: readonly string[] = ['ApplicationFrameWindow', 'Windows.UI.Core.CoreWindow']
+const UWP_AVOID: readonly string[] = ['uia:invoke', 'uia:toggle', 'uia:select', 'uia:expand', 'uia:default', 'uia:value', 'uia:contextmenu']
+
 export class ScreenControl {
   constructor(private readonly deps: ScreenControlDeps) {}
 
@@ -233,7 +236,14 @@ export class ScreenControl {
       if (viaCdp !== null && viaCdp.ok) return this.shown(viaCdp, who)
     }
 
-    const avoid = this.deps.takers?.avoid(window.process, window.className) ?? []
+    const avoid = [...(this.deps.takers?.avoid(window.process, window.className) ?? [])]
+    // A packaged (UWP) program that is not in front takes the keyboard on its first UI Automation call and a window message
+    // cannot always give it back in time (Calculator, 11 Nov 2026: 200 to 300 ms lost in 3 of 5 runs). So its UIA rungs are
+    // skipped until it is in front anyway: posted input first, then the agent desktop. Never retried once it has stolen focus.
+    if (UWP_CLASSES.includes(window.className)) {
+      const place = rec(await this.deps.call('place', { hwnd: window.hwnd }).catch(() => null)) ?? {}
+      if (place['foreground'] !== true) for (const rung of UWP_AVOID) if (!avoid.includes(rung)) avoid.push(rung)
+    }
     const args: Record<string, unknown> = {
       hwnd: window.hwnd,
       pid: window.pid,

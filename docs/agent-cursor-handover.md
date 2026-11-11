@@ -132,7 +132,7 @@ instead of real focus.
 - The cursor follows the window by polling the sidecar's `place` op (bounds, minimised, `shows` at the point).
 - Settings (packages/core/src/ipc.ts, main/settings.ts, renderer/views/settings/registry.ts, Settings.tsx beside
   `hideGuidesFromCapture`): `agentCursor` (default true), `agentRealInput` (default FALSE: my decision, stricter
-  than the brief, because the real path cannot be proven on his desktop), `agentRealInputIdleSeconds` (default 10).
+  than the brief, because the real path cannot be proven on his desktop), `inputLockIdleSeconds` (default 10).
 - Lock: real input only when the ladder and the agent desktop cannot do it, the setting is on, a notice was shown
   (with Not now; any touch of his mouse or keyboard also cancels), and he has been idle. The sidecar's `inject`
   enforces idle, aborts on his input (`Hooks.HisOwn`) and restores cursor and foreground itself.

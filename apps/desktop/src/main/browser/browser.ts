@@ -1237,6 +1237,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     await this.prepare(tab)
+    await this.showCursor(tab, null, 'upload', 'a file')
     if (!tab.cdp.ensure()) return 'ERROR: The page debugger is busy, so a file cannot be put into the page right now. Nothing was uploaded.'
     const wc = tab.wc
     const devtools = watchDevtools(wc)
