@@ -1733,6 +1733,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     devUrl: process.env['ELECTRON_RENDERER_URL'],
     keepOpen: () => dictation !== null && dictation.controller.phase !== 'idle',
     onWindow: (window) => capturePrivacy?.register(window, 'chat'),
+    spotsFile: join(app.getPath('userData'), 'quick-ask-spots.json'),
   })
   hotkeys = new HotkeyManager(
     globalShortcut,

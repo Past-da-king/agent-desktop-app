@@ -2010,6 +2010,8 @@ export interface AgentApi {
      * a page, or Back. False when the target is not one the window knows.
      */
     show(target: RouteTarget): Promise<boolean>
+    /** The quick ask orb: start or end dragging its window; the main process follows the cursor and snaps. */
+    quickDrag?(phase: 'start' | 'end'): void
     onMaximizeChange(cb: (maximized: boolean) => void): Unsubscribe
     /** Quick Ask overlay: the main process shows/hides it; the renderer listens. */
     onQuickAsk(cb: () => void): Unsubscribe

@@ -111,6 +111,7 @@ export const CHANNELS = {
     close: 'agent:window.close',
     isMaximized: 'agent:window.isMaximized',
     show: 'agent:window.show',
+    quickDrag: 'agent:window.quickDrag',
   },
   files: {
     pick: 'agent:files.pick',

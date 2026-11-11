@@ -1,5 +1,5 @@
 import type { ChatEvent } from '@agent/core'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 import { agent, chat } from '../bridge'
 import { formatAccelerator } from '../lib/hotkey'
@@ -114,6 +114,34 @@ export function QuickWindow(): JSX.Element {
 
   const dictating = useDictationDraft() !== null
 
+  // The window is see-through: only the orb, the pill and the bubble are drawn.
+  useEffect(() => {
+    document.documentElement.classList.add('quick-own')
+    return () => document.documentElement.classList.remove('quick-own')
+  }, [])
+
+  // Drag by the orb: the main process moves the window with the real cursor and snaps it. A press that never moved
+  // is a click, which puts the cursor back in the field.
+  const dragFrom = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  const onOrbDown = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (event.button !== 0) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragFrom.current = { x: event.screenX, y: event.screenY, moved: false }
+  }
+  const onOrbMove = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const from = dragFrom.current
+    if (from === null || from.moved) return
+    if (Math.abs(event.screenX - from.x) + Math.abs(event.screenY - from.y) < 4) return
+    from.moved = true
+    agent.window.quickDrag?.('start')
+  }
+  const onOrbUp = (): void => {
+    const from = dragFrom.current
+    dragFrom.current = null
+    if (from?.moved === true) agent.window.quickDrag?.('end')
+    input.current?.focus()
+  }
+
   // What Enter will do with this line: show it on his screen, or send it to the chat.
   const canShow = agent.showMe !== undefined
   const walkQuestion = !canShow || text.trim() === '' ? null : showMode ? text.trim() : howToQuestion(text)
@@ -150,59 +178,124 @@ export function QuickWindow(): JSX.Element {
     input.current?.focus()
   }
 
+  const showing = walkQuestion !== null
+  const sentOrBusy = waiting || running
+  // Help only where it is needed: nothing while he types a plain ask, one short line for the mode he is in.
+  const bubble: JSX.Element | null = dictating ? (
+    <span className="qo-dict">
+      <DictationDraft compact />
+    </span>
+  ) : problem !== '' ? (
+    <span className="qo-problem" role="alert">
+      {problem}
+    </span>
+  ) : answer !== '' ? (
+    <span className="qo-answer">{answer}</span>
+  ) : waiting ? (
+    <span role="status">Sent. I'm on it.</span>
+  ) : showing ? (
+    <span>
+      I'll show you on screen, one step at a time. <kbd>Ctrl</kbd> <kbd>Enter</kbd> asks instead.
+    </span>
+  ) : null
+
   return (
-    <div className="quickwin">
-      <div className="qw-row">
-        <Mascot id={settings?.mascot ?? 'scout'} size={44} busy={running || waiting} />
-        <input
-          ref={input}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-              event.preventDefault()
-              send(event.ctrlKey || event.metaKey)
-            }
-          }}
-          placeholder={showMode ? 'What do you want to be shown?' : `Message ${agentName}`}
-          aria-label={`Message ${agentName}`}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        {canShow ? (
-          <button type="button" className={`chip${showMode ? ' on' : ''}`} aria-pressed={showMode} title="Show the steps on the window you were on" onClick={() => { setShowMode((on) => !on); input.current?.focus() }}>
-            Show me
-          </button>
-        ) : null}
-        <button type="button" className="send" onClick={() => send()} aria-label={walkQuestion !== null ? 'Show me on screen' : 'Send'} disabled={text.trim() === ''}>
-          <Icon name="arrow" size={22} />
+    <div className={`qo${showing ? ' show' : ''}${dictating ? ' listening' : ''}`}>
+      <div className="qo-row">
+        <button
+          type="button"
+          className="qo-orb"
+          aria-label="Move the quick ask bar"
+          title="Drag to move"
+          onPointerDown={onOrbDown}
+          onPointerMove={onOrbMove}
+          onPointerUp={onOrbUp}
+          onPointerCancel={onOrbUp}
+        >
+          {dictating ? (
+            <>
+              <i className="qo-ring" />
+              <i className="qo-ring late" />
+            </>
+          ) : null}
+          {showing ? (
+            <svg className="qo-point" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+              <path d="M5 4l6.5 16 2.4-6.9L21 10.6z" />
+            </svg>
+          ) : (
+            <Mascot id={settings?.mascot ?? 'scout'} size={38} busy={sentOrBusy || dictating} />
+          )}
+          {waiting ? (
+            <span className="qo-badge">
+              <Icon name="check" size={12} />
+            </span>
+          ) : null}
         </button>
+
+        <div className="qo-pill">
+          <input
+            ref={input}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                send(event.ctrlKey || event.metaKey)
+              } else if (event.key === 'Tab' && canShow) {
+                event.preventDefault()
+                setShowMode((on) => !on)
+              }
+            }}
+            placeholder={showing || showMode ? 'What should I show you?' : `Ask ${agentName}`}
+            aria-label={`Message ${agentName}`}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            className={`qo-icon${dictating ? ' on' : ''}`}
+            aria-pressed={dictating}
+            aria-label="Dictate"
+            title={dictateKeys === '' ? 'Dictate' : `Dictate (${dictateKeys})`}
+            onClick={() => {
+              void agent.dictation.toggle('plain').catch(() => undefined)
+              input.current?.focus()
+            }}
+          >
+            <Icon name="mic" size={18} />
+          </button>
+          {canShow ? (
+            <button
+              type="button"
+              className={`qo-icon${showMode || showing ? ' on' : ''}`}
+              aria-pressed={showMode}
+              aria-label="Show me on screen"
+              title="Show me on screen (Tab)"
+              onClick={() => {
+                setShowMode((on) => !on)
+                input.current?.focus()
+              }}
+            >
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
+                <path d="M5 4l6.5 16 2.4-6.9L21 10.6z" />
+              </svg>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={`qo-send${text.trim() === '' ? '' : ' ready'}`}
+            onClick={() => send()}
+            aria-label={showing ? 'Show me on screen' : 'Send'}
+            disabled={text.trim() === ''}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 19V5M5 12l7-7 7 7" />
+            </svg>
+          </button>
+        </div>
       </div>
 
-      <div className="qw-line">
-        {/* The shortcut pressed here dictates into this box: the words show on this line, never in the pill. */}
-        {dictating ? (
-          <DictationDraft compact />
-        ) : problem !== '' ? (
-          <span className="qw-problem" role="alert">
-            {problem}
-          </span>
-        ) : waiting ? (
-          <span className="qw-status" role="status">
-            <i className="dot busy" />
-            Sent. {agentName} is on it, and the answer shows here and in your chat.
-          </span>
-        ) : answer !== '' ? (
-          <span className="qw-answer">{answer}</span>
-        ) : walkQuestion !== null ? (
-          <span className="qw-hint">Enter shows you the steps on the window you were on. Ctrl+Enter sends it to your chat instead.</span>
-        ) : (
-          <span className="qw-hint">
-            Enter sends to your chat. Esc closes.{dictateKeys === '' ? '' : ` ${dictateKeys} to dictate.`}
-            {canShow ? ' Start with "how do I" to be shown on screen.' : ''}
-          </span>
-        )}
-      </div>
+      {bubble !== null ? <div className="qo-bubble">{bubble}</div> : null}
     </div>
   )
 }

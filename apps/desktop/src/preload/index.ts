@@ -223,6 +223,9 @@ const api: AgentApi = {
     },
     isMaximized: () => call<boolean>(CHANNELS.window.isMaximized),
     show: (target) => call<boolean>(CHANNELS.window.show, target),
+    quickDrag: (phase) => {
+      void call<boolean>(CHANNELS.window.quickDrag, phase)
+    },
     onMaximizeChange: (callback) => on<boolean>(EVENTS.maximize, callback),
     onQuickAsk: (callback) => on<null>(EVENTS.quickAsk, () => callback()),
     onRoute: (callback) => on<RouteTarget>(EVENTS.route, callback),
