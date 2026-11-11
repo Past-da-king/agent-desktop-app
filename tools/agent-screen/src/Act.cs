@@ -1204,6 +1204,7 @@ namespace AgentScreen
                         {
                             if (!lost.IsRunning) { lost.Restart(); Taken++; if (TookOn == null) TookOn = run.Trying; }
                             if (GiveBack(his, fg)) { Restored++; LostMs += lost.ElapsedMilliseconds; lost.Reset(); }
+                            else Thread.Sleep(30); // hammering a program that is still activating makes it worse (seen on Calculator)
                         }
                     }
                     Thread.Sleep(3);
