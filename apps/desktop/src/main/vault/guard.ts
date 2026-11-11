@@ -34,6 +34,8 @@ export const VAULT_FILL_TOOLS: ReadonlySet<string> = new Set([
   'browser_guide',
   // The screen guide's clipboard fill: a {{vault:REF}} value is pasted by him, never shown.
   'screen_guide',
+  // screen_act types text into another program: a vault [vault:vercel-recovery-past952.token] is filled in before the tool sees it.
+  'screen_act',
 ])
 
 /** Tools that fill placeholders themselves (they need the value where only they know the shell or language). */

@@ -30,6 +30,8 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'browser_read',
   'browser_snapshot',
   'browser_look',
+  'screen_windows',
+  'screen_read',
   'browser_wait_for',
   'browser_scroll',
   'browser_network',

@@ -38,6 +38,9 @@ import { createAgentCursors } from './overlay/agent-cursor-window'
 import type { AgentCursors } from './overlay/agent-cursor'
 import { onRunEnded } from './browser/run-tabs'
 import { setAgentCursors } from './agent-cursor/cursor'
+import { createScreenControl } from './agent-cursor/wire'
+import type { ScreenControl } from './agent-cursor/control'
+import type { NativeScreenReader } from './showme/native'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
 import { FileBrainLocks } from './brain-locks'
@@ -308,6 +311,32 @@ let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
 /** Show me how: a guided ring on whatever window he is on (showme/). */
 let showMe: ShowMeApp | null = null
+/** Screen tools (screen_windows, screen_read, screen_act): other programs without his mouse, keyboard or focus (agent-cursor/). */
+let screenControlInstance: ScreenControl | null = null
+function screenControlOf(): ScreenControl | null {
+  if (process.platform !== 'win32' || showMe === null || settingsStore === null) return null
+  const store = settingsStore
+  const helper = showMe.reader as unknown as NativeScreenReader
+  if (typeof helper.call !== 'function') return null
+  if (screenControlInstance === null) {
+    const userData = app.getPath('userData')
+    screenControlInstance = createScreenControl({
+      helper,
+      picturesDir: join(userData, 'screen'),
+      takersFile: join(userData, 'screen-takers.json'),
+      settings: () => store.get(),
+      showNotice: (title, body, onNotNow) => {
+        if (!Notification.isSupported()) return () => undefined
+        const toast = new Notification({ title, body })
+        toast.on('click', onNotNow)
+        toast.show()
+        return () => toast.close()
+      },
+      toDip: (point) => screen.screenToDipPoint(point),
+    })
+  }
+  return screenControlInstance
+}
 let hotkeys: HotkeyManager | null = null
 let hotkeyRetry: NodeJS.Timeout | null = null
 const runningProcesses = cachedLister(listProcesses)
@@ -1186,6 +1215,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     miniappUi: () => miniappUi,
     git: { kv: gitKv, hook: () => gitHook },
     showMe: () => showMe?.service ?? null,
+    screenControl: screenControlOf,
   })
   // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
   // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
@@ -1334,6 +1364,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   }
   const tools = buildToolset({
     showMe: () => showMe?.service ?? null,
+    screenControl: screenControlOf,
     git: { kv: gitKv, hook: () => gitHook },
     appControl: { ...appControl, update: selfUpdater },
     calendar: () => presenceHandle?.calendar ?? null,

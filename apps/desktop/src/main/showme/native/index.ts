@@ -41,6 +41,7 @@ function unavailable(reason: string): NativeScreenReader {
     focus: () => Promise.resolve(false),
     setKeys: () => undefined,
     idleMs: () => Promise.resolve(-1),
+    call: refuse,
     helperState: () => Promise.resolve(null),
     dispose: () => undefined,
   }

@@ -76,6 +76,8 @@ export interface NativeScreenReader extends ScreenReader {
   setKeys(keys: string[]): void
   /** How long the person has not touched mouse or keyboard, ms; -1 when unknown. */
   idleMs(): Promise<number>
+  /** One raw request to the helper (windows, tree, act, inject...): the screen tools and the input lock use it. */
+  call(op: string, args?: Record<string, unknown>, timeoutMs?: number): Promise<unknown>
   /** The helper's own account of itself; null when it is not there. `hooks` is true only while input is being listened to. */
   helperState(): Promise<{ version: string; elevated: boolean; hooks: boolean; idleMs: number } | null>
 }
@@ -331,6 +333,7 @@ export function createWindowsScreenReader(options: ScreenReaderOptions): NativeS
   }
 
   return {
+    call: (op, args, timeoutMs) => call(op, args ?? {}, timeoutMs),
     unavailableReason: () => sidecar.unavailableReason(),
 
     async available(): Promise<boolean> {

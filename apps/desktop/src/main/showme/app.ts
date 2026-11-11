@@ -58,6 +58,8 @@ export interface ShowMeAppDeps {
 
 export interface ShowMeApp {
   service: ShowMeService
+  /** The screen helper's reader: the screen tools (agent-cursor/wire.ts) talk to the same helper. */
+  reader: ScreenReader
   dispose(): void
 }
 
@@ -150,6 +152,7 @@ export function startShowMe(deps: ShowMeAppDeps): ShowMeApp {
 
   return {
     service,
+    reader,
     dispose: () => {
       service.dispose()
       overlay.destroyAll()

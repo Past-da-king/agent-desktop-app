@@ -16,6 +16,8 @@ const WORDS = /(?<![A-Za-z0-9_])(SetCursorPos|mouse_event|keybd_event|SendInput|
 const ALLOWED: Record<string, string> = {
   'apps/desktop/src/main/agent-cursor/input-lock.ts': 'the lock: the one path',
   'apps/desktop/src/main/runtime/prompt.ts': 'names them only to forbid them in every agent prompt',
+  'apps/desktop/src/main/agent-desktop/agent-surface.ts': 'a comment: the agent desktop never uses it',
+  'tools/agent-desktop/src/Program.cs': 'a comment: the agent desktop uses posted messages, never it',
   'apps/desktop/src/main/agent-cursor/real-input-guard.ts': 'the list of refused names',
   'tools/agent-screen/src/Act.cs': 'the native half of the lock (inject) and the focus guard that gives HIS window back',
   'tools/agent-screen/src/Program.cs': 'focus: hands the keyboard back to the window he was in when the quick chat closes (his own action)',
