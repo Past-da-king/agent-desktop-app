@@ -194,6 +194,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'window.toggleMaximize': free('Maximise or restore the window'),
   'window.close': ask('Close the window'),
   'window.isMaximized': free('Is the window maximised'),
+  'window.quickDrag': no('Drag the quick ask bar by its orb', WINDOW_PLUMBING),
   'window.show': free(
     'Put a view on screen as tapping it does: a chat in full at its newest message, cursor in the box ({ view: "chat", id: chatId, "" for the main chat }), a helper\'s own view ({ view: "helper", id: helperId }), a page ({ view: "settings" }, { view: "project", id }) or Back ({ view: "back" })',
     '{ view, id }',
