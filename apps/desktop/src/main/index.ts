@@ -39,6 +39,8 @@ import type { AgentCursors } from './overlay/agent-cursor'
 import { onRunEnded } from './browser/run-tabs'
 import { setAgentCursors } from './agent-cursor/cursor'
 import { createScreenControl } from './agent-cursor/wire'
+import { makeCdpRung } from './agent-cursor/cdp-rung'
+import { disposeAgentDesktop } from './tools/agent-desktop'
 import type { ScreenControl } from './agent-cursor/control'
 import type { NativeScreenReader } from './showme/native'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
@@ -333,6 +335,7 @@ function screenControlOf(): ScreenControl | null {
         return () => toast.close()
       },
       toDip: (point) => screen.screenToDipPoint(point),
+      cdp: makeCdpRung((op, args, timeoutMs) => helper.call(op, args, timeoutMs)),
     })
   }
   return screenControlInstance
@@ -2093,6 +2096,7 @@ if (refuseToStart) {
     tray = null
     quickAsk?.destroy()
     quickAsk = null
+    disposeAgentDesktop()
     showMe?.dispose()
     showMe = null
     if (hotkeyRetry !== null) clearInterval(hotkeyRetry)

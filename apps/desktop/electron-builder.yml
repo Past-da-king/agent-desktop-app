@@ -42,6 +42,11 @@ extraResources:
     to: agent-screen
     filter:
       - agent-screen.exe
+  # The agent's own desktop (tools/agent-desktop, docs/agent-desktop.md), same pattern.
+  - from: ../../tools/agent-desktop/bin/${os}-${arch}
+    to: agent-desktop
+    filter:
+      - agent-desktop.exe
 
 npmRebuild: false
 buildDependenciesFromSource: false

@@ -17,6 +17,7 @@ import { browserTools } from '../tools/browser'
 import { browserProTools } from '../tools/browser-pro'
 import { browserGuideTools } from '../tools/browser-guide'
 import { screenGuideTools, type ScreenGuideHost } from '../tools/screen-guide'
+import { agentDesktopTools } from '../tools/agent-desktop'
 import { screenControlTools, type ScreenControlHost } from '../tools/screen-control'
 import { browserDevtoolsTools } from '../tools/browser-devtools'
 import { devtoolsOf } from '../browser/devtools'
@@ -276,6 +277,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...browserGuideTools({ browser: deps.browser, ...(deps.learned === undefined ? {} : { learned: deps.learned }) }), // browser_guide, browser_guide_log, browser_guide_save_app
     ...(deps.showMe === undefined ? [] : screenGuideTools({ showMe: deps.showMe })), // screen_guide
     ...(deps.screenControl === undefined ? [] : screenControlTools({ control: deps.screenControl })), // screen_windows, screen_read, screen_act
+    ...agentDesktopTools(), // agent_desktop: the agent's own desktop for programs that ignore posted input
     // The developer tools replace the learned apps' in-page network watcher: every tab records from the start.
     ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
     ...(deps.appControl?.invoker === undefined ? [] : appActionTools({ invoker: deps.appControl.invoker })), // app_actions, app_action: every button in the window
