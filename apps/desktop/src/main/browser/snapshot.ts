@@ -532,3 +532,50 @@ function str(value: unknown): string {
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
+
+
+/** Gives the resolved element the page's focus by script: no press, so the app's own keyboard is never taken. */
+export function focusTargetScript(): string {
+  return `(() => {
+const el = (globalThis.__agentBrowserPage || {}).target;
+if (!el || !el.isConnected) return { ok: false };
+try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { /* detached */ }
+try { el.focus({ preventScroll: true }); } catch (e) { /* not focusable */ }
+return { ok: el.ownerDocument.activeElement === el };
+})()`
+}
+
+/** The resolved tick box or radio now: checked or not. */
+export function targetCheckedScript(): string {
+  return `(() => {
+const el = (globalThis.__agentBrowserPage || {}).target;
+if (!el || !el.isConnected) return { ok: false, checked: null };
+return { ok: true, checked: !!el.checked };
+})()`
+}
+
+/**
+ * Tab and Shift+Tab by script: the next (or previous) thing a keyboard reaches takes the page's focus. A real Tab key
+ * is a focus traversal that Chromium hands to the browser, which moves the keyboard away from the chat box.
+ */
+export function tabScript(reverse: boolean): string {
+  return `(() => {
+const reverse = ${reverse ? 'true' : 'false'};
+const sel = 'a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=""],[contenteditable="true"]';
+const visible = (e) => { const r = e.getBoundingClientRect(); const st = getComputedStyle(e); return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'; };
+const ok = (e) => !e.disabled && !(e.tagName === 'INPUT' && e.type === 'hidden') && e.tabIndex >= 0 && visible(e);
+const all = Array.from(document.querySelectorAll(sel)).filter(ok);
+const positive = all.filter((e) => e.tabIndex > 0).sort((a, b) => a.tabIndex - b.tabIndex);
+const zero = all.filter((e) => e.tabIndex === 0);
+const order = positive.concat(zero);
+if (order.length === 0) return { ok: false, reason: 'Nothing on the page can take focus.' };
+const now = document.activeElement;
+let at = order.indexOf(now);
+let next;
+if (at < 0) next = reverse ? order[order.length - 1] : order[0];
+else next = order[(at + (reverse ? order.length - 1 : 1)) % order.length];
+next.focus();
+next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+return { ok: document.activeElement === next };
+})()`
+}

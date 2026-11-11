@@ -49,3 +49,50 @@ Wired as rung 5 via the one `AgentSurface` seam. The viewer UI is built only if 
   inside the guard), report `foreground.taken`, and remember (process, class, rung) as a taker so it is avoided.
 - Test apps: start minimised or SW_SHOWNOACTIVATE, only while he is idle; never run `inject` on his desktop.
 - I (integration lead) own the agent-desktop wiring (rung 5), release, proof and memory. Do not bump the version.
+
+
+## Browser focus (0.2.129): why his typing was interrupted, and what stops it
+
+Measured 11 Nov 2026 in a real Windows copy of the app (Electron 44), the chat box focused and typed into at 6 characters a
+second while the agent drove a form in its own browser. Harness: `tools/focus-proof/` (run.ps1) with the probe
+`main/browser/focus-probe.ts` (env AGENT_FOCUS_PROBE; never set in normal use).
+
+**The cause.** The agent's pages are `<webview>` guests in the same focus tree as the chat box. The debugger sends keys and text
+to the window's focused widget, and a press moves that focus into the page. Result: the chat box loses its caret, and he and
+the agent share one keyboard. Chromium has no switch for it (the injector and the page's frame focus do it inside the browser
+process; `Emulation.setFocusEmulationEnabled`, `inert`, `visibility:hidden` on the `<webview>` change nothing).
+
+| Agent tool | Debugger call | Moves the keyboard to the page (0.2.126) | Why |
+|---|---|---|---|
+| browser_open, snapshot, read, eval, view | Runtime.evaluate, Page.navigate, Emulation.* | no | page scripts and navigation never ask for focus; a page script `el.focus()` is quiet too |
+| browser_look | Page.captureScreenshot, capturePage | no | |
+| browser_scroll, act scroll, act hover | Input.dispatchMouseEvent mouseWheel, mouseMoved | no | only a press takes focus |
+| act click, check, uncheck, browser_click, select (custom list), double, right, hold, drag | Input.dispatchMouseEvent mousePressed (also Input.dispatchTouchEvent, Input.synthesizeTapGesture) | **yes** | the press focuses the page; measured on a click on empty body too |
+| act type, browser_type | the press above, then Input.insertText | **yes, for the whole action** | and Input.insertText goes to the window's focused widget: with no press first it types into HIS chat box |
+| act press, browser_press_key | Input.dispatchKeyEvent | **yes, and worse** | keys go to whoever holds the keyboard in the window: with the page not focused, Enter or Space lands in his chat box (Enter sends his message); Tab moves his focus |
+| browser_upload | DOM.setFileInputFiles, file chooser, trusted click | click only | covered by the burst below |
+| vault_fill, vault_login | page scripts through the debugger link (no Input.*) | no | read from `vault/`; not run in the loop |
+| browser_guide | his own clicks; overlay windows | no | read from `guide*.ts`; not run in the loop |
+| popup an agent click opened | showInactive | no | 0.2.126 |
+
+Window events do not show it: the app page's WebContents never emits blur and the guest never emits focus; only the page's own
+`document.hasFocus()` and `activeElement` see it. The 0.2.126 `focus-keeper` asked `webContents.isFocused()` and ran only
+around debugger input; in the test copy it never gave the keyboard back (the box ended with 17 of 413 characters).
+
+**The fix (0.2.129), in the order of the principle.**
+1. Prevented: typing no longer presses. The field takes the page's focus by script and the text goes in with
+   `webContents.insertText` (to that page's focused field, whoever holds the window's keyboard). Tab and Shift+Tab move the page's
+   focus by script (`tabScript`). Nothing else on the table above moved it.
+2. What still has to press or send keys is a burst (`FocusGuard.burst`, `focus-keeper.ts`): the page is given the keyboard on
+   purpose (`wc.focus()`), the click or keys go in, and the keyboard goes back to the exact element he was in the moment the
+   burst ends, never in the middle (so a key can never land in his message). The press-to-release gap is 12 ms.
+3. His own keys that reach the page during a burst are kept from it (the existing `before-input-event` hook) and typed into the
+   chat box, in order, after it has the keyboard back (`swallow`, `keyToEvents`). Keys the agent sends itself pass.
+4. Safety net: every `Input.*` command goes through `guardDebugger`; any that takes the keyboard outside a burst is given back
+   within a tick. Each give-back is logged ("keyboard given back to the chat") so a path that still takes it shows up.
+5. Never when he is in another app (it checks the app is the foreground window first), so it cannot bring the app forward.
+
+What is not fixed at the source: a real press (click, key) still moves the keyboard for the length of a burst (about 20 to 40 ms),
+because the page is a guest in the window's focus tree. Removing that needs the agent's page to be a separate native view
+(WebContentsView) instead of a `<webview>`, a larger change that was not made. His own clicks into the page still focus it
+normally. Numbers: `Downloads/agent/proof-focus-0.2.129/PROOF.md`.

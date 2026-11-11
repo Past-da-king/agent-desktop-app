@@ -70,6 +70,7 @@ import {
   selectFieldScript,
   selectOptionScript,
   snapshotScript,
+  tabScript,
   type Resolved,
 } from './snapshot'
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, GuideRequest, ViewRequest } from './types'
@@ -80,7 +81,7 @@ import { formatUpload, uploadFiles, type UploadHost, type UploadTarget } from '.
 import { brandLook, type BrandLook } from '../../shared/brand'
 import type { AgentCursors } from '../overlay/agent-cursor'
 import { browserCursorAt, cursorLabel } from './agent-cursor-link'
-import { keepFocus, RESTORE_ACTIVE_JS, SAVE_ACTIVE_JS, type FocusProbe } from './focus-keeper'
+import { FocusGuard, FORGET_ACTIVE_JS, guardDebugger, HOST_HAS_KEYBOARD_JS, keyToEvents, RESTORE_ACTIVE_JS, SAVE_ACTIVE_JS, type FocusProbe } from './focus-keeper'
 import { formatGuide, GuideRuns, guideShowsFullSize, runGuide, type GuideHost } from './guide'
 import { evaluateIn, FrameSessions } from './guide-host'
 import { GuideLog, TAIL_MS } from './guide-log'
@@ -206,6 +207,8 @@ export interface AgentBrowserOptions {
   /** The person closed the tab an agent handed them (browser_handoff), so its waiting question can be answered. */
   onHandoffClosed?: () => void
   maxTabs?: number
+  /** One line for the app's log (the keyboard had to be given back to the chat box). */
+  log?: (message: string, meta: Record<string, unknown>) => void
   onState?: (state: BrowserState) => void
   /**
    * Hand a page to the agent (toolbar button, the page's right-click menu): where its note and picture are written,
@@ -315,6 +318,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** Partitions whose session is set up: one header listener and one download handler per session. */
   private readonly sessionsReady = new Set<string>()
   private injectingInput = false
+  /** Gives him back the keyboard whenever a page takes it (focus-keeper.ts); every tab's debugger goes through it. */
+  private readonly focusGuard = new FocusGuard(this.focusProbe())
   private tabSeq = 0
   private shotSeq = 0
   private destroyed = false
@@ -329,6 +334,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** Full screen: the page has the whole screen, with only the browser's toolbar. Only ever on with `expanded`. */
   private fullScreen = false
   private readonly handOverTo: AgentBrowserOptions['handOver']
+  private readonly logLine: NonNullable<AgentBrowserOptions['log']>
   /** Tabs the person handed to the agent (hand-over.ts): an agent may be told to carry on in one of these. */
   private readonly handedTabs = new Set<string>()
 
@@ -341,6 +347,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.onState = options.onState ?? (() => undefined)
     this.onHandoffClosed = options.onHandoffClosed ?? (() => undefined)
     this.handOverTo = options.handOver
+    this.logLine = options.log ?? (() => undefined)
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
     this.look = options.look
     this.privateGuides = options.privateGuides
@@ -1445,7 +1452,15 @@ ${await this.snapshot()}`
       const key = (request.key ?? '').trim()
       if (key === '') return `Pass the key, for example Enter, Tab, Escape, ArrowDown or ctrl+a. Known: ${KEY_NAMES.join(', ')}.`
       await this.showCursor(tab, null, 'press', key)
-      const ok = await this.trusted(tab, async () => tab.cdp.press(key))
+      // Tab is a focus traversal Chromium hands to the browser, which moves the keyboard off his chat box: by script instead.
+      const tabbed = /^(shift\+)?tab$/i.exec(key)
+      if (tabbed !== null) {
+        const moved = objectOf(await this.run(tab, tabScript(tabbed[1] !== undefined)))
+        await this.settle(200)
+        this.emit()
+        return moved['ok'] === true ? `Pressed ${key}.\n\n${await this.snapshotText(tab, {})}` : String(moved['reason'] ?? 'Nothing took the focus.')
+      }
+      const ok = await this.trusted(tab, async () => tab.cdp.press(key), true)
       if (ok !== true) {
         if (!['Enter', 'Tab', 'Escape'].includes(key)) return `I do not know the key "${key}".`
         this.pressKey(tab, key)
@@ -1473,7 +1488,9 @@ ${await this.snapshot()}`
       const at = request.at
       const label = `the point ${Math.round(at.x)},${Math.round(at.y)}`
       await this.showCursor(tab, at, action, label, action !== 'hover' && action !== 'scroll')
-      const done = await this.trusted(tab, async () => {
+      const done = await this.trusted(
+        tab,
+        async () => {
         if (action === 'drag') {
           if (request.to === undefined) return 'Pass to:{x,y} for a drag.'
           await tab.cdp.drag(at, request.to, this.shotScale(tab))
@@ -1501,7 +1518,9 @@ ${await this.snapshot()}`
           return `Clicked ${label} and typed.`
         }
         return `Clicked ${label}.`
-      })
+        },
+        true,
+      )
       if (typeof done !== 'string') return 'The page did not accept input at that point.'
       await this.settle(450)
       this.emit()
@@ -1589,7 +1608,7 @@ ${await this.snapshot()}`
       if (picked['ok'] !== true) {
         // Not a native list: open it with a real click, then the option is an element to click by name.
         if (target.tag !== 'select' && cdpOk) {
-          await tab.cdp.click(point, scale)
+          await this.trustedInput(async () => tab.cdp.click(point, scale))
           await this.settle(400)
           return `Opened ${target.label}. Now click the option by name.\n\n${await this.snapshotText(tab, { filter: option })}`
         }
@@ -1640,14 +1659,24 @@ ${await this.snapshot()}`
       const text = request.text ?? ''
       if (target.tag === 'select') return this.actOn(tab, target, { ...request, action: 'select' }, scale)
       if (cdpOk) {
-        await this.trustedInput(async () => tab.cdp.click(point, scale))
-        await this.settle(80)
-        const focused = objectOf(await this.run(tab, selectFieldScript()))
+        // The field takes the page's focus by script, not by a press: a press moves the keyboard off his chat box.
+        let focused = objectOf(await this.run(tab, selectFieldScript()))
+        if (focused['ok'] !== true) {
+          await this.trustedInput(async () => tab.cdp.click(point, scale))
+          await this.settle(80)
+          focused = objectOf(await this.run(tab, selectFieldScript()))
+        }
         if (focused['ok'] !== true && !target.editable) return `${target.label} is not a text field.`
-        await this.trustedInput(async () => {
-          if (text === '') await tab.cdp.press('Delete')
-          else await tab.cdp.insertText(text)
-        })
+        if (text === '') await this.trustedInput(async () => tab.cdp.press('Delete'), true)
+        else {
+          // webContents.insertText goes to this page's focused field whatever holds the keyboard in the window; the debugger's
+          // Input.insertText goes to the window's focused widget, which is his chat box.
+          const inserted = await tab.wc.insertText(text).then(
+            () => true,
+            () => false,
+          )
+          if (!inserted) await this.trustedInput(async () => tab.cdp.insertText(text), true)
+        }
       } else {
         const index = request.index
         if (index === undefined) return 'Typing by name needs the page debugger, which is busy. Use the element number.'
@@ -1661,7 +1690,7 @@ ${await this.snapshot()}`
         await this.trustedInput(async () => {
           if (cdpOk) await tab.cdp.press('Enter')
           else this.pressKey(tab, 'Enter')
-        })
+        }, true)
         await this.settle(600)
         this.emit()
         return `Typed into ${target.label} and pressed Enter.${mismatch}\n\n${await this.snapshotText(tab, {})}`
@@ -2240,35 +2269,33 @@ ${await this.snapshot()}`
   }
 
 
-  private async trusted<T>(tab: Tab, action: () => Promise<T>): Promise<T | null> {
+  private async trusted<T>(tab: Tab, action: () => Promise<T>, keysToo = false): Promise<T | null> {
     if (!tab.cdp.ensure()) return null
     try {
-      return await this.liftGuard(tab, async () => this.trustedInput(action))
+      return await this.liftGuard(tab, async () => this.trustedInput(action, keysToo))
     } catch {
       return null
     }
   }
 
-  private async trustedInput<T>(action: () => Promise<T>): Promise<T> {
+  private async trustedInput<T>(action: () => Promise<T>, keysToo = false): Promise<T> {
     this.injectingInput = true
     const tab = this.activeTab()
     if (tab !== null) this.lastGesture.set(tab.id, Date.now())
-    const keep = await keepFocus(this.focusProbe())
     try {
-      return await action()
+      return await this.focusGuard.burst(() => tab?.wc.focus(), action, 'input', { keys: keysToo }) // grab: the page takes the keys of this burst, then it all goes back
     } finally {
       this.injectingInput = false
-      await keep()
     }
   }
 
-  /** What focus-keeper.ts needs to know about the app window: it only reads, and gives the keyboard back. */
+  /** What focus-keeper.ts needs to know about the app window: it asks the page, and gives the keyboard back. */
   private focusProbe(): FocusProbe {
-    const win = this.window
-    const live = (): BrowserWindow | null => (win !== null && !win.isDestroyed() ? win : null)
+    const live = (): BrowserWindow | null => (this.window !== null && !this.window.isDestroyed() ? this.window : null)
     return {
-      appFocused: () => live()?.isFocused() === true,
-      hostFocused: () => live()?.webContents.isFocused() === true,
+      // AGENT_FOCUS_PROBE_FOCUSED=1 (the focus proof, which runs the app off his screen without taking his focus) says it is the window he is in.
+      appFocused: () => live()?.isFocused() === true || process.env['AGENT_FOCUS_PROBE_FOCUSED'] === '1',
+      hostHasKeyboard: async () => (await live()?.webContents.executeJavaScript(HOST_HAS_KEYBOARD_JS)) === true,
       saveActive: async () => {
         await live()?.webContents.executeJavaScript(SAVE_ACTIVE_JS)
       },
@@ -2278,7 +2305,25 @@ ${await this.snapshot()}`
         w.webContents.focus()
         await w.webContents.executeJavaScript(RESTORE_ACTIVE_JS)
       },
+      replay: async (keys) => {
+        const w = live()
+        if (w === null) return
+        for (const key of keys) for (const event of keyToEvents(key)) w.webContents.sendInputEvent(event)
+      },
+      forgetActive: async () => {
+        await live()?.webContents.executeJavaScript(FORGET_ACTIVE_JS)
+      },
+      note: (what, detail) => this.logLine(what, detail),
     }
+  }
+
+  /** The focus proof (focus-probe.ts) reads these: is a click of the agent holding the keyboard in the page now, and how often it went back. */
+  keyboardHeldByPage(): boolean {
+    return this.focusGuard.isHolding()
+  }
+
+  keyboardGivenBack(): { fired: number; swallowed: number; replayed: number } {
+    return { fired: this.focusGuard.fired, swallowed: this.focusGuard.swallowed, replayed: this.focusGuard.replayed }
   }
 
   setAgentDriving(on: boolean, reason = ''): void {
@@ -2566,6 +2611,7 @@ ${await this.snapshot()}`
       siteCss: [],
     }
     tab.cdp.guest = view === null
+    guardDebugger(wc.debugger, this.focusGuard)
     this.tabs.push(tab)
     this.wireTab(tab)
     if (view !== null) this.sizeOffscreen(tab)
@@ -2686,7 +2732,12 @@ ${await this.snapshot()}`
           return
         }
         // A key the agent sends itself must still reach the page.
-        if (tab.id !== this.personTab && !this.injectingInput) event.preventDefault()
+        if (tab.id !== this.personTab && !this.injectingInput) {
+          event.preventDefault()
+          return
+        }
+        // A real key of his that lands in the page while a click of the agent holds the keyboard goes to the chat box instead.
+        if (tab.id !== this.personTab && (input.type === 'keyDown' || input.type === 'keyUp') && this.focusGuard.swallow({ type: input.type, key: input.key, shift: input.shift, control: input.control, alt: input.alt, meta: input.meta })) event.preventDefault()
       }),
     )
 
@@ -2943,13 +2994,15 @@ ${await this.snapshot()}`
   private pressKey(tab: Tab, key: string): void {
     const wc = tab.wc
     this.injectingInput = true
-    try {
-      wc.sendInputEvent({ type: 'keyDown', keyCode: key })
-      if (key.length === 1) wc.sendInputEvent({ type: 'char', keyCode: key })
-      wc.sendInputEvent({ type: 'keyUp', keyCode: key })
-    } finally {
-      this.injectingInput = false
-    }
+    void this.focusGuard.around(async () => {
+      try {
+        wc.sendInputEvent({ type: 'keyDown', keyCode: key })
+        if (key.length === 1) wc.sendInputEvent({ type: 'char', keyCode: key })
+        wc.sendInputEvent({ type: 'keyUp', keyCode: key })
+      } finally {
+        this.injectingInput = false
+      }
+    }, 'sendInputEvent')
   }
 
   private async waitForLoad(tab: Tab, timeoutMs = 5_000): Promise<void> {

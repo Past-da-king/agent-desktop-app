@@ -6,7 +6,6 @@ import { brandLook } from '../src/shared/brand'
 import { AgentCursors, FOLLOW_MS, IDLE_HIDE_MS, type CursorHost, type CursorPageState, type CursorSurface, type Located } from '../src/main/overlay/agent-cursor'
 import { cursorHtml, cursorStyle } from '../src/main/overlay/agent-cursor-page'
 import { browserCursorAt, cursorLabel } from '../src/main/browser/agent-cursor-link'
-import { keepFocus, type FocusProbe } from '../src/main/browser/focus-keeper'
 
 class FakeSurface implements CursorSurface {
   bounds = { x: 0, y: 0, width: 0, height: 0 }
@@ -197,43 +196,6 @@ describe('agent cursor in the browser', () => {
   })
 })
 
-describe('focus keeper', () => {
-  function probe(state: { app: boolean; host: boolean }): FocusProbe & { restored: number } {
-    const p = {
-      restored: 0,
-      appFocused: () => state.app,
-      hostFocused: () => state.host,
-      saveActive: async () => {},
-      restoreHost: async () => {
-        p.restored += 1
-        state.host = true
-      },
-    }
-    return p
-  }
-  it('gives the chat box its keyboard back when a guest took it', async () => {
-    const state = { app: true, host: true }
-    const p = probe(state)
-    const done = await keepFocus(p)
-    state.host = false
-    expect(await done()).toBe(true)
-    expect(p.restored).toBe(1)
-  })
-  it('does nothing when he is in another app (it can never bring the app forward)', async () => {
-    const state = { app: false, host: false }
-    const p = probe(state)
-    const done = await keepFocus(p)
-    expect(await done()).toBe(false)
-    expect(p.restored).toBe(0)
-  })
-  it('does nothing when the keyboard never moved', async () => {
-    const state = { app: true, host: true }
-    const p = probe(state)
-    const done = await keepFocus(p)
-    expect(await done()).toBe(false)
-  })
-})
-
 describe('the agent browser never takes focus (source guard)', () => {
   const root = join(__dirname, '..', 'src', 'main')
   const files = (dir: string): string[] =>
@@ -252,8 +214,8 @@ describe('the agent browser never takes focus (source guard)', () => {
         })
     }
     // Allowed: opening the developer tools (his own action), the popup his OWN click opened, the keyboard given back
-    // to the app's own page (focus-keeper), the show() that follows `if (this.personTab === opener.id)`.
-    const allowed = offenders.filter((o) => !/devToolsWebContents\?\.focus|child\.show\(\)|child\.focus\(\)|w\.webContents\.focus\(\)/.test(o))
+    // to the app's own page (focus-keeper), the list of commands focus-keeper guards (it names Page.bringToFront to guard it), the show() that follows `if (this.personTab === opener.id)`.
+    const allowed = offenders.filter((o) => !/devToolsWebContents\?\.focus|child\.show\(\)|child\.focus\(\)|w\.webContents\.focus\(\)|focus-keeper\.ts:\d+: return \/\^Input|\/\/ grab: the page takes the keys/.test(o))
     expect(allowed).toEqual([])
   })
 

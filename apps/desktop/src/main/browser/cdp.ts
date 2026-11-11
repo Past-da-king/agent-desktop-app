@@ -142,7 +142,7 @@ export class Cdp {
     await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
     for (let n = 1; n <= clickCount; n++) {
       await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button, buttons: 1, clickCount: n })
-      await sleep(30)
+      await sleep(12)
       await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button, buttons: 0, clickCount: n })
     }
   }

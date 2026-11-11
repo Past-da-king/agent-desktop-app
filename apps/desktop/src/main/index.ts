@@ -41,6 +41,7 @@ import { setAgentCursors } from './agent-cursor/cursor'
 import { createScreenControl } from './agent-cursor/wire'
 import { makeCdpRung } from './agent-cursor/cdp-rung'
 import { runTypingProbe } from './browser/typing-probe'
+import { runFocusProbe } from './browser/focus-probe'
 import { disposeAgentDesktop } from './tools/agent-desktop'
 import type { ScreenControl } from './agent-cursor/control'
 import type { NativeScreenReader } from './showme/native'
@@ -644,7 +645,11 @@ function createWindow(stateFile: string): BrowserWindow {
       if (!sameRect(chosenBounds(win), want)) win.setBounds(want)
     }
     if (saved.maximized) win.maximize()
-    win.show()
+    // The focus proof (browser/focus-probe.ts) runs the app off his screen and never takes his window focus.
+    if ((process.env['AGENT_FOCUS_PROBE'] ?? '') !== '') {
+      win.setBounds({ x: -2600, y: -1500, width: 1200, height: 760 })
+      win.showInactive()
+    } else win.show()
     logger.info('Window shown', { ms: Math.round(process.uptime() * 1000) })
   })
 
@@ -994,6 +999,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   agentBrowser = new AgentBrowser({
     window: win,
     cursors: agentCursors,
+    log: (message, meta) => logger.info(message, meta),
     onState: (state) => broadcast(EVENTS.browser, state),
     // Closing the tab an agent handed over answers its "needs you in the browser" card, so nothing waits forever.
     onHandoffClosed: () => {
@@ -1050,6 +1056,16 @@ async function startServices(win: BrowserWindow): Promise<void> {
     if (settings.get().theme === 'system') void agentBrowser?.restyleGuides()
   }
   nativeTheme.on('updated', onSystemTheme)
+  // The focus proof (browser/focus-probe.ts): the keyboard stays in the message box while the agent drives its browser. Never set in normal use. a local test page here; never set in normal use.
+  const focusProbe = process.env['AGENT_FOCUS_PROBE']?.trim() ?? ''
+  if (focusProbe !== '') {
+    setTimeout(() => {
+      const browser = agentBrowser
+      const win = mainWindow
+      if (browser === null || win === null) return
+      void runFocusProbe(browser, win.webContents, win, focusProbe).catch((error: unknown) => console.log(`FOCUS PROBE failed ${error instanceof Error ? error.message : String(error)}`))
+    }, 1500)
+  }
   // The real-Electron browser proof opens a local test page here; never set in normal use.
   const probeUrl = process.env['AGENT_BROWSER_PROBE_URL']?.trim() ?? ''
   if (probeUrl !== '') {
