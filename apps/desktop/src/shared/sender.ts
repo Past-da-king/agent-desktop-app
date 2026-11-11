@@ -79,3 +79,67 @@ export function viaLabel(via: ChatVia): string {
       return `[${senderLine(via)}]`
   }
 }
+
+// ---- Live voice hand-offs ------------------------------------------------------------------------------------------
+//
+// The phone's Live voice assistant (Gemini Live, tool hand_to_agent) hands a job to the agent in ITS OWN words. That is
+// not what he typed and not what he said. A Live session is a call (same as a voice call, but it can see), so its
+// hand-offs fold into the call block and never draw as a user bubble; the agent is told what it is.
+//
+// Wire contract (docs: apps/desktop docs live-voice-handoff.md): a phone send (`chat.send` options, `chat.sendOnce`
+// input, `voice.callHandoff` input) may carry `origin: "live_voice"`, `spoken: "<his words>"` and `session: "<id>"`,
+// at the top level or inside `meta` / `metadata`, or as one object `live: { spoken, session }`.
+
+export const LIVE_ORIGIN = 'live_voice'
+
+/** A hand-off from a Live session: his own words (when known) and the session (its call block) it belongs to. */
+export interface LiveHandoff {
+  spoken: string
+  session: string
+}
+
+const MAX_SPOKEN = 2000
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value === 'string' && value.trim().startsWith('{')) {
+    try {
+      value = JSON.parse(value) as unknown
+    } catch {
+      return null
+    }
+  }
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function text(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.trim().slice(0, max) : ''
+}
+
+/** The Live hand-off a send, or a call hand-off, carries; null for anything else (his own message). */
+export function liveFromInput(raw: unknown): LiveHandoff | null {
+  const top = asObject(raw)
+  if (top === null) return null
+  const explicit = asObject(top['live'])
+  const places = [explicit, top, asObject(top['meta']), asObject(top['metadata'])]
+  for (const place of places) {
+    if (place === null) continue
+    const origin = place['origin']
+    const named = origin === LIVE_ORIGIN || (typeof origin === 'object' && origin !== null && (origin as Record<string, unknown>)['kind'] === LIVE_ORIGIN)
+    if (!named && place !== explicit) continue
+    return { spoken: text(place['spoken'], MAX_SPOKEN), session: text(place['session'] ?? place['sessionId'] ?? place['callId'], 80) }
+  }
+  return null
+}
+
+/** The Live hand-off a stored row's meta records (`meta.live`), or null. */
+export function liveFromMeta(meta: Record<string, unknown>): LiveHandoff | null {
+  const live = asObject(meta['live'])
+  if (live === null) return null
+  return { spoken: text(live['spoken'], MAX_SPOKEN), session: text(live['session'], 80) }
+}
+
+/** What the agent reads in front of a Live hand-off, so it answers him and not the assistant. */
+export function liveLabel(live: LiveHandoff): string {
+  const said = live.spoken === '' ? 'His exact words were not kept.' : `He actually said: "${live.spoken.replace(/\s+/g, ' ')}"`
+  return `[Hand-off from his Live voice assistant. The request below is the assistant's own paraphrase, not his words. ${said} Your answer is read to him aloud by the assistant, so reply to him in plain spoken words.]\n`
+}

@@ -30,6 +30,7 @@ import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { toast } from '../state/useToast'
+import { foldLiveHandoffs } from '../lib/live'
 import { CallRow } from '../voice/CallRow'
 import { useCall } from '../voice/useCall'
 import { VisualCard, visualFromMeta } from '../voice/VisualCard'
@@ -1029,7 +1030,7 @@ export function Chat({ dock }: { dock?: { below: boolean; fold: () => void } } =
     for (const item of items) if (isSideRun(item)) views.set(item.id, helperView(item, items))
     return views
   }, [items])
-  const segments = useMemo(() => segmentsOf(messages), [messages])
+  const segments = useMemo(() => segmentsOf(foldLiveHandoffs(messages)), [messages])
   // The same name the rail shows for it.
   const title = chatTitleOf(items)
   const cards = openCards(items, true)
