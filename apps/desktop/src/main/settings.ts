@@ -256,6 +256,13 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     return number <= 0 ? 0 : Math.min(top, Math.round(number * 10) / 10)
   }
 
+  // Real input under the input lock: how long he must be still, 3 seconds to 10 minutes.
+  if (key === 'inputLockIdleSeconds') {
+    const number = typeof value === 'string' ? Number(value.trim()) : value
+    if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
+    return Math.min(600, Math.max(3, Math.round(number)))
+  }
+
   // Show me how: an account and a model, both '' for automatic.
   if (key === 'guideModel') return pickFrom(value)
 

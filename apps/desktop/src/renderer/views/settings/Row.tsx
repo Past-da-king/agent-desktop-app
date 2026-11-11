@@ -21,6 +21,7 @@ const UNITS: Record<string, string> = {
   helperMaxSteps: '',
   routinesAtOnce: '',
   helperQuietMinutes: ' minutes',
+  inputLockIdleSeconds: ' seconds',
   wakeupsIdleMinutes: ' minutes',
   wakeupSnoozeMinutes: ' minutes',
   miniappPinCap: '',

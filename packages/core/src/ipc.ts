@@ -143,6 +143,14 @@ export interface Settings {
    */
   agentCursor: boolean
   /**
+   * Last resort for a program that takes only real input: the agent may use his real mouse and keyboard, under the input
+   * lock (main/agent-cursor/input-lock.ts), only when he has been idle, after telling him, and it stops the moment he
+   * touches anything. OFF by default; only he turns it on (the agent cannot change it).
+   */
+  agentRealInput: boolean
+  /** How many seconds he must have been still before real input may start. Default 10. */
+  inputLockIdleSeconds: number
+  /**
    * The chat is hidden from screen sharing. A window can only be hidden whole and the chat is drawn in the app window
    * (docked beside the browser too), so this hides the whole app window and the Quick ask box. Off by default.
    */
@@ -280,6 +288,8 @@ export const DEFAULT_SETTINGS: Settings = {
   recordingAudioKeep: 'today',
   hideGuidesFromCapture: true,
   agentCursor: true,
+  agentRealInput: false,
+  inputLockIdleSeconds: 10,
   hideChatFromCapture: false,
   wakeupsRingHere: true,
   wakeupsPauseHereUntil: '',

@@ -108,6 +108,9 @@ export const SETTINGS_NEED_APPROVAL: ReadonlySet<string> = new Set([
   // What a screen share shows of him: only he lowers it.
   'hideGuidesFromCapture',
   'hideChatFromCapture',
+  // Real input on his desktop: only he allows it, and only he shortens the idle time it waits for.
+  'agentRealInput',
+  'inputLockIdleSeconds',
 ])
 
 function text(value: unknown): string {

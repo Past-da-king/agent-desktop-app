@@ -1198,6 +1198,32 @@ function PrivacySection({ settings, put, resetRow, navigate }: SectionProps): JS
       </SettingRow>
       <div className="divider" />
       <SettingRow
+        spec={row('agentRealInput')}
+        changed={changedNow(row('agentRealInput'), settings)}
+        onReset={() => resetRow(row('agentRealInput'))}
+      >
+        <Switch on={settings?.agentRealInput ?? false} label="Let the agent use your mouse and keyboard as a last resort" onToggle={(next) => put({ agentRealInput: next })} />
+      </SettingRow>
+      <SettingRow
+        spec={row('inputLockIdleSeconds')}
+        changed={changedNow(row('inputLockIdleSeconds'), settings)}
+        onReset={() => resetRow(row('inputLockIdleSeconds'))}
+      >
+        <SelectControl
+          label="Be still for this long before it starts"
+          value={String(settings?.inputLockIdleSeconds ?? 10)}
+          options={[
+            { value: '5', label: '5 seconds' },
+            { value: '10', label: '10 seconds' },
+            { value: '20', label: '20 seconds' },
+            { value: '30', label: '30 seconds' },
+            { value: '60', label: '1 minute' },
+          ]}
+          onChange={(value) => put({ inputLockIdleSeconds: Number(value) })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
         spec={{ ...row('hideGuidesFromCapture'), description: guidesHint(agent.platform) }}
         changed={changedNow(row('hideGuidesFromCapture'), settings)}
         onReset={() => resetRow(row('hideGuidesFromCapture'))}
