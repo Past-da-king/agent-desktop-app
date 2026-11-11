@@ -808,7 +808,7 @@ namespace AgentScreen
             IntPtr fgBefore = Native.GetForegroundWindow();
 
             ActRun run = new ActRun();
-            FocusGuard guard = fgBefore == IntPtr.Zero || Native.GetAncestor(fgBefore, Native.GA_ROOT) == hwnd ? null : new FocusGuard(fgBefore, pid, run);
+            FocusGuard guard = !J.Bool(req, "guard", true) || fgBefore == IntPtr.Zero || Native.GetAncestor(fgBefore, Native.GA_ROOT) == hwnd ? null : new FocusGuard(fgBefore, pid, run);
             try { return ActInner(req, run, guard, hwnd, pid, fgBefore, cursorBefore, action, text); }
             finally { if (guard != null) guard.Finish(); }
         }
