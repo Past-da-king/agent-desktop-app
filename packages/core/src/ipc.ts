@@ -132,6 +132,16 @@ export interface Settings {
    */
   recordingAudioKeep: 'today' | 'week' | 'always'
   /**
+   * Decisions (docs/decisions.md): a fast decision model answers yes/no, choice and score questions with a probability, as a
+   * cheap pre-check for desks and routines, and through the decide tool. Off by default; it only skips or routes when
+   * confident, otherwise the normal path runs unchanged.
+   */
+  decisionsEnabled: boolean
+  /** Which backend: 'gemini', 'jev', 'openai', or 'llm' (the app's own model). */
+  decisionsBackend: 'gemini' | 'jev' | 'openai' | 'llm'
+  /** 0.5 to 0.99: an answer counts only when its confidence is at least this. */
+  decisionsThreshold: number
+  /**
    * Guided mode's highlight and label are drawn in a window of their own that screen sharing (Teams, Meet, Zoom)
    * leaves out, so only he sees them. On by default. Where the system cannot hide a window from capture (Linux,
    * Windows before 10 version 2004) the highlight is drawn in the page as before, whatever this says.
@@ -286,6 +296,9 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceName: 'Kore',
   speakReplies: false,
   recordingAudioKeep: 'today',
+  decisionsEnabled: false,
+  decisionsBackend: 'gemini',
+  decisionsThreshold: 0.9,
   hideGuidesFromCapture: true,
   agentCursor: true,
   agentRealInput: false,
@@ -672,6 +685,11 @@ export interface TriggerRow extends RowBase {
    * app is back. Absent or false: it is skipped, and the routine runs at its next time.
    */
   catchUp?: boolean
+  /**
+   * interval and daily: when Decisions is on, a fast pre-check skips this run if nothing new reached the app since its last
+   * run (worker events), and a skipped run says nothing. Off or absent: it always runs.
+   */
+  deltaCheck?: boolean
   /** When its current run started (set as a run starts, so a run cut off is never started again on its own). */
   lastStartedAt?: number | null
   /** Devices (s12): which linked brain runs it, by name or id; '' or absent = the best one (a server first). */

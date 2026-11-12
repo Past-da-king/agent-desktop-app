@@ -34,6 +34,7 @@ const WORDS: Record<string, Record<string, string>> = {
   shell: { always: 'run without asking', ask: 'ask first', never: 'never' },
   recordingAudioKeep: { today: 'until the end of today', week: 'a week', always: 'always' },
   helpersRunOn: { best: 'best', here: 'this computer' },
+  decisionsBackend: { gemini: 'Gemini', jev: 'Jev', openai: 'OpenAI', llm: 'my own model' },
   accent: { iris: 'Iris', ocean: 'Ocean', teal: 'Teal', forest: 'Forest', ember: 'Ember', rose: 'Rose', violet: 'Violet', magenta: 'Magenta' },
   mascot: { scout: 'Scout', ghost: 'Ghost', clover: 'Clover', bloom: 'Bloom', puff: 'Puff', gem: 'Gem', pebble: 'Pebble', heart: 'Heart', bun: 'Bun' },
 }

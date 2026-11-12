@@ -65,6 +65,7 @@ import { buildToolset, buildWorkerToolset } from '../main/runtime/toolset'
 import { getDevicesService } from '../main/devices/service'
 import type { AppControlDeps } from '../main/tools/app-control'
 import { registryInvoker } from '../main/tools/app-actions'
+import { wireDecisions } from '../main/decisions'
 import { Secrets } from '../main/secrets'
 import { SettingsStore } from '../main/settings'
 import { EVENTS } from '../shared/channels'
@@ -222,6 +223,14 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const secrets = new Secrets(join(dir, 'secrets'), new FileKeyCipher(join(dir, 'secrets.key')))
   // The Vault, as on the computer: its own encrypted file here, filled from a brain through the bundle.
   const vault = new VaultStore(secrets)
+  // Fast decisions (main/decisions): off until turned on in Settings; reuses the Gemini key this node already holds.
+  const decisions = wireDecisions({
+    settings: () => settings.get(),
+    secrets,
+    complete: () => (system, prompt, signal) => theRunner.oneShot(system, prompt, signal),
+    events: () => workers,
+    log: (message, fields) => logger.info(message, fields),
+  })
   setVaultRedactor((text) => vault.redact(text))
   vault.onChange(() => broadcast(VAULT_EVENTS.changed, null))
   migrateLegacyAccount(settings, secrets)
@@ -349,7 +358,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const recordings = new Recordings({ root: join(dir, 'voice-notes', 'recordings'), log: (message, fields) => logger.info(message, fields) })
   // calendar_events reads the presence calendar cache, started below.
   let presenceCalendar: CalendarReader | null = null
-  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault, recordings, calendar: () => presenceCalendar })), ...nodeTools], vault)
+  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault, recordings, calendar: () => presenceCalendar, decisions: () => decisions.service })), ...nodeTools], vault)
   // Settings > Git: a run's work in a git repo on this machine is committed and pushed when it ends. Off by default.
   const gitKv = { get: (key: string) => store.localValue(key), set: (key: string, value: string) => store.setLocalValue(key, value) }
   let gitVault: { at: number; hashes: VaultHashes } | null = null
@@ -439,6 +448,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       browserVault,
       recordings,
       calendar: () => presenceCalendar,
+      decisions: () => decisions.service,
       devices: {
         selfId: () => devicesState.sync?.selfId() ?? '',
         commands: () => devicesState.sync?.commands ?? null,
@@ -469,6 +479,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     store,
     workers,
     desk: helpers,
+    triage: decisions.triage,
     maxRuns: () => settings.get().routinesAtOnce,
     onChange: () => broadcast(WORKERS_CHANGED, null),
     workerName: (id) => {
@@ -604,6 +615,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     },
     runEvent: async (trigger) => router.runNow(trigger),
     claim: (trigger) => wire.claimRoutine(trigger),
+    precheck: decisions.precheck,
   })
   if (options.quiet !== true) {
     scheduler.start()

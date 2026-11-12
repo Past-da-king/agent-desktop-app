@@ -39,6 +39,11 @@ export interface SchedulerDeps {
    * brain runs this slot (its lastRunAt arrives by replication). Absent: this brain runs every routine (alone).
    */
   claim?: (trigger: TriggerRow) => Promise<boolean>
+  /**
+   * Decisions (docs/decisions.md): asked before a routine that opted in (deltaCheck) runs. skip: true skips this run (nothing
+   * new); anything else, an error included, runs it as always. Absent: every routine runs.
+   */
+  precheck?: (trigger: TriggerRow) => Promise<{ skip: boolean; reason: string }>
 }
 
 export const SCHEDULER_INTERVAL_MS = 30_000
@@ -57,6 +62,7 @@ export class Scheduler {
   private readonly runBuiltin: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
   private readonly runEvent: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
   private readonly claim: ((trigger: TriggerRow) => Promise<boolean>) | null
+  private readonly precheck: ((trigger: TriggerRow) => Promise<{ skip: boolean; reason: string }>) | null
   /** Slots another brain took (claim said no), by routine id, with the lastRunAt they were due at. */
   private readonly elsewhere = new Map<string, number | null>()
   /**
@@ -80,6 +86,7 @@ export class Scheduler {
     this.runBuiltin = deps.runBuiltin ?? null
     this.runEvent = deps.runEvent ?? null
     this.claim = deps.claim ?? null
+    this.precheck = deps.precheck ?? null
   }
 
   /** Look for due routines now, then again every interval. Safe to call more than once. */
@@ -187,7 +194,8 @@ export class Scheduler {
         if (this.runEvent === null) throw new Error('Event routines run when their worker sends something.')
         outcome = await this.runEvent(fresh)
       } else {
-        outcome = await this.runner.runRoutine(fresh)
+        const verdict = fresh.deltaCheck === true && this.precheck !== null ? await this.precheck(fresh).catch(() => ({ skip: false, reason: 'error' })) : { skip: false, reason: '' }
+        outcome = verdict.skip ? { text: 'Skipped: ' + verdict.reason, waiting: false, skipped: true } : await this.runner.runRoutine(fresh)
       }
     } catch (error) {
       outcome = {
@@ -218,7 +226,7 @@ export class Scheduler {
     })
 
     // A retry that hit the limit again says nothing: the person was told at the first one.
-    if (!outcome.waiting && !(retrying && hits > 1)) this.notifyRoutine(fresh.id, fresh.name, result)
+    if (!outcome.waiting && outcome.skipped !== true && !(retrying && hits > 1)) this.notifyRoutine(fresh.id, fresh.name, result)
   }
 
   /** One queue for ticks and Run now, so two routines never run at the same time. */
