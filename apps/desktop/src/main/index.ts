@@ -1915,6 +1915,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     delegated: (chat, project, brief) => projectAgents.delegated(chat, project, brief),
   }, (pcm) => {
     // A linked phone's recording goes through dictation, so it gets his names and languages like his own mic does.
+    // Kept like his own recordings, so a take that came back wrong can be replayed (voice-notes/recordings/phone-audio).
+    if (recordingsStore !== null) void recordingsStore.keepPhoneAudio(pcm)
     if (dictation !== null) return dictation.transcribe(pcm, AbortSignal.timeout(transcribeLimitMs(pcm.length)))
     const service = voice
     return service === null ? Promise.resolve({ ok: false, text: '', error: 'Voice is not ready.' }) : service.transcribe(pcm)

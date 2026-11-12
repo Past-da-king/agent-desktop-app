@@ -350,7 +350,7 @@ export async function transcribe(
   if (pcm.length === 0) return ''
   const wav = wavFromPcm(pcm, INPUT_RATE)
   const vocabulary = cleanTerms(options.names ?? [])
-  const languageCodes = (options.languageCodes ?? []).map((code) => code.trim()).filter((code) => code !== '').slice(0, 4)
+  const languageCodes = (options.languageCodes ?? []).map((code) => code.trim()).filter((code) => code !== '').slice(0, 6)
   // 1. The speech model, when the key can see it: languages, vocabulary and the mode go in the request itself.
   for (const model of preferring(choice.transcribe, TRANSCRIBE_MODELS).filter((model) => /transcribe/.test(model) && !/live/.test(model))) {
     try {

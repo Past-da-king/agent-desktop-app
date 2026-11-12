@@ -295,17 +295,39 @@ export function joinSegment(text: string, segment: string): string {
   return `${text} ${segment}`
 }
 
+/** The most languages sent at once: past about eight, the English begins to lose its first words (measured 12 Nov 2026). */
+export const MAX_SPEECH_LANGUAGES = 6
+
+/** Languages commonly spoken beside the national ones, by country (the region of the person's own locale). */
+const NEIGHBOURS: Record<string, string[]> = {
+  ZA: ['zu-ZA', 'af-ZA', 'st-ZA', 'xh-ZA', 'tn-ZA'],
+  NA: ['af-NA', 'de-NA'],
+  BW: ['tn-BW', 'en-BW'],
+  LS: ['st-LS', 'zu-ZA'],
+  ZW: ['sn-ZW', 'nd-ZW'],
+  NG: ['yo-NG', 'ig-NG', 'ha-NG'],
+  KE: ['sw-KE'],
+  TZ: ['sw-TZ'],
+  IN: ['hi-IN', 'ta-IN', 'te-IN', 'bn-IN', 'mr-IN'],
+  PK: ['ur-PK', 'pa-PK'],
+  CH: ['de-CH', 'fr-CH', 'it-CH'],
+  BE: ['nl-BE', 'fr-BE'],
+  CA: ['fr-CA'],
+  PH: ['fil-PH'],
+}
+
 /**
- * The languages to tell the speech model about (11 Nov 2026).
+ * The languages to tell the speech model about (12 Nov 2026, replaces the 11 Nov rule).
  *
- * It used to send 'en-GB' for every English that was not en-US or en-IN, so a South African told Gemini he speaks
- * British English. Now the list is the person's own system languages, English first, at most four.
+ * Measured with gemini-3.5-transcribe on English mixed with isiZulu, Afrikaans and Sesotho: told ONE language (en-ZA or
+ * en-US, or none at all) it writes the English and silently DROPS the other languages (a 55 s dictation lost all its
+ * isiZulu). Told the person's own system languages plus the languages spoken beside them in the same country it writes
+ * every one of them, and the English stays word for word (the earlier "Shumayela" trap came from a two-language list on
+ * short slang; the six-language list kept "My guy, shame" exact). Two languages (en + zu) lose Afrikaans, so the set is
+ * the region's, not a guess at one language.
  *
- * It deliberately does NOT add isiZulu for South African English, which was the first thing tried and measured worse:
- * with zu-ZA in the list his "My guy" came back as "Shumayela" and once as "Shame, my guy"; with en-ZA alone the same
- * recording came back word for word. The model detects the language and switches between languages inside a sentence
- * by itself, so a language he actually has set on his machine still goes up, and isiZulu that he mixes into English is
- * still written as isiZulu, without biasing the English towards it. An empty list is fine too.
+ * Order: English first when the person has it, then the rest of their system languages, then the neighbours of the first
+ * region found. A tag the person already has for a language is never doubled. At most MAX_SPEECH_LANGUAGES.
  */
 export function speechLanguages(system: string[], locale: string): string[] {
   const tags: string[] = []
@@ -317,7 +339,17 @@ export function speechLanguages(system: string[], locale: string): string[] {
   push(locale)
   const english = tags.filter((tag) => /^en\b/i.test(tag))
   const others = tags.filter((tag) => !/^en\b/i.test(tag))
-  return [...english, ...others].slice(0, 4)
+  const out = [...english, ...others].slice(0, MAX_SPEECH_LANGUAGES)
+  const region = tags.map((tag) => tag.split('-')[1]).find((part) => part !== undefined && /^[A-Za-z]{2}$/.test(part))
+  const have = new Set(out.map((tag) => tag.split('-')[0]?.toLowerCase()))
+  for (const next of NEIGHBOURS[(region ?? '').toUpperCase()] ?? []) {
+    if (out.length >= MAX_SPEECH_LANGUAGES) break
+    const language = next.split('-')[0]?.toLowerCase()
+    if (have.has(language)) continue
+    out.push(next)
+    have.add(language)
+  }
+  return out
 }
 
 /** A language tag as a BCP-47 one: en_US and EN-za both become en-US, junk becomes null. */
