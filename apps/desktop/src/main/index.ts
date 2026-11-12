@@ -1202,7 +1202,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const selfUpdater = new SelfUpdater({
     userData: dir,
     currentVersion: app.getVersion(),
-    productName: 'Agent',
+    productName: APP_NAME,
     execPath: process.execPath,
     platform: process.platform,
     packaged: app.isPackaged,
@@ -1645,18 +1645,21 @@ async function startServices(win: BrowserWindow): Promise<void> {
     // After the repairs: what a crash cut off runs again, once (runtime/turns.ts).
     void leases?.recover().catch(() => 0)
     // Back from an update the agent started (app_update): it hears so in the chat that asked, and carries on.
-    const updated = selfUpdater.resume()
-    if (updated !== null) {
-      logger.info('Update finished', {
-        from: updated.from,
-        now: updated.now,
-        ok: updated.ok,
-        installed: updated.result?.installedVersion ?? null,
-        installerExit: updated.result?.installerExit ?? null,
-        reason: updated.reason,
-      })
-      void runner?.deliver(resumeNote(updated), updated.chat).catch(() => undefined)
-    }
+    // The launcher may still be checking the new app is up when this start-up runs: wait for its last word first.
+    void selfUpdater.settle().then(() => {
+      const updated = selfUpdater.resume()
+      if (updated !== null) {
+        logger.info('Update finished', {
+          from: updated.from,
+          now: updated.now,
+          ok: updated.ok,
+          installed: updated.result?.installedVersion ?? null,
+          installerExit: updated.result?.installerExit ?? null,
+          reason: updated.reason,
+        })
+        void runner?.deliver(resumeNote(updated), updated.chat).catch(() => undefined)
+      }
+    })
     // Helpers left working are now marked interrupted, so desks can start: anything that arrived meanwhile,
     // or was cut short when the app closed, goes to its routine now.
     try {
