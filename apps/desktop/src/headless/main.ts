@@ -204,6 +204,10 @@ async function start(args: Args): Promise<number> {
   }
 
   const runtime = await startHeadlessRuntime({ dataDir, appDir: appDir(), version: version() })
+  // Ask each plan's engine whether its login works BEFORE the node says it is ready to anyone: a node that starts with a
+  // dead login must not be picked by a phone for the seconds before the first watch tick.
+  const planKinds = (): Array<'claude' | 'codex'> => [...new Set(runtime.accounts.all().filter((a) => a.kind !== 'api').map((a) => a.kind as 'claude' | 'codex'))]
+  await Promise.all(planKinds().map((kind) => runtime.cli.checkSignIn(kind).catch(() => null)))
   let node
   try {
     node = await startHeadlessDevices(runtime, { name: config.name, version: version(), listen: config.listen, port: config.port, extraUrls: config.publicUrls })
@@ -221,7 +225,7 @@ async function start(args: Args): Promise<number> {
   }
   // Each plan's login is checked now and then with the engine's own status, so a login that died says so (not ready)
   // before a phone sends its message here.
-  const stopWatch = runtime.cli.watchSignIn(() => [...new Set(runtime.accounts.all().filter((a) => a.kind !== 'api').map((a) => a.kind as 'claude' | 'codex'))])
+  const stopWatch = runtime.cli.watchSignIn(planKinds)
   const control = await startControl(dataDir, runtime.ipc)
   writeFileSync(pidFile(dataDir), `${process.pid}\n`, { mode: 0o600 })
   runtime.logger.info('Node listening', { listen: config.listen, port: state.port })
