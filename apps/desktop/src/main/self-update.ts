@@ -12,12 +12,19 @@
  *     console) exits at once without running anything on Windows 11, which is why updates used to fail silently.
  *     The app quits only once the launcher has written that it is running; if it never does, the app stays up and
  *     the chat hears the real reason.
+ *  3b. A second script process, the watchdog (the same file, -Role watchdog), is started the same way. It is
+ *     independent of the launcher and of the installer's process tree: if the launcher is killed (by the installer, by
+ *     anything) or gets stuck, the watchdog does the end of the update itself (see Finish in the script). The app quits
+ *     only after both have said they run.
  *  4. The launcher (LAUNCHER_PS1): waits for this process to exit (forcing it after a timeout), waits for every other
  *     process started from the install folder to end (stopping the ones left), checks that no file in the folder is
  *     still open (Restart Manager names the process holding it), backs the folder up, runs the installer silently
  *     into the folder the app runs from (electron-builder NSIS: `/S` silent, `--updated`, `/D=<dir>` last and
- *     unquoted), records its exit code, reads the version of the installed exe, puts the backup back if anything
- *     failed, and opens the app again either way. Everything goes to `result.json` and `launcher.log` there.
+ *     unquoted; started with CreateProcess after clearing the downloaded-file mark, never through the shell, whose
+ *     'Open File - Security Warning' on a downloaded installer hung the launcher invisibly with the app closed),
+ *     records its exit code, reads the version of the installed exe, puts the backup back if anything failed, opens the
+ *     app again either way and checks that it is really up (a window, retried once; then the backup is restored; then
+ *     a toast and a note on the Desktop say that it failed). Everything goes to `result.json` and `launcher.log` there.
  *  5. On the next start `resume()` reads the note and the result, compares the running version and the installed
  *     exe's version with the one wanted, and the agent gets either "[App update finished: ...]" or the real failure
  *     (exit code, locked file and who held it, log path) in the same chat, so it carries on.
@@ -35,8 +42,9 @@ export interface PendingUpdate {
   at: number
   /** The folder holding this attempt's launcher, parameters, result and log. */
   work?: string
-  /** The launcher's process id, once started. */
+  /** The launcher's and the watchdog's process ids, once started. */
   launcher?: number
+  watchdog?: number
 }
 
 /** What the launcher writes to result.json. */
@@ -56,6 +64,17 @@ export interface LauncherResult {
   error: string | null
   startedAt: string
   finishedAt: string | null
+  /** Version 2 (launcher + watchdog): the rest are absent in a result written by an older launcher. */
+  installerStarted?: boolean
+  installerStartedAt?: number | null
+  appUp?: boolean
+  windowSeen?: boolean
+  /** The stage the launcher was in when it was killed or stopped for being stuck; the watchdog finished the update. */
+  launcherDied?: string | null
+  recoveredBy?: string | null
+  toast?: string | null
+  failed?: boolean
+  finalized?: boolean
 }
 
 export interface LauncherParams {
@@ -73,6 +92,18 @@ export interface LauncherParams {
   settleTimeoutSec: number
   lockTimeoutSec: number
   installerTimeoutSec: number
+  /** Product name for notices, and the files the installer step uses. */
+  appName: string
+  installCmd: string
+  installerExitFile: string
+  /** The most to wait for the reopened app to show a window. */
+  appUpSec: number
+  /** A launcher stage that takes longer than this is stuck: the watchdog stops it and finishes the update. */
+  stageLimitSec: number
+  watchdogMaxSec: number
+  /** Where the 'update failed' note goes (default: the Desktop) and whether to skip the toast (tests only). */
+  noteDir?: string
+  noToast?: boolean
 }
 
 export interface SelfUpdateDeps {
@@ -111,6 +142,7 @@ export interface SelfUpdateDeps {
 const NOTE_FILE = 'update-pending.json'
 const UPDATES_DIR = 'updates'
 const READY_LINE = 'launcher running'
+const WATCHDOG_READY_LINE = 'watchdog running'
 
 /** "0.2.53" from "Agent-0.2.53-setup.exe" (and pre-release tags like 0.3.0-beta.1), or null. */
 export function versionOfInstaller(file: string, productName: string): string | null {
@@ -153,9 +185,15 @@ function powershellExe(): string {
 }
 
 /** The command line WMI runs: the launcher script with its parameters file. */
-export function launcherCommandLine(script: string, params: string, powershell = powershellExe()): string {
-  return `"${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${script}" "${params}"`
+export function launcherCommandLine(script: string, params: string, powershell = powershellExe(), role: ScriptRole = 'launcher'): string {
+  return `"${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${script}" "${params}"${role === 'launcher' ? '' : ` -Role ${role}`}`
 }
+
+/** The one script runs in two separate processes: the launcher does the update, the watchdog finishes it if the launcher dies. */
+export type ScriptRole = 'launcher' | 'watchdog'
+
+/** The batch file the launcher starts the installer through: waits for it, and writes its exit code to a file that outlives the launcher. */
+export const INSTALL_CMD = '@echo off\r\ncall "%~1" /S --updated /D=%~2\r\nset "code=%ERRORLEVEL%"\r\n>"%~3" echo %code%\r\nexit /b %code%\r\n'
 
 /** Asks WMI to start the command line, hidden, outside this process's tree and job; resolves with its process id. */
 export const WMI_START_PS =
@@ -188,15 +226,27 @@ export function startViaWmi(commandLine: string): Promise<number> {
  * The launcher. Run as `powershell -File launcher.ps1 params.json`; never needs this app to be alive. Every step is
  * logged; result.json is rewritten after each stage so a launcher that dies part way still says where.
  */
-export const LAUNCHER_PS1 = String.raw`param([string]$ParamsFile)
+export const LAUNCHER_PS1 = String.raw`param([string]$ParamsFile, [string]$Role = 'launcher')
 $ErrorActionPreference = 'Stop'
 $p = Get-Content -Raw -LiteralPath $ParamsFile | ConvertFrom-Json
-$r = [ordered]@{ version = 1; wanted = $p.wanted; stage = 'start'; ok = $false; appExited = $false; forced = $false; killed = @(); locked = $null; installerExit = $null; installedVersion = $null; rolledBack = $false; relaunched = $false; error = $null; startedAt = (Get-Date).ToString('o'); finishedAt = $null }
-function Retry([scriptblock]$write) { for ($i = 0; $i -lt 40; $i++) { try { & $write; return } catch { Start-Sleep -Milliseconds 50 } } }
-function Log([string]$m) { $line = (Get-Date).ToString('o') + ' ' + $m + [Environment]::NewLine; Retry { [IO.File]::AppendAllText($p.log, $line, [Text.Encoding]::UTF8) } }
-function Save { $r.finishedAt = (Get-Date).ToString('o'); $json = $r | ConvertTo-Json -Depth 6; Retry { [IO.File]::WriteAllText($p.result, $json, [Text.Encoding]::UTF8) } }
 $dir = $p.installDir.TrimEnd('\')
 $prefix = $dir + '\'
+function Retry([scriptblock]$write) { for ($i = 0; $i -lt 40; $i++) { try { & $write; return } catch { Start-Sleep -Milliseconds 50 } } }
+function Log([string]$m) { $line = (Get-Date).ToString('o') + ' [' + $Role + '] ' + $m + [Environment]::NewLine; Retry { [IO.File]::AppendAllText($p.log, $line, [Text.Encoding]::UTF8) } }
+function NowMs { [DateTimeOffset]::Now.ToUnixTimeMilliseconds() }
+$fresh = [ordered]@{ version = 2; wanted = $p.wanted; stage = 'start'; stageAt = (NowMs); ok = $false; appExited = $false; forced = $false; killed = @(); locked = $null; installerStarted = $false; installerStartedAt = $null; installerExit = $null; installedVersion = $null; rolledBack = $false; relaunched = $false; appUp = $false; windowSeen = $false; error = $null; launcherPid = $null; watchdogPid = $null; launcherDied = $null; recoveredBy = $null; toast = $null; failed = $false; finalized = $false; startedAt = (Get-Date).ToString('o'); finishedAt = $null }
+function LoadResult {
+  $j = $null
+  for ($i = 0; $i -lt 20 -and -not $j; $i++) { try { $j = Get-Content -Raw -LiteralPath $p.result | ConvertFrom-Json } catch { Start-Sleep -Milliseconds 100 } }
+  if (-not $j) { return $null }
+  foreach ($k in $fresh.Keys) { if (-not ($j.PSObject.Properties.Name -contains $k)) { Add-Member -InputObject $j -NotePropertyName $k -NotePropertyValue $fresh[$k] } }
+  foreach ($k in 'startedAt', 'finishedAt') { if ($j.$k -is [datetime]) { $j.$k = $j.$k.ToString('o') } }
+  return $j
+}
+$r = [pscustomobject]$fresh
+if ($Role -eq 'watchdog') { $loaded = LoadResult; if ($loaded) { $r = $loaded } }
+function Save { $r.finishedAt = (Get-Date).ToString('o'); $json = $r | ConvertTo-Json -Depth 6; Retry { [IO.File]::WriteAllText($p.result, $json, [Text.Encoding]::UTF8) } }
+function Stage([string]$s) { $r.stage = $s; $r.stageAt = (NowMs); Save }
 function FromDir { @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { [ordered]@{ pid = [int]$_.ProcessId; name = [string]$_.Name; path = [string]$_.ExecutablePath } }) }
 function Describe($list) { ($list | ForEach-Object { '{0} (pid {1}{2})' -f $_.name, $_.pid, $(if ($_.path) { ', ' + $_.path } else { '' }) }) -join '; ' }
 function FirstLocked {
@@ -238,28 +288,240 @@ public static class AgentRmHolders {
 }
 function SameVersion([string]$have, [string]$want) { if (-not $have) { return $false }; $h = $have.Trim(); $w = $want.Trim(); return ($h -eq $w) -or ($h -eq ($w + '.0')) }
 function Mirror([string]$from, [string]$to) { & robocopy $from $to /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null; return $LASTEXITCODE }
+function InstalledVersion { if (Test-Path -LiteralPath $p.exe) { return [string](Get-Item -LiteralPath $p.exe).VersionInfo.ProductVersion }; return $null }
+function IsHere([string]$path, [string]$want) { return ($path -and ($path -ieq $want)) }
+# Nothing here may ever stop a process that is not this update's own: only what runs from the install folder, the app
+# exe itself, the installer and the NSIS helpers it unpacked after it started. The path is read again just before every
+# stop, so a process id that was reused by something else in the meantime is left alone.
+function IsNsisHelper($q) {
+  $tmp = [IO.Path]::GetTempPath()
+  if (-not ($q.ExecutablePath -and $q.ExecutablePath.StartsWith($tmp, [StringComparison]::OrdinalIgnoreCase) -and $q.ExecutablePath -match '\\(ns[A-Za-z0-9]+\.tmp|~nsu[A-Za-z0-9]*\.tmp)\\')) { return $false }
+  if (-not $r.installerStartedAt) { return $false }
+  try { return ([DateTimeOffset]$q.CreationDate).ToUnixTimeMilliseconds() -ge ([int64]$r.installerStartedAt - 5000) } catch { return $false }
+}
+function OwnProcess($q) {
+  if (-not $q -or -not $q.ExecutablePath) { return $false }
+  return ($q.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or (IsHere $q.ExecutablePath $p.exe) -or (IsHere $q.ExecutablePath $p.installer) -or (IsNsisHelper $q))
+}
+function SafeStop([int]$id, [string]$why) {
+  if ($id -eq $PID) { return $false }
+  $q = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $id) -ErrorAction SilentlyContinue
+  if (-not $q) { return $false }
+  if (-not (OwnProcess $q)) { Log ('not stopping pid ' + $id + ' (' + $q.Name + ', ' + $q.ExecutablePath + '): it is not part of this update (' + $why + ')'); return $false }
+  Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+  return $true
+}# Processes that belong to the installer: the setup exe itself, the NSIS helpers it unpacks into %TEMP%, and the uninstaller of the old version.
+function InstallerProcs {
+  @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.ExecutablePath -and ((IsHere $_.ExecutablePath $p.installer) -or (IsNsisHelper $_) -or ($_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and $_.Name -like 'Uninstall*')) } | ForEach-Object { [ordered]@{ pid = [int]$_.ProcessId; name = [string]$_.Name; path = [string]$_.ExecutablePath } })
+}function InstallerBusy {
+  if (@(InstallerProcs).Count -gt 0) { return $true }
+  # A running exe cannot be opened for writing: this also catches an installer started some other way.
+  try { $s = [IO.File]::Open($p.installer, 'Open', 'Write', 'None'); $s.Dispose() } catch [IO.IOException] { return $true } catch { }
+  return $false
+}
+function WaitInstallerGone([int]$maxSec) {
+  $t0 = Get-Date; $quiet = 0
+  while (((Get-Date) - $t0).TotalSeconds -lt $maxSec) {
+    if (InstallerBusy) { $quiet = 0 } else { $quiet++; if ($quiet -ge 3) { return $true } }
+    Start-Sleep -Seconds 1
+  }
+  return $false
+}
+function InstallerExitCode {
+  if (Test-Path -LiteralPath $p.installerExitFile) {
+    $t = ([IO.File]::ReadAllText($p.installerExitFile)).Trim(); $n = 0
+    if ([int]::TryParse($t, [ref]$n)) { return $n }
+  }
+  return $null
+}
+function ExeProcs { @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.ExecutablePath -and (IsHere $_.ExecutablePath $p.exe) }) }
+function HasWindow($procs) { foreach ($x in $procs) { $g = Get-Process -Id $x.ProcessId -ErrorAction SilentlyContinue; if ($g -and $g.MainWindowHandle -ne 0) { return $true } }; return $false }
+function StartApp {
+  $psi = New-Object Diagnostics.ProcessStartInfo
+  $psi.FileName = $p.exe; $psi.WorkingDirectory = $dir; $psi.UseShellExecute = $false
+  foreach ($k in $p.env.PSObject.Properties) { $psi.EnvironmentVariables[$k.Name] = [string]$k.Value }
+  return [Diagnostics.Process]::Start($psi)
+}
+# Up = a process of the app is alive with a window; or, when no window can be seen from here, alive for the whole time.
+function WaitUp($started, [int]$maxSec) {
+  $t0 = Get-Date
+  while ($true) {
+    $el = ((Get-Date) - $t0).TotalSeconds
+    $procs = @(ExeProcs)
+    $win = HasWindow $procs
+    if ($procs.Count -eq 0 -and $el -ge 4) { return @{ up = $false; window = $false; why = ('the app was gone ' + [int]$el + ' s after it was started') } }
+    if ($win -and $el -ge 4) { return @{ up = $true; window = $true; why = $null } }
+    if ($started -and $started.HasExited -and -not $win -and $el -ge 6) { return @{ up = $false; window = $false; why = ('the app exited with code ' + $started.ExitCode + ' right after it was started' + $(if ($procs.Count -gt 0) { ' while an older copy of it is still running and holds it (single instance)' } else { '' })) } }
+    if ($el -ge $maxSec) { if ($procs.Count -gt 0) { return @{ up = $true; window = $false; why = 'alive, no window was visible from the updater' } } else { return @{ up = $false; window = $false; why = 'no process of the app' } } }
+    Start-Sleep -Milliseconds 700
+  }
+}
+function StopStale {
+  $stale = @(FromDir)
+  if ($stale.Count -gt 0) {
+    Log ('stopping processes of the app that are still running before it is started: ' + (Describe $stale))
+    foreach ($x in $stale) { $null = SafeStop $x.pid 'stale process of the app'  }
+    $r.killed = @($r.killed) + $stale; Start-Sleep -Seconds 1
+  }
+}
+function EnsureApp([string]$what) {
+  $procs = @(ExeProcs)
+  if ($procs.Count -gt 0 -and (HasWindow $procs)) { Log ('the app is already up (' + $what + ')'); $r.windowSeen = $true; return $true }
+  for ($try = 1; $try -le 2; $try++) {
+    StopStale
+    Log ('starting ' + $p.exe + ' (' + $what + ', try ' + $try + ', session ' + [Diagnostics.Process]::GetCurrentProcess().SessionId + ')')
+    $started = $null
+    try { $started = StartApp } catch { Log ('could not start the app: ' + $_.Exception.Message); continue }
+    $w = WaitUp $started $p.appUpSec
+    Log ('after the start: up=' + $w.up + ', window=' + $w.window + $(if ($w.why) { ', ' + $w.why } else { '' }))
+    if ($w.up) { $r.windowSeen = [bool]$w.window; return $true }
+  }
+  return $false
+}
+function Esc([string]$s) { [Security.SecurityElement]::Escape($s) }
+function Notify([string]$title, [string]$body) {
+  if ($p.noToast) { $r.toast = 'not shown (switched off)' } else { try {
+    $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+    $x = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $x.LoadXml('<toast><visual><binding template="ToastGeneric"><text>' + (Esc $title) + '</text><text>' + (Esc $body) + '</text></binding></visual></toast>')
+    $n = New-Object Windows.UI.Notifications.ToastNotification $x
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show($n)
+    $r.toast = 'shown'
+  } catch { $r.toast = 'failed: ' + $_.Exception.Message } }
+  try { $where = $(if ($p.noteDir) { [string]$p.noteDir } else { [Environment]::GetFolderPath('Desktop') }); $note = Join-Path $where ($p.appName + ' update failed.txt'); [IO.File]::WriteAllText($note, $title + [Environment]::NewLine + $body + [Environment]::NewLine, [Text.Encoding]::UTF8); Log ('wrote ' + $note) } catch { }
+  Log ('notification: ' + $r.toast)
+}
+# The end of every update, whoever gets there (the launcher, or the watchdog when the launcher was killed or stuck):
+# wait for the installer to be gone, keep the new version only if the installer succeeded, otherwise put the old one
+# back, then open the app and check that it is really up. It never ends with the app closed without saying so loudly.
+function Finish([string]$by) {
+  $wasBack = ($r.stage -eq 'putting the backup back')
+  if (-not $r.appExited) {
+    Stage 'waiting for the app to exit'
+    $until = (Get-Date).AddSeconds(60)
+    while ((Get-Process -Id $p.appPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 250 }
+    if (Get-Process -Id $p.appPid -ErrorAction SilentlyContinue) { if (SafeStop $p.appPid 'the app') { $r.forced = $true }; Start-Sleep -Seconds 1 }
+    $r.appExited = $true
+  }
+  if ($r.installerStarted) {
+    Stage 'waiting for the installer to end'
+    if (-not (WaitInstallerGone $p.installerTimeoutSec)) {
+      $busy = @(InstallerProcs)
+      Log ('the installer is still busy after ' + $p.installerTimeoutSec + ' s: stopping it ' + (Describe $busy))
+      foreach ($x in $busy) { $null = SafeStop $x.pid 'installer that will not finish' }
+      if (-not $r.error) { $r.error = 'the installer did not finish within ' + $p.installerTimeoutSec + ' s' }
+      Start-Sleep -Seconds 2
+    }
+    if ($null -eq $r.installerExit) { $r.installerExit = InstallerExitCode }
+    Log ('installer exit code ' + $(if ($null -eq $r.installerExit) { 'unknown (no result was written)' } else { $r.installerExit }))
+  }
+  $r.installedVersion = InstalledVersion
+  Log ('installed exe reports ' + $r.installedVersion)
+  $newOk = $r.installerStarted -and ($r.installerExit -eq 0) -and (SameVersion $r.installedVersion $p.wanted)
+  if ($r.installerStarted -and -not $newOk -and -not $r.error) {
+    $r.error = if ($r.installerExit -ne 0 -and $null -ne $r.installerExit) { 'the installer failed with exit code ' + $r.installerExit } elseif ($null -eq $r.installerExit) { 'the installer left no exit code (it was cut off)' } else { 'the installer finished but ' + $p.exe + ' reports ' + $(if ($r.installedVersion) { $r.installedVersion } else { 'nothing (missing)' }) + ', not ' + $p.wanted }
+  }
+  $needBack = ($r.installerStarted -and -not $newOk) -or $wasBack
+  if ($needBack) {
+    if (Test-Path -LiteralPath $p.backup) {
+      Stage 'putting the backup back'
+      StopStale
+      $code = Mirror $p.backup $dir
+      $r.rolledBack = ($code -lt 8)
+      $r.installedVersion = InstalledVersion
+      Log ('put the backup back (robocopy exit ' + $code + '): the folder has ' + $r.installedVersion)
+    } else { Log ('there is no backup at ' + $p.backup + ' to put back'); if (-not $r.error) { $r.error = 'no backup to put back' } }
+  }
+  Stage 'opening the app'
+  $up = EnsureApp $(if ($newOk -and -not $r.rolledBack) { 'new version' } else { 'previous version' })
+  if (-not $up -and $newOk -and -not $r.rolledBack -and (Test-Path -LiteralPath $p.backup)) {
+    Log 'the new version would not start: putting the previous version back'
+    if (-not $r.error) { $r.error = 'the new version ' + $p.wanted + ' would not start' }
+    StopStale
+    $code = Mirror $p.backup $dir
+    $r.rolledBack = ($code -lt 8); $newOk = $false
+    $r.installedVersion = InstalledVersion
+    Log ('put the backup back (robocopy exit ' + $code + '): the folder has ' + $r.installedVersion)
+    $up = EnsureApp 'previous version'
+  }
+  $r.appUp = [bool]$up; $r.relaunched = [bool]$up
+  $r.ok = ($newOk -and $up)
+  if ($by -eq 'watchdog') { $r.recoveredBy = 'watchdog' }
+  if (-not $up) {
+    $r.failed = $true
+    $msg = 'The ' + $p.appName + ' update to ' + $p.wanted + ' failed and the app could not be opened again' + $(if ($r.error) { ' (' + $r.error + ')' } else { '' }) + '. Start ' + $p.exe + ' by hand. Details: ' + $p.log
+    if (-not $r.error) { $r.error = 'the app could not be opened again' }
+    Log ('FAILED: ' + $msg)
+    Notify ($p.appName + ' update failed') $msg
+  }
+  if ($up -and ($newOk -or $r.rolledBack) -and (Test-Path -LiteralPath $p.backup)) { Remove-Item -LiteralPath $p.backup -Recurse -Force -ErrorAction SilentlyContinue }
+  $r.stage = $(if ($r.ok) { 'done' } else { 'finished without the update' })
+  $r.finalized = $true
+  Save
+  Log ('finished: ok=' + $r.ok + ', app up=' + $up + ', installed ' + $r.installedVersion + ', rolled back=' + $r.rolledBack)
+}
+
+if ($Role -eq 'watchdog') {
+  Log ('watchdog running pid ' + $PID + ', watching the launcher of ' + $p.installer)
+  $began = Get-Date
+  $limit = $p.watchdogMaxSec
+  $why = $null
+  while (-not $why) {
+    Start-Sleep -Milliseconds 1000
+    $cur = LoadResult
+    if ($cur -and $cur.finalized) { Log 'the launcher finished the job: nothing to do'; exit 0 }
+    $elapsed = ((Get-Date) - $began).TotalSeconds
+    if (-not $cur -or -not $cur.launcherPid) {
+      if ($elapsed -gt 90) { Log 'the launcher never reported: nothing to do'; exit 0 }
+      continue
+    }
+    $lp = Get-Process -Id $cur.launcherPid -ErrorAction SilentlyContinue
+    if (-not $lp -or $lp.ProcessName -notlike 'powershell*') { $why = 'was killed or ended without finishing'; break }
+    $age = ((NowMs) - [int64]$cur.stageAt) / 1000
+    $max = $(if (@('running the installer', 'waiting for the installer to end') -contains $cur.stage) { $p.installerTimeoutSec + 180 } else { $p.stageLimitSec })
+    if ($age -gt $max) { Log ('the launcher has been in "' + $cur.stage + '" for ' + [int]$age + ' s: stopping it'); $lq = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $cur.launcherPid) -ErrorAction SilentlyContinue; if ($lq -and $lq.CommandLine -and $lq.CommandLine.Contains($ParamsFile) -and $lq.CommandLine -notmatch '-Role watchdog') { Stop-Process -Id $cur.launcherPid -Force -ErrorAction SilentlyContinue } else { Log ('not stopping pid ' + $cur.launcherPid + ': it is not the launcher of this update') }; $why = 'was stuck for ' + [int]$age + ' s'; break }
+    if ($elapsed -gt $limit) { Log 'giving up watching'; exit 0 }
+  }
+  $r = LoadResult
+  if (-not $r) { $r = [pscustomobject]$fresh }
+  if ($r.finalized) { exit 0 }
+  $r.launcherDied = [string]$r.stage
+  $r.watchdogPid = $PID
+  Log ('the launcher ' + $why + ' while "' + $r.stage + '" (installer started: ' + $r.installerStarted + '): the watchdog finishes the update')
+  Save
+  try { Finish 'watchdog' } catch {
+    $r.error = 'the watchdog failed: ' + $_.Exception.Message; Log ('watchdog error: ' + $r.error)
+    try { if (@(ExeProcs).Count -eq 0) { $null = StartApp } } catch { }
+    $r.finalized = $true; Save
+  }
+  exit 0
+}
+
+# ---- the launcher ----
 $backedUp = $false
 try {
-  Log ('${READY_LINE} pid ' + $PID + ': app pid ' + $p.appPid + ', ' + $p.installer + ' -> ' + $dir + ' (wanted ' + $p.wanted + ')')
-  $r.stage = 'waiting for the app to exit'; Save
+  $r.launcherPid = $PID
+  Log ('launcher running pid ' + $PID + ': app pid ' + $p.appPid + ', ' + $p.installer + ' -> ' + $dir + ' (wanted ' + $p.wanted + ')')
+  Stage 'waiting for the app to exit'
   $deadline = (Get-Date).AddSeconds($p.exitTimeoutSec)
   while ((Get-Process -Id $p.appPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
   if (Get-Process -Id $p.appPid -ErrorAction SilentlyContinue) {
     Log ('the app did not exit within ' + $p.exitTimeoutSec + ' s: stopping it')
-    Stop-Process -Id $p.appPid -Force -ErrorAction SilentlyContinue; $r.forced = $true; Start-Sleep -Seconds 1
+    if (SafeStop $p.appPid 'the app') { $r.forced = $true }; Start-Sleep -Seconds 1
   }
   $r.appExited = $true
   Log 'the app has exited'
-  $r.stage = 'waiting for its other processes'; Save
+  Stage 'waiting for its other processes'
   $deadline = (Get-Date).AddSeconds($p.settleTimeoutSec)
   while (@(FromDir).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
   $left = @(FromDir)
   if ($left.Count -gt 0) {
     Log ('stopping processes still running from the app folder: ' + (Describe $left))
-    foreach ($x in $left) { Stop-Process -Id $x.pid -Force -ErrorAction SilentlyContinue }
+    foreach ($x in $left) { $null = SafeStop $x.pid 'left in the app folder' }
     $r.killed = $left; Start-Sleep -Seconds 1
   }
-  $r.stage = 'checking that no file is in use'; Save
+  Stage 'checking that no file is in use'
   $deadline = (Get-Date).AddSeconds($p.lockTimeoutSec)
   do { $busy = FirstLocked; if ($busy) { Start-Sleep -Milliseconds 500 } } while ($busy -and (Get-Date) -lt $deadline)
   if ($busy) {
@@ -268,42 +530,36 @@ try {
     throw ('a file of the app is still in use after ' + $p.lockTimeoutSec + ' s: ' + $busy + $(if ($who.Count -gt 0) { ', held by ' + (Describe $who) } else { ' (Windows did not say which process holds it)' }))
   }
   Log 'no file of the app is in use'
-  $r.stage = 'backing up the app folder'; Save
+  Stage 'backing up the app folder'
   if (Test-Path -LiteralPath $p.backup) { Remove-Item -LiteralPath $p.backup -Recurse -Force }
   $code = Mirror $dir $p.backup
   if ($code -ge 8) { throw ('could not back up the app folder to ' + $p.backup + ' (robocopy exit ' + $code + ')') }
   $backedUp = $true
   Log ('backed up to ' + $p.backup)
-  $r.stage = 'running the installer'; Save
-  $proc = Start-Process -FilePath $p.installer -ArgumentList ('/S --updated /D=' + $dir) -PassThru
-  $null = $proc.Handle
-  if (-not $proc.WaitForExit([int]$p.installerTimeoutSec * 1000)) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; throw ('the installer did not finish within ' + $p.installerTimeoutSec + ' s') }
-  $r.installerExit = [int]$proc.ExitCode
+  Stage 'running the installer'
+  # A file that came off the internet carries a Mark of the Web, and starting it the shell way (Start-Process) opens an
+  # "Open File - Security Warning" nobody can see or answer from a hidden launcher, so the launcher used to hang there
+  # for good with the app closed. Clear the mark, and start the installer with CreateProcess (no shell, no warning).
+  try { Unblock-File -LiteralPath $p.installer -ErrorAction Stop; Log 'cleared the downloaded-file mark on the installer' } catch { Log ('could not clear the downloaded-file mark: ' + $_.Exception.Message) }
+  Remove-Item -LiteralPath $p.installerExitFile -Force -ErrorAction SilentlyContinue
+  $psi = New-Object Diagnostics.ProcessStartInfo
+  $psi.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
+  $psi.Arguments = '/d /s /c ""' + $p.installCmd + '" "' + $p.installer + '" "' + $dir + '" "' + $p.installerExitFile + '""'
+  $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; $psi.WorkingDirectory = [IO.Path]::GetTempPath()
+  $r.installerStarted = $true; $r.installerStartedAt = (NowMs); Save
+  $proc = [Diagnostics.Process]::Start($psi)
+  Log ('installer started (pid ' + $proc.Id + ')')
+  if (-not $proc.WaitForExit([int]$p.installerTimeoutSec * 1000)) { foreach ($x in @(InstallerProcs)) { $null = SafeStop $x.pid 'installer that will not finish' }; try { $proc.Kill() } catch { }; throw ('the installer did not finish within ' + $p.installerTimeoutSec + ' s') }
+  $r.installerExit = InstallerExitCode
+  if ($null -eq $r.installerExit) { $r.installerExit = [int]$proc.ExitCode }
   Log ('installer exit code ' + $r.installerExit)
-  $r.stage = 'checking the installed version'; Save
-  if (Test-Path -LiteralPath $p.exe) { $r.installedVersion = [string](Get-Item -LiteralPath $p.exe).VersionInfo.ProductVersion }
-  Log ('installed exe reports ' + $r.installedVersion)
-  if ($r.installerExit -ne 0) { throw ('the installer failed with exit code ' + $r.installerExit) }
-  if (-not (SameVersion $r.installedVersion $p.wanted)) { throw ('the installer finished but ' + $p.exe + ' reports ' + $(if ($r.installedVersion) { $r.installedVersion } else { 'nothing (missing)' }) + ', not ' + $p.wanted) }
-  $r.ok = $true
-  $r.stage = 'done'
-  Log 'update installed'
 } catch {
   $r.error = [string]$_.Exception.Message
   Log ('FAILED while ' + $r.stage + ': ' + $r.error)
-  if ($backedUp) {
-    $code = Mirror $p.backup $dir
-    $r.rolledBack = ($code -lt 8)
-    if (Test-Path -LiteralPath $p.exe) { $r.installedVersion = [string](Get-Item -LiteralPath $p.exe).VersionInfo.ProductVersion }
-    Log ('put the backup back (robocopy exit ' + $code + '): the folder has ' + $r.installedVersion)
-  }
-} finally {
-  Save
-  if ($backedUp -and ($r.ok -or $r.rolledBack)) { Remove-Item -LiteralPath $p.backup -Recurse -Force -ErrorAction SilentlyContinue }
-  if (Test-Path -LiteralPath $p.exe) {
-    foreach ($k in $p.env.PSObject.Properties) { Set-Item -Path ('Env:' + $k.Name) -Value ([string]$k.Value) }
-    try { Start-Process -FilePath $p.exe -WorkingDirectory $dir; $r.relaunched = $true; Log 'reopened the app' } catch { Log ('could not reopen the app: ' + $_.Exception.Message) }
-  } else { Log ('cannot reopen the app: ' + $p.exe + ' is missing') }
+}
+try { Finish 'launcher' } catch {
+  $r.error = 'the launcher failed while finishing: ' + $_.Exception.Message
+  Log ('FAILED: ' + $r.error)
   Save
 }
 `
@@ -386,12 +642,19 @@ export class SelfUpdater {
       settleTimeoutSec: 30,
       lockTimeoutSec: 20,
       installerTimeoutSec: 600,
+      appName: this.deps.productName,
+      installCmd: join(work, 'install.cmd'),
+      installerExitFile: join(work, 'installer.exit'),
+      appUpSec: 45,
+      stageLimitSec: 300,
+      watchdogMaxSec: 2400,
     }
     const script = join(work, 'launcher.ps1')
     const params = join(work, 'params.json')
     // A byte order mark so Windows PowerShell reads the script as UTF-8 whatever the system code page.
     writeFileSync(script, '\uFEFF' + LAUNCHER_PS1.replace(/\r?\n/g, '\r\n'), 'utf8')
     writeFileSync(params, JSON.stringify(values, null, 2), 'utf8')
+    writeFileSync(values.installCmd, INSTALL_CMD, 'utf8')
     return { work, script, params, values }
   }
 
@@ -412,35 +675,80 @@ export class SelfUpdater {
       fail(`could not write the update launcher: ${error instanceof Error ? error.message : String(error)}`)
       return
     }
+    const start = this.deps.startLauncher ?? startViaWmi
+    const stop = (...pids: number[]): void => {
+      for (const id of pids) {
+        try {
+          process.kill(id)
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+    // Both scripts start outside this app and outside each other: the launcher does the update, the watchdog finishes
+    // it if the launcher is killed or stuck. The app quits only when both are running, never into nothing.
     let pid: number
+    let watchdog: number
     try {
-      pid = await (this.deps.startLauncher ?? startViaWmi)(launcherCommandLine(prepared.script, prepared.params))
+      pid = await start(launcherCommandLine(prepared.script, prepared.params))
     } catch (error) {
       fail(error instanceof Error ? error.message : String(error))
       return
     }
-    // Quit only once the launcher is really running: never close into nothing.
+    try {
+      watchdog = await start(launcherCommandLine(prepared.script, prepared.params, undefined, 'watchdog'))
+    } catch (error) {
+      stop(pid)
+      fail(`the update watchdog could not start: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
     const readyBy = this.now() + (this.deps.launcherReadyMs ?? 30_000)
-    const ready = (): boolean => {
+    const ready = (line: string): boolean => {
       try {
-        return readFileSync(prepared.values.log, 'utf8').includes(READY_LINE)
+        return readFileSync(prepared.values.log, 'utf8').includes(line)
       } catch {
         return false
       }
     }
-    while (!ready() && this.now() < readyBy) await new Promise((resolve) => setTimeout(resolve, 100))
-    if (!ready()) {
-      try {
-        process.kill(pid)
-      } catch {
-        // Already gone.
-      }
-      fail(`the update launcher (process ${pid}) started but never ran its script; see ${prepared.work}`)
+    const bothReady = (): boolean => ready(READY_LINE) && ready(WATCHDOG_READY_LINE)
+    while (!bothReady() && this.now() < readyBy) await new Promise((resolve) => setTimeout(resolve, 100))
+    if (!bothReady()) {
+      stop(pid, watchdog)
+      const missing = [ready(READY_LINE) ? '' : `the update launcher (process ${pid})`, ready(WATCHDOG_READY_LINE) ? '' : `the update watchdog (process ${watchdog})`].filter((m) => m !== '').join(' and ')
+      fail(`${missing} started but never ran its script; see ${prepared.work}`)
       return
     }
-    writeFileSync(this.noteFile, JSON.stringify({ ...note, work: prepared.work, launcher: pid } satisfies PendingUpdate, null, 2), 'utf8')
-    this.deps.log?.('Update starting: quitting for the installer', { dir: prepared.values.installDir, launcher: pid, work: prepared.work })
+    writeFileSync(this.noteFile, JSON.stringify({ ...note, work: prepared.work, launcher: pid, watchdog } satisfies PendingUpdate, null, 2), 'utf8')
+    this.deps.log?.('Update starting: quitting for the installer', { dir: prepared.values.installDir, launcher: pid, watchdog, work: prepared.work })
     this.deps.quit()
+  }
+
+  /**
+   * The launcher starts the new app and then checks that it is really up before it writes its last word, so the app can
+   * be running its start-up a few seconds before the result is final. Wait for that word (the result says inalized)
+   * before reading the outcome; give up when nothing has written to the result for staleMs, or after maxMs.
+   */
+  async settle(maxMs = 180_000, staleMs = 60_000, pollMs = 500): Promise<void> {
+    let work: string | null = null
+    try {
+      const note = JSON.parse(readFileSync(this.noteFile, 'utf8')) as PendingUpdate
+      work = typeof note.work === 'string' ? note.work : null
+    } catch {
+      return
+    }
+    if (work === null) return
+    const file = join(work, 'result.json')
+    const began = Date.now()
+    while (Date.now() - began < maxMs) {
+      try {
+        const result = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) as LauncherResult
+        if (result.finalized === true || result.version < 2) return
+        if (Date.now() - statSync(file).mtimeMs > staleMs) return
+      } catch {
+        if (!existsSync(file)) return
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
+    }
   }
 
   /** On start: the update that was waiting, read once (the note is removed), or null. */
@@ -502,8 +810,10 @@ export function failureReason(note: PendingUpdate, now: string, result: Launcher
     return `the update launcher left no result at ${join(work, 'result.json')}${tail !== '' ? `; its log ends: ${tail}` : ` and no log at ${log}`}`
   }
   const parts: string[] = []
-  if (result.error !== null && result.error !== '') parts.push(`while ${result.stage}: ${result.error}`)
-  else if (!result.ok) parts.push(`the launcher stopped while ${result.stage}`)
+  if (typeof result.launcherDied === 'string' && result.launcherDied !== '') parts.push(`the launcher was killed or stuck while ${result.launcherDied}${result.recoveredBy === 'watchdog' ? ' and the watchdog finished the update' : ''}`)
+  if (result.error !== null && result.error !== '') parts.push(result.stage === 'finished without the update' ? result.error : `while ${result.stage}: ${result.error}`)
+  else if (!result.ok && result.finalized !== true) parts.push(`the launcher stopped while ${result.stage} and nothing finished the update`)
+  if (result.failed === true) parts.push('the app could not be opened again by the updater' + (result.toast ? `; notification: ${result.toast}` : ''))
   if (result.installerExit !== null && result.installerExit !== 0) parts.push(`installer exit code ${result.installerExit} = ${installerExitMeaning(result.installerExit)}`)
   if (result.killed.length > 0) parts.push(`had to stop ${result.killed.map((k) => `${k.name} (pid ${k.pid})`).join(', ')}`)
   if (result.forced) parts.push('the app did not exit by itself and was stopped')
@@ -518,7 +828,8 @@ export function failureReason(note: PendingUpdate, now: string, result: Launcher
 export function resumeNote(done: UpdateOutcome): string {
   if (done.ok) {
     const installed = done.result?.installedVersion
-    return `[App update finished: ${done.from} -> ${done.now}. The app restarted on the new version${installed ? ` (installed exe reports ${installed}, running ${done.now})` : ''}. Carry on with what you were doing before the update, and tell the person it is done.]`
+    const recovered = done.result?.recoveredBy === 'watchdog' && typeof done.result.launcherDied === 'string' && done.result.launcherDied !== '' ? ` The launcher was killed while ${done.result.launcherDied}; the watchdog recovered and finished the update.` : ''
+    return `[App update finished: ${done.from} -> ${done.now}.${recovered} The app restarted on the new version${installed ? ` (installed exe reports ${installed}, running ${done.now})` : ''}. Carry on with what you were doing before the update, and tell the person it is done.]`
   }
   return `[App update FAILED: wanted ${done.to} from ${basename(done.installer)}, the app is running ${done.now}. Reason: ${done.reason ?? 'unknown'}. Tell the person exactly this (the reason, not just that it failed), and carry on with what you were doing.]`
 }
