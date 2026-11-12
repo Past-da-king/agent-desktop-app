@@ -152,6 +152,8 @@ export interface HeadlessRuntime {
   /** The Vault (main/vault/store.ts). */
   vault: VaultStore
   accounts: AccountStore
+  /** The engines of the person's plans: whether each login still works (main/runtime/cli-host.ts). */
+  cli: CliHost
   account: AccountService
   runner: Runner
   helpers: HelperManager
@@ -696,6 +698,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     secrets,
     vault,
     accounts,
+    cli: cliHost,
     account,
     runner: theRunner,
     helpers,

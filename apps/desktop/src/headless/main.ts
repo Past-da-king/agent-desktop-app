@@ -219,6 +219,9 @@ async function start(args: Args): Promise<number> {
     await runtime.stop(0)
     return 1
   }
+  // Each plan's login is checked now and then with the engine's own status, so a login that died says so (not ready)
+  // before a phone sends its message here.
+  const stopWatch = runtime.cli.watchSignIn(() => [...new Set(runtime.accounts.all().filter((a) => a.kind !== 'api').map((a) => a.kind as 'claude' | 'codex'))])
   const control = await startControl(dataDir, runtime.ipc)
   writeFileSync(pidFile(dataDir), `${process.pid}\n`, { mode: 0o600 })
   runtime.logger.info('Node listening', { listen: config.listen, port: state.port })
@@ -230,6 +233,7 @@ async function start(args: Args): Promise<number> {
     stopping = true
     console.log(`${signal}: stopping${runtime.busy() ? ' after the running turn' : ''}...`)
     void (async () => {
+      stopWatch()
       control.close()
       await node.stop().catch(() => undefined)
       await runtime.stop(20_000).catch(() => undefined)

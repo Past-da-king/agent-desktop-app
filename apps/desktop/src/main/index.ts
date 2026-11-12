@@ -52,7 +52,7 @@ import { HANDOFF_CLOSED } from './tools/browser'
 
 import type { AppPlatform } from '@agent/core'
 
-import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type MiniAppCheck, type MiniAppRow, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, accountsOf, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type MiniAppCheck, type MiniAppRow, type Settings } from '@agent/core'
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
@@ -1172,6 +1172,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const workerTools = { store: workers, supervisor }
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
   cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
+  // The engine's own word on whether each plan's login works, now and every ten minutes (a dead login is not ready).
+  const stopSignInWatch = cliHost.watchSignIn(() => [...new Set(accountsOf(settings.get()).filter((a) => a.kind !== 'api').map((a) => a.kind as 'claude' | 'codex'))])
+  app.once('will-quit', stopSignInWatch)
   const leaseStore = store
   leases = new TurnLeases({
     store: leaseStore,
@@ -2011,7 +2014,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
       appVersion: app.getVersion(),
       nodeName: () => settings.get().deviceName,
       platform: process.platform,
-      ready: () => settings.get().mode !== 'none' || settings.get().accounts.length > 0,
+      // Ready = some account can answer now: a plan whose login works, an API account, or the old single choice.
+      ready: () => {
+        const list = accountsOf(settings.get())
+        if (list.length === 0) return settings.get().mode !== 'none'
+        return list.some((account) => account.kind === 'api' || cliHost === null || cliHost.signedIn(account.kind))
+      },
       busy: () => runner?.state().running ?? false,
       rendererDir: join(__dirname, '../renderer'),
       emitWindow: (channel, payload) => broadcast(channel, payload),
