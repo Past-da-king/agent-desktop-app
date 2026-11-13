@@ -589,6 +589,40 @@ function AgentsSection({ settings, put, resetRow }: SectionProps): JSX.Element {
         </Button>
       </SettingRow>
       <GuideModelRow settings={settings} put={put} resetRow={resetRow} />
+      <SettingRow spec={row('decisionsEnabled')} changed={changedNow(row('decisionsEnabled'), settings)} onReset={() => resetRow(row('decisionsEnabled'))}>
+        <Switch on={settings?.decisionsEnabled ?? false} label="Fast decisions" onToggle={(next) => put({ decisionsEnabled: next })} />
+      </SettingRow>
+      {settings?.decisionsEnabled === true ? (
+        <>
+          <SettingRow spec={row('decisionsBackend')} changed={changedNow(row('decisionsBackend'), settings)} onReset={() => resetRow(row('decisionsBackend'))}>
+            <SelectControl
+              label="Decision model"
+              value={settings?.decisionsBackend ?? 'gemini'}
+              options={[
+                { value: 'gemini', label: 'Gemini' },
+                { value: 'jev', label: 'Jev' },
+                { value: 'openai', label: 'OpenAI' },
+                { value: 'llm', label: 'My own model' },
+              ]}
+              onChange={(value) => put({ decisionsBackend: value as SettingsValues['decisionsBackend'] })}
+            />
+          </SettingRow>
+          <SettingRow spec={row('decisionsThreshold')} changed={changedNow(row('decisionsThreshold'), settings)} onReset={() => resetRow(row('decisionsThreshold'))}>
+            <SelectControl
+              label="How sure before it acts"
+              value={String(settings?.decisionsThreshold ?? 0.9)}
+              options={[
+                { value: '0.7', label: '70%' },
+                { value: '0.8', label: '80%' },
+                { value: '0.9', label: '90%' },
+                { value: '0.95', label: '95%' },
+                { value: '0.99', label: '99%' },
+              ]}
+              onChange={(value) => put({ decisionsThreshold: Number(value) })}
+            />
+          </SettingRow>
+        </>
+      ) : null}
     </SectionBlock>
   )
 }

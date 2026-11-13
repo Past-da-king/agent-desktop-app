@@ -88,6 +88,7 @@ import { ProjectAgentRows } from './runtime/project-agents'
 import { devicesState, ownBrainIds, type DevicesSyncDeps } from './devices/sync'
 import { attachDevicesSync } from './devices/attach'
 import { registerRelay, rolesFromStore } from './devices/relay'
+import { wireDecisions } from './decisions'
 import { Scheduler } from './runtime/scheduler'
 import { watchBackgroundScripts } from './runtime/script-runs'
 import { liveRuns } from './runtime/live-runs'
@@ -926,6 +927,14 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // The Vault (vault/store.ts): from here on no vault value is written into a row, a log or a tool result.
   const vault = new VaultStore(secrets)
   vaultStore = vault
+  // Fast decisions (decisions/, Settings > Agents and helpers): off until he turns it on; reuses the Gemini key the app already holds.
+  const decisions = wireDecisions({
+    settings: () => settings.get(),
+    secrets,
+    complete: () => (runner === null ? null : (system, prompt, signal) => (runner === null ? Promise.reject(new Error('The agent is not running.')) : runner.oneShot(system, prompt, signal))),
+    events: () => workers,
+    log: (message, fields) => logger.info(message, fields),
+  })
   setVaultRedactor((text) => vault.redact(text))
   vault.onChange(() => broadcast(VAULT_EVENTS.changed, null))
   const browserVault = new BrowserVault(vault, (message, detail) => logger.info(message, detail))
@@ -1242,6 +1251,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     browserVault,
     recordings,
     calendar: () => presenceHandle?.calendar ?? null,
+    decisions: () => decisions.service,
     miniappUi: () => miniappUi,
     git: { kv: gitKv, hook: () => gitHook },
     showMe: () => showMe?.service ?? null,
@@ -1398,6 +1408,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     git: { kv: gitKv, hook: () => gitHook },
     appControl: { ...appControl, update: selfUpdater },
     calendar: () => presenceHandle?.calendar ?? null,
+    decisions: () => decisions.service,
     miniappUi: () => miniappUi,
     media: {
       show: (path) => shownMedia.show(path),
@@ -1458,6 +1469,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     store,
     workers,
     desk: helpers,
+    triage: decisions.triage,
     maxRuns: () => settings.get().routinesAtOnce,
     onChange: () => workersChanged(),
     workerName: (id) => {
@@ -1742,6 +1754,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       return eventRouter.runNow(trigger)
     },
     claim: (trigger) => placedWire.claimRoutine(trigger),
+    precheck: decisions.precheck,
   })
   // Background scripts show as runs with a stop, and end with the routine or helper that started them.
   const scriptStore = store

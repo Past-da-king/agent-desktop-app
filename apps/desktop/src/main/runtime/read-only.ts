@@ -55,6 +55,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'recordings_list',
   'recordings_get',
   'calendar_events',
+  'decide',
   'git_status_report',
   'git_autocommit_log',
   'miniapp_guide',

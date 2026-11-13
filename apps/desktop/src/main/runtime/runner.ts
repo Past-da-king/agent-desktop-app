@@ -104,6 +104,8 @@ export interface RoutineRunResult {
   waiting: boolean
   /** True when the run itself failed (no brain, an error), not when it ran and reported a problem. */
   failed?: boolean
+  /** True when a decision pre-check found nothing new and the run was skipped; a skipped run notifies no one. */
+  skipped?: boolean
 }
 
 /**
