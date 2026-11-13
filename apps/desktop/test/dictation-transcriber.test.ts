@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { LiveTranscriber, cleanVocabulary, joinSegment, languageHint, replayRecording, setupMessage } from '../src/main/dictation/transcriber'
+import { LiveTranscriber, cleanVocabulary, joinSegment, normaliseTag, replayRecording, setupMessage, speechLanguages } from '../src/main/dictation/transcriber'
 import type { SocketLike } from '../src/main/voice/live'
 import { startFakeLive, type FakeLive } from './fake-live'
 
@@ -55,12 +55,28 @@ describe('the live transcription setup', () => {
     expect(joinSegment('Hello ', 'you')).toBe('Hello you')
   })
 
-  it('hints English from the locale and lets other languages be detected', () => {
-    expect(languageHint('en-ZA')).toEqual(['en-GB'])
-    expect(languageHint('en-US')).toEqual(['en-US'])
-    expect(languageHint('en_IN')).toEqual(['en-IN'])
-    expect(languageHint('en')).toEqual(['en-GB'])
-    expect(languageHint('af-ZA')).toEqual([])
+  it('tells the model every language he speaks and those spoken beside them in his country', () => {
+    // 12 Nov 2026: one language (even en-ZA) made the model DROP the isiZulu of a mixed dictation.
+    expect(speechLanguages([], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA', 'af-ZA', 'st-ZA', 'xh-ZA', 'tn-ZA'])
+    expect(speechLanguages(['en-ZA'], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA', 'af-ZA', 'st-ZA', 'xh-ZA', 'tn-ZA'])
+    // A language he does have set goes up with English first, and is not doubled by the neighbours.
+    expect(speechLanguages(['zu-ZA', 'en-ZA'], 'en-ZA')).toEqual(['en-ZA', 'zu-ZA', 'af-ZA', 'st-ZA', 'xh-ZA', 'tn-ZA'])
+    expect(speechLanguages(['af-ZA'], 'af-ZA')).toEqual(['af-ZA', 'zu-ZA', 'st-ZA', 'xh-ZA', 'tn-ZA'])
+    // A country with nothing listed: his own languages and nothing invented.
+    expect(speechLanguages(['en-US'], 'en-US')).toEqual(['en-US'])
+    expect(speechLanguages([], 'en-GB')).toEqual(['en-GB'])
+    expect(speechLanguages(['en-US', 'es-US'], 'en-US')).toEqual(['en-US', 'es-US'])
+    expect(speechLanguages([], '')).toEqual([])
+    expect(speechLanguages(['not a language', 'en_ZA'], 'en-ZA')[0]).toBe('en-ZA')
+    expect(speechLanguages(['en-US', 'fr-FR', 'de-DE', 'es-ES', 'it-IT', 'pt-PT', 'nl-NL', 'ja-JP'], 'en-US')).toHaveLength(6)
+  })
+
+  it('normalises a language tag and drops what is not one', () => {
+    expect(normaliseTag('en_us')).toBe('en-US')
+    expect(normaliseTag(' EN-za ')).toBe('en-ZA')
+    expect(normaliseTag('zu')).toBe('zu')
+    expect(normaliseTag('')).toBeNull()
+    expect(normaliseTag('English (South Africa)')).toBeNull()
   })
 })
 

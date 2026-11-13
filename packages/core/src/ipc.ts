@@ -132,6 +132,40 @@ export interface Settings {
    */
   recordingAudioKeep: 'today' | 'week' | 'always'
   /**
+   * Decisions (docs/decisions.md): a fast decision model answers yes/no, choice and score questions with a probability, as a
+   * cheap pre-check for desks and routines, and through the decide tool. Off by default; it only skips or routes when
+   * confident, otherwise the normal path runs unchanged.
+   */
+  decisionsEnabled: boolean
+  /** Which backend: 'gemini', 'jev', 'openai', or 'llm' (the app's own model). */
+  decisionsBackend: 'gemini' | 'jev' | 'openai' | 'llm'
+  /** 0.5 to 0.99: an answer counts only when its confidence is at least this. */
+  decisionsThreshold: number
+  /**
+   * Guided mode's highlight and label are drawn in a window of their own that screen sharing (Teams, Meet, Zoom)
+   * leaves out, so only he sees them. On by default. Where the system cannot hide a window from capture (Linux,
+   * Windows before 10 version 2004) the highlight is drawn in the page as before, whatever this says.
+   */
+  hideGuidesFromCapture: boolean
+  /**
+   * The agent shows its own cursor, a branded pointer with a small label of the step, where it acts (in its browser and on
+   * other windows), so it never has to use his mouse. On by default. It is click-through and follows hideGuidesFromCapture.
+   */
+  agentCursor: boolean
+  /**
+   * Last resort for a program that takes only real input: the agent may use his real mouse and keyboard, under the input
+   * lock (main/agent-cursor/input-lock.ts), only when he has been idle, after telling him, and it stops the moment he
+   * touches anything. OFF by default; only he turns it on (the agent cannot change it).
+   */
+  agentRealInput: boolean
+  /** How many seconds he must have been still before real input may start. Default 10. */
+  inputLockIdleSeconds: number
+  /**
+   * The chat is hidden from screen sharing. A window can only be hidden whole and the chat is drawn in the app window
+   * (docked beside the browser too), so this hides the whole app window and the Quick ask box. Off by default.
+   */
+  hideChatFromCapture: boolean
+  /**
    * Wake-ups: this computer rings (full-screen alarm) for wake-ups sent to it. Agents may change this one and
    * wakeupsPauseHereUntil; the others only he changes, in Settings. Off stops new rings here; a wake already ringing
    * here rings on until he answers it, whoever switched it off.
@@ -211,6 +245,16 @@ export interface Settings {
    * either way.
    */
   showDeveloperSettings: boolean
+  /**
+   * Show me how (10 Nov 2026): the account and model that walk the steps on his screen. '' account = automatic (the
+   * main chat's account when it is a key account, else the first key account), '' model = the smallest fast model
+   * that account lists. Never a hardcoded model (main/showme/guide-model.ts).
+   */
+  guideModel: AiPick
+  /** Show me how: the shortcut that skips a step, held only while a walk runs ('' = none). Esc always stops a walk. */
+  showMeSkipHotkey: string
+  /** Show me how: the shortcut that says "I did it", held only while a walk runs ('' = none). */
+  showMeDoneHotkey: string
 }
 
 /** The node row's `cap` for "no limit": older brains read cap <= 0 as "takes no work", so no limit is a big number. */
@@ -252,6 +296,14 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceName: 'Kore',
   speakReplies: false,
   recordingAudioKeep: 'today',
+  decisionsEnabled: false,
+  decisionsBackend: 'gemini',
+  decisionsThreshold: 0.9,
+  hideGuidesFromCapture: true,
+  agentCursor: true,
+  agentRealInput: false,
+  inputLockIdleSeconds: 10,
+  hideChatFromCapture: false,
   wakeupsRingHere: true,
   wakeupsPauseHereUntil: '',
   wakeupsPhoneOnlyWhenIdle: true,
@@ -280,6 +332,9 @@ export const DEFAULT_SETTINGS: Settings = {
   helperBusyCpu: 90,
   watchdogMs: 1000,
   showDeveloperSettings: false,
+  guideModel: { account: '', model: '' },
+  showMeSkipHotkey: 'CommandOrControl+Alt+Right',
+  showMeDoneHotkey: 'CommandOrControl+Alt+Down',
 }
 
 export interface ModelOption {
@@ -630,6 +685,11 @@ export interface TriggerRow extends RowBase {
    * app is back. Absent or false: it is skipped, and the routine runs at its next time.
    */
   catchUp?: boolean
+  /**
+   * interval and daily: when Decisions is on, a fast pre-check skips this run if nothing new reached the app since its last
+   * run (worker events), and a skipped run says nothing. Off or absent: it always runs.
+   */
+  deltaCheck?: boolean
   /** When its current run started (set as a run starts, so a run cut off is never started again on its own). */
   lastStartedAt?: number | null
   /** Devices (s12): which linked brain runs it, by name or id; '' or absent = the best one (a server first). */
@@ -1255,6 +1315,23 @@ export interface BrowserState {
   personPartition?: string
   /** A tab is playing sound right now (heard or not). */
   audible?: boolean
+  /** Full screen: the page has the whole screen, with only the browser's own toolbar and a way back. */
+  fullScreen?: boolean
+}
+
+/**
+ * A page the person handed to the agent from the browser (the reverse of browser_handoff): which tab, its address
+ * and title, what they had selected, and the files that carry it into the message box (a note, and a picture of the
+ * visible page when one could be taken).
+ */
+export interface BrowserHandOver {
+  tabId: string
+  url: string
+  title: string
+  selection: string
+  attachments: Attachment[]
+  /** '' when the page was pictured, else why it was not, in plain words. */
+  problem: string
 }
 
 /**
@@ -1617,6 +1694,12 @@ export interface DeviceCall {
   startedAt: number
   durationMs: number
   lines: Array<{ who: 'you' | 'agent'; text: string; at: number }>
+  /** 'live' for a Live voice assistant session (a call that can see); absent for a plain voice call. */
+  source?: 'live'
+  /** The phone's id for the session: its hand-off rows carry the same id, so they fold into this call. */
+  session?: string
+  /** What the assistant handed to the agent, in its own words, with his spoken words when known. */
+  handoffs?: Array<{ request: string; spoken?: string; at: number }>
 }
 
 /** Someone a call can talk to on this computer: the main agent, a project (with its chats) or a helper at work. */
@@ -1928,6 +2011,12 @@ export interface AgentApi {
     /** Signs one browser profile out of every site. */
     signOut(id: string): Promise<void>
     onState(cb: (state: BrowserState) => void): Unsubscribe
+    /** Full screen for the browser: only its toolbar and a way back. Turning it on opens the page over the window. */
+    setFullScreen(on: boolean): Promise<void>
+    /** Hands the page in front to the agent: it arrives through onHandOver, like one handed over from the page's own menu. */
+    handOver(): Promise<boolean>
+    /** A page was handed to the agent (toolbar button or the page's right-click menu): put it in the message box. */
+    onHandOver(cb: (page: BrowserHandOver) => void): Unsubscribe
     /** The renderer's <webview> for a tab is attached: hands its guest page to the main process. */
     attach(tabId: string, guestId: number): Promise<boolean>
   }
@@ -1945,6 +2034,8 @@ export interface AgentApi {
      * a page, or Back. False when the target is not one the window knows.
      */
     show(target: RouteTarget): Promise<boolean>
+    /** The quick ask orb: start or end dragging its window; the main process follows the cursor and snaps. */
+    quickDrag?(phase: 'start' | 'end'): void
     onMaximizeChange(cb: (maximized: boolean) => void): Unsubscribe
     /** Quick Ask overlay: the main process shows/hides it; the renderer listens. */
     onQuickAsk(cb: () => void): Unsubscribe
@@ -2057,6 +2148,40 @@ export interface AgentApi {
    * pickers are not there.
    */
   remote?: { nodeName: string }
+
+  /** Show me how: a guided ring on whatever window he is on. Absent where there is no screen of his (the node's web UI). */
+  showMe?: ShowMeApi
+}
+
+/** Where a "show me how" walk is, for the quick chat bar. */
+export interface ShowMeState {
+  running: boolean
+  /** 'planning' while the steps are worked out, 'walking' while a ring is up, 'ended' after. */
+  phase: 'idle' | 'planning' | 'walking' | 'ended'
+  question: string
+  step: number
+  of: number
+  label: string
+  /** One plain line once it has ended, or why it could not start. */
+  message: string
+  /** It ended without a single step (no route could be worked out): the bar comes back to say so. */
+  failed: boolean
+  /** When this state began (ms). */
+  at: number
+}
+
+export interface ShowMeStart {
+  ok: boolean
+  /** Why not, in plain words, when it could not start. */
+  message: string
+}
+
+export interface ShowMeApi {
+  /** Start a walk for this question on the window that was in front before the bar opened. */
+  start(question: string): Promise<ShowMeStart>
+  stop(): Promise<void>
+  state(): Promise<ShowMeState>
+  onState(cb: (state: ShowMeState) => void): Unsubscribe
 }
 
 declare global {

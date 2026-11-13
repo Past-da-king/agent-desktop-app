@@ -31,6 +31,20 @@ import {
   type FrameDelta,
 } from './window-fit'
 import { brandLook } from '../shared/brand'
+import { guidesUseOverlay } from '../shared/capture-privacy'
+import { CapturePrivacy } from './capture-privacy'
+import { createGuideOverlay } from './overlay/overlay-window'
+import { createAgentCursors } from './overlay/agent-cursor-window'
+import type { AgentCursors } from './overlay/agent-cursor'
+import { onRunEnded } from './browser/run-tabs'
+import { setAgentCursors } from './agent-cursor/cursor'
+import { createScreenControl } from './agent-cursor/wire'
+import { makeCdpRung } from './agent-cursor/cdp-rung'
+import { runTypingProbe } from './browser/typing-probe'
+import { runFocusProbe } from './browser/focus-probe'
+import { disposeAgentDesktop } from './tools/agent-desktop'
+import type { ScreenControl } from './agent-cursor/control'
+import type { NativeScreenReader } from './showme/native'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
 import { FileBrainLocks } from './brain-locks'
@@ -38,12 +52,13 @@ import { HANDOFF_CLOSED } from './tools/browser'
 
 import type { AppPlatform } from '@agent/core'
 
-import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type MiniAppCheck, type MiniAppRow, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, accountsOf, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type MiniAppCheck, type MiniAppRow, type Settings } from '@agent/core'
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
 import { APP_ID, APP_NAME, LICENCES_URL, makeAppInfo, windowTitle } from './app-info'
 import { AgentBrowser } from './browser/browser'
+import type { GuideStep } from './browser/guide'
 import { HOST_WINDOW_PREFS, keepPagesAwake } from './browser/keep-awake'
 import { runTurnstileProbe } from './browser/turnstile-probe'
 import { fallbackUserAgent } from './browser/emulation'
@@ -53,9 +68,11 @@ import { Logger } from './logger'
 import { onDestroyedSkip, safeSend, uncaughtHandler, whileAlive } from './alive'
 import { Notifier } from './notify'
 import { QuickAskWindow, quickAskPaths, type HotkeyStatus } from './hotkey'
+import { startShowMe, type ShowMeApp } from './showme/app'
 import { HotkeyManager } from './hotkeys'
 import { cachedLister, likelyHolder, listProcesses } from './hotkey-holders'
 import { createDictation, type DictationSetup } from './dictation/setup'
+import { speechLanguages } from './dictation/transcriber'
 import { Recordings } from './recordings/store'
 import { recoveredNoticeText, startRecordingsUpkeep, type Upkeep } from './recordings/upkeep'
 import { chatTag } from './runtime/chat-lines'
@@ -71,6 +88,7 @@ import { ProjectAgentRows } from './runtime/project-agents'
 import { devicesState, ownBrainIds, type DevicesSyncDeps } from './devices/sync'
 import { attachDevicesSync } from './devices/attach'
 import { registerRelay, rolesFromStore } from './devices/relay'
+import { wireDecisions } from './decisions'
 import { Scheduler } from './runtime/scheduler'
 import { watchBackgroundScripts } from './runtime/script-runs'
 import { liveRuns } from './runtime/live-runs'
@@ -88,6 +106,7 @@ import { createTray, type TrayHandle } from './tray'
 import { startUpdates } from './updates'
 import { EVENTS } from '../shared/channels'
 import { registerVoiceIpc } from './voice/ipc'
+import { transcribeLimitMs } from './voice/service'
 import { HelperFeed } from './devices/helper-feed'
 import { ChatIndex } from './memory/chat-index'
 import { EMPTY_VOCABULARY, dictationWordsFromProjects, vocabularyFrom } from './memory/vocabulary'
@@ -260,6 +279,10 @@ let mainWindow: BrowserWindow | null = null
 let smokeTimer: NodeJS.Timeout | null = null
 let store: Store | null = null
 let settingsStore: SettingsStore | null = null
+/** Which windows are hidden from screen sharing, by the two privacy settings (capture-privacy.ts). */
+let capturePrivacy: CapturePrivacy | null = null
+/** The agent's own cursor (overlay/agent-cursor.ts): the one drawing every tool that acts for the agent shows through. */
+let agentCursors: AgentCursors | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
 /** The helpers, so quitting can leave the ones still working for the next start to report (HelperManager.restore). */
@@ -293,6 +316,37 @@ let recordingsUpkeep: Upkeep | null = null
 const workersChanged = createWorkersChanged((payload) => broadcast(WORKER_EVENTS.changed, payload))
 let tray: TrayHandle | null = null
 let quickAsk: QuickAskWindow | null = null
+/** A Live voice session runs on this computer (the quick ask bar is its bubble). */
+let liveCallActive = false
+/** Show me how: a guided ring on whatever window he is on (showme/). */
+let showMe: ShowMeApp | null = null
+/** Screen tools (screen_windows, screen_read, screen_act): other programs without his mouse, keyboard or focus (agent-cursor/). */
+let screenControlInstance: ScreenControl | null = null
+function screenControlOf(): ScreenControl | null {
+  if (process.platform !== 'win32' || showMe === null || settingsStore === null) return null
+  const store = settingsStore
+  const helper = showMe.reader as unknown as NativeScreenReader
+  if (typeof helper.call !== 'function') return null
+  if (screenControlInstance === null) {
+    const userData = app.getPath('userData')
+    screenControlInstance = createScreenControl({
+      helper,
+      picturesDir: join(userData, 'screen'),
+      takersFile: join(userData, 'screen-takers.json'),
+      settings: () => store.get(),
+      showNotice: (title, body, onNotNow) => {
+        if (!Notification.isSupported()) return () => undefined
+        const toast = new Notification({ title, body })
+        toast.on('click', onNotNow)
+        toast.show()
+        return () => toast.close()
+      },
+      toDip: (point) => screen.screenToDipPoint(point),
+      cdp: makeCdpRung((op, args, timeoutMs) => helper.call(op, args, timeoutMs)),
+    })
+  }
+  return screenControlInstance
+}
 let hotkeys: HotkeyManager | null = null
 let hotkeyRetry: NodeJS.Timeout | null = null
 const runningProcesses = cachedLister(listProcesses)
@@ -574,6 +628,8 @@ function createWindow(stateFile: string): BrowserWindow {
   })
 
   mainWindow = win
+  // The app window holds the chat: "hide the chat from screen sharing" hides it whole (capture-privacy.ts).
+  capturePrivacy?.register(win, 'main')
   if (saved.x !== null && saved.y !== null) {
     // Created frameless on a scaled screen, Windows makes it a few pixels bigger than asked (1200x700 opens as
     // 1206x707 at 125%); one setBounds puts it right. What it then reports, a pixel or two over, is the frame.
@@ -592,7 +648,11 @@ function createWindow(stateFile: string): BrowserWindow {
       if (!sameRect(chosenBounds(win), want)) win.setBounds(want)
     }
     if (saved.maximized) win.maximize()
-    win.show()
+    // The focus proof (browser/focus-probe.ts) runs the app off his screen and never takes his window focus.
+    if ((process.env['AGENT_FOCUS_PROBE'] ?? '') !== '') {
+      win.setBounds({ x: -2600, y: -1500, width: 1200, height: 760 })
+      win.showInactive()
+    } else win.show()
     logger.info('Window shown', { ms: Math.round(process.uptime() * 1000) })
   })
 
@@ -721,7 +781,10 @@ async function explainBlockedHotkeys(): Promise<void> {
 }
 
 function openQuickAsk(): void {
-  quickAsk?.show()
+  // The window he is on is noted before the bar takes the focus, so "how do I..." is shown on it (showme/).
+  const noted = showMe?.service.noteForeground(150)
+  if (noted === undefined) quickAsk?.show()
+  else void noted.finally(() => quickAsk?.show())
 }
 
 function trayState(): { needsYou: number; routinesPaused: boolean } {
@@ -831,6 +894,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
   store.startReader({ log: (line, detail) => logger.warn(line, detail) })
   const settings = new SettingsStore(join(dir, 'settings.json'))
   settingsStore = settings
+  const privacy = new CapturePrivacy(() => settings.get())
+  capturePrivacy = privacy
+  if (mainWindow !== null && !mainWindow.isDestroyed()) privacy.register(mainWindow, 'main')
   // The main thread blocked for a second or more goes to main.log with its stacks (watchdog.ts).
   const watchMs = settings.get().watchdogMs
   watchdog = startWatchdog({
@@ -861,6 +927,14 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // The Vault (vault/store.ts): from here on no vault value is written into a row, a log or a tool result.
   const vault = new VaultStore(secrets)
   vaultStore = vault
+  // Fast decisions (decisions/, Settings > Agents and helpers): off until he turns it on; reuses the Gemini key the app already holds.
+  const decisions = wireDecisions({
+    settings: () => settings.get(),
+    secrets,
+    complete: () => (runner === null ? null : (system, prompt, signal) => (runner === null ? Promise.reject(new Error('The agent is not running.')) : runner.oneShot(system, prompt, signal))),
+    events: () => workers,
+    log: (message, fields) => logger.info(message, fields),
+  })
   setVaultRedactor((text) => vault.redact(text))
   vault.onChange(() => broadcast(VAULT_EVENTS.changed, null))
   const browserVault = new BrowserVault(vault, (message, detail) => logger.info(message, detail))
@@ -923,8 +997,20 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const updates = startUpdates()
   logger.info('Updates', { status: updates.status })
 
+  // The agent's own cursor and label, drawn in a click-through window that screen sharing leaves out (like the guides).
+  // A run ending takes its cursor away at once. Nothing here ever moves his pointer or takes his focus.
+  agentCursors?.destroyAll()
+  agentCursors = createAgentCursors({
+    privacy: capturePrivacy,
+    look: () => brandLook({ theme: settings.get().theme, accent: settings.get().accent, systemDark: nativeTheme.shouldUseDarkColors }),
+    enabled: () => settings.get().agentCursor !== false,
+  })
+  onRunEnded((owner) => agentCursors?.hide(owner))
+  setAgentCursors(agentCursors)
   agentBrowser = new AgentBrowser({
     window: win,
+    cursors: agentCursors,
+    log: (message, meta) => logger.info(message, meta),
     onState: (state) => broadcast(EVENTS.browser, state),
     // Closing the tab an agent handed over answers its "needs you in the browser" card, so nothing waits forever.
     onHandoffClosed: () => {
@@ -947,8 +1033,21 @@ async function startServices(win: BrowserWindow): Promise<void> {
     sitesFile: join(app.getPath('userData'), 'browser-sites.json'),
     // The person's own tabs keep their own sign-ins, apart from every agent's (apps/profiles.ts MINE_PARTITION).
     personPartition: MINE_PARTITION,
+    // Hand to the agent: the page's note and picture are ordinary attachments, and land in the message box.
+    handOver: {
+      root: join(app.getPath('userData'), 'attachments'),
+      agentName: () => settings.get().agentName,
+      deliver: (page) => broadcast(EVENTS.browserHandOver, page),
+    },
     // The guide's ring and label wear the app's own look: his theme and accent, read live (shared/brand.ts).
     look: () => brandLook({ theme: settings.get().theme, accent: settings.get().accent, systemDark: nativeTheme.shouldUseDarkColors }),
+    // The ring and label in a window of their own that screen sharing leaves out, where this computer can do that.
+    privateGuides: {
+      // AGENT_GUIDE_PROBE_OVERLAY=1 (a layout proof on a system that cannot hide a window; never set in normal use)
+      // draws in the overlay window all the same. It hides nothing there, and the overlay's own state says so.
+      on: () => guidesUseOverlay(settings.get().hideGuidesFromCapture, privacy.exclusion) || (process.env['AGENT_GUIDE_PROBE_OVERLAY'] === '1' && settings.get().hideGuidesFromCapture),
+      overlay: () => createGuideOverlay({ privacy }),
+    },
   })
   agentBrowser.setVault(browserVault)
   // The human-verification regression probe: load a page with a Turnstile widget (or a managed challenge), read
@@ -968,6 +1067,16 @@ async function startServices(win: BrowserWindow): Promise<void> {
     if (settings.get().theme === 'system') void agentBrowser?.restyleGuides()
   }
   nativeTheme.on('updated', onSystemTheme)
+  // The focus proof (browser/focus-probe.ts): the keyboard stays in the message box while the agent drives its browser. Never set in normal use. a local test page here; never set in normal use.
+  const focusProbe = process.env['AGENT_FOCUS_PROBE']?.trim() ?? ''
+  if (focusProbe !== '') {
+    setTimeout(() => {
+      const browser = agentBrowser
+      const win = mainWindow
+      if (browser === null || win === null) return
+      void runFocusProbe(browser, win.webContents, win, focusProbe).catch((error: unknown) => console.log(`FOCUS PROBE failed ${error instanceof Error ? error.message : String(error)}`))
+    }, 1500)
+  }
   // The real-Electron browser proof opens a local test page here; never set in normal use.
   const probeUrl = process.env['AGENT_BROWSER_PROBE_URL']?.trim() ?? ''
   if (probeUrl !== '') {
@@ -977,6 +1086,24 @@ async function startServices(win: BrowserWindow): Promise<void> {
       void (async () => {
         console.log(`BROWSER PROBE opened\n${await browser.probeOpen(probeUrl)}`)
         if (process.env['AGENT_DEVTOOLS_PROBE'] === '1') await runDevtoolsProbe(browser)
+        // The typist proof (browser/typing-probe.ts): fills a form while a script types elsewhere. Never set in normal use.
+        const typingProbe = process.env['AGENT_TYPING_PROBE']?.trim() ?? ''
+        if (typingProbe !== '') await runTypingProbe(browser, typingProbe).catch((error: unknown) => console.log(`TYPING PROBE failed ${error instanceof Error ? error.message : String(error)}`))
+        // The guide proof: a guide on the probe page, its steps as JSON ([{ "target": { "selector": "#go" }, "label":
+        // "Click Check out" }]). It ends as any guide does: his click, I did it, Skip, or its time running out.
+        const guideProbe = process.env['AGENT_GUIDE_PROBE']?.trim() ?? ''
+        if (guideProbe !== '') {
+          void (async () => {
+            try {
+              const steps = JSON.parse(guideProbe) as GuideStep[]
+              const limit = Number(process.env['AGENT_GUIDE_PROBE_TIMEOUT_MS'] ?? '')
+              console.log(`GUIDE PROBE started ${steps.length}`)
+              console.log(`GUIDE PROBE result\n${await browser.guide({ steps, ...(Number.isFinite(limit) && limit > 0 ? { timeoutMs: limit } : {}) })}`)
+            } catch (error) {
+              console.log(`GUIDE PROBE failed ${error instanceof Error ? error.message : String(error)}`)
+            }
+          })()
+        }
         if (process.env['AGENT_BROWSER_PROBE_ACT'] !== '1') return
         // Trusted input by name, at desktop size and again at phone size (where the view is drawn scaled).
         console.log(`BROWSER PROBE click\n${await browser.act({ action: 'click', name: 'Press me' })}`)
@@ -1054,6 +1181,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const workerTools = { store: workers, supervisor }
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
   cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
+  // The engine's own word on whether each plan's login works, now and every ten minutes (a dead login is not ready).
+  const stopSignInWatch = cliHost.watchSignIn(() => [...new Set(accountsOf(settings.get()).filter((a) => a.kind !== 'api').map((a) => a.kind as 'claude' | 'codex'))])
+  app.once('will-quit', stopSignInWatch)
   const leaseStore = store
   leases = new TurnLeases({
     store: leaseStore,
@@ -1084,7 +1214,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const selfUpdater = new SelfUpdater({
     userData: dir,
     currentVersion: app.getVersion(),
-    productName: 'Agent',
+    productName: APP_NAME,
     execPath: process.execPath,
     platform: process.platform,
     packaged: app.isPackaged,
@@ -1121,8 +1251,11 @@ async function startServices(win: BrowserWindow): Promise<void> {
     browserVault,
     recordings,
     calendar: () => presenceHandle?.calendar ?? null,
+    decisions: () => decisions.service,
     miniappUi: () => miniappUi,
     git: { kv: gitKv, hook: () => gitHook },
+    showMe: () => showMe?.service ?? null,
+    screenControl: screenControlOf,
   })
   // What registerDevicesSync needs from the app (devices/sync.ts), for the node server's call site:
   // registerDevicesSync(host, { store, pass, bundle, ...devicesAppHooks })
@@ -1270,9 +1403,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
     for (const event of ['lock-screen', 'unlock-screen', 'resume'] as const) powerMonitor.on(event as 'resume', () => wakeupService?.kick())
   }
   const tools = buildToolset({
+    showMe: () => showMe?.service ?? null,
+    screenControl: screenControlOf,
     git: { kv: gitKv, hook: () => gitHook },
     appControl: { ...appControl, update: selfUpdater },
     calendar: () => presenceHandle?.calendar ?? null,
+    decisions: () => decisions.service,
     miniappUi: () => miniappUi,
     media: {
       show: (path) => shownMedia.show(path),
@@ -1333,6 +1469,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     store,
     workers,
     desk: helpers,
+    triage: decisions.triage,
     maxRuns: () => settings.get().routinesAtOnce,
     onChange: () => workersChanged(),
     workerName: (id) => {
@@ -1523,18 +1660,21 @@ async function startServices(win: BrowserWindow): Promise<void> {
     // After the repairs: what a crash cut off runs again, once (runtime/turns.ts).
     void leases?.recover().catch(() => 0)
     // Back from an update the agent started (app_update): it hears so in the chat that asked, and carries on.
-    const updated = selfUpdater.resume()
-    if (updated !== null) {
-      logger.info('Update finished', {
-        from: updated.from,
-        now: updated.now,
-        ok: updated.ok,
-        installed: updated.result?.installedVersion ?? null,
-        installerExit: updated.result?.installerExit ?? null,
-        reason: updated.reason,
-      })
-      void runner?.deliver(resumeNote(updated), updated.chat).catch(() => undefined)
-    }
+    // The launcher may still be checking the new app is up when this start-up runs: wait for its last word first.
+    void selfUpdater.settle().then(() => {
+      const updated = selfUpdater.resume()
+      if (updated !== null) {
+        logger.info('Update finished', {
+          from: updated.from,
+          now: updated.now,
+          ok: updated.ok,
+          installed: updated.result?.installedVersion ?? null,
+          installerExit: updated.result?.installerExit ?? null,
+          reason: updated.reason,
+        })
+        void runner?.deliver(resumeNote(updated), updated.chat).catch(() => undefined)
+      }
+    })
     // Helpers left working are now marked interrupted, so desks can start: anything that arrived meanwhile,
     // or was cut short when the app closed, goes to its routine now.
     try {
@@ -1614,6 +1754,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       return eventRouter.runNow(trigger)
     },
     claim: (trigger) => placedWire.claimRoutine(trigger),
+    precheck: decisions.precheck,
   })
   // Background scripts show as runs with a stop, and end with the routine or helper that started them.
   const scriptStore = store
@@ -1629,7 +1770,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
   quickAsk = new QuickAskWindow({
     ...paths,
     devUrl: process.env['ELECTRON_RENDERER_URL'],
-    keepOpen: () => dictation !== null && dictation.controller.phase !== 'idle',
+    keepOpen: () => liveCallActive || (dictation !== null && dictation.controller.phase !== 'idle'),
+    onWindow: (window) => capturePrivacy?.register(window, 'chat'),
+    spotsFile: join(app.getPath('userData'), 'quick-ask-spots.json'),
   })
   hotkeys = new HotkeyManager(
     globalShortcut,
@@ -1650,6 +1793,36 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // main window gains focus, and after sleep or unlock.
   hotkeyRetry = setInterval(retryHotkeys, 25_000)
 
+  // Show me how: "how do I..." in the quick chat bar, or an agent's screen_guide, rings the next thing to use on the
+  // window he is on. The ring is the shared guide overlay; the walk's keys are held only while it runs.
+  {
+    const showStore = store
+    const showRunner = runner
+    showMe = startShowMe({
+      ipcMain,
+      settings,
+      secrets,
+      providerFactory: factory,
+      hasCli: cliHost !== null,
+      planModels: (accountId) => showRunner.planModels(accountId),
+      planTurn: async (account, model, system, prompt, signal) => {
+        if (cliHost === null || account.kind === 'api') throw new Error('This build cannot run on a plan.')
+        const answer = await cliHost.turn({ cli: account.kind, thread: 'routine', tools: [], system, prompt, ...(model === '' ? {} : { model }), context: showRunner.deviceToolContext(signal), signal, onEvent: async () => undefined, onCall: async () => undefined, onResult: async () => undefined })
+        if (answer.error !== undefined) throw new Error(answer.error)
+        return answer.text
+      },
+      memories: () => showStore.list('memory'),
+      apps: () => learned.apps(),
+      holdKey: (accelerator, callback) => hotkeys?.hold(accelerator, callback) ?? null,
+      privacy: capturePrivacy,
+      broadcast,
+      hideBar: () => quickAsk?.hide(),
+      showBar: () => quickAsk?.show(),
+      tmpDir: join(dir, 'showme'),
+      log: (message, detail) => logger.info(message, detail),
+    })
+  }
+
   let lastSettings = settings.get()
   disposeSettings = settings.onChange((next) => {
     // Which settings changed (names only, never values), so a setting that will not stick can be traced.
@@ -1658,6 +1831,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
     if (changed.length > 0) logger.info('Settings changed', { keys: changed.join(',') })
     if (changed.includes('shell') && next.shell === 'always') void runner?.approveComputerCards()
     if (changed.includes('theme') || changed.includes('accent')) void agentBrowser?.restyleGuides()
+    if (changed.includes('theme') || changed.includes('accent')) agentCursors?.restyle()
+    if (changed.includes('agentCursor')) agentCursors?.refresh()
+    if (changed.includes('hideGuidesFromCapture') || changed.includes('hideChatFromCapture')) {
+      capturePrivacy?.apply()
+      void agentBrowser?.refreshGuidePrivacy()
+    }
     applyLoginItem(next)
     applyHotkey(next)
     tray?.refresh()
@@ -1721,7 +1900,20 @@ async function startServices(win: BrowserWindow): Promise<void> {
     settings,
     store,
     runner,
-    emit: (event) => broadcast(EVENTS.voiceCall, event),
+    emit: (event) => {
+      broadcast(EVENTS.voiceCall, event)
+      // A Live voice session on this computer: the quick ask bar opens as a bubble (it shrinks inside the same window,
+      // renderer/shell/QuickWindow.tsx) and stays while the session runs; it goes when the session ends.
+      if (event.type !== 'state') return
+      const live = event.state !== 'ended' && event.state !== 'error'
+      if (live && !liveCallActive) {
+        liveCallActive = true
+        quickAsk?.show(true)
+      } else if (!live && liveCallActive) {
+        liveCallActive = false
+        quickAsk?.hide()
+      }
+    },
     platform: process.platform,
     environment: () => environment.current(),
     notesDir: join(app.getPath('userData'), 'voice-notes'),
@@ -1740,6 +1932,13 @@ async function startServices(win: BrowserWindow): Promise<void> {
     state: (chat) => callRunner.state(chat),
     agentName: () => settings.get().agentName,
     delegated: (chat, project, brief) => projectAgents.delegated(chat, project, brief),
+  }, (pcm) => {
+    // A linked phone's recording goes through dictation, so it gets his names and languages like his own mic does.
+    // Kept like his own recordings, so a take that came back wrong can be replayed (voice-notes/recordings/phone-audio).
+    if (recordingsStore !== null) void recordingsStore.keepPhoneAudio(pcm)
+    if (dictation !== null) return dictation.transcribe(pcm, AbortSignal.timeout(transcribeLimitMs(pcm.length)))
+    const service = voice
+    return service === null ? Promise.resolve({ ok: false, text: '', error: 'Voice is not ready.' }) : service.transcribe(pcm)
   })
 
   // Dictation anywhere: the pill window holds the microphone, the words are typed into the app in front.
@@ -1750,6 +1949,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     hotkeys: () => hotkeys,
     pill: { ...quickAskPaths(__dirname), devUrl: process.env['ELECTRON_RENDERER_URL'] },
     locale: app.getLocale(),
+    // His own languages, from the system: the speech model is told them instead of being left to guess (en-ZA + isiZulu).
+    languages: () => speechLanguages(app.getPreferredSystemLanguages(), app.getLocale()),
     log: (message, fields) => logger.info(message, fields),
     vocabulary: async () => (store === null ? EMPTY_VOCABULARY : vocabularyFrom(await store.list('memory'))),
     extraWords: async () => {
@@ -1826,7 +2027,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
       appVersion: app.getVersion(),
       nodeName: () => settings.get().deviceName,
       platform: process.platform,
-      ready: () => settings.get().mode !== 'none' || settings.get().accounts.length > 0,
+      // Ready = some account can answer now: a plan whose login works, an API account, or the old single choice.
+      ready: () => {
+        const list = accountsOf(settings.get())
+        if (list.length === 0) return settings.get().mode !== 'none'
+        return list.some((account) => account.kind === 'api' || cliHost === null || cliHost.signedIn(account.kind))
+      },
       busy: () => runner?.state().running ?? false,
       rendererDir: join(__dirname, '../renderer'),
       emitWindow: (channel, payload) => broadcast(channel, payload),
@@ -1961,6 +2167,9 @@ if (refuseToStart) {
     tray = null
     quickAsk?.destroy()
     quickAsk = null
+    disposeAgentDesktop()
+    showMe?.dispose()
+    showMe = null
     if (hotkeyRetry !== null) clearInterval(hotkeyRetry)
     hotkeyRetry = null
     hotkeys?.dispose()

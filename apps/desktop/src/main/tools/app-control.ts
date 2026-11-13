@@ -105,6 +105,16 @@ export const SETTINGS_NEED_APPROVAL: ReadonlySet<string> = new Set([
   'model',
   'accounts',
   'ai',
+  // What a screen share shows of him: only he lowers it.
+  'hideGuidesFromCapture',
+  'hideChatFromCapture',
+  // Real input on his desktop: only he allows it, and only he shortens the idle time it waits for.
+  'agentRealInput',
+  'inputLockIdleSeconds',
+  // Decisions send text to a decision model and let it skip work: only he turns them on, picks the model or lowers the bar.
+  'decisionsEnabled',
+  'decisionsBackend',
+  'decisionsThreshold',
 ])
 
 function text(value: unknown): string {

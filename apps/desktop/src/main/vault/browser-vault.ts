@@ -410,7 +410,7 @@ export class BrowserVault {
     } finally {
       await send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: op.authenticatorId }).catch(() => undefined)
       await send('WebAuthn.disable').catch(() => undefined)
-      await send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined)
+      // Focus emulation stays on: the browser keeps it on for every agent tab (it never takes real focus).
     }
   }
 }

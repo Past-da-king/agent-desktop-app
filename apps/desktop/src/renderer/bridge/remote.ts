@@ -378,6 +378,9 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       usePerson: async () => undefined,
       signOut: () => notHere('Signing out of a site'),
       onState: on(EVENTS.browser),
+      setFullScreen: async () => undefined,
+      handOver: async () => false,
+      onHandOver: () => () => undefined,
       attach: async () => false,
     },
 

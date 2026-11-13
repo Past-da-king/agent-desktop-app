@@ -1,4 +1,4 @@
-import { multiChatDemo, projectMemoriesDemo, projectsDemo } from './chats-demo'
+import { liveDemo, multiChatDemo, projectMemoriesDemo, projectsDemo } from './chats-demo'
 import {
   DEFAULT_SETTINGS,
   MEMORY_DAILY_ROUTINE,
@@ -823,5 +823,8 @@ export function seedFor(mode: DemoMode): SeedResult {
   }
   const rows = demoRows()
   const seeded = mode === 'big' ? bigRows(rows) : rows
-  return { settings: demoSettings(), rows: { ...seeded, miniapp: miniAppsDemo(Date.now(), mode === 'big') } }
+  // ?demo=1&live=1: his Live voice assistant's session as a call block, and a session still going (hand-offs only).
+  const withLive = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('live') === '1'
+  const chatRows = withLive ? [...seeded.chat_item, ...liveDemo(Date.now())] : seeded.chat_item
+  return { settings: demoSettings(), rows: { ...seeded, chat_item: chatRows, miniapp: miniAppsDemo(Date.now(), mode === 'big') } }
 }

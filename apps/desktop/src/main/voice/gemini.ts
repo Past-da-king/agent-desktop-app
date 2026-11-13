@@ -11,7 +11,12 @@ export const LIVE_URL = `${GEMINI_BASE.replace('https://', 'wss://')}/ws/google.
 /** Native-audio Live models, newest first. Older 2.0/2.5 live previews are no longer served. */
 export const LIVE_MODELS = ['gemini-3.8-live', 'gemini-3.1-flash-live-preview', 'gemini-2.5-flash-native-audio-preview-09-2025']
 export const TTS_MODELS = ['gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts']
-export const TRANSCRIBE_MODELS = ['gemini-3.5-flash-lite', 'gemini-2.5-flash']
+/** Google's speech-to-text model, then strong general models that also read audio (11 Nov 2026). */
+export const TRANSCRIBE_MODELS = ['gemini-3.5-transcribe', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash']
+/** The model made only for transcribing: custom vocabulary, language codes, code-switching. */
+export const SPEECH_MODEL = 'gemini-3.5-transcribe'
+/** General models that read audio with a prompt: the fallback when the speech model is out of reach. */
+export const TRANSCRIBE_FALLBACKS = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash']
 
 export const INPUT_RATE = 16_000
 export const OUTPUT_RATE = 24_000
@@ -150,9 +155,10 @@ export function chooseModels(listed: string[]): ModelChoice {
   const live = newest(listed.filter((m) => /live|native-audio/.test(m) && !/tts/.test(m)))
   const tts = newest(listed.filter((m) => /tts/.test(m)))
   const text = newest(listed.filter((m) => /^gemini-[\d.]+-flash(-lite)?(-preview[\w-]*)?$/.test(m)))
-  // Transcription wants the quick one: a lite model when there is one of the newest version.
-  const top = text[0] === undefined ? 0 : version(text[0])
-  const transcribe = text.find((m) => version(m) === top && /lite/.test(m)) ?? text[0]
+  // Transcription gets the model built for speech (11 Nov 2026): a general "lite" model was guessing at his words.
+  const speech = newest(listed.filter((m) => /transcribe/.test(m) && !/live/.test(m)))
+  const strong = text.find((m) => !/lite/.test(m)) ?? text[0]
+  const transcribe = speech[0] ?? strong
   const has = new Set(listed)
   const fallback = (list: string[]): string => list.find((m) => has.has(m)) ?? list[0] ?? ''
   return {
@@ -202,9 +208,14 @@ function inlineAudio(body: Record<string, unknown>): string | null {
 function textOf(body: Record<string, unknown>): string {
   const candidates = body['candidates']
   if (!Array.isArray(candidates)) return ''
-  const first = candidates[0] as { content?: { parts?: Array<{ text?: unknown }> } } | undefined
+  const first = candidates[0] as {
+    content?: { parts?: Array<{ text?: unknown; audioTranscription?: { text?: unknown } }> }
+  } | undefined
   return (first?.content?.parts ?? [])
-    .map((part) => (typeof part.text === 'string' ? part.text : ''))
+    .map((part) =>
+      // The speech model answers with audioTranscription; a general model answers with text.
+      typeof part.text === 'string' ? part.text : typeof part.audioTranscription?.text === 'string' ? `${part.audioTranscription.text}\n` : '',
+    )
     .join('')
     .trim()
 }
@@ -320,21 +331,50 @@ export function wavOf(pcm: Buffer, rate = OUTPUT_RATE): Buffer {
 }
 
 /**
- * Dictation: the whole recording in one call, transcribed word for word. `names` are the people, companies and
- * projects the speaker talks about, so they come back spelled right. `signal` bounds it: a call that never
- * answers must never leave a dictation waiting.
+ * Dictation: the whole recording in one call, word for word (11 Nov 2026).
+ *
+ * The speech model Google made for this (gemini-3.5-transcribe) is asked first, through the Interactions API, with two
+ * things the plain generateContent prompt could never carry: the languages he actually speaks (English and isiZulu in
+ * the same sentence, which it switches through by itself) and a custom vocabulary of his people and projects, which
+ * biases the recogniser towards those spellings instead of making it guess. A general model reading the audio with a
+ * prompt is only the fallback, and it now gets the strong one rather than a "lite" model.
+ *
+ * `signal` bounds it: a call that never answers must never leave a dictation waiting.
  */
 export async function transcribe(
   deps: GeminiDeps,
   pcm: Buffer,
   choice: ModelChoice,
-  options: { names?: string[]; signal?: AbortSignal } = {},
+  options: { names?: string[]; languageCodes?: string[]; mode?: 'verbatim' | 'smart'; signal?: AbortSignal } = {},
 ): Promise<string> {
+  if (pcm.length === 0) return ''
   const wav = wavFromPcm(pcm, INPUT_RATE)
-  const names = (options.names ?? []).filter((name) => name.trim() !== '').slice(0, 100)
-  const hint = names.length === 0 ? '' : ` Names the speaker may say, spelled as they should be written: ${names.join(', ')}. Use this list only to spell a name that is clearly spoken; never write a name that is not said, and write nothing for silence, breathing or noise.`
-  // A busy model (503) or one out of quota (429) hands over to the next one, like a missing one (404).
-  return eachModel(preferring(choice.transcribe, TRANSCRIBE_MODELS), [404, 429, 503], async (model) => {
+  const vocabulary = cleanTerms(options.names ?? [])
+  const languageCodes = (options.languageCodes ?? []).map((code) => code.trim()).filter((code) => code !== '').slice(0, 6)
+  // 1. The speech model, when the key can see it: languages, vocabulary and the mode go in the request itself.
+  for (const model of preferring(choice.transcribe, TRANSCRIBE_MODELS).filter((model) => /transcribe/.test(model) && !/live/.test(model))) {
+    try {
+      const text = await transcribeWithSpeechModel(deps, model, wav.toString('base64'), {
+        languageCodes,
+        vocabulary,
+        mode: options.mode ?? 'verbatim',
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      })
+      if (text !== '') return text
+    } catch (error) {
+      // Cancelled or out of time: nothing else is worth trying. Any other trouble (missing model, quota, a busy
+      // service, a shape it did not like): the general model below still gets the same audio and the same names.
+      if (options.signal?.aborted === true) throw error
+    }
+  }
+  // 2. A strong general model reading the audio, told what he says and how his names are spelled.
+  const names = vocabulary.slice(0, 100)
+  const hint =
+    (names.length === 0 ? '' : ` Names the speaker may say, spelled as they should be written: ${names.join(', ')}. Use this list only to spell a name that is clearly spoken; never write a name that is not said.`) +
+    (languageCodes.length === 0 ? '' : ` He speaks ${languageCodes.join(' and ')}, often mixing languages inside one sentence; write each word in the language he said it in.`) +
+    ' Write nothing for silence, breathing or noise.'
+  const general = preferring(choice.transcribe, [...TRANSCRIBE_FALLBACKS, ...TRANSCRIBE_MODELS]).filter((model) => !/transcribe/.test(model))
+  return eachModel(general, [404, 429, 503], async (model) => {
     const body = await post(
       deps,
       model,
@@ -345,7 +385,7 @@ export async function transcribe(
             parts: [
               {
                 text:
-                  'Transcribe this voice note exactly as spoken, in the language spoken. Add normal punctuation. ' +
+                  'Transcribe this recording exactly as spoken. Add normal punctuation and capital letters. ' +
                   'Reply with the transcript only. If nobody speaks, reply with nothing.' +
                   hint,
               },
@@ -359,6 +399,104 @@ export async function transcribe(
     )
     return textOf(body)
   })
+}
+
+/** The Interactions API: the speech-to-text model, with its own transcription settings. */
+export const INTERACTIONS_URL = `${GEMINI_BASE}/v1beta/interactions`
+
+/** What the speech model can be told about this recording. */
+export interface SpeechRequest {
+  languageCodes?: string[]
+  vocabulary?: string[]
+  mode?: 'verbatim' | 'smart'
+  signal?: AbortSignal
+}
+
+/** The request body for one transcription (exported so a test can pin its shape). */
+export function speechBody(model: string, wavBase64: string, options: SpeechRequest = {}): Record<string, unknown> {
+  const config: Record<string, unknown> = { mode: options.mode ?? 'verbatim' }
+  const codes = (options.languageCodes ?? []).filter((code) => code.trim() !== '')
+  if (codes.length > 0) config['language_codes'] = codes
+  const vocabulary = cleanTerms(options.vocabulary ?? [])
+  if (vocabulary.length > 0) config['custom_vocabulary'] = vocabulary
+  return {
+    model: `models/${model}`,
+    input: [{ type: 'user_input', content: [{ type: 'audio', data: wavBase64, mime_type: 'audio/wav' }] }],
+    generation_config: { transcription_config: config },
+  }
+}
+
+/** The transcript out of an Interactions reply, whichever shape it uses. */
+export function speechTextOf(body: Record<string, unknown>): string {
+  const direct = body['output_text']
+  if (typeof direct === 'string' && direct.trim() !== '') return direct.trim()
+  const steps = body['steps']
+  if (!Array.isArray(steps)) return ''
+  const parts: string[] = []
+  for (const step of steps as Array<Record<string, unknown>>) {
+    if (typeof step['type'] === 'string' && step['type'] !== 'model_output') continue
+    const content = step['content']
+    if (!Array.isArray(content)) continue
+    for (const part of content as Array<Record<string, unknown>>) {
+      const text = part['text']
+      if (typeof text === 'string') parts.push(text)
+      const spoken = part['audioTranscription'] as { text?: unknown } | undefined
+      if (typeof spoken?.text === 'string') parts.push(spoken.text)
+    }
+  }
+  return parts.join('').trim()
+}
+
+/** One call to the speech model. Throws a GeminiError like `post` does, so the caller can fall back. */
+async function transcribeWithSpeechModel(
+  deps: GeminiDeps,
+  model: string,
+  wavBase64: string,
+  options: SpeechRequest,
+): Promise<string> {
+  const key = deps.key()
+  if (key === null || key.trim() === '') throw new GeminiError(401, 'No key')
+  const fetcher = deps.fetchImpl ?? fetch
+  let response: Response
+  try {
+    response = await fetcher(INTERACTIONS_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': key.trim() },
+      body: JSON.stringify(speechBody(model, wavBase64, options)),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    })
+  } catch (error) {
+    if (options.signal?.aborted === true) throw new GeminiError(-1, 'cancelled')
+    throw new GeminiError(0, error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'unreachable')
+  }
+  let text: string
+  try {
+    text = await response.text()
+  } catch {
+    throw new GeminiError(options.signal?.aborted === true ? -1 : 0, 'unreachable')
+  }
+  if (!response.ok) throw new GeminiError(response.status, errorMessage(text))
+  try {
+    return speechTextOf(JSON.parse(text) as Record<string, unknown>)
+  } catch {
+    throw new GeminiError(502, 'Unreadable reply')
+  }
+}
+
+/** Vocabulary terms as the speech model wants them: distinct, trimmed, at most 100, in the order given. */
+export function cleanTerms(terms: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of terms) {
+    const term = raw.replace(/\s+/g, ' ').trim()
+    if (term.length < 2 || term.length > 60) continue
+    const key = term.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(term)
+    if (out.length >= 100) break
+  }
+  return out
 }
 
 /** Markdown out, so the voice does not read asterisks and link targets. */

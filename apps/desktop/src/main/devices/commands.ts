@@ -152,7 +152,8 @@ export class DeviceCommands {
         if (row.brainId !== this.deps.selfId()) continue
         await this.deps.store.upsert('device_command', { id: row.id, status: 'expired', updatedAt: now })
         const why = row.status === 'queued' ? 'the device did not come online within 10 minutes' : 'the device never confirmed it'
-        await this.deps.noteBack(row.chat, `[Device note: ${what(row)} was not delivered: ${why}. Tell the user another way if it still matters.]`, row.owner ?? '')
+        const stayed = row.kind === 'tool' && row.status === 'queued' ? ' The device stayed offline, so the tool was not run.' : ''
+        await this.deps.noteBack(row.chat, `[Device note: ${what(row)} was not delivered: ${why}. Tell the user another way if it still matters.${stayed}]`, row.owner ?? '')
         continue
       }
       if (row.status === 'queued' && row.kind !== 'tool' && host !== null && host.isConnected(row.target)) await this.deliver(host, row)

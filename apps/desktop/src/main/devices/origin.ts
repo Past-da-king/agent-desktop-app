@@ -9,6 +9,7 @@ import { hostname } from 'node:os'
 
 import { MAIN_CHAT, type ChatItem, type JsonObject } from '@agent/core'
 
+import { liveFromInput } from '../../shared/sender'
 import { listWhere, type DataStore } from '../runtime/data'
 import { wireOf } from './registry'
 import type { DeviceFacts, DeviceKind, DevicePlatform, MessageOrigin } from './types'
@@ -34,6 +35,17 @@ export function setLocalOrigin(origin: MessageOrigin | null): void {
 /** The origin for a handler's event: the wire caller, else this node, else undefined. */
 export function messageOrigin(event: unknown): MessageOrigin | undefined {
   return wireOf(event)?.origin ?? local ?? undefined
+}
+
+/**
+ * The origin of a send that his Live voice assistant made (shared/sender.ts: `origin: "live_voice"`, `spoken`, `session`
+ * in the call's input). It rides on the origin so every layer between the wire and the runner passes it on untouched;
+ * the runner turns it into the row's `meta.live` and the agent's label. Unchanged when the send is not a hand-off.
+ */
+export function originWithLive(origin: MessageOrigin | undefined, raw: unknown): MessageOrigin | undefined {
+  const live = liveFromInput(raw)
+  if (live === null) return origin
+  return { ...(origin ?? ({} as MessageOrigin)), live }
 }
 
 /** The same as originFrom (the name the sync side uses). */

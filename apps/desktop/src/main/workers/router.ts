@@ -19,7 +19,12 @@ export interface DeskHost {
   runDesk(spec: DeskSpec, message: string): Promise<DeskOutcome>
 }
 
+/** Decisions (docs/decisions.md): events a fast pre-check is confident are noise, and the ones that go to the desk. */
+export type DeskTriage = (trigger: TriggerRow, batch: WorkerEvent[]) => Promise<{ skipped: Array<{ event: WorkerEvent; reason: string }>; kept: WorkerEvent[] }>
+
 export interface RouterDeps {
+  /** Asked before a desk run. Absent, or an error: the desk sees every event, as before. */
+  triage?: DeskTriage
   store: DataStore
   workers: WorkerStore
   desk: DeskHost
@@ -55,6 +60,7 @@ export class EventRouter {
   private readonly onFailed: (trigger: TriggerRow, why: string) => void
   private readonly onChange: () => void
   private readonly workerName: (id: string) => string
+  private readonly triage: DeskTriage | null
   private readonly lanes = new Map<string, Lane>()
   /** Events already gathered or with a desk in this process, so a catch-up never offers them twice. */
   private readonly inFlight = new Set<string>()
@@ -74,6 +80,7 @@ export class EventRouter {
     this.onFailed = deps.onFailed ?? (() => undefined)
     this.onChange = deps.onChange ?? (() => undefined)
     this.workerName = deps.workerName ?? ((id) => id)
+    this.triage = deps.triage ?? null
   }
 
   /**
@@ -186,7 +193,28 @@ export class EventRouter {
     // In the order they arrived (the map keeps it); the wall clock can jump, so it is never used to order them.
     const batch = [...lane.pending.values()].slice(0, MAX_BATCH)
     for (const event of batch) lane.pending.delete(event.id)
-    const outcome = await this.runDesk(trigger, batch, false)
+    let work = batch
+    if (this.triage !== null) {
+      // The lane is busy while the pre-check reads, so a second flush cannot start beside it.
+      lane.running = true
+      try {
+        const verdict = await this.triage(trigger, batch)
+        for (const item of verdict.skipped) {
+          this.workers.setStatus([item.event.id], 'ignored', trigger.id, item.reason)
+          this.inFlight.delete(item.event.id)
+        }
+        work = verdict.kept
+      } catch {
+        work = batch
+      }
+      lane.running = false
+      if (work.length === 0) {
+        this.onChange()
+        this.next(routineId)
+        return 'Decision pre-check: nothing needed the desk.'
+      }
+    }
+    const outcome = await this.runDesk(trigger, work, false)
     return outcome.result
   }
 

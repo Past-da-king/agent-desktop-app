@@ -1,8 +1,9 @@
-import type { ChatEvent } from '@agent/core'
-import { useEffect, useRef, useState } from 'react'
+import type { CallEvent, CallState, ChatEvent } from '@agent/core'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 import { agent, chat } from '../bridge'
 import { formatAccelerator } from '../lib/hotkey'
+import { howToQuestion } from '../../shared/showme'
 import { useSettings } from '../state/useSettings'
 import { Icon } from '../ui/Icon'
 import { Mascot } from '../ui/Mascot'
@@ -15,6 +16,10 @@ import '../voice/voice.css'
  * front. Enter sends the line into the one chat the main window shows (while the agent is busy it joins the run,
  * as it does from the main window), and the reply shows here in a line or two. Esc or a click elsewhere closes it.
  * Paste works as in any text box; the dictation shortcut types into it like into any app.
+ *
+ * Show me how (10 Nov 2026): a line that starts as a how-to ("how do I...", "show me how...") or is typed with the
+ * Show me chip on is not sent to the chat: the bar closes and the steps are ringed, one at a time, on the window he
+ * was on. The hint says which of the two Enter will do before he presses it, and Ctrl+Enter always sends to the chat.
  */
 export function QuickWindow(): JSX.Element {
   const settings = useSettings((state) => state.settings)
@@ -23,8 +28,15 @@ export function QuickWindow(): JSX.Element {
   const [waiting, setWaiting] = useState(false)
   const [answer, setAnswer] = useState('')
   const [problem, setProblem] = useState('')
+  const [showMode, setShowMode] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const sentAt = useRef(0)
+  // A Live voice session (the call, which sees): while it runs the bar is just a bubble in this same window. Clicking
+  // it opens the full bar and the session carries on.
+  const [live, setLive] = useState<CallState | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [muted, setMuted] = useState(false)
+  const compact = live !== null && !expanded
 
   const agentName = settings?.agentName.trim() || 'Your agent'
   const dictateKeys = formatAccelerator(settings?.dictateHotkey ?? '', agent.platform).join('+')
@@ -36,6 +48,19 @@ export function QuickWindow(): JSX.Element {
       .then((state) => setRunning(state.running))
       .catch(() => undefined)
   }, [])
+
+  useEffect(
+    () =>
+      agent.voice.onCall((event: CallEvent) => {
+        if (event.type !== 'state') return
+        if (event.state === 'ended' || event.state === 'error') {
+          setLive(null)
+          setExpanded(false)
+          setMuted(false)
+        } else setLive(event.state)
+      }),
+    [],
+  )
 
   useEffect(() => {
     const refresh = async (): Promise<void> => {
@@ -58,12 +83,25 @@ export function QuickWindow(): JSX.Element {
     }
 
     const offQuick = agent.window.onQuickAsk(() => {
+      // His shortcut during a session opens the full bar too.
+      setExpanded(true)
       setText('')
       setAnswer('')
       setProblem('')
       setWaiting(false)
+      setShowMode(false)
       sentAt.current = 0
       input.current?.focus()
+      // A walk that could not start brought the bar back: it says why.
+      void agent.showMe
+        ?.state()
+        .then((state) => {
+          if (state.phase === 'ended' && state.failed && state.message !== '' && Date.now() - state.at < 15_000) {
+            setText(state.question)
+            setProblem(state.message)
+          }
+        })
+        .catch(() => undefined)
     })
 
     // The reply lands as a row change; the list is read only once the run ends, in case a change was missed.
@@ -97,9 +135,58 @@ export function QuickWindow(): JSX.Element {
 
   const dictating = useDictationDraft() !== null
 
-  const send = (): void => {
+  // The window is see-through: only the orb, the pill and the bubble are drawn.
+  useEffect(() => {
+    document.documentElement.classList.add('quick-own')
+    return () => document.documentElement.classList.remove('quick-own')
+  }, [])
+
+  // Drag by the orb: the main process moves the window with the real cursor and snaps it. A press that never moved
+  // is a click, which puts the cursor back in the field.
+  const dragFrom = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  const onOrbDown = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (event.button !== 0) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragFrom.current = { x: event.screenX, y: event.screenY, moved: false }
+  }
+  const onOrbMove = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const from = dragFrom.current
+    if (from === null || from.moved) return
+    if (Math.abs(event.screenX - from.x) + Math.abs(event.screenY - from.y) < 4) return
+    from.moved = true
+    agent.window.quickDrag?.('start')
+  }
+  const onOrbUp = (): void => {
+    const from = dragFrom.current
+    dragFrom.current = null
+    if (from?.moved === true) agent.window.quickDrag?.('end')
+    input.current?.focus()
+  }
+
+  // What Enter will do with this line: show it on his screen, or send it to the chat.
+  const canShow = agent.showMe !== undefined
+  const walkQuestion = !canShow || text.trim() === '' ? null : showMode ? text.trim() : howToQuestion(text)
+
+  const showOnScreen = (question: string): void => {
+    setProblem('')
+    setAnswer('')
+    void agent.showMe
+      ?.start(question)
+      .then((started) => {
+        // Started: the bar is closed by the main process and the ring is on his window.
+        if (started.ok) setText('')
+        else setProblem(started.message)
+      })
+      .catch((error: unknown) => setProblem(error instanceof Error ? error.message : 'Could not start that.'))
+  }
+
+  const send = (toChat = false): void => {
     const value = text.trim()
     if (value === '') return
+    if (!toChat && walkQuestion !== null) {
+      showOnScreen(walkQuestion)
+      return
+    }
     setWaiting(true)
     setAnswer('')
     setProblem('')
@@ -112,51 +199,165 @@ export function QuickWindow(): JSX.Element {
     input.current?.focus()
   }
 
-  return (
-    <div className="quickwin">
-      <div className="qw-row">
-        <Mascot id={settings?.mascot ?? 'scout'} size={44} busy={running || waiting} />
-        <input
-          ref={input}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-              event.preventDefault()
-              send()
-            }
-          }}
-          placeholder={`Message ${agentName}`}
-          aria-label={`Message ${agentName}`}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <button type="button" className="send" onClick={send} aria-label="Send" disabled={text.trim() === ''}>
-          <Icon name="arrow" size={22} />
-        </button>
-      </div>
+  const liveWords: Record<CallState, string> = {
+    connecting: 'Connecting',
+    listening: 'Listening',
+    thinking: 'Working on it',
+    speaking: 'Speaking',
+    waiting: 'Needs you',
+    ended: '',
+    error: '',
+  }
+  const quickKeys = formatAccelerator(settings?.quickAskHotkey ?? '', agent.platform).join('+')
+  const toggleMute = (): void => {
+    const next = !muted
+    setMuted(next)
+    void agent.voice.callMute(next).catch(() => undefined)
+  }
 
-      <div className="qw-line">
-        {/* The shortcut pressed here dictates into this box: the words show on this line, never in the pill. */}
-        {dictating ? (
-          <DictationDraft compact />
-        ) : problem !== '' ? (
-          <span className="qw-problem" role="alert">
-            {problem}
-          </span>
-        ) : waiting ? (
-          <span className="qw-status" role="status">
-            <i className="dot busy" />
-            Sent. {agentName} is on it, and the answer shows here and in your chat.
-          </span>
-        ) : answer !== '' ? (
-          <span className="qw-answer">{answer}</span>
+  const showing = walkQuestion !== null
+  const sentOrBusy = waiting || running
+  // Help only where it is needed: nothing while he types a plain ask, one short line for the mode he is in.
+  const bubble: JSX.Element | null = dictating ? (
+    <span className="qo-dict">
+      <DictationDraft compact />
+    </span>
+  ) : problem !== '' ? (
+    <span className="qo-problem" role="alert">
+      {problem}
+    </span>
+  ) : answer !== '' ? (
+    <span className="qo-answer">{answer}</span>
+  ) : waiting ? (
+    <span role="status">Sent. I'm on it.</span>
+  ) : showing ? (
+    <span>
+      I'll show you on screen, one step at a time. <kbd>Ctrl</kbd> <kbd>Enter</kbd> asks instead.
+    </span>
+  ) : null
+
+  const talking = live === 'listening' || live === 'speaking'
+  return (
+    <div className={`qo${showing ? ' show' : ''}${dictating || (talking && !muted) ? ' listening' : ''}${compact ? ' compact' : ''}${live !== null ? ' live' : ''}`}>
+      <div className="qo-row">
+        <button
+          type="button"
+          className="qo-orb"
+          aria-label="Move the quick ask bar"
+          title="Drag to move"
+          onPointerDown={onOrbDown}
+          onPointerMove={onOrbMove}
+          onPointerUp={onOrbUp}
+          onPointerCancel={onOrbUp}
+        >
+          {dictating || (talking && !muted) ? (
+            <>
+              <i className="qo-ring" />
+              <i className="qo-ring late" />
+            </>
+          ) : null}
+          {showing ? (
+            <svg className="qo-point" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+              <path d="M5 4l6.5 16 2.4-6.9L21 10.6z" />
+            </svg>
+          ) : (
+            <Mascot id={settings?.mascot ?? 'scout'} size={38} busy={sentOrBusy || dictating || live === 'speaking' || live === 'thinking'} />
+          )}
+          {live !== null ? <i className="qo-live-dot" title="Live voice" aria-label="Live voice" /> : null}
+          {waiting && live === null ? (
+            <span className="qo-badge">
+              <Icon name="check" size={12} />
+            </span>
+          ) : null}
+        </button>
+
+        {compact ? (
+          <div className="qo-pill qo-livebar" role="group" aria-label="Live voice">
+            <button
+              type="button"
+              className="qo-live-main"
+              title={quickKeys === '' ? 'Open the full box' : `Open the full box (${quickKeys})`}
+              onClick={() => {
+                setExpanded(true)
+                window.setTimeout(() => input.current?.focus(), 0)
+              }}
+            >
+              <b>LIVE</b>
+              <span role="status">{muted ? 'Muted' : liveWords[live ?? 'listening']}</span>
+            </button>
+            <button type="button" className={`qo-icon${muted ? ' on' : ''}`} aria-pressed={muted} aria-label={muted ? 'Unmute' : 'Mute'} title={muted ? 'Unmute' : 'Mute'} onClick={toggleMute}>
+              <Icon name="mic" size={18} />
+            </button>
+            <button type="button" className="qo-icon" aria-label="End the live session" title="End the live session" onClick={() => void agent.voice.callEnd().catch(() => undefined)}>
+              <Icon name="x" size={18} />
+            </button>
+          </div>
         ) : (
-          <span className="qw-hint">
-            Enter sends to your chat. Esc closes.{dictateKeys === '' ? '' : ` ${dictateKeys} to dictate.`}
-          </span>
+        <div className="qo-pill">
+          <input
+            ref={input}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                send(event.ctrlKey || event.metaKey)
+              } else if (event.key === 'Tab' && canShow) {
+                event.preventDefault()
+                setShowMode((on) => !on)
+              }
+            }}
+            placeholder={showing || showMode ? 'What should I show you?' : `Ask ${agentName}`}
+            aria-label={`Message ${agentName}`}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            className={`qo-icon${dictating ? ' on' : ''}`}
+            aria-pressed={dictating}
+            aria-label="Dictate"
+            title={dictateKeys === '' ? 'Dictate' : `Dictate (${dictateKeys})`}
+            onClick={() => {
+              void agent.dictation.toggle('plain').catch(() => undefined)
+              input.current?.focus()
+            }}
+          >
+            <Icon name="mic" size={18} />
+          </button>
+          {canShow ? (
+            <button
+              type="button"
+              className={`qo-icon${showMode || showing ? ' on' : ''}`}
+              aria-pressed={showMode}
+              aria-label="Show me on screen"
+              title="Show me on screen (Tab)"
+              onClick={() => {
+                setShowMode((on) => !on)
+                input.current?.focus()
+              }}
+            >
+              <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
+                <path d="M5 4l6.5 16 2.4-6.9L21 10.6z" />
+              </svg>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={`qo-send${text.trim() === '' ? '' : ' ready'}`}
+            onClick={() => send()}
+            aria-label={showing ? 'Show me on screen' : 'Send'}
+            disabled={text.trim() === ''}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 19V5M5 12l7-7 7 7" />
+            </svg>
+          </button>
+        </div>
         )}
       </div>
+
+      {bubble !== null && !compact ? <div className="qo-bubble">{bubble}</div> : null}
     </div>
   )
 }

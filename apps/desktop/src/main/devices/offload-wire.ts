@@ -38,7 +38,7 @@ export interface OffloadWireDeps {
   secrets: { get(name: string): string | null }
   providerFactory: ProviderFactory
   /** Whether this build runs plans, and which ones are signed in here. */
-  cli: { signedIn(cli: 'claude' | 'codex'): boolean } | null
+  cli: { signedIn(cli: 'claude' | 'codex'): boolean; onSignInChange?: ((cli: 'claude' | 'codex', usable: boolean) => void) | null } | null
   /** The chat runner, once made. */
   runner: () => OffloadRunner | null
   kind: 'desktop' | 'server'
@@ -97,6 +97,18 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
   } catch {
     // Nothing remembered.
   }
+  let offloadRef: Offload | null = null
+  // A login found dead or working again is told to the other devices at once, and a plan that works again is not held
+  // back by an old failure (the six hours a failed helper rests an account for).
+  if (deps.cli !== null && deps.cli.onSignInChange !== undefined) {
+    deps.cli.onSignInChange = (cli, usable) => {
+      if (usable) {
+        for (const account of accountsOf(settings.get())) if (account.kind === cli) cannot.delete(account.id)
+        store.setLocalValue(CANNOT_KEY, JSON.stringify(Object.fromEntries(cannot)))
+      }
+      void offloadRef?.beat().catch(() => undefined)
+    }
+  }
   const canRun = (account: AiAccount): boolean => {
     if ((cannot.get(account.id) ?? 0) > now()) return false
     if (account.kind !== 'api') return deps.cli !== null && deps.cli.signedIn(account.kind)
@@ -145,7 +157,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     return helpers.onRemote(msg)
   }
 
-  const offload = new Offload({
+  const offload: Offload = new Offload({
     store,
     selfId,
     isSelf,
@@ -171,6 +183,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
       void offload.beat().catch(() => undefined)
     },
   }
+  offloadRef = offload
   helpers.setOffload(link)
 
   // Project chats other computers placed here, with the commands-and-files choice each carries (read when a turn

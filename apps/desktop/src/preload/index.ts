@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 
+import { SHOWME_CHANNELS, SHOWME_EVENTS, type ShowMeStart, type ShowMeState } from '../shared/showme'
+
 import type {
   ModelListResult,
   AccountRules,
@@ -22,6 +24,7 @@ import type {
   ChatBrain,
   DataChange,
   BrowserState,
+  BrowserHandOver,
   ChatEvent,
   ChatRunInfo,
   Decision,
@@ -164,6 +167,15 @@ const api: AgentApi = {
     usePerson: (id: string) => call<void>(CHANNELS.browser.usePerson, id),
     signOut: (id: string) => call<void>(CHANNELS.browser.signOut, id),
     onState: (callback) => on<BrowserState>(EVENTS.browser, callback),
+    setFullScreen: (on) => call<void>(CHANNELS.browser.setFullScreen, on),
+    handOver: () => call<boolean>(CHANNELS.browser.handOver),
+    onHandOver: (callback) =>
+      on<BrowserHandOver>(EVENTS.browserHandOver, (page) => {
+        // The page's picture is shown on its chip like any file the person attached.
+        const paths = page.attachments.map((file) => file.path)
+        if (paths.length > 0) void call<void>(CHANNELS.files.register, paths)
+        callback(page)
+      }),
     attach: (tabId, guestId) => call<boolean>(CHANNELS.browser.attach, tabId, guestId),
   },
 
@@ -211,6 +223,9 @@ const api: AgentApi = {
     },
     isMaximized: () => call<boolean>(CHANNELS.window.isMaximized),
     show: (target) => call<boolean>(CHANNELS.window.show, target),
+    quickDrag: (phase) => {
+      void call<boolean>(CHANNELS.window.quickDrag, phase)
+    },
     onMaximizeChange: (callback) => on<boolean>(EVENTS.maximize, callback),
     onQuickAsk: (callback) => on<null>(EVENTS.quickAsk, () => callback()),
     onRoute: (callback) => on<RouteTarget>(EVENTS.route, callback),
@@ -389,6 +404,12 @@ const api: AgentApi = {
     prefs: () => call<VaultPrefs>(VAULT_CHANNELS.prefs),
     setPrefs: (patch) => call<VaultPrefs>(VAULT_CHANNELS.setPrefs, patch),
     onChange: (callback) => on<null>(VAULT_EVENTS.changed, () => callback()),
+  },
+  showMe: {
+    start: (question) => call<ShowMeStart>(SHOWME_CHANNELS.start, question),
+    stop: () => call<void>(SHOWME_CHANNELS.stop),
+    state: () => call<ShowMeState>(SHOWME_CHANNELS.state),
+    onState: (callback) => on<ShowMeState>(SHOWME_EVENTS.state, callback),
   },
 }
 

@@ -67,12 +67,48 @@ const GROUPS = {
     ['quick', '?demo=1', '#/home', [[D, 'light']], 'Control+Shift+Space'],
   ],
   chat: [['chat-full', '?demo=1', '#/chat', DESK], ['chat-empty', '?demo=empty', '#/chat', DESK]],
+  // His Live voice assistant: one collapsed call block per session (hand-offs folded inside), then opened.
+  live: [['live-call', '?demo=1&live=1', '#/chat', [[D, 'light'], [D, 'dark']], null, liveFlow]],
+  // The quick ask bar while a Live voice session runs: just the orb and a LIVE pill, then opened into the full bar.
+  quicklive: [['quick-live', '?demo=1', '#/quick-window', [[D, 'light'], [D, 'dark']], null, quickLiveFlow]],
   // The commands the agent ran: folded rows, then the step opened with one run disclosed (long output folded).
   runs: [['runs-open', '?demo=1', '#/chat', DESK, null, runsFlow]],
   data: [
     ['home-empty', '?demo=empty', '#/home', DESK], ['tasks-empty', '?demo=empty', '#/tasks', DESK], ['memory-empty', '?demo=empty', '#/memory', DESK], ['routines-empty', '?demo=empty', '#/routines', DESK],
     ['home-big', '?demo=big', '#/home', DESK], ['tasks-big', '?demo=big', '#/tasks', DESK], ['memory-big', '?demo=big', '#/memory', DESK], ['routines-big', '?demo=big', '#/routines', DESK],
   ],
+}
+
+async function quickLiveFlow(page, tag, vp, theme) {
+  await page.evaluate(async () => { await window.__previewAgent.voice.callStart() })
+  await page.waitForSelector('.qo.compact', { timeout: 5000 })
+  if ((await page.locator('.qo.compact input').count()) !== 0) throw new Error('the compact bubble has an input')
+  await page.waitForTimeout(900)
+  await page.screenshot({ path: path.join(outDir, `quick-live-bubble-${vp.w}-${theme}.png`) })
+  await page.locator('.qo-live-main').click()
+  await page.waitForSelector('.qo:not(.compact) input')
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: path.join(outDir, `quick-live-expanded-${vp.w}-${theme}.png`) })
+  await page.evaluate(async () => { await window.__previewAgent.voice.callEnd() })
+  await page.waitForSelector('.qo:not(.live)')
+  await page.waitForTimeout(200)
+}
+
+async function liveFlow(page, tag, vp, theme) {
+  const blocks = page.locator('.call-row')
+  await blocks.first().waitFor()
+  const count = await blocks.count()
+  if (count < 2) throw new Error(`expected the saved Live call and the one still going, found ${count} call blocks`)
+  if ((await page.locator('.u-msg', { hasText: 'Update the EOD report' }).count()) !== 0) throw new Error('a hand-off drew as a standalone bubble')
+  await blocks.first().scrollIntoViewIfNeeded()
+  await page.evaluate(() => { const el = document.querySelectorAll('.call-row'); el[0]?.scrollIntoView({ block: 'center' }) })
+  await page.waitForTimeout(200)
+  await page.screenshot({ path: path.join(outDir, `live-collapsed-${vp.w}-${theme}.png`) })
+  await blocks.first().locator('.call-row-h').click()
+  await blocks.last().locator('.call-row-h').click()
+  await page.waitForTimeout(400)
+  await page.evaluate(() => { const el = document.querySelectorAll('.call-row'); el[0]?.scrollIntoView({ block: 'start' }) })
+  await page.waitForTimeout(200)
 }
 
 // Shoots the folded run rows first, then opens the step and the failing test run for the main screenshot.

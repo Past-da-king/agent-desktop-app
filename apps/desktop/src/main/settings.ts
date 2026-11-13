@@ -33,6 +33,7 @@ const STRING_ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
   shell: ['always', 'ask', 'never'],
   voiceName: VOICES.map((voice) => voice.id),
   recordingAudioKeep: ['today', 'week', 'always'],
+  decisionsBackend: ['gemini', 'jev', 'openai', 'llm'],
 }
 
 export class SettingsStore {
@@ -204,6 +205,11 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     const at = Date.parse(clean)
     return Number.isFinite(at) ? localIso(at) : INVALID
   }
+  if (key === 'decisionsThreshold') {
+    const number = typeof value === 'string' ? Number(value.trim()) : value
+    if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
+    return Math.min(0.99, Math.max(0.5, Math.round(number * 100) / 100))
+  }
   if (key === 'gitMaxFileMb') {
     const number = typeof value === 'string' ? Number(value.trim()) : value
     if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
@@ -255,6 +261,16 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     const top = key === 'helperBusyCpu' ? 100 : key === 'watchdogMs' ? 60_000 : 1_000
     return number <= 0 ? 0 : Math.min(top, Math.round(number * 10) / 10)
   }
+
+  // Real input under the input lock: how long he must be still, 3 seconds to 10 minutes.
+  if (key === 'inputLockIdleSeconds') {
+    const number = typeof value === 'string' ? Number(value.trim()) : value
+    if (typeof number !== 'number' || !Number.isFinite(number)) return INVALID
+    return Math.min(600, Math.max(3, Math.round(number)))
+  }
+
+  // Show me how: an account and a model, both '' for automatic.
+  if (key === 'guideModel') return pickFrom(value)
 
   const expected = DEFAULT_SETTINGS[key]
   if (typeof expected === 'boolean') return typeof value === 'boolean' ? value : INVALID

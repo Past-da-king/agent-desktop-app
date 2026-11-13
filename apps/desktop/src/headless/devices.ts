@@ -47,9 +47,13 @@ export function headlessFacts(name: string, version: string, urls: string[], fp:
   }
 }
 
-/** Ready = some AI account can run a turn now: a plan, or an API account with its key. */
+/**
+ * Ready = some AI account can run a turn now: a plan whose login works, or an API account with its key. A plan with
+ * a dead login is not ready (12 Nov 2026): the phone picks the first ready brain, and one that cannot answer must not
+ * be picked.
+ */
 export function canRunTurns(runtime: HeadlessRuntime): boolean {
-  if (runtime.accounts.all().some((a) => a.kind !== 'api' || a.hasKey)) return true
+  if (runtime.accounts.all().some((a) => (a.kind === 'api' ? a.hasKey : runtime.cli.signedIn(a.kind)))) return true
   return runtime.settings.get().hasKey
 }
 

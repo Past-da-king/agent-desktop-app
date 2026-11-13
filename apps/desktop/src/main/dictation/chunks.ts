@@ -1,19 +1,22 @@
 /**
- * A long recording transcribed in pieces: cut at quiet moments into pieces of at most about 30 seconds, a few
- * transcribed at once, joined in order. One call with 90 seconds of audio can take longer than the finishing limit
- * (29 Oct 2026: 74 s and aborted); 30-second pieces come back in a few seconds each.
+ * A long recording transcribed in pieces: cut at quiet moments into pieces of at most about two minutes, a few
+ * transcribed at once, joined in order (11 Nov 2026).
+ *
+ * Pieces used to be 30 seconds, because the words came back through the live model and a long call could outlast the
+ * finishing limit. The speech model reads two minutes in one go in a couple of seconds, and every cut is a place where
+ * a word can be clipped in half or a sentence lose its start, so there are now four times fewer of them.
  */
 import type { BatchResult } from './controller'
 
 const BYTES_PER_SECOND = 16_000 * 2
 /** The longest piece. */
-export const CHUNK_MAX_BYTES = BYTES_PER_SECOND * 30
+export const CHUNK_MAX_BYTES = BYTES_PER_SECOND * 120
 /** How far back from the longest point a quiet moment is looked for. */
-const QUIET_SEARCH_BYTES = BYTES_PER_SECOND * 6
+const QUIET_SEARCH_BYTES = BYTES_PER_SECOND * 10
 /** The step the quiet moment is measured in (100 ms). */
 const FRAME_BYTES = 3200
-/** Pieces at once: quicker than one by one, gentle on the key's quota. */
-const CONCURRENCY = 3
+/** Pieces at once: quicker than one by one, gentle on the key's quota (a free key allows a few calls a minute). */
+const CONCURRENCY = 2
 
 /** Where to cut: offsets (even, in bytes) of each piece's start. A piece is never longer than maxBytes. */
 export function splitAtQuiet(pcm: Buffer, maxBytes = CHUNK_MAX_BYTES, searchBytes = QUIET_SEARCH_BYTES): Buffer[] {

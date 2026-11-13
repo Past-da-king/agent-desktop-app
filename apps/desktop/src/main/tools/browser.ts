@@ -54,12 +54,19 @@ function openTool(deps: BrowserToolDeps): Tool {
       name: 'browser_open',
       description:
         "Open a web address in your own browser, shown in the panel beside the chat. Returns the page outline with numbered elements. The agent may only open normal web pages, never local files or this computer's network.",
-      schema: schema(['url'], {
+      schema: schema([], {
         url: str('URL or domain, for example example.com'),
         new_tab: bool('Open it in a new tab of your own and keep your current one open too'),
+        tab: str('Instead of url: the id of a tab the person handed you (their note names it, for example tab-3), to carry on in that very tab'),
       }),
     },
     run: async (input) => {
+      const handed = text(input['tab']).trim()
+      if (handed !== '' && text(input['url']).trim() === '') {
+        const take = deps.browser.takeHandedTab
+        if (take === undefined) return 'This browser has no tabs handed over by the person. Open the address with url instead.'
+        return call(() => take.call(deps.browser, handed))
+      }
       const raw = text(input['url']).trim()
       if (raw === '') return 'Pass the web address to open.'
       const policy = checkBrowserUrl(raw)

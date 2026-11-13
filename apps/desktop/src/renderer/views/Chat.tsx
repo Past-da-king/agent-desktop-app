@@ -30,6 +30,7 @@ import { useSettings } from '../state/useSettings'
 import { useUi } from '../state/useUi'
 import { useWaiting } from '../state/useWaiting'
 import { toast } from '../state/useToast'
+import { foldLiveHandoffs } from '../lib/live'
 import { CallRow } from '../voice/CallRow'
 import { useCall } from '../voice/useCall'
 import { VisualCard, visualFromMeta } from '../voice/VisualCard'
@@ -259,11 +260,15 @@ const ToolSteps = memo(function ToolSteps({ items, live, idle }: { items: ChatIt
   )
 }, (a, b) => a.live === b.live && a.idle === b.idle && a.items.length === b.items.length && a.items.every((row, i) => sameItem(row, b.items[i] as ChatItem)))
 
+/** The chat is docked beside the browser: the side panel is out of sight, so what needs the person is answered in the chat itself. */
+const ChatDocked = createContext(false)
+
 /** True while the side panel shows its list of what needs the person (it is on screen and not taken by a report or helper). */
 function useSidebarWaiting(): boolean {
   const narrow = useNarrow()
+  const docked = useContext(ChatDocked)
   const panel = usePanel((store) => !store.collapsed && store.report === null && store.helper === null)
-  return panel && !narrow
+  return panel && !narrow && !docked
 }
 
 /**
@@ -963,7 +968,8 @@ const pickThread = rowsSelector(threadRowsOf)
 const pickSteps = rowsSelector(helperStepRowsOf)
 const NO_ROWS: ChatItem[] = []
 
-export function Chat(): JSX.Element {
+/** `dock`: the chat is docked beside the browser (shell/Panel.tsx BrowserStage): it gets a fold button and reads reports in a dialog. */
+export function Chat({ dock }: { dock?: { below: boolean; fold: () => void } } = {}): JSX.Element {
   const settings = useSettings((state) => state.settings)
   const loaded = useEntityLoaded('chat_item')
   const scrollToken = useUi((state) => state.chatScroll)
@@ -974,7 +980,9 @@ export function Chat(): JSX.Element {
   const running = useChatRunning(openChat)
   const [reader, setReader] = useState<ChatItem | null>(null)
   const openReport = usePanel((store) => store.openReport)
-  const narrow = useNarrow()
+  // Docked beside the browser the side panel is out of sight, as on a narrow window.
+  const windowNarrow = useNarrow()
+  const narrow = windowNarrow || dock !== undefined
   const thread = useRef<HTMLDivElement>(null)
   const composer = useRef<ComposerHandle>(null)
   const stuck = useRef(true)
@@ -1022,7 +1030,7 @@ export function Chat(): JSX.Element {
     for (const item of items) if (isSideRun(item)) views.set(item.id, helperView(item, items))
     return views
   }, [items])
-  const segments = useMemo(() => segmentsOf(messages), [messages])
+  const segments = useMemo(() => segmentsOf(foldLiveHandoffs(messages)), [messages])
   // The same name the rail shows for it.
   const title = chatTitleOf(items)
   const cards = openCards(items, true)
@@ -1157,8 +1165,9 @@ export function Chat(): JSX.Element {
   }
 
   return (
+    <ChatDocked.Provider value={dock !== undefined}>
     <div
-      className="chat"
+      className={dock === undefined ? 'chat' : 'chat docked'}
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -1204,6 +1213,9 @@ export function Chat(): JSX.Element {
         >
           <VoiceIcon name="handset" size={22} />
         </button>
+        {dock === undefined ? null : (
+          <IconButton icon={dock.below ? 'chevd' : 'chev'} label="Fold the chat away" size={20} className="dock-fold" onClick={dock.fold} />
+        )}
       </div>
 
       <div
@@ -1346,5 +1358,6 @@ export function Chat(): JSX.Element {
         </div>
       ) : null}
     </div>
+    </ChatDocked.Provider>
   )
 }

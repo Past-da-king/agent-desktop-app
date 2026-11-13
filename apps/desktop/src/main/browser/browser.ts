@@ -18,10 +18,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Script } from 'node:vm'
 
-import { app, BrowserWindow, clipboard as systemClipboard, screen, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard as systemClipboard, Menu, screen, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
 import type { DownloadItem, Session, WebContents, WebPreferences } from 'electron'
 
-import type { BrowserBounds, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
+import type { BrowserBounds, BrowserHandOver, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
+
+import { makeHandOver, pageMenuItems } from './hand-over'
 
 import { Cdp, KEY_NAMES } from './cdp'
 import { emailsIn } from './people'
@@ -68,6 +70,7 @@ import {
   selectFieldScript,
   selectOptionScript,
   snapshotScript,
+  tabScript,
   type Resolved,
 } from './snapshot'
 import type { ActRequest, BrowserDriver, BrowserProDriver, FixRequest, GuideRequest, ViewRequest } from './types'
@@ -75,11 +78,15 @@ import { planWindowOpen, popupSize } from './popup'
 import type { BrowserVault } from '../vault/browser-vault'
 import { attachVaultTo, debuggerLink } from './vault-link'
 import { formatUpload, uploadFiles, type UploadHost, type UploadTarget } from './upload'
-import type { BrandLook } from '../../shared/brand'
+import { brandLook, type BrandLook } from '../../shared/brand'
+import type { AgentCursors } from '../overlay/agent-cursor'
+import { browserCursorAt, cursorLabel } from './agent-cursor-link'
+import { FocusGuard, FORGET_ACTIVE_JS, guardDebugger, HOST_HAS_KEYBOARD_JS, keyToEvents, RESTORE_ACTIVE_JS, SAVE_ACTIVE_JS, type FocusProbe } from './focus-keeper'
 import { formatGuide, GuideRuns, guideShowsFullSize, runGuide, type GuideHost } from './guide'
 import { evaluateIn, FrameSessions } from './guide-host'
 import { GuideLog, TAIL_MS } from './guide-log'
-import { dialogsScript, guideClearScript, guideRestyleScript, pickMarkScript } from './guide-page'
+import { dialogsScript, guideClearScript, guideModeScript, guideRestyleScript, pickMarkScript } from './guide-page'
+import { parseView, PrivateGuide, viewWatchScript, type PrivateOverlay, type ViewInfo } from './guide-private'
 import { alive, ifAlive, whileAlive } from '../alive'
 import { pickTab } from './tab-pick'
 import { siteTabPlan } from './site-tab'
@@ -153,6 +160,13 @@ function appLocale(): string {
 }
 
 const MAX_TABS = 5
+/** How long the agent cursor takes to glide to a click (agent-cursor-page.ts): a click waits for it. */
+const GLIDE_MS = 300
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 const EMPTY_BOUNDS: BrowserBounds = { x: 0, y: 0, width: 0, height: 0, visible: false }
 
 /** A tab whose <webview> the renderer is creating; it becomes a Tab once the guest is handed over. */
@@ -193,13 +207,28 @@ export interface AgentBrowserOptions {
   /** The person closed the tab an agent handed them (browser_handoff), so its waiting question can be answered. */
   onHandoffClosed?: () => void
   maxTabs?: number
+  /** One line for the app's log (the keyboard had to be given back to the chat box). */
+  log?: (message: string, meta: Record<string, unknown>) => void
   onState?: (state: BrowserState) => void
+  /**
+   * Hand a page to the agent (toolbar button, the page's right-click menu): where its note and picture are written,
+   * the name the person gave their agent (for the menu line), and where the result goes (the message box).
+   */
+  handOver?: { root: string; agentName: () => string; deliver: (page: BrowserHandOver) => void }
   openExternal?: (url: string) => Promise<void>
   tempRoot?: string
   /** Where what the browser learns about sites is kept (a JSON file under userData). Null keeps it in memory. */
   sitesFile?: string | null
   /** The app's brand look now (his theme and accent setting): the guide's ring and label are drawn in it. */
   look?: () => BrandLook
+  /**
+   * Guides drawn in a window of their own that screen sharing leaves out (main/overlay/). `on` is his setting and
+   * what this computer can really hide, read live; `overlay` makes one overlay, called only when a ring is first
+   * drawn that way. Without this the page draws the ring itself, as before.
+   */
+  privateGuides?: { on: () => boolean; overlay: () => PrivateOverlay }
+  /** The agent's own cursor (overlay/agent-cursor.ts): shown where a tool acts, so it never needs his pointer. */
+  cursors?: AgentCursors
 }
 
 export class AgentBrowser implements BrowserDriver, BrowserProDriver {
@@ -266,6 +295,10 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** Guides showing now: each restyles its rings when his theme or accent changes (restyleGuides). */
   private readonly liveGuides = new Set<() => Promise<void>>()
   private readonly look: (() => BrandLook) | undefined
+  private readonly privateGuides: AgentBrowserOptions['privateGuides']
+  private readonly cursors: AgentCursors | undefined
+  /** Guides showing now: each moves its drawing into or out of the page when his privacy setting changes. */
+  private readonly livePrivacy = new Set<() => Promise<void>>()
   /** Each tab's frames, cross-site ones included, for the guide (guide-host.ts). */
   private readonly frameSessions = new Map<string, FrameSessions>()
   /** The guided session running on each tab, and who started it. */
@@ -285,6 +318,8 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** Partitions whose session is set up: one header listener and one download handler per session. */
   private readonly sessionsReady = new Set<string>()
   private injectingInput = false
+  /** Gives him back the keyboard whenever a page takes it (focus-keeper.ts); every tab's debugger goes through it. */
+  private readonly focusGuard = new FocusGuard(this.focusProbe())
   private tabSeq = 0
   private shotSeq = 0
   private destroyed = false
@@ -296,6 +331,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
   /** browser_open applies the site's view itself; navigation listeners leave it alone meanwhile. */
   private opening = false
   private expanded = false
+  /** Full screen: the page has the whole screen, with only the browser's toolbar. Only ever on with `expanded`. */
+  private fullScreen = false
+  private readonly handOverTo: AgentBrowserOptions['handOver']
+  private readonly logLine: NonNullable<AgentBrowserOptions['log']>
+  /** Tabs the person handed to the agent (hand-over.ts): an agent may be told to carry on in one of these. */
+  private readonly handedTabs = new Set<string>()
 
   constructor(options: AgentBrowserOptions) {
     // Set by attach() below, which also guards the window's <webview>s.
@@ -305,8 +346,12 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.maxTabs = Math.max(1, options.maxTabs ?? MAX_TABS)
     this.onState = options.onState ?? (() => undefined)
     this.onHandoffClosed = options.onHandoffClosed ?? (() => undefined)
+    this.handOverTo = options.handOver
+    this.logLine = options.log ?? (() => undefined)
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url))
     this.look = options.look
+    this.privateGuides = options.privateGuides
+    this.cursors = options.cursors
 
     const root = options.tempRoot ?? tmpdir()
     this.runDir = mkdtempSync(join(root, 'agent-browser-'))
@@ -507,6 +552,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       needsUser: this.handoffReason !== '',
       handoffReason: this.handoffReason,
       expanded: this.expanded,
+      fullScreen: this.fullScreen && this.expanded,
       muted: this.sites.muted(),
       personPartition: this.current,
       audible: this.tabs.some((tab) => safeAudible(tab.wc)),
@@ -535,6 +581,103 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     if (this.expanded === on) return
     this.expanded = on
     this.emit()
+  }
+
+  /**
+   * Full screen for the browser: the window takes the whole screen and the page keeps only its own toolbar. Turning
+   * it on opens the page over the window first; leaving the browser view by any road leaves full screen too.
+   */
+  setFullScreen(on: boolean): void {
+    if (on && !this.hasPage()) return
+    if (this.fullScreen === on && (!on || this.expanded)) return
+    this.fullScreen = on
+    if (on) this.expanded = true
+    this.windowFullScreen(on)
+    this.emit()
+  }
+
+  private windowFullScreen(on: boolean): void {
+    try {
+      const win = this.window
+      if (win !== null && !win.isDestroyed() && win.isFullScreen() !== on) win.setFullScreen(on)
+    } catch {
+      // A window that cannot go full screen still shows the layout.
+    }
+  }
+
+  /**
+   * The person hands a page to the agent: the tab in front, or the one whose menu was used. Its address, title,
+   * selection, picture and tab id go to the message box (hand-over.ts). False when there is no page to hand over.
+   */
+  async handOverPage(tabId?: string, selection?: string): Promise<boolean> {
+    const to = this.handOverTo
+    const tab = tabId === undefined ? this.shownTab() : (this.tabs.find((each) => each.id === tabId) ?? null)
+    if (to === undefined || tab === null || tab.wc.isDestroyed()) return false
+    const page = await makeHandOver(to.root, {
+      tabId: tab.id,
+      url: safeUrl(tab.wc),
+      title: safeTitle(tab.wc),
+      selection: selection ?? (async () => String(await tab.wc.executeJavaScript('String(window.getSelection ? window.getSelection() : "")', true))),
+      capture: async () => {
+        const image = await withDeadline(tab.wc.capturePage(undefined, { stayHidden: true, stayAwake: true }), 6_000, 'The page capture')
+        return image.isEmpty() ? null : image.toPNG()
+      },
+    })
+    if (page === null) return false
+    this.handedTabs.add(tab.id)
+    try {
+      to.deliver(page)
+    } catch {
+      // A window that is closing has no message box to fill.
+    }
+    return true
+  }
+
+  /**
+   * browser_open with `tab`: the agent carries on in a tab the person handed over. Only a handed tab can be taken,
+   * and the person can take it back at any time, as with any tab an agent drives.
+   */
+  async takeHandedTab(id: string): Promise<string> {
+    const owner = currentOwner()
+    const tab = this.tabs.find((each) => each.id === id)
+    if (tab === undefined || tab.wc.isDestroyed()) return `There is no tab ${id} open. Open the address yourself with browser_open.`
+    if (!this.handedTabs.has(id)) return `The person has not handed ${id} to you. Only a tab they hand over (Hand to you, in the browser) can be taken; open the address yourself with browser_open.`
+    if (owner !== undefined) this.ownerTabs.set(owner, id)
+    // It stays the person's page: no run's end closes it, and the agent cannot close it either (run-tabs.ts).
+    this.runTabs.shared(id)
+    if (this.personTab === id) {
+      this.personTab = null
+      this.handoffReason = ''
+    }
+    for (const each of this.tabs) void this.refreshInputGuard(each)
+    this.emit()
+    return `You are now on ${id}, the tab the person handed you.\n\n${await this.snapshot()}`
+  }
+
+  /** The page's right-click menu: Back, Reload, Copy, Paste and the hand-over, in the person's own tab. */
+  private showPageMenu(tab: Tab, params: Electron.ContextMenuParams): void {
+    const win = this.window
+    if (win === null || win.isDestroyed() || tab.wc.isDestroyed()) return
+    const items = pageMenuItems({
+      agentName: this.handOverTo?.agentName() ?? '',
+      url: safeUrl(tab.wc),
+      canGoBack: tab.wc.navigationHistory.canGoBack(),
+      hasSelection: params.selectionText.trim() !== '',
+      editable: params.isEditable,
+    })
+    const run: Record<string, () => void> = {
+      back: () => tab.wc.navigationHistory.goBack(),
+      reload: () => tab.wc.reload(),
+      copy: () => tab.wc.copy(),
+      paste: () => tab.wc.paste(),
+      'hand-over': () => void this.handOverPage(tab.id, params.selectionText),
+    }
+    const menu = Menu.buildFromTemplate(
+      items
+        .filter((item) => item.id !== 'hand-over' || this.handOverTo !== undefined)
+        .map((item) => (item.id === 'separator' ? { type: 'separator' as const } : { label: item.label, enabled: item.enabled, click: () => run[item.id]?.() })),
+    )
+    menu.popup({ window: win })
   }
 
   /** The person's mute: every tab now and every tab opened later, until they turn it back on. */
@@ -604,6 +747,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     this.frameSessions.delete(tab.id)
     for (const [owner, tabId] of this.ownerTabs) if (tabId === tab.id) this.ownerTabs.delete(owner)
     this.runTabs.forget(tab.id)
+    this.handedTabs.delete(tab.id)
     this.idled.delete(tab.id)
     // A sign-in window the tab opened goes with it: nothing is left running for a page that is gone.
     for (const [popup, opener] of this.popupOpener) {
@@ -710,6 +854,14 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
     }
     host.on('will-attach-webview', onWillAttach)
     this.windowCleanups.push(() => host.removeListener('will-attach-webview', onWillAttach))
+    // Full screen left by the system's own road (a key, the taskbar): the layout follows.
+    const onLeaveFull = (): void => {
+      if (!this.fullScreen) return
+      this.fullScreen = false
+      this.emit()
+    }
+    win.on('leave-full-screen', onLeaveFull)
+    this.windowCleanups.push(() => win.removeListener('leave-full-screen', onLeaveFull))
     this.layout()
     this.emit()
   }
@@ -1092,6 +1244,7 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return 'No page is open yet. Use browser_open with a web address.'
     }
     await this.prepare(tab)
+    await this.showCursor(tab, null, 'upload', 'a file')
     if (!tab.cdp.ensure()) return 'ERROR: The page debugger is busy, so a file cannot be put into the page right now. Nothing was uploaded.'
     const wc = tab.wc
     const devtools = watchDevtools(wc)
@@ -1298,7 +1451,16 @@ ${await this.snapshot()}`
     if (action === 'press') {
       const key = (request.key ?? '').trim()
       if (key === '') return `Pass the key, for example Enter, Tab, Escape, ArrowDown or ctrl+a. Known: ${KEY_NAMES.join(', ')}.`
-      const ok = await this.trusted(tab, async () => tab.cdp.press(key))
+      await this.showCursor(tab, null, 'press', key)
+      // Tab is a focus traversal Chromium hands to the browser, which moves the keyboard off his chat box: by script instead.
+      const tabbed = /^(shift\+)?tab$/i.exec(key)
+      if (tabbed !== null) {
+        const moved = objectOf(await this.run(tab, tabScript(tabbed[1] !== undefined)))
+        await this.settle(200)
+        this.emit()
+        return moved['ok'] === true ? `Pressed ${key}.\n\n${await this.snapshotText(tab, {})}` : String(moved['reason'] ?? 'Nothing took the focus.')
+      }
+      const ok = await this.trusted(tab, async () => tab.cdp.press(key), true)
       if (ok !== true) {
         if (!['Enter', 'Tab', 'Escape'].includes(key)) return `I do not know the key "${key}".`
         this.pressKey(tab, key)
@@ -1325,7 +1487,10 @@ ${await this.snapshot()}`
     if (request.at !== undefined) {
       const at = request.at
       const label = `the point ${Math.round(at.x)},${Math.round(at.y)}`
-      const done = await this.trusted(tab, async () => {
+      await this.showCursor(tab, at, action, label, action !== 'hover' && action !== 'scroll')
+      const done = await this.trusted(
+        tab,
+        async () => {
         if (action === 'drag') {
           if (request.to === undefined) return 'Pass to:{x,y} for a drag.'
           await tab.cdp.drag(at, request.to, this.shotScale(tab))
@@ -1353,7 +1518,9 @@ ${await this.snapshot()}`
           return `Clicked ${label} and typed.`
         }
         return `Clicked ${label}.`
-      })
+        },
+        true,
+      )
       if (typeof done !== 'string') return 'The page did not accept input at that point.'
       await this.settle(450)
       this.emit()
@@ -1391,12 +1558,48 @@ ${await this.snapshot()}`
     }
   }
 
+  /**
+   * The agent's own cursor for one action: glides to where the click or typing goes in the page, with a label of the
+   * step, and follows the page if the window moves. All input still goes in by the debugger, so his pointer, keys and
+   * focus are never used; this is only the drawing. `point` is in page CSS px. Waits for the glide (a moment) so the
+   * click lands where the cursor is; never throws, and does nothing with the cursor switched off.
+   */
+  private async showCursor(tab: Tab, point: { x: number; y: number } | null, action: string, targetLabel: string, pulse = false): Promise<void> {
+    const cursors = this.cursors
+    const win = this.window
+    if (cursors === undefined || win === null || win.isDestroyed() || tab.id === this.personTab) return
+    try {
+      const id = currentOwner() ?? 'person'
+      const label = cursorLabel(action, targetLabel)
+      const owner = id === 'person' ? '' : ownerLabel(id)
+      if (point === null) {
+        cursors.label(id, label)
+        return
+      }
+      const pageWidth = Math.max(1, Number(await withDeadline(this.run(tab, 'innerWidth', 1_500), 2_000).catch(() => 0)) || this.bounds.width)
+      const locate = async (): Promise<ReturnType<typeof browserCursorAt>> => {
+        if (win.isDestroyed()) return null
+        const view = parseView(await withDeadline(win.webContents.executeJavaScript(viewWatchScript(tab.id, '', 50)), 1_500).catch(() => null))
+        const content = win.getContentBounds()
+        return browserCursorAt({ point, pageWidth, view, window: { content: { x: content.x, y: content.y }, zoom: win.webContents.getZoomFactor(), visible: win.isVisible() && !win.isMinimized() } })
+      }
+      await cursors.show(id, { locate, label, who: owner, owner: win })
+      if (pulse) {
+        await sleep(GLIDE_MS)
+        cursors.click(id)
+      }
+    } catch {
+      // A drawing must never stop an action.
+    }
+  }
+
   private async actOn(tab: Tab, target: Resolved, request: ActRequest, scale: number): Promise<string> {
     const wc = tab.wc
     const point = { x: target.x * this.zoomOf(tab), y: target.y * this.zoomOf(tab) }
     const covered = target.covered === '' ? '' : `\nWARNING: ${target.covered} is on top of it, so the click may have landed there. If nothing changed, hide the overlay with browser_fix css or close it first.`
     const action = request.action
     const cdpOk = tab.cdp.ensure()
+    await this.showCursor(tab, point, action, target.label, action !== 'hover' && action !== 'scroll' && action !== 'focus')
 
     if (action === 'select') {
       const option = request.text ?? ''
@@ -1405,7 +1608,7 @@ ${await this.snapshot()}`
       if (picked['ok'] !== true) {
         // Not a native list: open it with a real click, then the option is an element to click by name.
         if (target.tag !== 'select' && cdpOk) {
-          await tab.cdp.click(point, scale)
+          await this.trustedInput(async () => tab.cdp.click(point, scale))
           await this.settle(400)
           return `Opened ${target.label}. Now click the option by name.\n\n${await this.snapshotText(tab, { filter: option })}`
         }
@@ -1456,14 +1659,24 @@ ${await this.snapshot()}`
       const text = request.text ?? ''
       if (target.tag === 'select') return this.actOn(tab, target, { ...request, action: 'select' }, scale)
       if (cdpOk) {
-        await this.trustedInput(async () => tab.cdp.click(point, scale))
-        await this.settle(80)
-        const focused = objectOf(await this.run(tab, selectFieldScript()))
+        // The field takes the page's focus by script, not by a press: a press moves the keyboard off his chat box.
+        let focused = objectOf(await this.run(tab, selectFieldScript()))
+        if (focused['ok'] !== true) {
+          await this.trustedInput(async () => tab.cdp.click(point, scale))
+          await this.settle(80)
+          focused = objectOf(await this.run(tab, selectFieldScript()))
+        }
         if (focused['ok'] !== true && !target.editable) return `${target.label} is not a text field.`
-        await this.trustedInput(async () => {
-          if (text === '') await tab.cdp.press('Delete')
-          else await tab.cdp.insertText(text)
-        })
+        if (text === '') await this.trustedInput(async () => tab.cdp.press('Delete'), true)
+        else {
+          // webContents.insertText goes to this page's focused field whatever holds the keyboard in the window; the debugger's
+          // Input.insertText goes to the window's focused widget, which is his chat box.
+          const inserted = await tab.wc.insertText(text).then(
+            () => true,
+            () => false,
+          )
+          if (!inserted) await this.trustedInput(async () => tab.cdp.insertText(text), true)
+        }
       } else {
         const index = request.index
         if (index === undefined) return 'Typing by name needs the page debugger, which is busy. Use the element number.'
@@ -1477,7 +1690,7 @@ ${await this.snapshot()}`
         await this.trustedInput(async () => {
           if (cdpOk) await tab.cdp.press('Enter')
           else this.pressKey(tab, 'Enter')
-        })
+        }, true)
         await this.settle(600)
         this.emit()
         return `Typed into ${target.label} and pressed Enter.${mismatch}\n\n${await this.snapshotText(tab, {})}`
@@ -1578,17 +1791,29 @@ ${await this.snapshot()}`
         link.onEvent((method, params) => {
           if (method === 'Page.javascriptDialogOpening') listener(String(params['message'] ?? ''))
         }),
+      onReport: (listener) => sessions.onReport(listener),
       loading: () => alive(wc) && wc.isLoading(),
       ready: (ms) => this.waitForDom(tab, ms),
     }
+    // Drawn in a window of its own when his setting says so, so a screen share never shows the ring.
+    const privately = this.privateGuide(tab, sessions)
     const lookNow = this.look
     const restyle = async (): Promise<void> => {
       if (lookNow === undefined || !alive(wc)) return
       const look = lookNow()
+      privately?.surface.refresh()
       const all = await withDeadline(sessions.frames(), 2_000).catch(() => [])
       await Promise.all(all.map((frame) => withDeadline(evaluateIn(sessions, frame.key, guideRestyleScript(look)), 2_000).catch(() => undefined)))
     }
     this.liveGuides.add(restyle)
+    const reprivate = async (): Promise<void> => {
+      if (privately === null || !alive(wc)) return
+      const outside = privately.surface.outside()
+      const all = await withDeadline(sessions.frames(), 2_000).catch(() => [])
+      await Promise.all(all.map((frame) => withDeadline(evaluateIn(sessions, frame.key, guideModeScript(outside)), 2_000).catch(() => undefined)))
+      privately.surface.refresh()
+    }
+    this.livePrivacy.add(reprivate)
     try {
       const timeoutMs = request.timeoutMs
       const result = await runGuide(host, request.steps, {
@@ -1596,6 +1821,7 @@ ${await this.snapshot()}`
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         signal: entry.abort.signal,
         token: session.id,
+        ...(privately === null ? {} : { surface: privately.surface }),
         clipboard: { read: () => systemClipboard.readText(), write: (text) => systemClipboard.writeText(text), clear: () => systemClipboard.clear() },
         pasteKey: process.platform === 'darwin' ? 'Cmd+V' : 'Ctrl+V',
         onStep: (event) => {
@@ -1626,6 +1852,9 @@ ${await this.snapshot()}`
       return formatGuide(result, session.id)
     } finally {
       this.liveGuides.delete(restyle)
+      this.livePrivacy.delete(reprivate)
+      // The overlay window goes with the guide, whatever ended it (done, skip, tab closed, run end, a newer guide).
+      privately?.stop()
       signal?.removeEventListener('abort', onOuter)
       this.guiding.finish(entry)
       if (alive(wc)) {
@@ -1640,6 +1869,87 @@ ${await this.snapshot()}`
   /** His theme or accent changed: a ring showing now takes the new look at once (the next one is drawn in it anyway). */
   async restyleGuides(): Promise<void> {
     await Promise.all([...this.liveGuides].map((restyle) => restyle().catch(() => undefined)))
+  }
+
+  /** His "hide guides from screen sharing" setting changed: a ring showing now moves into or out of the page at once. */
+  async refreshGuidePrivacy(): Promise<void> {
+    await Promise.all([...this.livePrivacy].map((apply) => apply().catch(() => undefined)))
+  }
+
+  /**
+   * The private drawing of one guide (guide-private.ts): keeps track of where the tab's page is in the app window
+   * and of the window itself, for as long as the guide runs. Null when private guides are not set up.
+   */
+  private privateGuide(tab: Tab, sessions: FrameSessions): { surface: PrivateGuide; stop: () => void } | null {
+    const options = this.privateGuides
+    const win = this.window
+    if (options === undefined || win === null || win.isDestroyed()) return null
+    let view: ViewInfo | null = null
+    let stopped = false
+    let topKey: string | null = null
+    const surface = new PrivateGuide({
+      outside: () => !stopped && options.on(),
+      overlay: options.overlay,
+      owner: win,
+      view: () => view,
+      window: () => {
+        try {
+          if (win.isDestroyed()) return null
+          const content = win.getContentBounds()
+          return { content: { x: content.x, y: content.y }, zoom: win.webContents.getZoomFactor(), visible: win.isVisible() && !win.isMinimized() }
+        } catch {
+          return null
+        }
+      },
+      look: () => this.look?.() ?? brandLook(),
+      frameBox: async (frame) => {
+        const box = await withDeadline(sessions.frameBox(frame.key), 2_000).catch(() => null)
+        if (box === null) return null
+        if (topKey === null) topKey = (await withDeadline(sessions.frames(), 2_000).catch(() => [])).find((each) => each.top)?.key ?? null
+        if (topKey === null) return null
+        const width = Number(
+          await withDeadline(evaluateIn(sessions, topKey, 'innerWidth'), 2_000).catch(() => {
+            topKey = null
+            return Number.NaN
+          }),
+        )
+        return Number.isFinite(width) && width > 0 ? { ...box, pageWidth: width } : null
+      },
+    })
+    // Where the page's view is in the window, heard in the frame it changes (the script waits for a change).
+    const watch = async (): Promise<void> => {
+      let prev = ''
+      while (!stopped && !win.isDestroyed()) {
+        if (!options.on()) {
+          prev = ''
+          await this.settle(300)
+          continue
+        }
+        const text = await withDeadline(win.webContents.executeJavaScript(viewWatchScript(tab.id, prev, 1_000)) as Promise<unknown>, 4_000).catch(() => null)
+        if (stopped) return
+        if (typeof text !== 'string') {
+          await this.settle(250)
+          continue
+        }
+        prev = text
+        view = parseView(text)
+        surface.refresh()
+      }
+    }
+    void watch().catch(() => undefined)
+    const onWindow = (): void => surface.refresh()
+    const events = ['move', 'resize', 'minimize', 'restore', 'show', 'hide', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen'] as const
+    for (const name of events) win.on(name as 'move', onWindow)
+    return {
+      surface,
+      stop: () => {
+        stopped = true
+        ifAlive('private guide off', () => {
+          if (!win.isDestroyed()) for (const name of events) win.removeListener(name as 'move', onWindow)
+        })
+        surface.dispose()
+      },
+    }
   }
 
   /** Hands the tab to the person for the guide and shows it to them; the returned function hands it back. */
@@ -1753,6 +2063,9 @@ ${await this.snapshot()}`
     // Chromium only runs such scripts while the Page domain is on.
     if (tab.ready) {
       await tab.cdp.send('Page.enable').catch(() => undefined)
+      // The page believes it has focus, so it never asks the browser for the real one (no activation, no taking the
+      // keyboard from another app or from the chat box). Never `Page.bringToFront`.
+      await tab.cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined)
       await tab.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: PRESENCE_SCRIPT }).catch(() => undefined)
       // The guide keeps every cross-site frame's session from the start, so none is missed when the Vault turns
       // auto-attach on just below.
@@ -1956,24 +2269,61 @@ ${await this.snapshot()}`
   }
 
 
-  private async trusted<T>(tab: Tab, action: () => Promise<T>): Promise<T | null> {
+  private async trusted<T>(tab: Tab, action: () => Promise<T>, keysToo = false): Promise<T | null> {
     if (!tab.cdp.ensure()) return null
     try {
-      return await this.liftGuard(tab, async () => this.trustedInput(action))
+      return await this.liftGuard(tab, async () => this.trustedInput(action, keysToo))
     } catch {
       return null
     }
   }
 
-  private async trustedInput<T>(action: () => Promise<T>): Promise<T> {
+  private async trustedInput<T>(action: () => Promise<T>, keysToo = false): Promise<T> {
     this.injectingInput = true
     const tab = this.activeTab()
     if (tab !== null) this.lastGesture.set(tab.id, Date.now())
     try {
-      return await action()
+      return await this.focusGuard.burst(() => tab?.wc.focus(), action, 'input', { keys: keysToo }) // grab: the page takes the keys of this burst, then it all goes back
     } finally {
       this.injectingInput = false
     }
+  }
+
+  /** What focus-keeper.ts needs to know about the app window: it asks the page, and gives the keyboard back. */
+  private focusProbe(): FocusProbe {
+    const live = (): BrowserWindow | null => (this.window !== null && !this.window.isDestroyed() ? this.window : null)
+    return {
+      // AGENT_FOCUS_PROBE_FOCUSED=1 (the focus proof, which runs the app off his screen without taking his focus) says it is the window he is in.
+      appFocused: () => live()?.isFocused() === true || process.env['AGENT_FOCUS_PROBE_FOCUSED'] === '1',
+      hostHasKeyboard: async () => (await live()?.webContents.executeJavaScript(HOST_HAS_KEYBOARD_JS)) === true,
+      saveActive: async () => {
+        await live()?.webContents.executeJavaScript(SAVE_ACTIVE_JS)
+      },
+      restoreHost: async () => {
+        const w = live()
+        if (w === null) return
+        w.webContents.focus()
+        await w.webContents.executeJavaScript(RESTORE_ACTIVE_JS)
+      },
+      replay: async (keys) => {
+        const w = live()
+        if (w === null) return
+        for (const key of keys) for (const event of keyToEvents(key)) w.webContents.sendInputEvent(event)
+      },
+      forgetActive: async () => {
+        await live()?.webContents.executeJavaScript(FORGET_ACTIVE_JS)
+      },
+      note: (what, detail) => this.logLine(what, detail),
+    }
+  }
+
+  /** The focus proof (focus-probe.ts) reads these: is a click of the agent holding the keyboard in the page now, and how often it went back. */
+  keyboardHeldByPage(): boolean {
+    return this.focusGuard.isHolding()
+  }
+
+  keyboardGivenBack(): { fired: number; swallowed: number; replayed: number } {
+    return { fired: this.focusGuard.fired, swallowed: this.focusGuard.swallowed, replayed: this.focusGuard.replayed }
   }
 
   setAgentDriving(on: boolean, reason = ''): void {
@@ -2016,7 +2366,8 @@ ${await this.snapshot()}`
       const tab = id === undefined ? undefined : this.tabs.find((item) => item.id === id)
       // An agent that has not opened a page of its own has none: it never borrows another agent's tab, and a
       // tab from another profile's sign-ins is not reused either (the next open makes one in the right profile).
-      const usable = tab !== undefined && tab.partition === this.partitionNow() ? tab : null
+      // A tab the person handed over is the one exception: it keeps the sign-ins it was handed over with.
+      const usable = tab !== undefined && (tab.partition === this.partitionNow() || this.handedTabs.has(tab.id)) ? tab : null
       // Browsing again: its run is live, so its tabs are not due to close (the main agent's next turn).
       this.runTabs.used(owner)
       if (usable !== null) this.wakeTab(usable)
@@ -2260,6 +2611,7 @@ ${await this.snapshot()}`
       siteCss: [],
     }
     tab.cdp.guest = view === null
+    guardDebugger(wc.debugger, this.focusGuard)
     this.tabs.push(tab)
     this.wireTab(tab)
     if (view !== null) this.sizeOffscreen(tab)
@@ -2365,14 +2717,35 @@ ${await this.snapshot()}`
     wc.on(
       'before-input-event',
       whileAlive(wc, 'tab key', (event: Electron.Event, input: Electron.Input) => {
-        // Escape shrinks the full-size page back into the panel, as the bar says.
-        if (this.expanded && input.type === 'keyDown' && input.key === 'Escape' && !input.shift && !input.control && !input.alt && !input.meta) {
+        const plain = input.type === 'keyDown' && !input.shift && !input.control && !input.alt && !input.meta
+        // F11, as in every browser: full screen and back, from inside the page too.
+        if (plain && input.key === 'F11') {
           event.preventDefault()
-          this.setExpanded(false)
+          this.setFullScreen(!(this.fullScreen && this.expanded))
+          return
+        }
+        // Escape leaves full screen first; then it shrinks the full-size page back into the panel, as the bar says.
+        if (this.expanded && plain && input.key === 'Escape') {
+          event.preventDefault()
+          if (this.fullScreen) this.setFullScreen(false)
+          else this.setExpanded(false)
           return
         }
         // A key the agent sends itself must still reach the page.
-        if (tab.id !== this.personTab && !this.injectingInput) event.preventDefault()
+        if (tab.id !== this.personTab && !this.injectingInput) {
+          event.preventDefault()
+          return
+        }
+        // A real key of his that lands in the page while a click of the agent holds the keyboard goes to the chat box instead.
+        if (tab.id !== this.personTab && (input.type === 'keyDown' || input.type === 'keyUp') && this.focusGuard.swallow({ type: input.type, key: input.key, shift: input.shift, control: input.control, alt: input.alt, meta: input.meta })) event.preventDefault()
+      }),
+    )
+
+    // Right-click in a page the person is using: the browser's own short menu, with the hand-over.
+    wc.on(
+      'context-menu',
+      whileAlive(wc, 'tab menu', (_event: Electron.Event, params: Electron.ContextMenuParams) => {
+        if (tab.id === this.personTab) this.showPageMenu(tab, params)
       }),
     )
 
@@ -2443,6 +2816,8 @@ ${await this.snapshot()}`
     const size = popupSize(features)
     const child = new BrowserWindow({
       ...options,
+      // Shown only by ready-to-show below, and then without taking his focus.
+      show: false,
       parent: this.window ?? undefined,
       width: size.width,
       height: size.height,
@@ -2501,8 +2876,14 @@ ${await this.snapshot()}`
     child.once(
       'ready-to-show',
       whileAlive(child, 'popup show', () => {
-        child.show()
-        child.focus()
+        // Never takes his window focus: a sign-in window an AGENT's click opened is shown behind whatever he is
+        // doing (showInactive); only a window his own click opened is brought forward and focused.
+        if (this.personTab === opener.id) {
+          child.show()
+          child.focus()
+        } else {
+          child.showInactive()
+        }
       }),
     )
     return wc
@@ -2613,13 +2994,15 @@ ${await this.snapshot()}`
   private pressKey(tab: Tab, key: string): void {
     const wc = tab.wc
     this.injectingInput = true
-    try {
-      wc.sendInputEvent({ type: 'keyDown', keyCode: key })
-      if (key.length === 1) wc.sendInputEvent({ type: 'char', keyCode: key })
-      wc.sendInputEvent({ type: 'keyUp', keyCode: key })
-    } finally {
-      this.injectingInput = false
-    }
+    void this.focusGuard.around(async () => {
+      try {
+        wc.sendInputEvent({ type: 'keyDown', keyCode: key })
+        if (key.length === 1) wc.sendInputEvent({ type: 'char', keyCode: key })
+        wc.sendInputEvent({ type: 'keyUp', keyCode: key })
+      } finally {
+        this.injectingInput = false
+      }
+    }, 'sendInputEvent')
   }
 
   private async waitForLoad(tab: Tab, timeoutMs = 5_000): Promise<void> {
@@ -2644,6 +3027,11 @@ ${await this.snapshot()}`
   }
 
   private emit(): void {
+    // The browser view closed (Escape, Done, the tab closed) while full screen: the window comes back with it.
+    if (this.fullScreen && !this.expanded) {
+      this.fullScreen = false
+      this.windowFullScreen(false)
+    }
     try {
       this.onState(this.state())
     } catch {

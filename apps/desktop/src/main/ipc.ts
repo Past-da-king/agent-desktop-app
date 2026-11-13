@@ -68,7 +68,7 @@ import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
 import type { SettingsStore } from './settings'
 import { CHANNELS, EVENTS } from '../shared/channels'
-import { messageOrigin } from './devices/origin'
+import { messageOrigin, originWithLive } from './devices/origin'
 import { dismissCard } from './runtime/card-dismiss'
 import type { MessageOrigin } from './devices/types'
 
@@ -140,6 +140,9 @@ export interface BrowserControl {
   /** Optional so older fakes keep compiling; AgentBrowser has it. */
   setViewMode?(mode: BrowserViewMode): Promise<void>
   setExpanded?(on: boolean): void
+  setFullScreen?(on: boolean): void
+  /** The person hands the page in front to the agent; true when there was a page to hand over. */
+  handOverPage?(): Promise<boolean>
   frame?(): Promise<string | null>
   personOpen?(address: string): Promise<void>
   personNewTab?(): void
@@ -471,7 +474,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     const text = requireString(rawText, 'message', MAX_MESSAGE)
     const attachments = requireAttachments(rawAttachments)
     const target = optionalChat(rawChat)
-    const origin = messageOrigin(event)
+    const origin = originWithLive(messageOrigin(event), rawOptions)
     // A reply on a project's card: to that project chat, and its answer back to the chat the card is in.
     const replyIn = typeof rawOptions === 'object' && rawOptions !== null ? optionalChat((rawOptions as Record<string, unknown>)['replyIn']) : undefined
     if (replyIn !== undefined && target !== undefined && deps.chat !== undefined) {
@@ -492,7 +495,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     const attachments = requireAttachments(input['attachments'] ?? [])
     const target = optionalChat(input['chat'])
     const replyIn = optionalChat(input['replyIn'])
-    const origin = messageOrigin(event)
+    const origin = originWithLive(messageOrigin(event), input)
     return sendOnceGate(
       { sendId: input['sendId'], sentAt: input['sentAt'], fresh: input['fresh'] === true, isOpen: wireOf(event)?.isOpen },
       async () => {
@@ -678,6 +681,11 @@ export function registerIpc(deps: IpcDeps): () => void {
     if (typeof rawOn !== 'boolean') throw new Error('expanded must be true or false')
     deps.browser?.setExpanded?.(rawOn)
   })
+  handle(CHANNELS.browser.setFullScreen, async (_event, rawOn) => {
+    if (typeof rawOn !== 'boolean') throw new Error('full screen must be true or false')
+    deps.browser?.setFullScreen?.(rawOn)
+  })
+  handle(CHANNELS.browser.handOver, async () => (await deps.browser?.handOverPage?.()) ?? false)
   handle(CHANNELS.browser.openInSystem, async () => {
     await deps.browser?.openInSystem()
   })

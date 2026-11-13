@@ -13,6 +13,9 @@ const servedByNode = document.querySelector('meta[name="agent-remote"]') !== nul
 export const agent: AgentApi =
   window.agent ?? (servedByNode ? await (await import('./remote')).createRemoteAgent() : (await import('./mock')).mockAgent)
 
+// The browser preview only: the screenshot script drives the scripted call through the same bridge (scripts/shoot.mjs).
+if (window.agent === undefined) (window as unknown as { __previewAgent?: AgentApi }).__previewAgent = agent
+
 /**
  * Chat is the real main-process runner in Electron and the demo echo in the browser preview. A message sent
  * without naming a chat goes to the chat on screen.
