@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { withNo } from '../../shared/ask-options'
 import { chat } from '../bridge'
+import { cardFailText } from '../lib/cards'
 import { openChat } from '../lib/chat-actions'
 import { chatOf } from '../lib/chats'
 import { metaStrings, metaText, parseMeta } from '../lib/meta'
@@ -48,15 +49,17 @@ export function WaitingCard({ item, source, onOpen }: { item: ChatItem; source: 
   // The exact thing being approved (the command, the message, the list), not only its one-line summary.
   const details = approval ? metaText(meta, 'details').trim() : ''
   const [failed, setFailed] = useState(false)
+  const [failText, setFailText] = useState('')
 
   const act = (run: () => Promise<unknown>): void => {
     if (sending) return
     setSending(true)
     setFailed(false)
-    void run().catch(() => {
+    void run().catch((error: unknown) => {
       // The answer did not get through: the card says so and can be pressed again.
       setSending(false)
       setFailed(true)
+      setFailText(cardFailText(error))
     })
   }
 
@@ -79,7 +82,7 @@ export function WaitingCard({ item, source, onOpen }: { item: ChatItem; source: 
       ) : null}
       {failed ? (
         <div className="ny-fail" role="alert">
-          That did not go through. Try again.
+          {failText || 'That did not go through. Try again.'}
         </div>
       ) : null}
       <div className="ny-acts">

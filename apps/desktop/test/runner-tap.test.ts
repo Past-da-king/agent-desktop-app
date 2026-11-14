@@ -54,7 +54,7 @@ describe('Runner.tap', () => {
     expect(rows.filter((row) => row.kind === 'user')).toHaveLength(0)
     expect(rows.some((row) => row.kind === 'agent' && row.text === 'Added the Orbit M3 to your cart.')).toBe(true)
     const tapped = rows.find((row) => row.id === card.id)
-    expect(JSON.parse(tapped?.meta ?? '{}')).toEqual({ taps: ['Add to cart\n↳ Orbit M3 · sku: DM-1001'] })
+    expect(JSON.parse(tapped?.meta ?? '{}')).toMatchObject({ taps: ['Add to cart\n↳ Orbit M3 · sku: DM-1001'] })
 
     const body = JSON.stringify(fake.requests[0]?.body ?? {})
     expect(body).toContain('[The user tapped \\"Add to cart\\" on a card you drew.')

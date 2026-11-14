@@ -110,10 +110,11 @@ export interface ChatRunner {
   states?(): ChatRunInfo[]
   /** A new chat with the history up to this message. */
   branch?(itemId: string): Promise<string>
-  answer(itemId: string, answer: string): Promise<void>
-  decide(itemId: string, decision: Decision): Promise<void>
-  /** A button tap on an agent card, heard by the agent quietly. */
-  tap(itemId: string, label: string, message: string): Promise<void>
+  /** `by`: the device the answer came from (devices/origin.ts name), kept on the card as who answered first. */
+  answer(itemId: string, answer: string, by?: string): Promise<void>
+  decide(itemId: string, decision: Decision, by?: string): Promise<void>
+  /** A button tap on an agent card, heard by the agent quietly. `tapId`: the client's id for this one tap (retries repeat it). */
+  tap(itemId: string, label: string, message: string, tapId?: string): Promise<void>
   /** Optional: only the real runner can drive an installed AI tool. */
   checkCli?(accountId?: string): Promise<{ ok: boolean; message: string }>
   cliLogin?(accountId?: string): Promise<{ ok: boolean; message: string }>
@@ -533,25 +534,28 @@ export function registerIpc(deps: IpcDeps): () => void {
     return chat.branch(id)
   })
 
-  handle(CHANNELS.chat.answer, async (_event, rawId, rawAnswer) => {
+  handle(CHANNELS.chat.answer, async (event, rawId, rawAnswer) => {
     const id = requireString(rawId, 'card id', MAX_STRING)
     const answer = requireString(rawAnswer, 'answer', MAX_ANSWER)
-    await chat.answer(id, answer)
+    await chat.answer(id, answer, messageOrigin(event)?.name ?? 'this computer')
   })
 
-  handle(CHANNELS.chat.decide, async (_event, rawId, rawDecision) => {
+  handle(CHANNELS.chat.decide, async (event, rawId, rawDecision) => {
     const id = requireString(rawId, 'card id', MAX_STRING)
     if (rawDecision !== 'approve' && rawDecision !== 'decline') {
       throw new Error('decision must be approve or decline')
     }
-    await chat.decide(id, rawDecision)
+    // Who decided is kept on the card (decisionBy): the first decision wins and a later one is told by whom.
+    await chat.decide(id, rawDecision, messageOrigin(event)?.name ?? 'this computer')
   })
 
-  handle(CHANNELS.chat.tap, async (_event, rawId, rawLabel, rawMessage) => {
+  handle(CHANNELS.chat.tap, async (_event, rawId, rawLabel, rawMessage, rawTapId) => {
     const id = requireString(rawId, 'message id', MAX_STRING)
     const label = requireString(rawLabel, 'button label', MAX_STRING)
     const message = requireString(rawMessage, 'tap', MAX_ANSWER)
-    await chat.tap(id, label, message)
+    // Optional: an old client sends none (runtime/card-claim.ts falls back to a short duplicate window).
+    const tapId = typeof rawTapId === 'string' ? rawTapId.slice(0, 100) : ''
+    await chat.tap(id, label, message, tapId)
   })
 
   // ---- routines ----
