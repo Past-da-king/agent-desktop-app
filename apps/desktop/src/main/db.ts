@@ -106,6 +106,21 @@ const LIST_SLICE_ROWS = 1000
 /** Longest stretch of store calls before the event loop gets a turn (Store.turn). */
 const STORE_SLICE_MS = 30
 
+/**
+ * A write reached a row that was deleted (its tombstone is still there). A write that only updates a row must never
+ * bring a deleted row back: the caller catches this and drops its write. Bringing a row back is a decision, made
+ * with `upsert(entity, row, { restore: true })`.
+ */
+export class RowDeletedError extends Error {
+  constructor(
+    readonly entity: string,
+    readonly rowId: string,
+  ) {
+    super(`The ${entity} ${rowId} was deleted.`)
+    this.name = 'RowDeletedError'
+  }
+}
+
 export const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule', 'wakeup', 'miniapp']
 
 /** Versions kept per memory page; the oldest go first. */
@@ -572,7 +587,7 @@ export class Store implements SyncStore {
 
   // ---- writing ----
 
-  async upsert<E extends EntityName>(entity: E, input: RowInput<E>): Promise<EntityMap[E]> {
+  async upsert<E extends EntityName>(entity: E, input: RowInput<E>, options: { restore?: boolean } = {}): Promise<EntityMap[E]> {
     this.assertEntity(entity)
     await this.turn()
     const raw = input as Record<string, unknown>
@@ -580,15 +595,18 @@ export class Store implements SyncStore {
     const id = typeof suppliedId === 'string' && suppliedId !== '' ? suppliedId : randomUUID()
     const existing = this.readRow(entity, id)
     const timestamp = this.now()
+    // A deleted row stays deleted: a write that carries an id it read earlier (a snapshot taken before the delete)
+    // must not bring it back. Only an explicit restore does, and it starts from a clean row, not the deleted one.
+    if (existing !== null && existing.deleted && options.restore !== true) throw new RowDeletedError(entity, id)
 
     const payload: Record<string, unknown> = { ...defaultsFor(entity) }
-    if (existing !== null) Object.assign(payload, existing.payload)
+    if (existing !== null && !existing.deleted) Object.assign(payload, existing.payload)
     for (const [key, value] of Object.entries(raw)) {
       if (key === 'id' || value === undefined) continue
       // No vault value is ever written into a synced row (vault/redact.ts): chat items, turns, memory, tasks.
       payload[key] = redactDeep(value)
     }
-    if (existing === null && typeof payload.createdAt !== 'number') payload.createdAt = timestamp
+    if ((existing === null || existing.deleted) && typeof payload.createdAt !== 'number') payload.createdAt = timestamp
     if (UPDATED_AT_ENTITIES.has(entity)) payload.updatedAt = timestamp
 
     const writer = currentWriter()

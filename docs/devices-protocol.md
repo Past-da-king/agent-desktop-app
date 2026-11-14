@@ -341,7 +341,7 @@ so both apps keep working alone.
   brain that placed it), `post`, `chatstop` (a project chat). `status` sent, then done by the receiver. Handled
   messages are removed after a day.
 - `kind: claim`: `chat-<chatId>` = which brain runs a project chat (`device`) and who placed it (`from`);
-  `routine-<triggerId>@<lastRunAt>` = which brain runs that slot of a routine.
+  `routine-<triggerId>@<slot>` = which brain runs that slot of a routine, with a fencing token in `info`.
 
 **Helpers.** `delegate` (task field `device`: best, here, or a brain by name) asks `place()`. Placed elsewhere, the
 helper row is written here with `placedBy`, `runOn`, `runsOnName`, and a `start` goes to that brain. That brain adopts
@@ -369,9 +369,11 @@ stays). Messages into a placed chat (`project_chat_send`, the person typing in i
 `message_main` comes back to the placing brain as `post` into the main chat; Stop sends `chatstop`. The chat shows as
 running here while its turn lease runs there.
 
-**Routines.** Every brain holds the same routines, so a due slot runs on exactly one: the brain the routine's prompt
-would be placed on (field `device` on the routine, else best) claims it at once; any other brain waits 90 s and
-claims it only if nobody did; the newest claim wins after a 2.5 s settle. Run now runs where it was pressed.
+**Routines.** Every brain holds the same routines, so a due slot runs on exactly one: the slot's home brain (field
+`device` on the routine, else a server before a computer) is its authority and claims it at once with a fencing token;
+another brain stands in only after every brain ahead of it has been silent for 15 minutes. The claim is checked before
+the run starts, and the slot key (`<routine id>@<slot>`) goes into the run so outside effects can dedupe. Run now runs
+where it was pressed. What happens when brains are cut off, and how catch-up works: [devices-routine-claims.md](devices-routine-claims.md).
 
 ## 10. Overlay network (optional, pluggable)
 

@@ -614,7 +614,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       return { text: resultLine(await theMemory.runNow()), waiting: false }
     },
     runEvent: async (trigger) => router.runNow(trigger),
-    claim: (trigger) => wire.claimRoutine(trigger),
+    claim: async (trigger, slotKey) => (await wire.claimRoutine(trigger, slotKey)) ?? false,
     precheck: decisions.precheck,
   })
   if (options.quiet !== true) {

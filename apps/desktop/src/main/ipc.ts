@@ -456,7 +456,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     if (entity === 'trigger') row = await guardRoutineWrite(store, row)
     if (entity === 'project') row = withSafeIcon(withKnownPicks(row, deps))
     // A memory page changed in the window is the person's own edit (memory/history.ts).
-    const saved = await asWriter('you', undefined, () => store.upsert(entity, row as RowInput<EntityName>))
+    const saved = await asWriter('you', undefined, () => store.upsert(entity, row as RowInput<EntityName>, { restore: true }))
     account.nudge()
     return saved
   })
