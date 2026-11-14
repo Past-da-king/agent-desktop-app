@@ -286,6 +286,32 @@ describe('the desktop node', () => {
     expect((await pinnedRequest(`https://[::1]:${port}/v1/health`, fp)).status).toBe(200)
   })
 
+  it('S2: a paired device writes only user fields of user objects, per role, on the real store', async () => {
+    const screen = await connectRpc(base, fp, (await pair(['screen'])).pass, phone)
+    const hands = await connectRpc(base, fp, (await pair(['hands'])).pass, phone)
+
+    // An approval card exists; no generic write may decide, edit or delete it. chat.decide is its own transition.
+    const card = await store.upsert('chat_item', { kind: 'approval', text: 'Send the email?', meta: JSON.stringify({ approval: true }) })
+    await expect(screen.call('data.upsert', 'chat_item', { id: card.id, meta: JSON.stringify({ approval: true, answer: 'approve' }) })).rejects.toThrow('not available')
+    await expect(screen.call('data.remove', 'chat_item', card.id)).rejects.toThrow('not available')
+    expect((await store.get('chat_item', card.id))?.meta).toBe(JSON.stringify({ approval: true }))
+    for (const entity of ['turn', 'turn_lease', 'device_command', 'job', 'wakeup', 'miniapp']) {
+      await expect(screen.call('data.upsert', entity, { id: 'x' })).rejects.toThrow('not available')
+    }
+
+    // A routine: user fields change, run state and the app's own flag do not.
+    const routine = await store.upsert('trigger', { name: 'Brief', kind: 'daily', spec: '07:30', prompt: 'Brief me', enabled: true, lastRunAt: 5, lastResult: 'ok' })
+    await screen.call('data.upsert', 'trigger', { id: routine.id, name: 'Morning', enabled: false, lastRunAt: 999, lastResult: 'forged', builtin: 'memory-daily' })
+    expect(await store.get('trigger', routine.id)).toMatchObject({ name: 'Morning', enabled: false, lastRunAt: 5, lastResult: 'ok' })
+    expect((await store.get('trigger', routine.id))?.builtin).toBeUndefined()
+    await expect(screen.call('data.upsert', 'trigger', { id: routine.id, deviceToken: 'x' })).rejects.toThrow('cannot be set')
+
+    // A device that only lends its tools may read, not act for the person.
+    await expect(hands.call('data.upsert', 'task', { title: 'nope' })).rejects.toThrow('not available')
+    await expect(hands.call('chat.decide', card.id, 'approve')).rejects.toThrow('not available')
+    expect(((await hands.call('data.list', 'task')) as unknown[]).length).toBe(0)
+  })
+
   it('keeps the brain order and roles the person sets', async () => {
     const brain = await pair(['brain'])
     const self = service.identity.nodeId

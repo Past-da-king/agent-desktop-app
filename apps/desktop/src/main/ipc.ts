@@ -49,6 +49,7 @@ import { isIconImage } from '../shared/project-icon'
 import { feedState } from './devices/feed-state'
 import { changesForPhone, isPhoneListOpts, listForPhone } from './devices/phone-reads'
 import { wireOf } from './devices/registry'
+import { checkRemoteRemove, checkRemoteUpsert } from './devices/rpc-policy'
 import { DEVICE_CHANNELS } from '../shared/device-channels'
 import { rememberCards, trimHelperRow } from '../shared/device-feed'
 import { DEVICE_CHAT_ROWS, boundRows, isLiveHelper, isOpenCard } from '../shared/device-list'
@@ -450,9 +451,12 @@ export function registerIpc(deps: IpcDeps): () => void {
     return store.get(entityArg(rawEntity), requireString(rawId, 'id', MAX_STRING))
   })
 
-  handle(CHANNELS.data.upsert, async (_event, rawEntity, rawRow) => {
-    const entity = entityArg(rawEntity)
-    let row = requireObject(rawRow, 'row')
+  handle(CHANNELS.data.upsert, async (event, rawEntity, rawRow) => {
+    // A write from another device only ever touches what a person edits by hand, field by field (devices/rpc-policy.ts):
+    // checked here too, so no way in (the RPC door, the headless node, a future caller) skips it.
+    const remote = wireOf(event) !== null ? checkRemoteUpsert(rawEntity, rawRow) : null
+    const entity = entityArg(remote === null ? rawEntity : remote.entity)
+    let row = requireObject(remote === null ? rawRow : remote.row, 'row')
     if (entity === 'trigger') row = await guardRoutineWrite(store, row)
     if (entity === 'project') row = withSafeIcon(withKnownPicks(row, deps))
     // A memory page changed in the window is the person's own edit (memory/history.ts).
@@ -461,7 +465,8 @@ export function registerIpc(deps: IpcDeps): () => void {
     return saved
   })
 
-  handle(CHANNELS.data.remove, async (_event, rawEntity, rawId) => {
+  handle(CHANNELS.data.remove, async (event, rawEntity, rawId) => {
+    if (wireOf(event) !== null) checkRemoteRemove(rawEntity, rawId)
     const entity = entityArg(rawEntity)
     const id = requireString(rawId, 'id', MAX_STRING)
     await asWriter('you', undefined, () => store.remove(entity, id))
