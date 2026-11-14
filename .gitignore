@@ -4,6 +4,9 @@ out
 shots
 .gate
 release
+# The build output folders are ignored; the release docs and the signing tool are source.
+!/docs/release/
+!/tools/release/
 logs
 *.log
 .DS_Store

@@ -91,6 +91,8 @@ npm run build      # the app and its packages
 npm run dist:win   # the installer, into apps/desktop/release
 ```
 
+After building, sign the installer so the app accepts it as an update (it refuses unsigned ones): `node tools/release/sign-release.mjs sign --installer apps/desktop/release/Agent-<version>-setup.exe --commit $(git rev-parse HEAD)`. See docs/release/signing.md.
+
 Tests: `npx vitest run` for the whole suite, and `npx tsc --noEmit -p apps/desktop/tsconfig.json` for the types. The
 suite covers the tools, the storage, the prompts and the renderer's parsing.
 
