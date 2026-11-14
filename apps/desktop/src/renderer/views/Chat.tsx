@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { Suspense, createContext, lazy, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 
 import { agent, chat } from '../bridge'
-import { openCards } from '../lib/cards'
+import { cardFailText, openCards } from '../lib/cards'
 import { attachmentsFromMeta, isImageFile } from '../lib/files'
 import { helperView, type HelperView } from '../lib/helpers'
 import { helperHold } from '../../shared/helper-cards'
@@ -331,6 +331,7 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
   const [custom, setCustom] = useState('')
   const [sending, setSending] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [failText, setFailText] = useState('')
 
   if (answered) {
     return (
@@ -350,10 +351,11 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
     if (clean === '' || sending) return
     setSending(true)
     setFailed(false)
-    void chat.answer(item.id, clean).catch(() => {
+    void chat.answer(item.id, clean).catch((error: unknown) => {
       // The answer did not get through: the card says so and can be answered again.
       setSending(false)
       setFailed(true)
+      setFailText(cardFailText(error))
     })
   }
 
@@ -382,7 +384,7 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
         </div>
         {failed ? (
           <div className="hint card-fail" role="alert">
-            That did not go through. Try again.
+            {failText || 'That did not go through. Try again.'}
           </div>
         ) : null}
         <div className="hint">The page is yours while this card is open. Finish the step, then carry on.</div>
@@ -421,7 +423,7 @@ function QuestionRow({ item }: { item: ChatItem }): JSX.Element {
       </form>
       {failed ? (
         <div className="hint card-fail" role="alert">
-          That did not go through. Try again.
+          {failText || 'That did not go through. Try again.'}
         </div>
       ) : null}
       <div className="hint">The run waits until you answer.</div>
@@ -438,10 +440,12 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
   const save = useSettings((state) => state.save)
   const [sending, setSending] = useState(false)
   const [failed, setFailed] = useState(false)
-  const retry = (): void => {
+  const [failText, setFailText] = useState('')
+  const retry = (error?: unknown): void => {
     // The answer did not get through: the card says so and can be pressed again.
     setSending(false)
     setFailed(true)
+    setFailText(cardFailText(error))
   }
 
   if (decision === 'approve' || decision === 'decline') {
@@ -508,7 +512,7 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
       </div>
       {failed ? (
         <div className="hint card-fail" role="alert">
-          That did not go through. Try again.
+          {failText || 'That did not go through. Try again.'}
         </div>
       ) : null}
       <div className="hint">

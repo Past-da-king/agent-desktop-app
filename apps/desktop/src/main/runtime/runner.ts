@@ -46,6 +46,7 @@ import {
 
 import { keyFor } from '../accounts'
 import { listWhere, type DataStore } from './data'
+import { CardDecidedError, claimCard, claimTap } from './card-claim'
 import { liveRuns } from './live-runs'
 import type { StepBudget } from './budget'
 import { chatBrainOf, isBrain, mainBrain, pickBrain, providerForAccount, rosterFor, type Brain, type BrainDeps, type BrainLocks } from './brains'
@@ -118,6 +119,8 @@ export const routineCardId = (triggerId: string): string => `rt-${triggerId}`
 
 /** How often a routine's card is rewritten with the step it is on (each write is a row a phone may pull). */
 const ROUTINE_STEP_MS = 1_500
+/** Who a card decision came from when the caller does not say (this window). */
+const THIS_DEVICE = 'this computer'
 
 /** A stopped routine's result in plain words: "Stopped by switching the routine off." */
 function stoppedText(why: string): string {
@@ -791,23 +794,26 @@ export class Runner {
   }
 
   /** Answer a question card, now or after a restart. */
-  async answer(itemId: string, answer: string): Promise<void> {
+  async answer(itemId: string, answer: string, by = THIS_DEVICE): Promise<void> {
     const row = await this.store.get('chat_item', itemId)
     if (row === null || row.kind !== 'question') return
     const meta = parseMeta(row.meta)
     if (typeof meta['helper'] === 'string' && this.helpers?.answer !== undefined) {
-      if (await this.helpers.answer(itemId, answer)) return
+      if (await this.helpers.answer(itemId, answer, by)) return
     }
-    const answered = typeof meta['answer'] === 'string' && meta['answer'] !== ''
-    const waiter = this.askWaiters.get(itemId)
     const chat = chatOf(row)
-
-    await this.store.upsert('chat_item', {
-      id: row.id,
-      kind: row.kind,
-      text: row.text,
-      meta: JSON.stringify({ ...meta, answer }),
-    })
+    // The first answer is claimed in one step on the row (runtime/card-claim.ts): only the request that wins
+    // resumes the waiter or starts the continuation. A later one is told what the card already says.
+    const claim = await claimCard(this.store, itemId, 'answer', answer, by, this.now())
+    if (claim === null) return
+    const waiter = this.askWaiters.get(itemId)
+    if (!claim.won) {
+      // The card was answered where the waiter is not (another brain, replicated): the waiter proceeds with what the
+      // card shows. Only the winner ever starts a continuation.
+      if (waiter !== undefined) waiter(claim.entry.value)
+      if (claim.entry.value !== answer) throw new CardDecidedError('answer', claim.entry)
+      return
+    }
     this.waiting.delete(itemId)
     this.emitFor(chat, { type: 'chat_changed' })
 
@@ -815,7 +821,6 @@ export class Runner {
       waiter(answer)
       return
     }
-    if (answered) return
     await this.continueAfterCard(`The user answered your question "${row.text}" with: ${answer}`, chat)
   }
 
@@ -830,31 +835,43 @@ export class Runner {
       if (row.kind !== 'approval') continue
       const meta = parseMeta(row.meta)
       if (meta['scope'] !== 'computer' || (typeof meta['decision'] === 'string' && meta['decision'] !== '')) continue
-      await this.decide(row.id, 'approve')
-      count += 1
+      try {
+        await this.decide(row.id, 'approve')
+        count += 1
+      } catch (error) {
+        // Someone decided it between the list and now: theirs stands.
+        if (!(error instanceof CardDecidedError)) throw error
+      }
     }
     return count
   }
 
-  /** Approve or decline an approval card, now or after a restart. */
-  async decide(itemId: string, decision: Decision): Promise<void> {
+  /**
+   * Approve or decline an approval card, now or after a restart. The first decision wins (runtime/card-claim.ts,
+   * review finding R1): it is claimed in one step on the row, and only that request resumes the waiter or starts a
+   * continuation. The same decision again is quiet; a different one throws "already decided: <decision> by <device>",
+   * which the window and the phone show. `by`: the device the request came from.
+   */
+  async decide(itemId: string, decision: Decision, by = THIS_DEVICE): Promise<void> {
     const row = await this.store.get('chat_item', itemId)
     if (row === null || row.kind !== 'approval') return
     const meta = parseMeta(row.meta)
     if (typeof meta['helper'] === 'string' && this.helpers?.decide !== undefined) {
-      if (await this.helpers.decide(itemId, decision)) return
+      if (await this.helpers.decide(itemId, decision, by)) return
     }
-    const decided = typeof meta['decision'] === 'string' && meta['decision'] !== ''
-    const waiter = this.decisionWaiters.get(itemId)
     const summary = typeof meta['summary'] === 'string' ? meta['summary'] : row.text
     const chat = chatOf(row)
 
-    await this.store.upsert('chat_item', {
-      id: row.id,
-      kind: row.kind,
-      text: row.text,
-      meta: JSON.stringify({ ...meta, decision }),
-    })
+    const claim = await claimCard(this.store, itemId, 'decision', decision, by, this.now())
+    if (claim === null) return
+    const waiter = this.decisionWaiters.get(itemId)
+    if (!claim.won) {
+      // Decided where the waiter is not (another brain, replicated): the waiter proceeds with what the card shows,
+      // never with this request. Only the winner ever starts a continuation.
+      if (waiter !== undefined) waiter(claim.entry.value === 'approve')
+      if (claim.entry.value !== decision) throw new CardDecidedError('decision', claim.entry)
+      return
+    }
     this.waiting.delete(itemId)
     this.emitFor(chat, { type: 'chat_changed' })
 
@@ -862,7 +879,6 @@ export class Runner {
       waiter(decision === 'approve')
       return
     }
-    if (decided) return
     const verb = decision === 'approve' ? 'approved' : 'declined'
     await this.continueAfterCard(`The user ${verb} your request: ${summary}`, chat)
   }
@@ -872,23 +888,19 @@ export class Runner {
    * is told it was a button tap, and the message remembers the tap so the button keeps saying Sent. As on the
    * phone (AgentRuntime.sendQuiet). While a run is active it joins that run as a steering note.
    */
-  async tap(itemId: string, label: string, message: string): Promise<void> {
+  async tap(itemId: string, label: string, message: string, tapId = ''): Promise<void> {
     const clean = message.trim()
     if (clean === '') return
     const row = await this.store.get('chat_item', itemId)
     if (row === null || row.kind !== 'agent') return
     const chat = chatOf(row)
-    const meta = parseMeta(row.meta)
-    const taps = Array.isArray(meta['taps']) ? meta['taps'].filter((t): t is string => typeof t === 'string') : []
-    if (!taps.includes(clean)) {
-      await this.store.upsert('chat_item', {
-        id: row.id,
-        kind: row.kind,
-        text: row.text,
-        meta: JSON.stringify({ ...meta, taps: [...taps, clean].slice(-50) }),
-      })
-      this.emitFor(chat, { type: 'chat_changed' })
-    }
+    // Record, then dispatch, and the record is the check (review finding F2): in one step on the row, so a retry
+    // of the same tap (`tapId` from the client: the window, the phone, a mini-app) never reaches the model twice,
+    // even after a restart. A deliberate second tap carries a new id. An old client sends none: the same words on
+    // the same message within a few seconds count as one tap (runtime/card-claim.ts).
+    const fresh = await claimTap(this.store, itemId, clean, tapId.trim().slice(0, 100), this.now())
+    if (fresh === null || !fresh) return
+    this.emitFor(chat, { type: 'chat_changed' })
     const note = quietTapNote(label, clean)
     const line = this.line(chat)
     if (line.running) {

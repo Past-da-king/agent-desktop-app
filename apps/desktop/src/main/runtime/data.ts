@@ -12,6 +12,16 @@ export interface DataStore {
   listWhere?<E extends EntityName>(entity: E, where: ListWhere): Promise<Array<EntityMap[E]>>
   get<E extends EntityName>(entity: E, id: string): Promise<EntityMap[E] | null>
   upsert<E extends EntityName>(entity: E, input: RowInput<E>): Promise<EntityMap[E]>
+  /**
+   * Read, decide and write one row as ONE step (the real Store: no await between the read and the write, so nothing
+   * can slip in). `step` gets the stored payload and returns the payload to write (null: write nothing) and a
+   * result. null back: the row is not there. Optional: a small fake leaves it out and the callers serialise instead.
+   */
+  mutate?<E extends EntityName, R>(
+    entity: E,
+    id: string,
+    step: (payload: Record<string, unknown>) => { next: Record<string, unknown> | null; result: R },
+  ): Promise<R | null>
   remove(entity: EntityName, id: string): Promise<void>
   /** A memory page's kept versions, newest first (the real Store keeps them; a small fake may not). */
   memoryHistory?(memoryId: string): MemoryVersion[]

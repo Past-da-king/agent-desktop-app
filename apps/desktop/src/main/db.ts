@@ -34,6 +34,7 @@ import { filterRows } from '../shared/list-where'
 import { isLiveHelper, isOpenCard } from '../shared/device-list'
 import { changedFields, currentWriter, versionFields, type MemoryWriter } from './memory/history'
 import { redactDeep } from './vault/redact'
+import { cardWinners, withWinners } from './runtime/card-claim'
 import { startCheckpointWorker, type Checkpointer } from './db-checkpoint'
 import { DbReader, type RawRow } from './db-reader'
 
@@ -615,6 +616,45 @@ export class Store implements SyncStore {
     return saved
   }
 
+  /**
+   * Read a row, let `step` decide, write what it returns: all in one synchronous step after the turn, so two callers
+   * can never both read the same state (a conditional update: "decide this card only if nobody has yet").
+   * The step returns the payload to write, or null to leave the row alone. null back: no such row.
+   */
+  async mutate<E extends EntityName, R>(
+    entity: E,
+    id: string,
+    step: (payload: Record<string, unknown>) => { next: Record<string, unknown> | null; result: R },
+  ): Promise<R | null> {
+    this.assertEntity(entity)
+    await this.turn()
+    const existing = this.readRow(entity, id)
+    if (existing === null || existing.deleted) return null
+    const { next, result } = step({ ...existing.payload })
+    if (next === null) return result
+    const payload: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(next)) if (value !== undefined) payload[key] = redactDeep(value)
+    if (UPDATED_AT_ENTITIES.has(entity)) payload.updatedAt = this.now()
+    this.oneCommit(() => {
+      const stamp = encodeStamp(this.hlc.now())
+      this.db
+        .prepare(
+          `INSERT INTO rows(entity, cid, stamp, deleted, payload, local)
+           VALUES(?, ?, ?, 0, ?, 1)
+           ON CONFLICT(entity, cid) DO UPDATE SET
+             stamp = excluded.stamp,
+             deleted = 0,
+             payload = excluded.payload,
+             local = 1`,
+        )
+        .run(entity, id, stamp, JSON.stringify(payload))
+      if (existing.archived === true) this.dropBody(entity, id)
+      this.logChange(entity, id, '')
+    })
+    this.emit({ entity, row: { id, ...payload } as EntityMap[E] })
+    return result
+  }
+
   async remove(entity: EntityName, id: string): Promise<void> {
     this.assertEntity(entity)
     await this.turn()
@@ -957,6 +997,25 @@ export class Store implements SyncStore {
 
       this.hlc.observe(remote)
       const existing = this.readRow(change.entity, change.id)
+      // A card (approval or question) is decided once, first decision wins on every device (runtime/card-claim.ts):
+      // where the two copies differ on the decision, the winner's is kept whichever copy is newer, so a later
+      // conflicting decision, or a write that has none, can never undo the first.
+      if (existing !== null && !existing.deleted && !change.deleted) {
+        const winners = cardWinners(change.entity, existing.payload, change.payload)
+        if (winners !== null) {
+          const local = decodeStamp(existing.stamp)
+          const ours = local !== null && compareStamps(local, remote) >= 0
+          const merged = withWinners(ours ? existing.payload : { ...change.payload }, winners)
+          if (ours && JSON.stringify(merged) === JSON.stringify(existing.payload)) continue
+          if (typeof merged.createdAt !== 'number') merged.createdAt = this.now()
+          this.db
+            .prepare('UPDATE rows SET stamp = ?, payload = ?, local = ? WHERE entity = ? AND cid = ?')
+            .run(ours ? existing.stamp : change.stamp, JSON.stringify(merged), ours ? 1 : 0, change.entity, change.id)
+          this.logChange(change.entity, change.id, ours ? '' : via)
+          touched.push({ entity: change.entity, row: { id: change.id, ...merged } as EntityMap[EntityName] })
+          continue
+        }
+      }
       if (existing !== null) {
         const local = decodeStamp(existing.stamp)
         if (local !== null && compareStamps(local, remote) >= 0) continue

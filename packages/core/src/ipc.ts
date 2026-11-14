@@ -1960,13 +1960,19 @@ export interface AgentApi {
     branch(itemId: string): Promise<string>
     /** Answer a `question` card. */
     answer(itemId: string, answer: string): Promise<void>
-    /** Approve or decline an `approval` card. */
+    /**
+     * Approve or decline an `approval` card. The first decision wins: the same one again is quiet, a different one
+     * rejects with "already decided: <decision> by <device>" (show it, the card already shows what proceeded).
+     */
     decide(itemId: string, decision: Decision): Promise<void>
     /**
      * A tap on a button the agent drew in its message `itemId`: goes to the agent quietly, as a button tap, never as a
      * message the person typed. `label` is the button's words, `message` what the tap asks (with the item it names).
+     * `tapId`: made by the client for this one tap (a UUID) and kept on every retry of it; the agent hears a tap id
+     * once, however often it is delivered. A deliberate second tap makes a new id. Left out (an old client): the same
+     * words on the same message within 10 s are one tap.
      */
-    tap(itemId: string, label: string, message: string): Promise<void>
+    tap(itemId: string, label: string, message: string, tapId?: string): Promise<void>
     onEvent(cb: (e: ChatEvent) => void): Unsubscribe
   }
 

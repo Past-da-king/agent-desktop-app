@@ -38,6 +38,7 @@ import {
 
 import { siteFromCall, siteOf, stuckPhrase, urlFromResult, type ToolInFlight } from './stuck-tool'
 import { listWhere, type DataStore } from './data'
+import { CardDecidedError, claimCard } from './card-claim'
 import { helperHold, helperState } from '../../shared/helper-cards'
 import { liveRuns } from './live-runs'
 import { isLimitFailure, limitRetryLeft, limitWaitMs, waitWords } from './limit-backoff'
@@ -164,8 +165,8 @@ export interface HelperHost {
   stopAll(by?: string): Promise<number>
   live(): HelperLive[]
   /** A helper's question or approval card, answered by the person. False when it was not ours. */
-  answer?(itemId: string, answer: string): Promise<boolean>
-  decide?(itemId: string, decision: Decision): Promise<boolean>
+  answer?(itemId: string, answer: string, by?: string): Promise<boolean>
+  decide?(itemId: string, decision: Decision, by?: string): Promise<boolean>
   /**
    * A fresh process has no live helpers: the ones left working are ended ("the app restarted") and their creators
    * told. `defer`: hold the notices until flushNotices (the runner sends them once its own start-up repair is done).
@@ -1555,39 +1556,30 @@ export class HelperManager implements HelperHost {
 
   // ---- cards -------------------------------------------------------------------------------
 
-  async answer(itemId: string, answer: string): Promise<boolean> {
+  // A helper's card is decided once, first wins, like the main agent's (runtime/card-claim.ts, review finding R1):
+  // claimed in one step on the row; only the winner releases the waiter or is sent to the brain running the helper.
+  async answer(itemId: string, answer: string, by = 'this computer'): Promise<boolean> {
     const waiter = this.askWaiters.get(itemId)
-    if (waiter === undefined) return this.answerElsewhere(itemId, 'answer', answer)
-    const row = await this.store.get('chat_item', itemId)
-    if (row === null) return false
-    const meta = parseMeta(row.meta)
-    await this.store.upsert('chat_item', {
-      id: row.id,
-      kind: row.kind,
-      text: row.text,
-      meta: JSON.stringify({ ...meta, answer }),
-    })
+    if (waiter === undefined) return this.answerElsewhere(itemId, 'answer', answer, by)
+    const claim = await claimCard(this.store, itemId, 'answer', answer, by, this.now())
+    if (claim === null) return false
     this.askWaiters.delete(itemId)
     this.emit({ type: 'chat_changed' })
-    waiter(answer)
+    // Already answered (here a moment ago, or by another brain): the run proceeds with what the card shows.
+    waiter(claim.entry.value)
+    if (!claim.won && claim.entry.value !== answer) throw new CardDecidedError('answer', claim.entry)
     return true
   }
 
-  async decide(itemId: string, decision: Decision): Promise<boolean> {
+  async decide(itemId: string, decision: Decision, by = 'this computer'): Promise<boolean> {
     const waiter = this.decisionWaiters.get(itemId)
-    if (waiter === undefined) return this.answerElsewhere(itemId, 'decide', decision)
-    const row = await this.store.get('chat_item', itemId)
-    if (row === null) return false
-    const meta = parseMeta(row.meta)
-    await this.store.upsert('chat_item', {
-      id: row.id,
-      kind: row.kind,
-      text: row.text,
-      meta: JSON.stringify({ ...meta, decision }),
-    })
+    if (waiter === undefined) return this.answerElsewhere(itemId, 'decide', decision, by)
+    const claim = await claimCard(this.store, itemId, 'decision', decision, by, this.now())
+    if (claim === null) return false
     this.decisionWaiters.delete(itemId)
     this.emit({ type: 'chat_changed' })
-    waiter(decision === 'approve')
+    waiter(claim.entry.value === 'approve')
+    if (!claim.won && claim.entry.value !== decision) throw new CardDecidedError('decision', claim.entry)
     return true
   }
 
@@ -2317,11 +2309,12 @@ export class HelperManager implements HelperHost {
         // Not running here either: it is ended here (its creator's brain hears by the result), never sent on.
         await this.stopFrom(id, msg.text, true)
         return true
+      // A decision from another brain that lost the first-wins race resumes nothing: its refusal is not an error here.
       case 'answer':
-        await this.answer(msg.item, msg.text)
+        await this.answer(msg.item, msg.text, 'another device').catch(ignoreDecided)
         return true
       case 'decide':
-        await this.decide(msg.item, msg.text === 'approve' ? 'approve' : 'decline')
+        await this.decide(msg.item, msg.text === 'approve' ? 'approve' : 'decline', 'another device').catch(ignoreDecided)
         return true
       case 'result': {
         this.remote.delete(id)
@@ -2418,7 +2411,7 @@ export class HelperManager implements HelperHost {
   }
 
   /** A card a helper on another brain asked: the answer is kept on the card and sent to that brain. */
-  private async answerElsewhere(itemId: string, op: 'answer' | 'decide', value: string): Promise<boolean> {
+  private async answerElsewhere(itemId: string, op: 'answer' | 'decide', value: string, by: string): Promise<boolean> {
     const link = this.link()
     if (link === null) return false
     const row = await this.store.get('chat_item', itemId)
@@ -2428,8 +2421,16 @@ export class HelperManager implements HelperHost {
     if (helper === '') return false
     const there = await this.runningElsewhere(helper)
     if (there === '') return false
-    await this.store.upsert('chat_item', { id: row.id, kind: row.kind, text: row.text, meta: JSON.stringify({ ...meta, ...(op === 'answer' ? { answer: value } : { decision: value }) }) })
+    // First wins here too: only the request that claims the card is sent on; the brain running the helper finds the
+    // claim on its copy of the row and releases its waiter with it.
+    const field = op === 'answer' ? 'answer' : 'decision'
+    const claim = await claimCard(this.store, itemId, field, value, by, this.now())
+    if (claim === null) return false
     this.emit({ type: 'chat_changed' })
+    if (!claim.won) {
+      if (claim.entry.value !== value) throw new CardDecidedError(field, claim.entry)
+      return true
+    }
     await link.send(there, op, helper, { item: itemId, text: value })
     return true
   }
@@ -3257,6 +3258,12 @@ function parseMeta(raw: string): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+/** A catch for a decision or answer that arrived after the card was settled: nothing to do, nothing to report. */
+function ignoreDecided(error: unknown): boolean {
+  if (error instanceof CardDecidedError) return false
+  throw error
 }
 
 function stringField(value: unknown): string {

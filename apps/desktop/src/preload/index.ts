@@ -137,7 +137,7 @@ const api: AgentApi = {
     branch: (itemId: string) => call<string>(CHANNELS.chat.branch, itemId),
     answer: (itemId, answer) => call<void>(CHANNELS.chat.answer, itemId, answer),
     decide: (itemId, decision: Decision) => call<void>(CHANNELS.chat.decide, itemId, decision),
-    tap: (itemId, label, message) => call<void>(CHANNELS.chat.tap, itemId, label, message),
+    tap: (itemId, label, message, tapId) => (tapId === undefined ? call<void>(CHANNELS.chat.tap, itemId, label, message) : call<void>(CHANNELS.chat.tap, itemId, label, message, tapId)),
     onEvent: (callback) => on<ChatEvent>(EVENTS.chat, callback),
   },
 
