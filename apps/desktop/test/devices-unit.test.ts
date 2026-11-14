@@ -217,7 +217,7 @@ describe('websocket framing', () => {
 
 describe('the wire allowlist', () => {
   const origin: MessageOrigin = { deviceId: 'dev_p', name: 'Test phone', kind: 'phone', platform: 'android', screenWidth: 412, canOpenLinks: true, canReceiveFiles: true }
-  const session = { deviceId: 'dev_p', origin: () => origin }
+  const session = { deviceId: 'dev_p', origin: () => origin, roles: ['screen' as const] }
 
   it('names real channels for every allowed method', () => {
     for (const name of RPC_ALLOWED) expect(RPC_CHANNELS[name], name).toMatch(/^agent:/)
