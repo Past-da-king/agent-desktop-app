@@ -168,6 +168,17 @@ describe('device commands and the tools that use them', () => {
     expect((await store.list('device_command'))[0]?.status).toBe('expired')
   })
 
+  it('a tool call that waited ten minutes for an offline device ends with a definite not-run note', async () => {
+    let now = 1_000_000
+    const { store, commands, notes } = await setup({ connected: false, now: () => now })
+    await store.upsert('device_command', { id: 'cmd_x', target: 'dev_phone', kind: 'tool', tool: 'browser_open', args: '{}', status: 'queued', note: '', chat: 'pc8', brainId: 'dev_pc', owner: '', expiresAt: now + 600_000, updatedAt: now } as never)
+    now += 11 * 60_000
+    await commands.tick()
+    expect(notes).toHaveLength(1)
+    expect(notes[0]?.text).toContain('the tool was not run')
+    expect((await store.get('device_command', 'cmd_x'))?.status).toBe('expired')
+  })
+
   it('says so when the phone cannot do it', async () => {
     const { store, host, tools } = await setup()
     cleanups.push(phoneAnswers(host, false, 'no browser'))

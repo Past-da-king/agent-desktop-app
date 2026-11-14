@@ -161,7 +161,7 @@ describe('a default the person owns', () => {
     expect(await dailyRoutineSlot(store)).toBe('')
     // Undo puts it back as the app's own routine, not as an agent prompt.
     const restored = await guardRoutineWrite(store, { id: MEMORY_DAILY_ROUTINE, name: 'End of day', kind: 'daily', spec: '23:30', prompt: DAILY_ROUTINE_PROMPT, enabled: true, lastRunAt: null, lastResult: '' })
-    await store.upsert('trigger', restored)
+    await store.upsert('trigger', restored, { restore: true })
     expect(await store.get('trigger', MEMORY_DAILY_ROUTINE)).toMatchObject({ builtin: MEMORY_DAILY_ROUTINE, kind: 'daily' })
   })
 

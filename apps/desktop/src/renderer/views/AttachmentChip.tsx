@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
 import { isImageFile } from '../lib/files'
+import { handedPageTitle, isHandedPage } from '../../shared/hand-over'
 import { Icon } from '../ui/Icon'
 
 export function useThumbnail(file: Attachment): string | null {
@@ -46,6 +47,24 @@ function kindWord(file: Attachment): string {
 export function AttachmentChip({ file, onRemove }: { file: Attachment; onRemove: () => void }): JSX.Element {
   const src = useThumbnail(file)
   const size = file.size === undefined ? '' : fileSizeLabel(file.size)
+  // A page handed over from the browser: shown as the page it is, not as a text file.
+  if (isHandedPage(file.name)) {
+    const title = handedPageTitle(file.name)
+    return (
+      <div className="att-chip att-page" title={`${title}: the page you handed over, with its address, tab and selected text`}>
+        <span className="att-icon" aria-hidden="true">
+          <Icon name="globe" size={20} />
+        </span>
+        <span className="att-text">
+          <span className="att-name">{title}</span>
+          <span className="att-meta">Page from the browser</span>
+        </span>
+        <button type="button" className="att-x" onClick={onRemove} aria-label={`Remove the page ${title}`} title="Remove">
+          <Icon name="x" size={16} />
+        </button>
+      </div>
+    )
+  }
   return (
     <div className="att-chip" title={file.path}>
       {src !== null ? (

@@ -52,8 +52,11 @@ export interface SettingsControl {
 /** Installs an update of this app (main/self-update.ts). */
 export interface UpdateControl {
   currentVersion(): string
-  /** Checks the installer and schedules the install and restart for when this turn has ended. */
-  install(path: string, chat: string): Promise<{ ok: boolean; text: string; from?: string; to?: string }>
+  /**
+   * Checks the installer (signed release manifest, pinned key, digest), stages it, asks the person through `confirm`
+   * (the app's own approval card) and only on his yes schedules the install and restart for when this turn has ended.
+   */
+  install(path: string, chat: string, confirm: (summary: string, details?: string) => Promise<boolean>): Promise<{ ok: boolean; text: string; from?: string; to?: string }>
 }
 
 export interface AppControlDeps {
@@ -105,6 +108,16 @@ export const SETTINGS_NEED_APPROVAL: ReadonlySet<string> = new Set([
   'model',
   'accounts',
   'ai',
+  // What a screen share shows of him: only he lowers it.
+  'hideGuidesFromCapture',
+  'hideChatFromCapture',
+  // Real input on his desktop: only he allows it, and only he shortens the idle time it waits for.
+  'agentRealInput',
+  'inputLockIdleSeconds',
+  // Decisions send text to a decision model and let it skip work: only he turns them on, picks the model or lowers the bar.
+  'decisionsEnabled',
+  'decisionsBackend',
+  'decisionsThreshold',
 ])
 
 function text(value: unknown): string {
@@ -508,14 +521,15 @@ function updateTool(deps: AppControlDeps): Tool {
     spec: {
       name: 'app_update',
       description:
-        "Install a newer version of this app from its installer file (for example C:\\Users\\me\\Downloads\\Agent-1.2.3-setup.exe) without any clicks: once this turn has ended the app closes, installs silently in the same place and opens again, and you get a note in this chat saying the update finished (version before and after) or, if it failed, the real reason (installer exit code, a file in use and which process held it, the log path) so you carry on and can tell the person exactly what happened. Tell the person in your reply that the app will restart for the update (a short notice, not a question). Nothing in the chat is lost.",
+        "Install a newer version of this app from its installer file (for example C:\\Users\\me\\Downloads\\Agent-1.2.3-setup.exe). The installer must be a signed release (a matching Agent-1.2.3-setup.exe.release.json beside it, signed by the release key this app trusts) and newer than this app; unsigned, changed, older or equal files are refused with the reason. The person gets an approval card naming the version, the verified publisher and the key, and nothing is installed unless he says yes. After his yes, with no further clicks: once this turn has ended the app closes, installs silently in the same place and opens again, and you get a note in this chat saying the update finished (version before and after) or, if it failed, the real reason (installer exit code, a file in use and which process held it, the log path) so you carry on and can tell the person exactly what happened. Tell the person in your reply that the app will restart for the update (a short notice, not a question). Nothing in the chat is lost.",
       schema: schema(['installer'], { installer: str("Full path of this app's setup .exe") }),
     },
     run: async (input, ctx) => {
       if (deps.update === undefined) return 'This app cannot update itself here.'
       const path = text(input['installer'])
       if (path === '') return 'Give the full path of the installer (.exe).'
-      const result = await deps.update.install(path, ctx.chat ?? 'main')
+      // The person's own yes, on the approval card (no scope: never auto-approved), to this exact version, publisher and key.
+      const result = await deps.update.install(path, ctx.chat ?? 'main', (summary, details) => ctx.approve(summary, details))
       if (result.ok) await ctx.notify('Updating the app', `Restarting into ${result.to ?? 'the new version'} when this reply is done.`).catch(() => undefined)
       return result.text
     },

@@ -1,0 +1,89 @@
+/* ---------- the browser as a workspace (shell/Panel.tsx BrowserStage, lib/workspace.ts) ---------- */
+
+/* Browser view: the app's own top bar folds to a slim strip. It keeps the mascot, Back, search (as an icon), the
+   working count, light and dark and the three window buttons; the rest of the strip is where the window is dragged. */
+.win.bv .titlebar{height:30px;gap:6px;padding:0 0 0 10px}
+.win.bv .tb-brand{min-width:0;gap:0}
+.win.bv .tb-brand > span{display:none}
+.win.bv .titlebar .tb-back{width:30px;height:24px;margin-left:0}
+.win.bv .cmdbar{flex:none;width:30px;min-width:30px;height:24px;margin:0;padding:0;justify-content:center;background:transparent;border-radius:8px}
+.win.bv .cmdbar:hover{background:var(--s-high)}
+.win.bv .cmdbar span,.win.bv .cmdbar kbd{display:none}
+.win.bv .tb-right{flex:1;min-width:0}
+.win.bv .syncpill,.win.bv .tb-panel{display:none}
+.win.bv .tb-work{height:22px;padding:0 10px 0 8px;font-size:12px}
+.win.bv .titlebar .tb-btn{width:32px;height:24px;border-radius:8px}
+.win.bv .wc{width:42px;height:30px;border-radius:0}
+.win.bv .mnav{display:none}
+/* Full screen: only the browser's own toolbar. The bar keeps its place in the grid at no height. */
+.win.bv-full{border-radius:0}
+.win.bv-full .titlebar{height:0;min-height:0;padding:0;overflow:hidden;visibility:hidden}
+
+/* The stage: the page, and the chat docked beside it (under it on a narrow window). */
+.br-stage{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.br-stage.dock-side{grid-template-columns:minmax(0,1fr) var(--dock-w,400px)}
+.br-stage.dock-below{grid-template-rows:minmax(0,1fr) minmax(220px,46%)}
+.br-stage-main{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-width:0;min-height:0;container-type:inline-size;container-name:brmain}
+.br-stage-chrome{padding:5px 10px 4px}
+.br-stage-chrome .br-top{padding:0;gap:6px}
+.br-stage-chrome .br-tabs{padding:4px 0 0}
+.br-stage-chrome .br-stage-actions{gap:6px}
+.br-stage-actions .ib{width:32px;height:32px;flex:none}
+.br-stage-actions .btn.sm{height:32px}
+.br-hand{white-space:nowrap}
+.panel-h-actions .br-hand{width:32px;height:32px}
+.br-dock-toggle{position:relative;display:inline-flex;flex:none}
+.br-dock-dot{position:absolute;top:3px;right:3px;width:8px;height:8px;border-radius:50%;background:var(--tert);box-shadow:0 0 0 2px var(--s-low)}
+
+/* The toolbar gives way as the page's column narrows (the dock can take a lot of a mid-size window). */
+@container brmain (max-width:1180px){
+  .br-stage-chrome .br-mode-size{display:none}
+  .br-stage-chrome .br-stage-actions > .br-here{display:none}
+}
+@container brmain (max-width:1060px){
+  .br-stage-chrome .br-modes{display:none}
+}
+@container brmain (max-width:940px){
+  .br-stage-chrome .br-hand .br-hand-t{display:none}
+  .br-stage-chrome .btn.br-hand{width:32px;padding:0;justify-content:center}
+}
+@container brmain (max-width:720px){
+  .br-stage-chrome .br-top{flex-wrap:wrap;row-gap:6px}
+  .br-stage-chrome .br-top .url{flex:1 1 140px}
+  .br-stage-chrome .br-stage-actions{flex:1 1 100%;flex-wrap:wrap;row-gap:6px;margin-left:0}
+  .br-stage-chrome .br-stage-actions > .br-leave{margin-left:auto}
+  .br-stage-chrome .br-modes{display:inline-flex}
+}
+/* The narrowest: the address row keeps Back, Reload, the address and whose sign-ins; one row of actions under it. */
+@container brmain (max-width:520px){
+  .br-stage-chrome .br-top .br-mute,.br-stage-chrome .br-top .br-expand,.br-stage-chrome .br-top .br-dev,.br-stage-chrome .br-modes{display:none}
+  .br-stage-chrome .br-top .url{flex:1 1 100px}
+}
+@media (max-width:720px){
+  .br-stage-chrome .br-stage-actions > .btn:last-child{margin-left:0}
+}
+
+/* The docked chat: the real chat, in a column of its own. */
+.br-dock{position:relative;min-width:0;min-height:0;overflow:hidden;container-type:inline-size;container-name:brdock;background:var(--s-lowest);border-left:1px solid var(--outline-v)}
+.br-stage.dock-below .br-dock{border-left:0;border-top:1px solid var(--outline-v)}
+.dock-resize{position:absolute;left:0;top:0;bottom:0;width:9px;cursor:col-resize;z-index:6;outline:none}
+.dock-resize::after{content:"";position:absolute;left:3px;top:50%;width:3px;height:44px;margin-top:-22px;border-radius:999px;background:var(--outline-v);transition:background .15s var(--effects)}
+.dock-resize:hover::after,.dock-resize:focus-visible::after{background:var(--primary)}
+/* While the dock is dragged the live page must not take the pointer. */
+body.dock-dragging{cursor:col-resize;-webkit-user-select:none;user-select:none}
+body.dock-dragging .br-host{pointer-events:none!important}
+.chat.docked .chat-h{padding:10px 8px 8px 16px;gap:10px}
+.chat.docked .thread{padding-inline:14px}
+.chat.docked .compose{padding:6px 12px 12px}
+.chat.docked .dock-fold{flex:none}
+.chat.docked .cfoot{display:none}
+.chat.docked .compose textarea{text-overflow:ellipsis}
+.chat.docked .compose textarea::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* A slim dock keeps the agent's name readable: the mascot gives way first. */
+@container brdock (max-width:480px){
+  .chat.docked .chat-h > .mascot{display:none!important}
+}
+.br-stage.dock-below .chat.docked .chat-h{padding-block:6px}
+
+/* A page handed over from the browser, waiting in the message box. */
+.att-chip.att-page .att-icon{background:var(--tc);color:var(--on-tc)}

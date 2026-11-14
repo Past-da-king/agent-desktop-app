@@ -36,7 +36,7 @@ export async function restoreVersion(store: Store, memoryId: string, n: number, 
       aliases: version.aliases,
       pinned: version.pinned,
       source: existing?.source ?? 'user',
-    }),
+    }, { restore: true }),
   )
   return true
 }

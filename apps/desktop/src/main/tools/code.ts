@@ -11,6 +11,7 @@ import { delimiter, join } from 'node:path'
 
 import { enumOf, resultLimitOf, schema, str, type JsonObject, type Tool } from '@agent/core'
 
+import { refuseRealInput } from '../agent-cursor/real-input-guard'
 import type { ProgramRef } from '../runtime/environment'
 import { spawnResolved } from '../runtime/spawn'
 import { killProcessTree, sanitiseEnv } from './shell'
@@ -99,6 +100,8 @@ function runCodeTool(deps: CodeToolDeps): Tool {
       }
       const code = text(input['code'])
       if (code.trim() === '') return 'Pass the code to run.'
+      const real = refuseRealInput(code)
+      if (real !== null) return real
 
       const chosen = resolveCodeProgram(language, deps)
       if (chosen.program === null) {

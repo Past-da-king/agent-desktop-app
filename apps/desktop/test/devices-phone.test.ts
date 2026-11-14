@@ -145,8 +145,10 @@ describe('the phone app against the node', () => {
 
     // (3) The calls the native screens make.
     const made: Record<string, string> = {}
+    // S2: a device writes only what a person edits by hand; chat rows are written by the app, never by a device.
+    await expect(phone.call('data.upsert', 'chat_item', { kind: 'agent', text: 'hi', meta: '{}' })).rejects.toThrow('not available')
+    await expect(phone.call('data.upsert', 'task', { title: 'x', evil: true })).rejects.toThrow('cannot be set')
     for (const [entity, row] of [
-      ['chat_item', { kind: 'agent', text: 'hi', meta: '{}' }],
       ['memory', { title: 'Fact', body: 'b', kind: 'fact', topics: '', pinned: false, source: 'user', updatedAt: 0 }],
       ['goal', { title: 'Goal', why: '', status: 'open' }],
       ['task', { title: 'Milk', notes: '', status: 'todo', owner: 'user' }],

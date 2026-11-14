@@ -56,6 +56,8 @@ export interface BrowserDriver {
   useSiteTab?(url: string): boolean
   /** browser_open with new_tab: open in a fresh tab of the agent's own; its other tabs stay its. Optional. */
   openNewTab?(url: string): Promise<string>
+  /** browser_open with tab: carry on in a tab the person handed over (hand-over.ts). Optional. */
+  takeHandedTab?(id: string): Promise<string>
   /** browser_close: the acting agent closes its current tab, one of its tabs by id, or all of them (run-tabs.ts). */
   closeOwnTab?(id?: string, all?: boolean): Promise<string>
   /**

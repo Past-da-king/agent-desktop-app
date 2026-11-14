@@ -8,7 +8,7 @@
  * it, cross-site frames included; tests give a fake or a Playwright page). Pure of Electron.
  */
 import type { BrandLook } from '../../shared/brand'
-import { guideClearScript, guideFindScript, guideShowScript, parseMatches, parseShow, PICK_ATTR, type GuideQuery, type ShowResult } from './guide-page'
+import { guideClearScript, guideEndScript, guideFindScript, guideReportReadScript, guideShowScript, parseMatches, parseReport, parseShow, PICK_ATTR, type GuideQuery, type GuideReport, type ShowResult } from './guide-page'
 
 export interface GuideTarget {
   name?: string
@@ -189,9 +189,42 @@ export interface GuideHost {
   loading(): boolean
   /** Waits for the new document to be ready, at most ms. */
   ready(ms: number): Promise<void>
+  /**
+   * Told each time a frame says where its target is (a step drawn outside the page). Optional: without it, or while
+   * it stays silent, the guide asks the frame instead.
+   */
+  onReport?(listener: (report: GuideReport) => void): () => void
   /** Called with each step as it starts and ends (the step log, the panel's line). */
   now?(): number
 }
+
+/** One step, as something that draws it outside the page sees it. */
+export interface GuideSurfaceStep {
+  token: string
+  frame: GuideFrame
+  /** The label as shown (clipboard-fill wording included; a sensitive value is never in it). */
+  label: string
+  n: number
+  total: number
+  /** His press on I did it or Skip, drawn outside the page: ends the step in the page with that outcome. */
+  act: (outcome: 'done' | 'skipped') => void
+}
+
+/**
+ * Draws the ring and label OUTSIDE the page (the private overlay window, 10 Nov 2026), from the places the page
+ * reports. The page still finds and follows the target and hears his click, typing and paste: only the drawing moves.
+ */
+export interface GuideSurface {
+  /** Asked as each step starts: true = the page draws nothing and reports; false = the page draws as it always did. */
+  outside(): boolean
+  begin(step: GuideSurfaceStep): void
+  report(report: GuideReport): void
+  /** The step is over, whatever ended it. */
+  end(token: string): void
+}
+
+/** How often a frame is asked where its target is while it does not say by itself. */
+export const REPORT_ASK_MS = 120
 
 export interface GuideOptions {
   /** The whole guide's limit. Default 5 minutes. */
@@ -211,6 +244,8 @@ export interface GuideOptions {
   /** The app's brand look (his theme and accent) for the ring and label, read again for every step so a change he
    * makes in Settings shows on the next highlight at the latest. Default: light theme, iris. */
   look?: BrandLook | (() => BrandLook)
+  /** Draws the ring outside the page when it says so (browser/guide-private.ts). Without it the page draws. */
+  surface?: GuideSurface
 }
 
 export const GUIDE_TIMEOUT_MS = 5 * 60_000
@@ -258,7 +293,7 @@ export async function runGuide(host: GuideHost, steps: GuideStep[], options: Gui
       if (fills && fill !== null) await fill.put(step.value!, step.sensitive === true)
       const shownAt = now()
       options.onStep?.({ kind: 'shown', n, step: shown })
-      const outcome = await waitForHim(host, found, shown, n, steps.length, stepToken, deadline, options.signal, now, { ...(fills ? { paste: true, ...(step.sensitive === true ? { secret: true } : { expect: step.value! }) } : {}), ...(options.look === undefined ? {} : { look: typeof options.look === 'function' ? options.look() : options.look }) })
+      const outcome = await waitForHim(host, found, shown, n, steps.length, stepToken, deadline, options.signal, now, options.surface, { ...(fills ? { paste: true, ...(step.sensitive === true ? { secret: true } : { expect: step.value! }) } : {}), ...(options.look === undefined ? {} : { look: typeof options.look === 'function' ? options.look() : options.look }) })
       const clip = fills && fill !== null ? await fill.settle() : undefined
       const gotAt = now()
       const log: StepLog = {
@@ -399,13 +434,44 @@ async function waitForHim(
   deadline: number,
   signal: AbortSignal | undefined,
   now: () => number,
+  surface: GuideSurface | undefined,
   extra: { paste?: boolean; expect?: string; secret?: boolean; look?: BrandLook } = {},
 ): Promise<{ outcome: StepOutcome; show: ShowResult | null }> {
+  const cleanups: Array<() => void> = []
+  const outside = surface !== undefined && surface.outside()
+  if (surface !== undefined) {
+    // The surface hears of every step, so a switch of his setting while the ring shows can move the drawing at once.
+    surface.begin({ token, frame: found.frame, label: step.label, n, total, act: (outcome) => void host.evaluate(found.frame.key, guideEndScript(token, outcome)).catch(() => undefined) })
+    let toldAt = Number.NEGATIVE_INFINITY
+    const off = host.onReport?.((report) => {
+      if (report.token !== token) return
+      toldAt = now()
+      surface.report(report)
+    })
+    if (off !== undefined) cleanups.push(off)
+    // A frame that cannot tell (no binding there) is asked instead; one that tells is left alone.
+    let asking = false
+    const ask = setInterval(() => {
+      if (asking || now() - toldAt < REPORT_ASK_MS * 4) return
+      asking = true
+      host
+        .evaluate(found.frame.key, guideReportReadScript(token))
+        .then((value) => {
+          const report = parseReport(value)
+          if (report !== null && report.token === token && now() - toldAt >= REPORT_ASK_MS * 4) surface.report(report)
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          asking = false
+        })
+    }, REPORT_ASK_MS)
+    cleanups.push(() => clearInterval(ask))
+    cleanups.push(() => surface.end(token))
+  }
   const show = host
-    .evaluate(found.frame.key, guideShowScript({ token, query: found.query, mode: found.mode, pick: found.pick, label: step.label, step: n, total, ...extra }))
+    .evaluate(found.frame.key, guideShowScript({ token, query: found.query, mode: found.mode, pick: found.pick, label: step.label, step: n, total, ...extra, ...(outside ? { report: true } : {}) }))
     .then((value) => ({ kind: 'show' as const, show: parseShow(value) }))
     .catch(() => ({ kind: 'gone' as const }))
-  const cleanups: Array<() => void> = []
   const navigated = new Promise<{ kind: 'nav' }>((resolve) => {
     cleanups.push(host.onNavigate(() => resolve({ kind: 'nav' })))
   })

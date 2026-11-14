@@ -93,3 +93,55 @@
 .qw-hint{color:var(--on-sv)}
 .qw-answer{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;line-height:1.5;color:var(--on-bg)}
 .qw-problem{color:var(--err);font-size:13px;overflow-wrap:anywhere}
+.qw-row .chip{flex:none}
+
+/* ---------- the quick ask orb (#/quick-window, 11 Nov 2026): a see-through window holding the orb, its pill and one
+   bubble of help or answer. Dragged by the orb; the main process moves and snaps the window. ---------- */
+html.quick-own,html.quick-own body,html.quick-own #root{background:transparent !important}
+.qo{height:100%;padding:20px;display:flex;flex-direction:column;gap:10px;font-family:var(--font);color:var(--on-bg);user-select:none}
+.qo-row{display:flex;align-items:center;gap:10px;min-width:0}
+.qo-orb{position:relative;flex:none;width:60px;height:60px;border-radius:50%;border:0;display:grid;place-items:center;
+  background:var(--s-lowest);color:var(--on-primary);cursor:grab;touch-action:none;
+  box-shadow:0 10px 28px rgba(20,16,60,.22),0 1px 3px rgba(20,16,60,.12);transition:background .25s var(--effects),transform .2s var(--spatial)}
+.qo-orb:active{cursor:grabbing;transform:scale(.96)}
+.qo-orb:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+.qo.show .qo-orb{background:var(--primary)}
+.qo-point{fill:var(--on-primary)}
+.qo-ring{position:absolute;inset:0;border-radius:50%;border:2px solid var(--primary);animation:qo-pulse 1.6s ease-out infinite;pointer-events:none}
+.qo-ring.late{animation-delay:.8s}
+@keyframes qo-pulse{0%{transform:scale(1);opacity:.55}100%{transform:scale(1.8);opacity:0}}
+.qo-badge{position:absolute;right:-2px;top:-2px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;
+  background:var(--ok);color:var(--on-ok);box-shadow:0 0 0 2px var(--s-lowest)}
+.qo-pill{flex:1;min-width:0;height:60px;border-radius:999px;display:flex;align-items:center;gap:6px;padding:0 10px 0 22px;
+  background:var(--s-lowest);box-shadow:0 10px 28px rgba(20,16,60,.22),0 1px 3px rgba(20,16,60,.12);
+  outline:2px solid transparent;transition:outline-color .25s var(--effects);transform-origin:left center;animation:qo-grow .42s var(--spatial)}
+@keyframes qo-grow{from{clip-path:inset(0 calc(100% - 60px) 0 0 round 999px);opacity:.4}to{clip-path:inset(0 0 0 0 round 999px);opacity:1}}
+.qo.show .qo-pill{outline-color:var(--primary)}
+.qo-pill input{flex:1;min-width:0;height:44px;border:0;background:transparent;color:var(--on-bg);font:inherit;font-size:16px;outline:none;user-select:text}
+.qo-pill input::placeholder{color:var(--outline)}
+.qo-icon{flex:none;width:36px;height:36px;border-radius:50%;border:0;display:grid;place-items:center;background:transparent;color:var(--on-sv);cursor:pointer;
+  transition:background .2s var(--effects),color .2s var(--effects)}
+.qo-icon:hover{background:var(--s-mid)}
+.qo-icon.on{background:var(--pc);color:var(--on-pc)}
+.qo-send{flex:none;width:40px;height:40px;border-radius:50%;border:0;display:grid;place-items:center;background:var(--s-high);color:var(--outline);cursor:pointer;
+  transition:background .2s var(--effects),color .2s var(--effects)}
+.qo-send.ready{background:var(--primary);color:var(--on-primary)}
+.qo-send:disabled{cursor:default}
+.qo-bubble{align-self:flex-start;margin-left:70px;max-width:calc(100% - 70px);padding:9px 14px;border-radius:6px 18px 18px 18px;
+  background:var(--pc);color:var(--on-pc);font-size:13.5px;line-height:1.45;box-shadow:0 8px 22px rgba(20,16,60,.18);animation:qo-in .25s var(--effects)}
+.qo-bubble kbd{display:inline-flex;align-items:center;height:18px;padding:0 5px;border-radius:5px;font:inherit;font-size:11px;font-weight:600;
+  background:color-mix(in srgb,var(--on-pc) 12%,transparent)}
+.qo-answer{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.qo-problem{color:var(--err)}
+.qo-dict{display:block;min-width:0}
+@keyframes qo-in{from{opacity:0;transform:translateY(-4px)}}
+
+/* Live voice: the bar shrinks to the orb and a small pill inside the same window; the orb is still the drag handle. */
+.qo-live-dot{position:absolute;right:-1px;top:-1px;width:14px;height:14px;border-radius:50%;background:var(--err);border:2px solid var(--s-low);animation:qo-live 1.4s ease-in-out infinite}
+@keyframes qo-live{50%{opacity:.35}}
+.qo-pill.qo-livebar{flex:none;width:auto;min-width:200px;padding:0 10px 0 6px;animation:none}
+.qo-live-main{flex:1;min-width:0;height:44px;display:flex;align-items:center;gap:10px;padding:0 12px 0 14px;border:0;border-radius:999px;background:transparent;color:var(--on-bg);font:inherit;font-size:14px;cursor:pointer;text-align:left}
+.qo-live-main:hover{background:var(--s-mid)}
+.qo-live-main b{font:700 11px/16px var(--font);letter-spacing:.14em;color:var(--err)}
+.qo.live:not(.compact) .qo-orb{box-shadow:0 0 0 2px var(--err)}
+@media (prefers-reduced-motion:reduce){.qo-live-dot,.qo-ring{animation:none}}

@@ -19,6 +19,7 @@ import type {
   DataChange,
   ProjectRow,
   BrowserState,
+  BrowserHandOver,
   BrowserViewMode,
   ChatEvent,
   ChatItem,
@@ -371,6 +372,7 @@ function signInError(email: string, password: string): string | null {
 const runState: RunState = { running: false, waiting: [] }
 
 const browserListeners = new Set<(state: BrowserState) => void>()
+const handOverListeners = new Set<(page: BrowserHandOver) => void>()
 // Only the seeded demo has a page open; empty and fresh modes show the browser's own empty state.
 const demoBrowser = mode === 'demo' || mode === 'big'
 const mockBrowser: BrowserState = {
@@ -1115,7 +1117,37 @@ export const mockAgent: AgentApi = {
     },
     async setExpanded(on: boolean) {
       mockBrowser.expanded = on
+      if (!on) mockBrowser.fullScreen = false
       notifyBrowser()
+    },
+    async setFullScreen(on: boolean) {
+      mockBrowser.fullScreen = on
+      if (on) mockBrowser.expanded = true
+      notifyBrowser()
+    },
+    async handOver() {
+      const tab = mockBrowser.tabs.find((each) => each.active) ?? mockBrowser.tabs[0]
+      if (tab === undefined) return false
+      // The preview has no real page: the same payload the app builds, with example files.
+      const page: BrowserHandOver = {
+        tabId: tab.id,
+        url: tab.url,
+        title: tab.title,
+        selection: '',
+        problem: '',
+        attachments: [
+          { path: `C:\\Users\\You\\AppData\\Roaming\\Agent\\attachments\\${tab.title}.page.md`, name: `${tab.title}.page.md`, mime: 'text/markdown', size: 412 },
+          { path: `C:\\Users\\You\\AppData\\Roaming\\Agent\\attachments\\${tab.title}.png`, name: `${tab.title}.png`, mime: 'image/png', size: 184_000 },
+        ],
+      }
+      for (const listener of handOverListeners) listener(page)
+      return true
+    },
+    onHandOver(callback: (page: BrowserHandOver) => void): Unsubscribe {
+      handOverListeners.add(callback)
+      return () => {
+        handOverListeners.delete(callback)
+      }
     },
     async setView(viewMode: BrowserViewMode) {
       mockBrowser.view = { ...MOCK_VIEWS[viewMode] }
@@ -1514,6 +1546,13 @@ export const mockAgent: AgentApi = {
   ...mockHotkeys(() => settings),
   workers: mockWorkers(),
   vault: mockVault(),
+  // Show me how, in the preview: the bar shows its chip and its hint; there is no screen of his to guide on here.
+  showMe: {
+    start: async () => ({ ok: false, message: 'Showing you on screen needs the desktop app.' }),
+    stop: async () => undefined,
+    state: async () => ({ running: false, phase: 'idle' as const, question: '', step: 0, of: 0, label: '', message: '', failed: false, at: 0 }),
+    onState: () => () => undefined,
+  },
   git: {
     log: async () => [],
     report: async () => [],

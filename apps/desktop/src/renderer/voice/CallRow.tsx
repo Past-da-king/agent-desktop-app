@@ -1,6 +1,7 @@
 import type { ChatItem } from '@agent/core'
 import { useState } from 'react'
 
+import { handoffsOfCall } from '../lib/live'
 import { parseMeta } from '../lib/meta'
 import { VoiceIcon } from './VoiceIcon'
 
@@ -32,6 +33,17 @@ export function CallRow({ item, agentName }: { item: ChatItem; agentName: string
   const duration = typeof meta['durationMs'] === 'number' ? meta['durationMs'] : 0
   const lines = linesOf(meta)
   const spoken = lines.filter((line) => line.who !== 'note').length
+  // A Live voice session is a call that can see; its hand-offs to the agent fold inside, never a bubble of his.
+  const live = meta['source'] === 'live'
+  const pending = meta['pending'] === true
+  const handoffs = handoffsOfCall(meta)
+  const parts = [
+    ...(handoffs.length > 0 ? [`${handoffs.length} ${handoffs.length === 1 ? 'job' : 'jobs'} handed to the agent`] : []),
+    ...(spoken > 0 ? [`${spoken} ${spoken === 1 ? 'line' : 'lines'} of transcript`] : []),
+  ]
+  const summary = parts.length > 0 ? parts.join(', ') : 'Nothing was said'
+  const title = `${live ? 'Live voice' : 'Call'}${pending ? '' : `, ${callLength(duration)}`}`
+  const at = new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   return (
     <div className={`call-row${open ? ' open' : ''}`}>
       <button type="button" className="call-row-h" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -39,14 +51,23 @@ export function CallRow({ item, agentName }: { item: ChatItem; agentName: string
           <VoiceIcon name="handset" size={18} />
         </span>
         <span className="call-row-t">
-          <b>Call, {callLength(duration)}</b>
-          <span>{spoken === 0 ? 'Nothing was said' : `${spoken} ${spoken === 1 ? 'line' : 'lines'} of transcript`}</span>
+          <b>{title}</b>
+          <span>
+            {at} · {summary}
+          </span>
         </span>
         <span className="call-row-c">{open ? 'Hide' : 'Show'}</span>
       </button>
       {open ? (
         <div className="call-row-b">
-          {lines.length === 0 ? <p className="muted">No transcript was kept.</p> : null}
+          {handoffs.map((entry, index) => (
+            <div key={`h${index}`} className="call-hand">
+              <b>Handed to the agent</b>
+              <p>{entry.request}</p>
+              {entry.spoken !== '' ? <blockquote>{entry.spoken}</blockquote> : null}
+            </div>
+          ))}
+          {lines.length === 0 && handoffs.length === 0 ? <p className="muted">No transcript was kept.</p> : null}
           {lines.map((line, index) =>
             line.who === 'note' ? (
               <div key={index} className="call-note">

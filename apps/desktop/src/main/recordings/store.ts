@@ -177,6 +177,9 @@ export interface RecordingDetail extends RecordingSummary {
   folder: string
 }
 
+/** Where the pieces of phone dictations are kept (beside the day folders, which only hold recordings made here). */
+export const PHONE_AUDIO_DIR = 'phone-audio'
+
 const ID_PATTERN = /^(\d{4})(\d{2})(\d{2})-\d{6}-[0-9a-f]{4,8}$/
 const CHUNK_PATTERN = /^(\d{6})\.pcm$/
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
@@ -366,6 +369,50 @@ export class Recordings {
     await writeAtomic(join(dir, 'transcript.txt'), text)
     await writeAtomic(join(dir, 'manifest.json'), JSON.stringify(manifest))
     return id
+  }
+
+  /**
+   * The audio of a phone dictation, kept like the audio of a recording made here (12 Nov 2026). The phone sends each
+   * piece of a take to be written down (voice.transcribe) and its recording row only carries the words, so a take whose
+   * words came back wrong could never be replayed. Each piece is saved as a playable wav under
+   * `<root>/phone-audio/<yyyy-mm-dd>/<hhmmss-mmm>-<rand>.wav` and goes with the keep setting (cleanup). Never throws:
+   * a piece that cannot be saved must not stop its words coming back. Returns the file name, or null.
+   */
+  async keepPhoneAudio(pcm: Buffer): Promise<string | null> {
+    try {
+      if (pcm.length === 0) return null
+      const at = this.now()
+      const date = new Date(at)
+      const dir = join(this.root, PHONE_AUDIO_DIR, dayKey(at))
+      await fsp.mkdir(dir, { recursive: true })
+      const name = `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}-${String(date.getMilliseconds()).padStart(3, '0')}-${randomBytes(2).toString('hex')}.wav`
+      const even = pcm.length % 2 === 0 ? pcm : pcm.subarray(0, pcm.length - 1)
+      await writeAtomic(join(dir, name), Buffer.concat([wavHeader(even.length), even]))
+      return name
+    } catch (error) {
+      this.log('Phone audio not kept', { reason: error instanceof Error ? error.message : String(error) })
+      return null
+    }
+  }
+
+  /** Phone audio from before the keep setting's cutoff goes (day folders, oldest first). */
+  private async cleanPhoneAudio(keep: AudioKeep): Promise<number> {
+    if (keep === 'always') return 0
+    const cutoff = keep === 'week' ? dayKey(this.now() - 7 * 86_400_000) : dayKey(this.now())
+    const base = join(this.root, PHONE_AUDIO_DIR)
+    let removed = 0
+    let days: string[] = []
+    try {
+      days = (await fsp.readdir(base)).filter((name) => DAY_PATTERN.test(name))
+    } catch {
+      return 0
+    }
+    for (const day of days) {
+      if (day >= cutoff) continue
+      await fsp.rm(join(base, day), { recursive: true, force: true })
+      removed += 1
+    }
+    return removed
   }
 
   private dirOf(id: string): string | null {
@@ -585,6 +632,8 @@ export class Recordings {
       deleted.push(folder.id)
     }
     if (deleted.length > 0) this.log('Recording audio deleted by the keep setting', { count: deleted.length, keep })
+    const phoneDays = await this.cleanPhoneAudio(keep)
+    if (phoneDays > 0) this.log('Phone audio deleted by the keep setting', { days: phoneDays, keep })
     return { deleted, kept }
   }
 

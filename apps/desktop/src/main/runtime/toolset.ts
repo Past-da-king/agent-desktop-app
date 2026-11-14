@@ -16,6 +16,9 @@ import { codeTools } from '../tools/code'
 import { browserTools } from '../tools/browser'
 import { browserProTools } from '../tools/browser-pro'
 import { browserGuideTools } from '../tools/browser-guide'
+import { screenGuideTools, type ScreenGuideHost } from '../tools/screen-guide'
+import { agentDesktopTools } from '../tools/agent-desktop'
+import { screenControlTools, type ScreenControlHost } from '../tools/screen-control'
 import { browserDevtoolsTools } from '../tools/browser-devtools'
 import { devtoolsOf } from '../browser/devtools'
 import { coreTools, type CoreToolDeps } from '../tools/core'
@@ -54,6 +57,7 @@ import type { VaultStore } from '../vault/store'
 import type { BrowserVault } from '../vault/browser-vault'
 import { presenceTools, type MeetingEndedHost } from '../tools/presence'
 import { recordingsTools, type RecordingsReader } from '../tools/recordings'
+import { decideTool, type DecisionService } from '../decisions'
 import { calendarTools, type CalendarReader } from '../tools/calendar'
 import { miniAppTools, type MiniAppUi } from '../tools/miniapps'
 import { gitTools, type GitToolDeps } from '../tools/git'
@@ -109,12 +113,18 @@ export interface ToolsetDeps extends CoreToolDeps {
   recordings?: RecordingsReader
   /** His connected calendars, read through the presence cache (presence/calendar.ts): calendar_events. */
   calendar?: () => CalendarReader | null
+  /** The decision service (decisions/): the decide tool. Off by default in Settings; absent: no decide tool. */
+  decisions?: () => DecisionService | null
   /** Settings > Git: git_status_report, git_autocommit_log. */
   git?: Omit<GitToolDeps, 'store'>
   /** Showing and looking at mini-apps (the desktop window). Absent: the miniapp_* tools save and edit only. */
   miniappUi?: () => MiniAppUi | null
   /** The desktop window's list of files an agent has shown (media/shown.ts): show_media. Absent on a headless node. */
   media?: Omit<MediaToolDeps, 'store'>
+  /** Show me how (showme/service.ts): screen_guide, a guided ring on whatever window he is on. Absent on a headless node. */
+  showMe?: () => ScreenGuideHost | null
+  /** Working in other programs without his mouse, keyboard or focus (agent-cursor/): screen_windows, screen_read, screen_act. */
+  screenControl?: () => ScreenControlHost | null
 }
 
 /** With Devices: the device tools, and the local ones able to run on another device. */
@@ -268,6 +278,9 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...webAppTools(deps.learned, deps.browser === undefined ? undefined : browserRunner(deps.browser)).filter((tool) => tool.spec.name !== 'browser_eval' && tool.spec.name !== 'browser_network'), // webapp_*
     ...browserProTools({ browser: deps.browser }), // browser_view, browser_fix, browser_snapshot, browser_act, browser_eval
     ...browserGuideTools({ browser: deps.browser, ...(deps.learned === undefined ? {} : { learned: deps.learned }) }), // browser_guide, browser_guide_log, browser_guide_save_app
+    ...(deps.showMe === undefined ? [] : screenGuideTools({ showMe: deps.showMe })), // screen_guide
+    ...(deps.screenControl === undefined ? [] : screenControlTools({ control: deps.screenControl })), // screen_windows, screen_read, screen_act
+    ...agentDesktopTools(), // agent_desktop: the agent's own desktop for programs that ignore posted input
     // The developer tools replace the learned apps' in-page network watcher: every tab records from the start.
     ...browserDevtoolsTools({ devtools: () => devtoolsOf(deps.browser) }), // browser_network, browser_network_get, browser_fetch, browser_console, browser_inspect, browser_storage
     ...(deps.appControl?.invoker === undefined ? [] : appActionTools({ invoker: deps.appControl.invoker })), // app_actions, app_action: every button in the window
@@ -275,6 +288,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
     ...(deps.recordings === undefined ? [] : recordingsTools(deps.recordings)), // recordings_list, recordings_get
     ...(deps.appControl === undefined ? [] : appControlTools(deps.appControl)), // devices_status, devices_switch, device_pair_offer, device_join, device_remove, device_roles, device_order, device_share, devices_firewall_allow, devices_addresses, settings_get, settings_set
     ...calendarTools(deps.calendar ?? (() => null)), // calendar_events: every connected calendar in one list
+    ...(deps.decisions === undefined ? [] : [decideTool(deps.decisions)]), // decide: yes/no, choice and score questions, answered with probabilities
     ...(deps.git === undefined ? [] : gitTools({ ...deps.git, store: deps.store })), // git_status_report, git_autocommit_log
     ...(deps.media === undefined ? [] : mediaTools({ ...deps.media, store: deps.store })), // show_media: play a local file in the chat
     ...miniAppTools({ store: deps.store, knownTools: () => names, ...(deps.miniappUi === undefined ? {} : { ui: deps.miniappUi }), ...(deps.devices === undefined ? {} : { devices: deps.devices }) }), // miniapp_guide, miniapp_create, miniapp_update, miniapp_list, miniapp_get, miniapp_open, miniapp_pin, miniapp_unpin, miniapp_undo, miniapp_check, miniapp_delete

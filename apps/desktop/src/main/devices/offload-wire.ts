@@ -10,7 +10,7 @@ import { MAIN_CHAT, NO_LIMIT_CAP, accountsOf, resolvePick, type AiAccount, type 
 
 import { brainFor, isBrain, type ProviderFactory } from '../runtime/brains'
 import type { HelperManager, OffloadLink } from '../runtime/helpers'
-import { Offload, TAKE_BACK_MS, type NodeCapacity, type PlaceResult } from '../runtime/offload'
+import { Offload, TAKE_BACK_MS, type NodeCapacity, type PlaceResult, type SlotClaim } from '../runtime/offload'
 import type { ChatVia } from '../tools/projects'
 import { devicesState, ownBrainIds } from './sync'
 
@@ -38,7 +38,7 @@ export interface OffloadWireDeps {
   secrets: { get(name: string): string | null }
   providerFactory: ProviderFactory
   /** Whether this build runs plans, and which ones are signed in here. */
-  cli: { signedIn(cli: 'claude' | 'codex'): boolean } | null
+  cli: { signedIn(cli: 'claude' | 'codex'): boolean; onSignInChange?: ((cli: 'claude' | 'codex', usable: boolean) => void) | null } | null
   /** The chat runner, once made. */
   runner: () => OffloadRunner | null
   kind: 'desktop' | 'server'
@@ -59,7 +59,8 @@ export interface OffloadWire {
   /** Where a new project chat runs (project_chat_start). */
   placeChat(chat: string, project: ProjectRow, brief: string, device?: string): Promise<PlaceResult | null>
   /** Whether this brain runs a due routine slot. */
-  claimRoutine(trigger: TriggerRow): Promise<boolean>
+  /** The authoritative claim on one slot of a routine: null/false stands down, else the claim (key, fence, verify). */
+  claimRoutine(trigger: TriggerRow, slotKey: string): Promise<SlotClaim | null>
   /** Whether this brain runs a day's End of day memory pass (the person's own computer first). */
   claimDaily(day: string): Promise<boolean>
   /** The chat runner as the window and other devices use it: placed chats go to their brain. */
@@ -96,6 +97,18 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     for (const [account, until] of Object.entries(saved)) if (typeof until === 'number' && until > now()) cannot.set(account, until)
   } catch {
     // Nothing remembered.
+  }
+  let offloadRef: Offload | null = null
+  // A login found dead or working again is told to the other devices at once, and a plan that works again is not held
+  // back by an old failure (the six hours a failed helper rests an account for).
+  if (deps.cli !== null && deps.cli.onSignInChange !== undefined) {
+    deps.cli.onSignInChange = (cli, usable) => {
+      if (usable) {
+        for (const account of accountsOf(settings.get())) if (account.kind === cli) cannot.delete(account.id)
+        store.setLocalValue(CANNOT_KEY, JSON.stringify(Object.fromEntries(cannot)))
+      }
+      void offloadRef?.beat().catch(() => undefined)
+    }
   }
   const canRun = (account: AiAccount): boolean => {
     if ((cannot.get(account.id) ?? 0) > now()) return false
@@ -145,7 +158,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     return helpers.onRemote(msg)
   }
 
-  const offload = new Offload({
+  const offload: Offload = new Offload({
     store,
     selfId,
     isSelf,
@@ -171,6 +184,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
       void offload.beat().catch(() => undefined)
     },
   }
+  offloadRef = offload
   helpers.setOffload(link)
 
   // Project chats other computers placed here, with the commands-and-files choice each carries (read when a turn
@@ -269,9 +283,9 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
       }
       return placed
     },
-    claimRoutine: async (trigger) => {
+    claimRoutine: async (trigger, slotKey) => {
       const pick = resolvePick(settings.get(), undefined, 'main')
-      return offload.claimRoutine(trigger.id, String(trigger.lastRunAt ?? 0), { text: `${trigger.name}\n${trigger.prompt}`, account: pick.account, ...(trigger.device === undefined || trigger.device === '' ? {} : { device: trigger.device }) })
+      return offload.claimSlot(trigger.id, slotKey, { text: `${trigger.name}\n${trigger.prompt}`, account: pick.account, ...(trigger.device === undefined || trigger.device === '' ? {} : { device: trigger.device }) })
     },
     // The pass's report and its Undo live on the computer that ran it, so the person's own computer goes first and
     // a server does it only when no computer claimed the day within the grace.

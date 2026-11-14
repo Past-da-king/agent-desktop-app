@@ -15,6 +15,10 @@ describe('renderer content security policy', () => {
 
   it('stays closed to remote media and scripts', () => {
     expect(directive('media-src')).not.toContain('https:')
-    expect(directive('script-src')).toEqual(["'self'"])
+    // Scripts come from the app's own files, and from blobs the app itself makes (the microphone's worklet, 11 Nov
+    // 2026): never from a host, a wildcard or an inline <script>.
+    expect(directive('script-src').filter((source) => source !== "'self'" && source !== 'blob:')).toEqual([])
+    expect(directive('script-src')).toContain("'self'")
+    expect(directive('script-src')).not.toContain("'unsafe-inline'")
   })
 })

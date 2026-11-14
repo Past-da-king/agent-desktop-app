@@ -49,6 +49,7 @@ import { isIconImage } from '../shared/project-icon'
 import { feedState } from './devices/feed-state'
 import { changesForPhone, isPhoneListOpts, listForPhone } from './devices/phone-reads'
 import { wireOf } from './devices/registry'
+import { checkRemoteRemove, checkRemoteUpsert } from './devices/rpc-policy'
 import { DEVICE_CHANNELS } from '../shared/device-channels'
 import { rememberCards, trimHelperRow } from '../shared/device-feed'
 import { DEVICE_CHAT_ROWS, boundRows, isLiveHelper, isOpenCard } from '../shared/device-list'
@@ -68,7 +69,7 @@ import type { HelperHost } from './runtime/helpers'
 import type { Secrets } from './secrets'
 import type { SettingsStore } from './settings'
 import { CHANNELS, EVENTS } from '../shared/channels'
-import { messageOrigin } from './devices/origin'
+import { messageOrigin, originWithLive } from './devices/origin'
 import { dismissCard } from './runtime/card-dismiss'
 import type { MessageOrigin } from './devices/types'
 
@@ -109,10 +110,11 @@ export interface ChatRunner {
   states?(): ChatRunInfo[]
   /** A new chat with the history up to this message. */
   branch?(itemId: string): Promise<string>
-  answer(itemId: string, answer: string): Promise<void>
-  decide(itemId: string, decision: Decision): Promise<void>
-  /** A button tap on an agent card, heard by the agent quietly. */
-  tap(itemId: string, label: string, message: string): Promise<void>
+  /** `by`: the device the answer came from (devices/origin.ts name), kept on the card as who answered first. */
+  answer(itemId: string, answer: string, by?: string): Promise<void>
+  decide(itemId: string, decision: Decision, by?: string): Promise<void>
+  /** A button tap on an agent card, heard by the agent quietly. `tapId`: the client's id for this one tap (retries repeat it). */
+  tap(itemId: string, label: string, message: string, tapId?: string): Promise<void>
   /** Optional: only the real runner can drive an installed AI tool. */
   checkCli?(accountId?: string): Promise<{ ok: boolean; message: string }>
   cliLogin?(accountId?: string): Promise<{ ok: boolean; message: string }>
@@ -140,6 +142,9 @@ export interface BrowserControl {
   /** Optional so older fakes keep compiling; AgentBrowser has it. */
   setViewMode?(mode: BrowserViewMode): Promise<void>
   setExpanded?(on: boolean): void
+  setFullScreen?(on: boolean): void
+  /** The person hands the page in front to the agent; true when there was a page to hand over. */
+  handOverPage?(): Promise<boolean>
   frame?(): Promise<string | null>
   personOpen?(address: string): Promise<void>
   personNewTab?(): void
@@ -447,18 +452,22 @@ export function registerIpc(deps: IpcDeps): () => void {
     return store.get(entityArg(rawEntity), requireString(rawId, 'id', MAX_STRING))
   })
 
-  handle(CHANNELS.data.upsert, async (_event, rawEntity, rawRow) => {
-    const entity = entityArg(rawEntity)
-    let row = requireObject(rawRow, 'row')
+  handle(CHANNELS.data.upsert, async (event, rawEntity, rawRow) => {
+    // A write from another device only ever touches what a person edits by hand, field by field (devices/rpc-policy.ts):
+    // checked here too, so no way in (the RPC door, the headless node, a future caller) skips it.
+    const remote = wireOf(event) !== null ? checkRemoteUpsert(rawEntity, rawRow) : null
+    const entity = entityArg(remote === null ? rawEntity : remote.entity)
+    let row = requireObject(remote === null ? rawRow : remote.row, 'row')
     if (entity === 'trigger') row = await guardRoutineWrite(store, row)
     if (entity === 'project') row = withSafeIcon(withKnownPicks(row, deps))
     // A memory page changed in the window is the person's own edit (memory/history.ts).
-    const saved = await asWriter('you', undefined, () => store.upsert(entity, row as RowInput<EntityName>))
+    const saved = await asWriter('you', undefined, () => store.upsert(entity, row as RowInput<EntityName>, { restore: true }))
     account.nudge()
     return saved
   })
 
-  handle(CHANNELS.data.remove, async (_event, rawEntity, rawId) => {
+  handle(CHANNELS.data.remove, async (event, rawEntity, rawId) => {
+    if (wireOf(event) !== null) checkRemoteRemove(rawEntity, rawId)
     const entity = entityArg(rawEntity)
     const id = requireString(rawId, 'id', MAX_STRING)
     await asWriter('you', undefined, () => store.remove(entity, id))
@@ -471,7 +480,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     const text = requireString(rawText, 'message', MAX_MESSAGE)
     const attachments = requireAttachments(rawAttachments)
     const target = optionalChat(rawChat)
-    const origin = messageOrigin(event)
+    const origin = originWithLive(messageOrigin(event), rawOptions)
     // A reply on a project's card: to that project chat, and its answer back to the chat the card is in.
     const replyIn = typeof rawOptions === 'object' && rawOptions !== null ? optionalChat((rawOptions as Record<string, unknown>)['replyIn']) : undefined
     if (replyIn !== undefined && target !== undefined && deps.chat !== undefined) {
@@ -492,7 +501,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     const attachments = requireAttachments(input['attachments'] ?? [])
     const target = optionalChat(input['chat'])
     const replyIn = optionalChat(input['replyIn'])
-    const origin = messageOrigin(event)
+    const origin = originWithLive(messageOrigin(event), input)
     return sendOnceGate(
       { sendId: input['sendId'], sentAt: input['sentAt'], fresh: input['fresh'] === true, isOpen: wireOf(event)?.isOpen },
       async () => {
@@ -525,25 +534,28 @@ export function registerIpc(deps: IpcDeps): () => void {
     return chat.branch(id)
   })
 
-  handle(CHANNELS.chat.answer, async (_event, rawId, rawAnswer) => {
+  handle(CHANNELS.chat.answer, async (event, rawId, rawAnswer) => {
     const id = requireString(rawId, 'card id', MAX_STRING)
     const answer = requireString(rawAnswer, 'answer', MAX_ANSWER)
-    await chat.answer(id, answer)
+    await chat.answer(id, answer, messageOrigin(event)?.name ?? 'this computer')
   })
 
-  handle(CHANNELS.chat.decide, async (_event, rawId, rawDecision) => {
+  handle(CHANNELS.chat.decide, async (event, rawId, rawDecision) => {
     const id = requireString(rawId, 'card id', MAX_STRING)
     if (rawDecision !== 'approve' && rawDecision !== 'decline') {
       throw new Error('decision must be approve or decline')
     }
-    await chat.decide(id, rawDecision)
+    // Who decided is kept on the card (decisionBy): the first decision wins and a later one is told by whom.
+    await chat.decide(id, rawDecision, messageOrigin(event)?.name ?? 'this computer')
   })
 
-  handle(CHANNELS.chat.tap, async (_event, rawId, rawLabel, rawMessage) => {
+  handle(CHANNELS.chat.tap, async (_event, rawId, rawLabel, rawMessage, rawTapId) => {
     const id = requireString(rawId, 'message id', MAX_STRING)
     const label = requireString(rawLabel, 'button label', MAX_STRING)
     const message = requireString(rawMessage, 'tap', MAX_ANSWER)
-    await chat.tap(id, label, message)
+    // Optional: an old client sends none (runtime/card-claim.ts falls back to a short duplicate window).
+    const tapId = typeof rawTapId === 'string' ? rawTapId.slice(0, 100) : ''
+    await chat.tap(id, label, message, tapId)
   })
 
   // ---- routines ----
@@ -678,6 +690,11 @@ export function registerIpc(deps: IpcDeps): () => void {
     if (typeof rawOn !== 'boolean') throw new Error('expanded must be true or false')
     deps.browser?.setExpanded?.(rawOn)
   })
+  handle(CHANNELS.browser.setFullScreen, async (_event, rawOn) => {
+    if (typeof rawOn !== 'boolean') throw new Error('full screen must be true or false')
+    deps.browser?.setFullScreen?.(rawOn)
+  })
+  handle(CHANNELS.browser.handOver, async () => (await deps.browser?.handOverPage?.()) ?? false)
   handle(CHANNELS.browser.openInSystem, async () => {
     await deps.browser?.openInSystem()
   })

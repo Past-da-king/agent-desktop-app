@@ -4,7 +4,7 @@
  * debugger reaches it through the flat session auto-attach opens for it (the Vault uses the same sessions). Kept to a
  * small link so it is tested without Electron.
  */
-import { GUIDE_WORLD } from './guide-page'
+import { GUIDE_REPORT_BINDING, GUIDE_WORLD, parseReport, type GuideReport } from './guide-page'
 import type { GuideFrame } from './guide'
 
 /** The parts of a page's debugger the guide uses (vault-link.ts debuggerLink is one). */
@@ -24,9 +24,11 @@ interface FrameNode {
  * turns auto-attach on, so none is missed). One per tab.
  */
 export class FrameSessions {
-  private readonly sessions = new Map<string, { targetId: string; url: string }>()
+  private readonly sessions = new Map<string, { targetId: string; url: string; parent: string }>()
   private readonly off: () => void
   private readonly contexts = new Map<string, number>()
+  private readonly reportListeners = new Set<(report: GuideReport) => void>()
+  private binding = false
 
   constructor(private readonly link: GuideLink) {
     this.off = link.onEvent((method, params, rawSession) => {
@@ -35,7 +37,9 @@ export class FrameSessions {
         const info = (params['targetInfo'] ?? {}) as Record<string, unknown>
         const sid = typeof params['sessionId'] === 'string' ? params['sessionId'] : ''
         if (sid !== '' && info['type'] === 'iframe') {
-          this.sessions.set(sid, { targetId: String(info['targetId'] ?? ''), url: String(info['url'] ?? '') })
+          // The session that announced it is the one its frame element lives in (the top page's: '').
+          this.sessions.set(sid, { targetId: String(info['targetId'] ?? ''), url: String(info['url'] ?? ''), parent: sessionId ?? '' })
+          if (this.binding) void this.bind(sid)
           // A cross-site frame inside a cross-site frame gets a session of its own too.
           void link.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true, filter: [{ type: 'iframe' }] }, sid).catch(() => undefined)
         }
@@ -48,6 +52,10 @@ export class FrameSessions {
         for (const [key, ctx] of this.contexts) if (ctx === id && key.startsWith(`${sessionId ?? ''}|`)) this.contexts.delete(key)
       } else if (method === 'Runtime.executionContextsCleared') {
         for (const key of [...this.contexts.keys()]) if (key.startsWith(`${sessionId ?? ''}|`)) this.contexts.delete(key)
+      } else if (method === 'Runtime.bindingCalled') {
+        if (params['name'] !== GUIDE_REPORT_BINDING || this.reportListeners.size === 0) return
+        const report = parseReport(params['payload'])
+        if (report !== null) for (const listener of [...this.reportListeners]) listener(report)
       } else if (method === 'Page.frameNavigated') {
         const frame = (params['frame'] ?? {}) as Record<string, unknown>
         this.contexts.delete(`${sessionId ?? ''}|${String(frame['id'] ?? '')}`)
@@ -62,6 +70,78 @@ export class FrameSessions {
 
   stop(): void {
     this.off()
+    this.reportListeners.clear()
+  }
+
+  /**
+   * Hears every frame's report of where its target is (a step drawn outside the page). The report function exists
+   * only in the guide's own world of each frame, never in the site's.
+   */
+  onReport(listener: (report: GuideReport) => void): () => void {
+    this.reportListeners.add(listener)
+    if (!this.binding) {
+      this.binding = true
+      void this.bind(undefined)
+      for (const sid of this.sessions.keys()) void this.bind(sid)
+    }
+    return () => {
+      this.reportListeners.delete(listener)
+    }
+  }
+
+  private async bind(sid: string | undefined): Promise<void> {
+    await this.link.send('Runtime.addBinding', { name: GUIDE_REPORT_BINDING, executionContextName: GUIDE_WORLD }, sid).catch(() => undefined)
+  }
+
+  /**
+   * Where a frame's viewport is inside the TOP page's viewport (CSS px): the content box of each frame element on
+   * the way up. Within one process the debugger answers in that process's root viewport, so only the frame's own
+   * element and then one element per cross-site hop are read. Null when it cannot be worked out (a frame gone).
+   */
+  async frameBox(key: string): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    const bar = key.indexOf('|')
+    let sid = key.slice(0, bar)
+    const frameId = key.slice(bar + 1)
+    let x = 0
+    let y = 0
+    let size: { width: number; height: number } | null = null
+    const add = async (frame: string, inSession: string): Promise<boolean> => {
+      const box = await this.ownerBox(frame, inSession).catch(() => null)
+      if (box === null) return false
+      x += box.x
+      y += box.y
+      if (size === null) size = { width: box.width, height: box.height }
+      return true
+    }
+    const root = sid === '' ? null : (this.sessions.get(sid)?.targetId ?? null)
+    if (sid === '' || frameId !== root) {
+      // A frame inside its process's root page.
+      if (!(await add(frameId, sid))) return null
+    }
+    for (let hops = 0; sid !== '' && hops < 8; hops++) {
+      const info = this.sessions.get(sid)
+      if (info === undefined) return null
+      if (!(await add(info.targetId, info.parent))) return null
+      sid = info.parent
+    }
+    const got = size as { width: number; height: number } | null
+    return got === null ? null : { x, y, width: got.width, height: got.height }
+  }
+
+  private async ownerBox(frameId: string, sid: string): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    const session = sid === '' ? undefined : sid
+    const owner = (await this.link.send('DOM.getFrameOwner', { frameId }, session)) as Record<string, unknown>
+    const backendNodeId = Number(owner?.['backendNodeId'])
+    if (!Number.isFinite(backendNodeId)) return null
+    const got = (await this.link.send('DOM.getBoxModel', { backendNodeId }, session)) as Record<string, unknown>
+    const quad = ((got?.['model'] ?? {}) as Record<string, unknown>)['content']
+    if (!Array.isArray(quad) || quad.length < 8 || !quad.every((n) => typeof n === 'number')) return null
+    const q = quad as number[]
+    const xs = [q[0]!, q[2]!, q[4]!, q[6]!]
+    const ys = [q[1]!, q[3]!, q[5]!, q[7]!]
+    const left = Math.min(...xs)
+    const top = Math.min(...ys)
+    return { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top }
   }
 
   /** Every frame, in page order: the top page's tree, with each cross-site frame's own tree put in its place. */

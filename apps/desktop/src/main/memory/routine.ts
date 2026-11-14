@@ -6,7 +6,7 @@
  */
 import { MEMORY_DAILY_ROUTINE, type TriggerRow, type UpkeepReport } from '@agent/core'
 
-import type { DataStore } from '../runtime/data'
+import { updateLive, type DataStore } from '../runtime/data'
 import { DEFAULT_DAILY_AT, summaryLine } from './daily'
 
 export const DAILY_ROUTINE_NAME = 'End of day'
@@ -47,7 +47,7 @@ export async function ensureDailyRoutine(
     enabled: setting !== '',
     lastRunAt: report === null ? null : report.at,
     lastResult: report === null ? '' : resultLine(report),
-  })
+  }, { restore: true })
 }
 
 /** The time the pass runs, or '' when the routine is off (or gone). */
@@ -63,9 +63,7 @@ export function resultLine(report: UpkeepReport): string {
 
 /** After any pass (on time, caught up, or run by hand), the routine shows when it ran and what changed. */
 export async function recordDailyRun(store: DataStore, report: UpkeepReport): Promise<void> {
-  const row = await store.get('trigger', MEMORY_DAILY_ROUTINE)
-  if (row === null) return
-  await store.upsert('trigger', { id: row.id, lastRunAt: report.at, lastResult: resultLine(report) })
+  await updateLive(store, 'trigger', MEMORY_DAILY_ROUTINE, () => ({ lastRunAt: report.at, lastResult: resultLine(report) }))
 }
 
 /**

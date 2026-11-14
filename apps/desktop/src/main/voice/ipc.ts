@@ -5,7 +5,8 @@
 import { CHANNELS, EVENTS } from '../../shared/channels'
 import type { DeviceCall } from '@agent/core'
 
-import { messageOrigin } from '../devices/origin'
+import { liveFromInput } from '../../shared/sender'
+import { messageOrigin, originWithLive } from '../devices/origin'
 import type { IpcMainLike } from '../ipc'
 import { callHandoff, callTargets, type CallHandoffDeps } from './handoff'
 import type { VoiceService } from './service'
@@ -26,13 +27,22 @@ export function registerVoiceIpc(
   ipcMain: IpcMainLike & Partial<IpcMainOnLike>,
   /** Where a paired device's call hands its work (voice.callTargets, voice.callHandoff). */
   handoff?: CallHandoffDeps,
+  /**
+   * How a linked device's recording is written down: dictation's own transcription, which carries the person's names
+   * and languages, rather than the plain one here (11 Nov 2026: a phone's dictation reached the desktop with no
+   * vocabulary at all, so his names came back as whatever the model guessed).
+   */
+  transcribeDevice?: (pcm: Buffer) => Promise<{ ok: boolean; text?: string; error?: string }>,
 ): void {
   ipcMain.handle(CHANNELS.voice.setKey, async (_event, key) => {
     if (typeof key !== 'string' || key.length > MAX_KEY) throw new Error('key must be text')
     voice.setKey(key)
   })
   ipcMain.handle(CHANNELS.voice.check, async () => voice.check())
-  ipcMain.handle(CHANNELS.voice.transcribe, async (_event, pcm) => voice.transcribe(bytes(pcm, MAX_DICTATION)))
+  ipcMain.handle(CHANNELS.voice.transcribe, async (_event, pcm) => {
+    const audio = bytes(pcm, MAX_DICTATION)
+    return transcribeDevice === undefined ? voice.transcribe(audio) : transcribeDevice(audio)
+  })
   ipcMain.handle(CHANNELS.voice.speak, async (_event, text) => {
     if (typeof text !== 'string' || text.length > MAX_SPEAK) throw new Error('text must be text')
     return voice.speak(text)
@@ -48,7 +58,7 @@ export function registerVoiceIpc(
   ipcMain.handle(CHANNELS.voice.callHandoff, async (event, raw) => {
     const input = handoffInput(raw)
     if (handoff === undefined) return { ok: false, error: 'This computer cannot take work from a call.', ambiguous: [] }
-    return callHandoff(handoff, input, messageOrigin(event))
+    return callHandoff(handoff, input, originWithLive(messageOrigin(event), raw))
   })
   ipcMain.handle(CHANNELS.voice.callStart, async () => voice.callStart())
   ipcMain.handle(CHANNELS.voice.callMute, async (_event, muted) => {
@@ -114,7 +124,23 @@ export function deviceCall(value: unknown): DeviceCall {
     if ((who !== 'you' && who !== 'agent') || typeof text !== 'string' || text.trim() === '') return []
     return [{ who, text: text.slice(0, MAX_LINE), at: Number.isFinite(Number(at)) ? Number(at) : startedAt }] as DeviceCall['lines']
   })
-  return { startedAt, durationMs, lines }
+  const out: DeviceCall = { startedAt, durationMs, lines }
+  // A Live voice session is a call that can see: it saves as one call with its hand-offs folded inside (shared/sender.ts).
+  const live = liveFromInput(value)
+  const rec = value as { source?: unknown; session?: unknown; handoffs?: unknown }
+  if (live !== null || rec.source === 'live') out.source = 'live'
+  const session = live?.session !== undefined && live.session !== '' ? live.session : typeof rec.session === 'string' ? rec.session.trim().slice(0, 80) : ''
+  if (session !== '') out.session = session
+  if (Array.isArray(rec.handoffs)) {
+    const list = rec.handoffs.slice(0, MAX_CALL_LINES).flatMap((entry: unknown) => {
+      if (typeof entry !== 'object' || entry === null) return []
+      const { request, spoken, at } = entry as { request?: unknown; spoken?: unknown; at?: unknown }
+      if (typeof request !== 'string' || request.trim() === '') return []
+      return [{ request: request.slice(0, MAX_LINE), ...(typeof spoken === 'string' && spoken.trim() !== '' ? { spoken: spoken.slice(0, MAX_LINE) } : {}), at: Number.isFinite(Number(at)) ? Number(at) : startedAt }]
+    })
+    if (list.length > 0) out.handoffs = list
+  }
+  return out
 }
 
 const MAX_HANDOFF = 20_000

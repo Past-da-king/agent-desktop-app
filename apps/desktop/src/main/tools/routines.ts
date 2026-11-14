@@ -25,7 +25,7 @@ import {
 } from '@agent/core'
 
 import { isBuiltinRoutine } from '../memory/routine'
-import type { DataStore } from '../runtime/data'
+import { updateLive, type DataStore } from '../runtime/data'
 import { parseWhen } from './tasks'
 
 const KINDS: Array<TriggerRow['kind']> = ['at', 'daily', 'interval', 'event']
@@ -53,6 +53,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
           profile: str('event only: the profile its desk works in, by name. Leave out for General'),
           device: str('Optional, not for event routines: which linked device runs it, by name. Leave out for the best one (a linked server when it can run it).'),
           event_id: str("Optional, 'at' only: the calendar event id of the meeting a follow-up job belongs to, so the job is brought forward when the meeting ends early"),
+          delta_check: bool("Optional, 'interval' or 'daily' only: when Fast decisions is on in Settings, skip a run when nothing new reached the app (worker events) since the last run, and say nothing. Only for routines that react to worker events. Default false."),
           catch_up: bool("Optional, 'daily' only: true runs a missed day's run when the app is back (closed or asleep at its time). Default false: a run more than 15 minutes late is skipped."),
         },
       ),
@@ -85,6 +86,7 @@ function routineCreate(store: DataStore, now: () => Date): Tool {
         ...(device === '' ? {} : { device }),
         ...(eventId === '' ? {} : { eventId }),
         ...(kind === 'daily' && input['catch_up'] === true ? { catchUp: true } : {}),
+        ...((kind === 'daily' || kind === 'interval') && input['delta_check'] === true ? { deltaCheck: true } : {}),
       })
       await ctx.activity(`New routine: ${name}`, { tool: 'routine_create' })
       return `Routine #${row.id} created: runs ${plainSchedule(kind, spec)}.${
@@ -147,7 +149,8 @@ function routineUpdate(store: DataStore, now: () => Date): Tool {
       const said = [spec === '' ? '' : `runs ${plainSchedule(row.kind, spec)}`, enabled === null ? '' : enabled ? 'switched on' : 'switched off']
         .filter((part) => part !== '')
         .join(' and ')
-      await store.upsert('trigger', { id: row.id, ...(spec === '' ? {} : { spec }), ...(enabled === null ? {} : { enabled }) })
+      const changed = await updateLive(store, 'trigger', row.id, () => ({ ...(spec === '' ? {} : { spec }), ...(enabled === null ? {} : { enabled }) }))
+      if (changed === null) return `No routine #${id}.`
       await ctx.activity(`Changed routine: ${row.name}`, { tool: 'routine_update' })
       return `Routine #${row.id} now ${said}.`
     },

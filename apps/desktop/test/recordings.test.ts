@@ -414,6 +414,29 @@ describe('audio is kept until the end of its day, transcripts always', () => {
     expect(existsSync(join(today, 'audio.wav'))).toBe(true)
   })
 
+  it('keeps the audio of a phone dictation like its own recordings, and drops it with the same setting', async () => {
+    const now = new Date(2026, 10, 12, 11, 0).getTime()
+    const store = new Recordings({ root, now: () => now })
+    const pcm = Buffer.alloc(32_000, 1)
+    const nameToday = await store.keepPhoneAudio(pcm)
+    expect(nameToday).not.toBeNull()
+    const todayFile = join(root, 'phone-audio', dayKey(now), nameToday as string)
+    const wav = readFileSync(todayFile)
+    expect(wav.subarray(0, 4).toString()).toBe('RIFF')
+    expect(wav.length).toBe(44 + 32_000)
+    const old = await new Recordings({ root, now: () => now - 2 * DAY }).keepPhoneAudio(pcm)
+    const oldFile = join(root, 'phone-audio', dayKey(now - 2 * DAY), old as string)
+    expect(existsSync(oldFile)).toBe(true)
+    expect(await store.keepPhoneAudio(Buffer.alloc(0))).toBeNull()
+    await store.cleanup('always')
+    expect(existsSync(oldFile)).toBe(true)
+    await store.cleanup('today')
+    expect(existsSync(oldFile)).toBe(false)
+    expect(existsSync(todayFile)).toBe(true)
+    // It never shows up as a recording of its own.
+    expect(await store.list({})).toHaveLength(0)
+  })
+
   it('keeps audio whose words were never had, and follows the week and always settings', async () => {
     const now = new Date(2026, 9, 26, 15, 0).getTime()
     const unheard = await made(now - DAY, '', false)

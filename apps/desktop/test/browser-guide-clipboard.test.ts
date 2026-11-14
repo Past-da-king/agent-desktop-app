@@ -14,11 +14,12 @@ import { chromium, type Browser, type CDPSession, type Page } from 'playwright-c
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import type { NetEntry } from '../src/main/browser/devtools-log'
-import { ClipboardFill, fillLabel, formatGuide, runGuide, type ClipboardLike, type GuideHost, type GuideStep } from '../src/main/browser/guide'
+import { ClipboardFill, fillLabel, formatGuide, type ClipboardLike, type GuideHost, type GuideStep } from '../src/main/browser/guide'
 import { evaluateIn, FrameSessions, type GuideLink } from '../src/main/browser/guide-host'
 import { formatLog, GuideLog } from '../src/main/browser/guide-log'
 import { stepOf } from '../src/main/tools/browser-guide'
 import { markVaultSteps } from '../src/main/vault/guard'
+import { DRAWS, guideOn } from './helpers/outside-surface'
 
 const SECRET = 'Pa55-word-SECRET-7781'
 
@@ -137,7 +138,7 @@ async function linkFor(session: CDPSession): Promise<GuideLink> {
   }
 }
 
-;(chrome === null ? describe.skip : describe)('clipboard fill in a real Chromium: his paste is the signal', () => {
+;(chrome === null ? describe.skip : describe).each(DRAWS)('clipboard fill in a real Chromium: his paste is the signal (ring drawn by: %s)', (draw) => {
   let browser: Browser
   let server: Server
   let page: Page
@@ -180,7 +181,8 @@ async function linkFor(session: CDPSession): Promise<GuideLink> {
       { label: 'Type the name', target: { name: 'Pixel name', role: 'textbox' }, value: 'Cosmiprint' },
       { label: 'Password', target: { name: 'Password', role: 'textbox' }, value: SECRET, sensitive: true },
     ]
-    const run = runGuide(host, steps, { timeoutMs: 15_000, clipboard, onStep: (e) => { if (e.kind === 'shown') labels.push(e.step.label) } })
+    const on = guideOn(draw)
+    const run = on.run(host, steps, { timeoutMs: 15_000, clipboard, onStep: (e) => { if (e.kind === 'shown') labels.push(e.step.label) } })
     // He clicks the field and pastes what the label says is on his clipboard: a trusted paste into the field.
     const paste = async (selector: string): Promise<number> => {
       await expect.poll(() => page.evaluate(() => document.querySelector('[data-agent-guide]') !== null), { timeout: 5000 }).toBe(true)
@@ -212,6 +214,14 @@ async function linkFor(session: CDPSession): Promise<GuideLink> {
     expect(text).not.toContain(SECRET)
     expect(JSON.stringify(result)).not.toContain(SECRET)
     expect(text).toContain('he pasted it and the clipboard was cleared')
+    if (on.surface !== null) {
+      // Drawn outside the page (this link has no binding, so the frame was asked where its target is): the label it
+      // was given names the field only, both steps were told and ended, and the secret is in nothing it heard.
+      expect(on.surface.begun.map((step) => step.label)).toEqual(labels)
+      expect(on.surface.ended.length).toBe(2)
+      expect(on.surface.reports.some((report) => report.shown)).toBe(true)
+      expect(JSON.stringify([on.surface.begun, on.surface.reports])).not.toContain(SECRET)
+    }
     await context.close()
   })
 })

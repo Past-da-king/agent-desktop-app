@@ -227,3 +227,59 @@ export function projectMemoriesDemo(now: number): MemoryRow[] {
     },
   ]
 }
+
+/** A Live voice session in the main chat: one saved call block with its hand-offs folded inside, and one still going. */
+export function liveDemo(now: number): ChatItem[] {
+  const via = { from: 'call', name: 'Ayanda\'s A35', chat: '' }
+  const at = now - 50 * 60_000
+  return [
+    {
+      id: 'live-call',
+      createdAt: at,
+      kind: 'call',
+      text: 'Live voice, 4 min',
+      meta: JSON.stringify({
+        source: 'live',
+        session: 'live-1',
+        durationMs: 4 * 60_000,
+        endedAt: at + 4 * 60_000,
+        lines: [
+          { who: 'you', text: 'Can you update the end of day report with what we shipped?', at },
+          { who: 'agent', text: 'On it. I am handing that to the main agent now.', at: at + 5000 },
+        ],
+        handoffList: [{ request: 'Update the EOD report with what shipped today', spoken: 'Can you update the end of day report with what we shipped?', at: at + 4000 }],
+        handoffs: 1,
+        visuals: 0,
+        device: true,
+      }),
+    },
+    {
+      id: 'live-h1',
+      createdAt: at + 4000,
+      kind: 'user',
+      text: 'Update the EOD report with what shipped today',
+      meta: JSON.stringify({ via, live: { spoken: 'Can you update the end of day report with what we shipped?', session: 'live-1' } }),
+    },
+    {
+      id: 'live-a1',
+      createdAt: at + 40_000,
+      kind: 'agent',
+      text: 'The EOD report now lists what shipped today.',
+      meta: '{}',
+    },
+    {
+      id: 'live-h2',
+      createdAt: now - 20 * 60_000,
+      kind: 'user',
+      text: 'Check whether the Cosmiprint post went out',
+      meta: JSON.stringify({ via, live: { spoken: 'Did the Cosmiprint post go out?', session: 'live-2' } }),
+    },
+    {
+      id: 'live-a2',
+      createdAt: now - 19 * 60_000,
+      kind: 'agent',
+      text: 'Yes, it went out at 09:00.',
+      meta: '{}',
+    },
+  ]
+}

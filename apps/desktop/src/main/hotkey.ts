@@ -2,19 +2,98 @@
  * The global Quick Ask shortcut and the little window it opens (PLAN.md M8).
  *
  * `HotkeyBinder` holds the register/re-register logic and only talks to an injected shortcut
- * registry, so it can be tested with a fake. `QuickAskWindow` is the real frameless 640x180 window:
- * always on top, centred, closed by a click elsewhere, by Esc, or by asking it to hide.
+ * registry, so it can be tested with a fake. `QuickAskWindow` is the real frameless, see-through 640x180 window
+ * that holds the orb and its pill: always on top, closed by a click elsewhere, by Esc, or by asking it to hide.
+ * He drags it by the orb anywhere on any screen; it snaps to the edges and centre lines, and opens again where he
+ * left it on that screen (11 Nov 2026).
  */
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { BrowserWindow, nativeTheme, screen } from 'electron'
+import { BrowserWindow, ipcMain, screen } from 'electron'
 
-import { EVENTS } from '../shared/channels'
+import { CHANNELS, EVENTS } from '../shared/channels'
 import { safeSend, whileAlive } from './alive'
 
 export const QUICK_ASK_WIDTH = 640
 export const QUICK_ASK_HEIGHT = 180
 export const QUICK_ASK_ROUTE = '#/quick-window'
+/** The see-through margin around the orb and pill inside the window (room for their shadow). */
+export const QUICK_ASK_PAD = 20
+/** How close, in pixels, the bar must come to a screen edge or centre line to snap to it. */
+export const QUICK_ASK_SNAP = 22
+/** The gap the bar keeps from a screen edge it snapped to. */
+const EDGE_GAP = 12
+
+interface Area {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+const SIZE = { width: QUICK_ASK_WIDTH, height: QUICK_ASK_HEIGHT }
+
+/** Keep the bar on the screen: the orb and pill inside the work area (the see-through margin may hang over). */
+export function quickAskClamp(pos: { x: number; y: number }, area: Area, size = SIZE): { x: number; y: number } {
+  const minX = area.x - QUICK_ASK_PAD
+  const minY = area.y - QUICK_ASK_PAD
+  const maxX = Math.max(minX, area.x + area.width + QUICK_ASK_PAD - size.width)
+  const maxY = Math.max(minY, area.y + area.height + QUICK_ASK_PAD - size.height)
+  return { x: Math.round(Math.min(Math.max(pos.x, minX), maxX)), y: Math.round(Math.min(Math.max(pos.y, minY), maxY)) }
+}
+
+/** Where a dragged bar lands: snapped to the screen's edges and centre lines when it comes close, then kept on screen. */
+export function quickAskSnap(pos: { x: number; y: number }, area: Area, size = SIZE): { x: number; y: number } {
+  let { x, y } = pos
+  const left = area.x + EDGE_GAP - QUICK_ASK_PAD
+  const right = area.x + area.width - EDGE_GAP + QUICK_ASK_PAD - size.width
+  const top = area.y + EDGE_GAP - QUICK_ASK_PAD
+  const bottom = area.y + area.height - EDGE_GAP + QUICK_ASK_PAD - size.height
+  const centreX = area.x + (area.width - size.width) / 2
+  const centreY = area.y + (area.height - size.height) / 2
+  if (Math.abs(x - left) < QUICK_ASK_SNAP) x = left
+  else if (Math.abs(x - right) < QUICK_ASK_SNAP) x = right
+  else if (Math.abs(x - centreX) < QUICK_ASK_SNAP) x = centreX
+  if (Math.abs(y - top) < QUICK_ASK_SNAP) y = top
+  else if (Math.abs(y - bottom) < QUICK_ASK_SNAP) y = bottom
+  else if (Math.abs(y - centreY) < QUICK_ASK_SNAP) y = centreY
+  return quickAskClamp({ x, y }, area, size)
+}
+
+/** A saved spot is a fraction of that screen's work area, so it means the same place after a scale or resolution change. */
+export interface QuickAskSpot {
+  fx: number
+  fy: number
+}
+
+export function quickAskSpotToPosition(spot: QuickAskSpot, area: Area): { x: number; y: number } {
+  return quickAskClamp({ x: area.x + spot.fx * area.width, y: area.y + spot.fy * area.height }, area)
+}
+
+export function quickAskPositionToSpot(pos: { x: number; y: number }, area: Area): QuickAskSpot {
+  const fx = area.width > 0 ? (pos.x - area.x) / area.width : 0
+  const fy = area.height > 0 ? (pos.y - area.y) / area.height : 0
+  return { fx: Number(fx.toFixed(4)), fy: Number(fy.toFixed(4)) }
+}
+
+function readSpots(file: string | undefined): Record<string, QuickAskSpot> {
+  if (file === undefined) return {}
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown
+    if (raw === null || typeof raw !== 'object') return {}
+    const out: Record<string, QuickAskSpot> = {}
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      const spot = value as { fx?: unknown; fy?: unknown }
+      if (typeof spot?.fx === 'number' && typeof spot?.fy === 'number' && Number.isFinite(spot.fx) && Number.isFinite(spot.fy)) {
+        out[key] = { fx: spot.fx, fy: spot.fy }
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
 
 /** Where the quick chat box opens: centred across the screen the mouse is on, a little above the middle. */
 export function quickAskPosition(workArea: { x: number; y: number; width: number; height: number }): { x: number; y: number } {
@@ -125,17 +204,83 @@ export interface QuickAskOptions {
   devUrl?: string
   /** While true a lost focus does not close the box (a dictation is typing into it). */
   keepOpen?: () => boolean
+  /** Told of the box's window when it is made (it shows only the chat: capture-privacy.ts hides it by that setting). */
+  onWindow?: (window: BrowserWindow) => void
+  /** Where the spots he dragged the bar to are kept, one per screen. Left out: it opens in the default place. */
+  spotsFile?: string
 }
 
 export class QuickAskWindow {
   private window: BrowserWindow | null = null
+  private spots: Record<string, QuickAskSpot>
+  private drag: { timer: ReturnType<typeof setInterval>; dx: number; dy: number; until: number } | null = null
 
-  constructor(private readonly options: QuickAskOptions) {}
+  constructor(private readonly options: QuickAskOptions) {
+    this.spots = readSpots(options.spotsFile)
+    // The orb is dragged by the main process following the real cursor, so the window never lags behind a fast
+    // move and a click on the orb that does not move stays a click.
+    ipcMain.handle(CHANNELS.window.quickDrag, (event, phase: unknown) => {
+      const window = this.window
+      if (window === null || window.isDestroyed() || event.sender !== window.webContents) return false
+      if (phase === 'start') this.startDrag(window)
+      else this.endDrag(window)
+      return true
+    })
+  }
 
-  show(): void {
+  private startDrag(window: BrowserWindow): void {
+    this.stopDragTimer()
+    const cursor = screen.getCursorScreenPoint()
+    const [wx, wy] = window.getPosition()
+    const dx = cursor.x - (wx ?? 0)
+    const dy = cursor.y - (wy ?? 0)
+    const timer = setInterval(() => {
+      if (window.isDestroyed() || !window.isVisible() || Date.now() > (this.drag?.until ?? 0)) {
+        this.endDrag(window)
+        return
+      }
+      const point = screen.getCursorScreenPoint()
+      const area = screen.getDisplayNearestPoint(point).workArea
+      const next = quickAskSnap({ x: point.x - dx, y: point.y - dy }, area)
+      window.setPosition(next.x, next.y)
+    }, 16)
+    // A drag whose end was never heard (the button let go outside every window) stops by itself.
+    this.drag = { timer, dx, dy, until: Date.now() + 60_000 }
+  }
+
+  private stopDragTimer(): void {
+    if (this.drag !== null) clearInterval(this.drag.timer)
+    this.drag = null
+  }
+
+  private endDrag(window: BrowserWindow): void {
+    const was = this.drag !== null
+    this.stopDragTimer()
+    if (!was || window.isDestroyed()) return
+    try {
+      const [x, y] = window.getPosition()
+      const display = screen.getDisplayMatching(window.getBounds())
+      this.spots[String(display.id)] = quickAskPositionToSpot({ x: x ?? 0, y: y ?? 0 }, display.workArea)
+      if (this.options.spotsFile !== undefined) writeFileSync(this.options.spotsFile, JSON.stringify(this.spots, null, 2))
+    } catch {
+      // The spot is only a nicety: the bar opens in the default place next time.
+    }
+  }
+
+  /**
+   * Opens the bar. `quiet` (a Live voice session started: the bar is only a bubble) does not take focus from what he
+   * is doing and does not tell the bar to reset itself.
+   */
+  show(quiet = false): void {
     const existing = this.window
     if (existing !== null && !existing.isDestroyed()) {
+      if (quiet && existing.isVisible()) return
       this.place(existing)
+      if (quiet) {
+        existing.showInactive()
+        existing.setAlwaysOnTop(true, 'floating')
+        return
+      }
       existing.show()
       existing.setAlwaysOnTop(true, 'floating')
       existing.focus()
@@ -147,6 +292,9 @@ export class QuickAskWindow {
       width: QUICK_ASK_WIDTH,
       height: QUICK_ASK_HEIGHT,
       frame: false,
+      // See-through: only the orb, the pill and the answer bubble show, each with its own shadow.
+      transparent: true,
+      hasShadow: false,
       resizable: false,
       movable: true,
       minimizable: false,
@@ -155,7 +303,7 @@ export class QuickAskWindow {
       alwaysOnTop: true,
       skipTaskbar: true,
       show: false,
-      backgroundColor: nativeTheme.shouldUseDarkColors ? '#131218' : '#FAF8F4',
+      backgroundColor: '#00000000',
       webPreferences: {
         preload: this.options.preloadPath,
         contextIsolation: true,
@@ -166,12 +314,18 @@ export class QuickAskWindow {
     })
 
     this.window = window
+    this.options.onWindow?.(window)
     window.setAlwaysOnTop(true, 'floating')
     this.place(window)
 
     window.once(
       'ready-to-show',
       whileAlive(window, 'quick ask show', () => {
+        if (quiet) {
+          window.showInactive()
+          window.setAlwaysOnTop(true, 'floating')
+          return
+        }
         window.show()
         window.setAlwaysOnTop(true, 'floating')
         window.focus()
@@ -200,11 +354,15 @@ export class QuickAskWindow {
     }
   }
 
-  /** Over whatever is in front, on the screen the person is looking at (the one with the mouse). */
+  /**
+   * Over whatever is in front, on the screen the person is looking at (the one with the mouse): where he last
+   * dragged it on that screen, else a little above the middle. Always fully on that screen.
+   */
   private place(window: BrowserWindow): void {
     try {
       const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-      const { x, y } = quickAskPosition(display.workArea)
+      const spot = this.spots[String(display.id)]
+      const { x, y } = spot !== undefined ? quickAskSpotToPosition(spot, display.workArea) : quickAskPosition(display.workArea)
       window.setBounds({ x, y, width: QUICK_ASK_WIDTH, height: QUICK_ASK_HEIGHT })
     } catch {
       window.center()
@@ -221,6 +379,7 @@ export class QuickAskWindow {
   hide(): void {
     const window = this.window
     if (window === null || window.isDestroyed()) return
+    this.endDrag(window)
     window.hide()
   }
 
@@ -230,6 +389,8 @@ export class QuickAskWindow {
 
   destroy(): void {
     const window = this.window
+    this.stopDragTimer()
+    ipcMain.removeHandler(CHANNELS.window.quickDrag)
     this.window = null
     if (window !== null && !window.isDestroyed()) window.destroy()
   }

@@ -96,6 +96,10 @@
 .call-row-b .tl b{display:block;font:700 11px/16px var(--font);letter-spacing:.12em;text-transform:uppercase;color:var(--on-sv)}
 .call-row-b .tl.who-agent b{color:var(--primary)}
 .call-row-b .call-note{align-self:flex-start}
+.call-hand{display:flex;flex-direction:column;gap:4px}
+.call-hand b{font:700 11px/16px var(--font);letter-spacing:.12em;text-transform:uppercase;color:var(--tert)}
+.call-hand p{margin:0;font-size:15px;line-height:1.5}
+.call-hand blockquote{margin:0;padding:2px 0 2px 12px;border-left:3px solid var(--outline-v);font-size:14px;line-height:1.5;color:var(--on-sv)}
 
 /* ---------- read aloud ---------- */
 .read-aloud{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:4px 10px 4px 8px;border-radius:999px;font:500 13px/18px var(--font);

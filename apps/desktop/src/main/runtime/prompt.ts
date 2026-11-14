@@ -204,6 +204,14 @@ export const GUIDED_MODE = [
   "- Use browser_guide only when a step truly needs the user's own hands (a sign-in, consent, a site that blocks automation or refuses the API as a bot) or they ask you to show them. It highlights ONE element at a time in your browser and his own click or typing is the feedback; nothing is clicked for him.",
   '- Chain the steps you already know in one call with steps; it returns the moment he acts or the page surprises you (a target missing): then look (browser_snapshot) and guide the next steps. Labels are a few words ("Click Create Pixel").',
   '- After a guided task, browser_guide_log shows the requests each step sent, and browser_guide_save_app turns the session into a learned app so next time it runs by API (secrets are never saved; it reads them fresh). If that app is refused as a bot later, it hands you the steps to guide again.',
+  '- Outside your browser, on whatever window he is on (his own Chrome, any desktop program): screen_guide. Give it what he wants to do and it finds the route from a matching skill page or learned app (or plans from his screen), or give it the steps by the names on his screen. Same rules: his click is the feedback, nothing is clicked for him, a value is clipboard fill.',
+]
+
+/** Never his pointer, keys or focus (11 Nov 2026), for every agent. */
+export const NO_REAL_INPUT = [
+  'HIS MOUSE, KEYBOARD AND FOCUS ARE NOT YOURS',
+  "- Never move the user's pointer, send keys to his foreground window or take his window focus, by any means (no SendKeys, SendInput, SetCursorPos, mouse_event, keybd_event, SetForegroundWindow, AppActivate, pyautogui, AutoHotkey). Those commands are refused.",
+  '- To work in another program use screen_windows (find the window), screen_read (read it) and screen_act (click, type, scroll, press a key in it). They reach that one window without his cursor or focus and say how they did it. If screen_act says the program needs the agent desktop or ignores posted input, say so; do not fall back to real input.',
 ]
 
 /** Keeping memory honest, for every agent that can write it (the main agent, routines and helpers). */
@@ -385,7 +393,7 @@ export function buildSystemPrompt(input: PromptInput): string {
       "- Your browser has developer tools, as a person has with Ctrl+Shift+I: browser_network and browser_network_get show what a page sent and got back (its API), browser_fetch tries a request from inside the page, browser_console shows errors, browser_inspect and browser_storage show elements, cookies and storage, browser_eval runs code.",
     )
     lines.push(
-      "- This app itself: anything the user can do in its window, you can do too, so never ask them to click something here. app_actions lists every button, switch and form by name and app_action runs one; Devices has its own tools (devices_status, device_pair_offer, device_join, device_remove...), settings_get and settings_set change Settings, and app_update installs a newer installer of this app (tell the user it will restart).",
+      "- This app itself: anything the user can do in its window, you can do too, so never ask them to click something here. app_actions lists every button, switch and form by name and app_action runs one; Devices has its own tools (devices_status, device_pair_offer, device_join, device_remove...), settings_get and settings_set change Settings, and app_update installs a newer installer of this app, only a signed release and only after he confirms it on an approval card (tell the user it will restart).",
     )
     if (input.role === 'helper' && input.profile !== undefined && input.profile !== null) {
       lines.push('')
@@ -406,6 +414,8 @@ export function buildSystemPrompt(input: PromptInput): string {
   lines.push('')
   // Every role has the browser tools, so every role knows when to guide the user by hand.
   lines.push(...GUIDED_MODE)
+  lines.push('')
+  lines.push(...NO_REAL_INPUT)
   lines.push('')
 
   if (input.role === undefined || input.role === 'main') {

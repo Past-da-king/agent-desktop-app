@@ -12,6 +12,7 @@ import { resolve } from 'node:path'
 
 import type { Settings } from '@agent/core'
 
+import { refuseRealInput } from '../agent-cursor/real-input-guard'
 import { expandHome, insideFolder } from '../tools/files'
 
 export type Permission = { allow: true } | { allow: false; message: string }
@@ -53,6 +54,8 @@ export function sdkPermission(deps: PermissionDeps): (name: string, input: Recor
     // "Run without asking": the person lets the agent act anywhere on this computer.
     const free = deps.settings().shell === 'always'
     if (COMMANDS.has(name)) {
+      const real = refuseRealInput(String(input['command'] ?? ''))
+      if (real !== null) return { allow: false, message: real }
       if (free) return { allow: true }
       if (deps.settings().shell === 'never') {
         return { allow: false, message: 'Shell commands are turned off on this computer (Settings, This computer). Do the job another way or ask the user to turn them on.' }

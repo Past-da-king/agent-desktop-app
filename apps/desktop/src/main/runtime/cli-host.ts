@@ -4,8 +4,8 @@
  * app archive in an installed build), keeps each conversation's session id between turns and across
  * restarts, and knows whether the person has signed in on this computer.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { execFile, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
@@ -16,6 +16,7 @@ import { planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
 import { startToolServer, type ToolServer } from './mcp-server'
 import { HELD_STEP, type TurnMessages } from './note-tools'
 import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
+import { SIGN_IN_CHECK_MS, SIGN_IN_RETRY_MS, isSignInFailure, loginFileDead, signInVerdict } from './sign-in-check'
 import { usableFolder } from './work-folder'
 
 export type { CliId }
@@ -142,16 +143,95 @@ export class CliHost {
     return null
   }
 
-  /** Whether the person has signed in to this tool on this computer (the SDK reuses that login). */
+  /** The file that holds this tool's login on this computer. */
+  private loginFile(cli: CliId): string {
+    const home = homedir()
+    if (cli === 'claude') return join(process.env['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude'), '.credentials.json')
+    return join(process.env['CODEX_HOME'] ?? join(home, '.codex'), 'auth.json')
+  }
+
+  /** When the login file last changed (0 when there is none): a new sign-in, or a refresh, changes it. */
+  private loginStamp(cli: CliId): number {
+    try {
+      return statSync(this.loginFile(cli)).mtimeMs
+    } catch {
+      return 0
+    }
+  }
+
+  /** The tools whose login is known to be dead on this computer, and the login file's stamp when that was found. */
+  private readonly refused = new Map<CliId, { at: number; stamp: number }>()
+  /** Told when a tool's login is found dead or working again, so the node can say so to the other devices at once. */
+  onSignInChange: ((cli: CliId, usable: boolean) => void) | null = null
+
+  private refuse(cli: CliId): void {
+    const was = this.refused.has(cli)
+    this.refused.set(cli, { at: Date.now(), stamp: this.loginStamp(cli) })
+    if (!was) this.onSignInChange?.(cli, false)
+  }
+
+  private accept(cli: CliId): void {
+    if (this.refused.delete(cli)) this.onSignInChange?.(cli, true)
+  }
+
+  /**
+   * Whether the person has signed in to this tool on this computer (the SDK reuses that login) AND the login still
+   * works: a login file whose session ran out for good, or one a turn or a check found dead, does not count until the
+   * file changes (a new sign-in) or SIGN_IN_RETRY_MS has passed. A computer that cannot answer must not say it can
+   * (12 Nov 2026: the server kept a dead Claude login file, said it was ready, and answered the phone with an error).
+   */
   signedIn(cli: CliId): boolean {
     const home = homedir()
     if (cli === 'claude') {
       const configDir = process.env['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude')
       // macOS keeps the Claude login in the keychain, so a config folder is the best signal there.
-      return existsSync(join(configDir, '.credentials.json')) || (process.platform === 'darwin' && existsSync(configDir))
+      if (!(existsSync(join(configDir, '.credentials.json')) || (process.platform === 'darwin' && existsSync(configDir)))) return false
+    } else if (!existsSync(this.loginFile(cli))) return false
+    if (loginFileDead(this.loginFile(cli), Date.now())) return false
+    const refused = this.refused.get(cli)
+    if (refused === undefined) return true
+    if (this.loginStamp(cli) !== refused.stamp || Date.now() - refused.at > SIGN_IN_RETRY_MS) {
+      this.accept(cli)
+      return true
     }
-    const codexHome = process.env['CODEX_HOME'] ?? join(home, '.codex')
-    return existsSync(join(codexHome, 'auth.json'))
+    return false
+  }
+
+  /**
+   * Asks the engine itself whether the login works (`claude auth status`, `codex login status`: local, free, quick)
+   * and remembers the answer. Unknown (no engine, no answer) changes nothing.
+   */
+  async checkSignIn(cli: CliId): Promise<boolean | null> {
+    const program = this.engine(cli)
+    if (program === null) return null
+    const args = cli === 'claude' ? ['auth', 'status'] : ['login', 'status']
+    const answer = await new Promise<{ code: number | null; out: string } | null>((resolve) => {
+      execFile(program, args, { timeout: 20_000, windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined } }, (error, stdout, stderr) => {
+        const code = error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : null
+        resolve(error !== null && code === null ? null : { code, out: `${stdout}\n${stderr}` })
+      })
+    })
+    if (answer === null) return null
+    const usable = signInVerdict(cli, answer.code, answer.out)
+    if (usable === null) return null
+    if (usable) this.accept(cli)
+    else this.refuse(cli)
+    return usable
+  }
+
+  /** Checks soon and then every [every] ms, for each tool [clis] names; stop it with the function it returns. */
+  watchSignIn(clis: () => CliId[], every = SIGN_IN_CHECK_MS): () => void {
+    const run = (): void => {
+      for (const cli of clis()) void this.checkSignIn(cli).catch(() => undefined)
+    }
+    const first = setTimeout(run, 3_000)
+    const timer = setInterval(run, every)
+    first.unref?.()
+    timer.unref?.()
+    return () => {
+      clearTimeout(first)
+      clearInterval(timer)
+    }
   }
 
   /**
@@ -292,6 +372,9 @@ export class CliHost {
       if (continues && result.sessionId !== null && (this.forgotten.get(request.thread) ?? 0) === generation) {
         this.saveSessions({ ...this.sessions(), [key]: result.sessionId, [`${key}#rev`]: String(PROMPT_REVISION) })
       }
+      // A turn that ends on a dead login settles it for this computer at once; one that ran proves it works.
+      if (isSignInFailure(result.error)) this.refuse(request.cli)
+      else if (result.error === undefined) this.accept(request.cli)
       return result.error === undefined ? { text: result.text } : { text: result.text, error: result.error }
     } finally {
       server.release(token)

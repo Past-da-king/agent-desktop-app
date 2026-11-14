@@ -648,9 +648,12 @@ describe('audio maths', () => {
   it('downsamples 48 kHz to 16 kHz and round-trips PCM16', () => {
     const input = new Float32Array(4800).map((_, index) => Math.sin(index / 10) * 0.5)
     const small = downsample(input, 48_000)
-    expect(small.length).toBe(1600)
+    // The band-limited filter keeps its last samples back (it needs them for the next block), so 4,800 in gives about
+    // 1,600 out, a sample or two short.
+    expect(small.length).toBeGreaterThan(1_580)
+    expect(small.length).toBeLessThanOrEqual(1_600)
     const back = pcm16ToFloat(floatToPcm16(small))
-    expect(back.length).toBe(1600)
+    expect(back.length).toBe(small.length)
     for (let index = 0; index < back.length; index += 97) expect(Math.abs((back[index] ?? 0) - (small[index] ?? 0))).toBeLessThan(0.001)
   })
 

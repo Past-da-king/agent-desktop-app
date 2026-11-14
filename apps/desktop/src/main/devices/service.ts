@@ -209,12 +209,7 @@ export class DevicesService {
         keyPem: this.identity.keyPem,
         certPem: this.identity.certPem,
         deviceForPass: (pass) => this.passes.deviceFor(pass),
-        rolesOf: (id) => {
-          const row = this.rows.get(id)
-          // A brain this computer joined (join) is trusted until its row arrives, like a headless node's (knownPeer).
-          if (row === undefined) return this.deps.knownPeer?.(id) ?? (this.config.get().peers.some((peer) => peer.id === id) ? ['brain', 'hands'] : null)
-          return row.revoked ? null : row.roles
-        },
+        rolesOf: (id) => this.rolesOf(id),
         // Most callers want only the id (selfId on every turn, command and sync step): the facts read the network
         // interfaces and the tool list, so they are worked out only when asked for.
         self: () => {
@@ -227,7 +222,7 @@ export class DevicesService {
           }
         },
         logSeq: () => this.deps.store.logSeq?.() ?? 0,
-        callRpc: (session, method, args) => callAllowed(this.deps.registry, this.server.added(), session, method, args),
+        callRpc: (session, method, args) => callAllowed(this.deps.registry, this.server.added(), { deviceId: session.deviceId, origin: () => session.origin(), get open() { return session.open }, roles: this.rolesOf(session.deviceId) }, method, args),
         onConnections: () => this.changed(),
         onSeen: (id) => this.seen(id),
         onHello: (id, facts) => void this.hello(id, facts),
@@ -236,6 +231,14 @@ export class DevicesService {
       this.mountRoutes()
     }
     return this.srv
+  }
+
+  /** A paired device's roles: null when it is unknown or taken out (it then may do nothing). */
+  private rolesOf(id: string): DeviceRole[] | null {
+    const row = this.rows.get(id)
+    // A brain this computer joined (join) is trusted until its row arrives, like a headless node's (knownPeer).
+    if (row === undefined) return this.deps.knownPeer?.(id) ?? (this.config.get().peers.some((peer) => peer.id === id) ? ['brain', 'hands'] : null)
+    return row.revoked ? null : row.roles
   }
 
   private get enabled(): boolean {

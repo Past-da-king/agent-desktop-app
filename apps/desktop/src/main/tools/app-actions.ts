@@ -20,6 +20,7 @@ import { WORKER_CHANNELS } from '../../shared/workers-channels'
 import { WAKEUP_CHANNELS } from '../../shared/wakeups-channels'
 import { GIT_CHANNELS } from '../../shared/git-channels'
 import { MINIAPP_CHANNELS } from '../../shared/miniapps-channels'
+import { SHOWME_CHANNELS } from '../../shared/showme'
 
 export interface AppActionRule {
   kind: 'free' | 'ask' | 'tool' | 'no'
@@ -53,6 +54,7 @@ export const APP_ACTION_CHANNELS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(WAKEUP_CHANNELS).map(([key, channel]) => [`wakeups.${key}`, channel])),
   ...Object.fromEntries(Object.entries(MINIAPP_CHANNELS).map(([key, channel]) => [`miniapps.${key}`, channel])),
   ...Object.fromEntries(Object.entries(GIT_CHANNELS).map(([key, channel]) => [`git.${key}`, channel])),
+  ...Object.fromEntries(Object.entries(SHOWME_CHANNELS).map(([key, channel]) => [`showme.${key}`, channel])),
 }
 
 const free = (about: string, args?: string): AppActionRule => ({ kind: 'free', about, ...(args === undefined ? {} : { args }) })
@@ -151,6 +153,8 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'browser.openInSystem': free("Browser panel: open the page in the computer's own browser"),
   'browser.setView': free('Browser panel: desktop, phone or fit view', 'mode'),
   'browser.setExpanded': free('Browser panel: expand or shrink', 'on'),
+  'browser.setFullScreen': free('Browser: full screen on or off (only the browser toolbar and a way back)', 'on'),
+  'browser.handOver': free('Browser: hand the page in front to the agent (it lands in the message box with its address, selection, picture and tab id)'),
   'browser.frame': free('Browser panel: a picture of the page (data URL)'),
   'browser.go': free('Browser panel: go to an address', 'address'),
   'browser.newTab': free('Browser panel: new tab'),
@@ -190,6 +194,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'window.toggleMaximize': free('Maximise or restore the window'),
   'window.close': ask('Close the window'),
   'window.isMaximized': free('Is the window maximised'),
+  'window.quickDrag': no('Drag the quick ask bar by its orb', WINDOW_PLUMBING),
   'window.show': free(
     'Put a view on screen as tapping it does: a chat in full at its newest message, cursor in the box ({ view: "chat", id: chatId, "" for the main chat }), a helper\'s own view ({ view: "helper", id: helperId }), a page ({ view: "settings" }, { view: "project", id }) or Back ({ view: "back" })',
     '{ view, id }',
@@ -294,6 +299,10 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'vault.setPrefs': ask('Change when the Vault asks (Settings > Vault switches)', 'patch'),
   'vault.importText': ask('Import passwords from the text of an export (Settings > Vault > Import)', 'text, fileName?', [0]),
   'vault.importFile': free('Import a password export on this computer: Chrome or Edge CSV, Bitwarden CSV or JSON, 1Password CSV, or JSON of names and values (Settings > Vault > Import)', 'path'),
+  // Show me how: the guided ring on whatever window he is on (the quick chat bar's "how do I...").
+  'showme.start': tool('Show him how on his own screen, step by step (Quick chat: "how do I...")', 'screen_guide'),
+  'showme.stop': free('Stop the walk that is showing him how (Esc)'),
+  'showme.state': free('Where the walk that is showing him how is: the step, the label, how it ended'),
 }
 
 /** Calls the app's own IPC handlers (main/devices/registry.ts keeps them all). */

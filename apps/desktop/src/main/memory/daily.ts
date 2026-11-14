@@ -383,7 +383,8 @@ export async function undoChange(store: DataStore, upkeep: UpkeepFile, changeId:
   const change = state.log.find((item) => item.id === changeId)
   if (change === undefined || change.undone === true) return false
   if (change.before === null) await store.remove('memory', change.memoryId)
-  else await store.upsert('memory', { ...change.before })
+  // Putting a page back is an explicit restore, so it brings back a page that was deleted.
+  else await store.upsert('memory', { ...change.before }, { restore: true })
   upkeep.update((next) => {
     const entry = next.log.find((item) => item.id === changeId)
     if (entry !== undefined) entry.undone = true

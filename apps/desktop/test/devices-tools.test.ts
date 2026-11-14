@@ -36,7 +36,7 @@ function fakeTool(name: string, answer: (input: Record<string, unknown>) => stri
 
 const base = { platform: 'linux', urls: [], fp: '', facts: {}, pairedAt: 1, lastSeen: 1, revoked: false }
 
-async function setup(options: { phoneOnline?: boolean } = {}) {
+async function setup(options: { phoneOnline?: boolean; offlineStatusMs?: number } = {}) {
   const store = new Store(':memory:')
   const host: TestHost = await startTestHost('dev_pc')
   await store.upsert('device', { ...base, id: 'dev_pc', name: 'Office PC', kind: 'desktop', roles: ['brain'], priority: 0 })
@@ -57,6 +57,7 @@ async function setup(options: { phoneOnline?: boolean } = {}) {
       notes.push({ chat, text })
     },
     waitMs: 1500,
+    ...(options.offlineStatusMs === undefined ? {} : { offlineStatusMs: options.offlineStatusMs }),
   })
   hub.attach(host)
   cleanups.push(async () => {
@@ -189,6 +190,34 @@ describe('shared device tools: a phone', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(notes).toHaveLength(1)
     expect((await store.list('device_command'))[0]?.status).toBe('done')
+  })
+
+  it('an offline phone is reported to the caller early with the call id and queue time, and the job stays queued', async () => {
+    const { host, hub, store } = await setup({ phoneOnline: false, offlineStatusMs: 60 })
+    const started = Date.now()
+    const out = await hub.call('Test Phone', 'browser_open', { url: 'https://early.example' }, 'pc4')
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(out.state).toBe('waiting')
+    expect(out.text).toContain('offline, retrying')
+    expect(out.text).toMatch(/queued since \d\d:\d\d/)
+    const row = (await store.list('device_command'))[0]
+    expect(row?.status).toBe('queued')
+    expect(out.text).toContain(row?.id ?? 'missing')
+    expect(host.events).toEqual([])
+  })
+
+  it('a command sent to a phone that then dropped is sent again, with the same id, when the phone reconnects', async () => {
+    const { host, hub } = await setup({ offlineStatusMs: 60 })
+    const pending = hub.call('Test Phone', 'browser_open', { url: 'https://again.example' }, 'pc5')
+    await waitFor(() => host.events.filter((e) => e.name === 'device.command').length === 1, 3000)
+    host.connected.delete('dev_phone')
+    await hub.refresh()
+    expect((await pending).text).toContain('offline, retrying')
+    host.connected.add('dev_phone')
+    await hub.refresh()
+    const sent = host.events.filter((e) => e.name === 'device.command').map((e) => (e.payload as { id: string }).id)
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toBe(sent[0])
   })
 
   it('only the target device may answer, and a tool it does not have is named', async () => {

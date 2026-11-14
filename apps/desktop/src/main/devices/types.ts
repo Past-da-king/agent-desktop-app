@@ -90,6 +90,8 @@ export interface MessageOrigin {
   screenWidth: number
   canOpenLinks: boolean
   canReceiveFiles: boolean
+  /** Set for a hand-off from his Live voice assistant (shared/sender.ts LiveHandoff); never from device facts. */
+  live?: { spoken: string; session: string }
 }
 
 export type RouteAuth = 'none' | 'device' | 'node'

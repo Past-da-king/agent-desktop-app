@@ -6,8 +6,9 @@
 import { NOT_AVAILABLE, RPC_ALLOWED, RPC_CHANNELS, decodeWire, encodeWire } from '../../shared/rpc-methods'
 import { cleanFacts } from './facts'
 import { originFrom } from './origin'
+import { guardRemoteCall } from './rpc-policy'
 import type { HandlerRegistry, WireEvent } from './registry'
-import type { DeviceFacts, MessageOrigin, RpcMethod } from './types'
+import type { DeviceFacts, DeviceRole, MessageOrigin, RpcMethod } from './types'
 import type { WsConnection } from './ws'
 
 const HELLO_WAIT_MS = 15_000
@@ -112,28 +113,24 @@ export class RpcSession {
   }
 }
 
-/** Methods a device may never reach through data.* (the device registry changes only through devices.*). */
-function guardData(method: string, args: unknown[]): void {
-  if ((method === 'data.upsert' || method === 'data.remove') && args[0] === 'device') throw new Error(NOT_AVAILABLE)
-}
-
 /** Calls a recorded IPC handler by its dotted name, if the ALLOWLIST lets a device reach it. */
 export async function callAllowed(
   registry: HandlerRegistry,
   added: ReadonlyMap<string, RpcMethod>,
-  session: { deviceId: string; origin(): MessageOrigin | null; readonly open?: boolean },
+  session: { deviceId: string; origin(): MessageOrigin | null; readonly open?: boolean; /** The device's roles; none or null = unknown or taken out: it may do nothing. */ readonly roles?: readonly DeviceRole[] | null },
   method: string,
   args: unknown[],
 ): Promise<unknown> {
   const extra = added.get(method)
   if (extra !== undefined) return extra(session.deviceId, args)
   if (!RPC_ALLOWED.has(method)) throw new Error(NOT_AVAILABLE)
-  guardData(method, args)
+  // Per role, per entity and per field (rpc-policy.ts): default deny; decisions only through their own methods.
+  const safeArgs = guardRemoteCall(method, args, session.roles)
   const channel = RPC_CHANNELS[method]
   const handler = channel === undefined ? null : registry.get(channel)
   if (handler === null) throw new Error(NOT_AVAILABLE)
   const origin = session.origin()
   if (origin === null) throw new Error('Say hello first.')
   const event: WireEvent = { sender: null, wire: { deviceId: session.deviceId, origin, isOpen: () => session.open !== false } }
-  return handler(event, ...args)
+  return handler(event, ...safeArgs)
 }

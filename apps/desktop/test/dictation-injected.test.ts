@@ -13,7 +13,7 @@ import { join } from 'node:path'
 
 import { addedNames, onlyNames, nameWords, stretches, stripInjectedNames } from '../src/main/dictation/injected'
 import { respellNames, soundsLike } from '../src/main/dictation/respell'
-import { LiveTranscriber, replayRecording } from '../src/main/dictation/transcriber'
+import { LiveTranscriber, replayRecording, setupMessage } from '../src/main/dictation/transcriber'
 import { applyAliases, dictationWordsFromProjects, nameTerm, vocabularyFrom } from '../src/main/memory/vocabulary'
 import type { SocketLike } from '../src/main/voice/live'
 import { startFakeLive, type FakeLive } from './fake-live'
@@ -190,10 +190,15 @@ describe('names are spelled right after transcription, only for words that were 
     expect(fixed).toBe("Yeah, yeah, yeah, because it's like a wasting real estate with that tab saying calendar. Oh, and I really don't know why that thing saying Cosmiprint there.")
   })
 
-  it('no recogniser is biased with names any more: not the live session, not a replay, not the one-call transcription', () => {
+  it('the final transcript is the speech model told his names; the live preview still runs unbiased', () => {
+    // 11 Nov 2026: the one-call transcription is what gets typed, so it carries his own vocabulary and languages. The
+    // live session stays plain, and every transcript still goes through respellNames, which only corrects words said.
     const setup = readFileSync(join(__dirname, '../src/main/dictation/setup.ts'), 'utf8')
-    expect(setup).not.toMatch(/vocabulary:\s*(\(\)\s*=>\s*)?(words|names)/)
-    expect(setup).not.toMatch(/transcribe\([^)]*names/)
+    expect(setup).toMatch(/names: words, languageCodes: languages\(\), mode: 'verbatim'/)
     expect(setup).toContain('respellNames(text, names)')
+    // The live session's own request still carries no name list: it is only the caption he watches.
+    expect(JSON.stringify(setupMessage({ model: 'gemini-3.5-transcribe-live', languageCodes: ['en-ZA'] }))).not.toContain('customVocabulary')
+    const factory = /new LiveTranscriber\(\{[\s\S]*?\}\)/.exec(setup)
+    expect(factory?.[0] ?? '').not.toContain('vocabulary')
   })
 })

@@ -46,6 +46,7 @@ import {
 
 import { keyFor } from '../accounts'
 import { listWhere, type DataStore } from './data'
+import { CardDecidedError, claimCard, claimTap } from './card-claim'
 import { liveRuns } from './live-runs'
 import type { StepBudget } from './budget'
 import { chatBrainOf, isBrain, mainBrain, pickBrain, providerForAccount, rosterFor, type Brain, type BrainDeps, type BrainLocks } from './brains'
@@ -70,6 +71,7 @@ import {
 } from './chat-route'
 import { describeRun, finishRun, runStarted } from './run-detail'
 import { viaLabel, type ChatVia } from '../tools/projects'
+import { callVia, liveFromInput, liveLabel } from '../../shared/sender'
 import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
 import { replyText } from '../notify'
@@ -103,6 +105,8 @@ export interface RoutineRunResult {
   waiting: boolean
   /** True when the run itself failed (no brain, an error), not when it ran and reported a problem. */
   failed?: boolean
+  /** True when a decision pre-check found nothing new and the run was skipped; a skipped run notifies no one. */
+  skipped?: boolean
 }
 
 /**
@@ -115,6 +119,8 @@ export const routineCardId = (triggerId: string): string => `rt-${triggerId}`
 
 /** How often a routine's card is rewritten with the step it is on (each write is a row a phone may pull). */
 const ROUTINE_STEP_MS = 1_500
+/** Who a card decision came from when the caller does not say (this window). */
+const THIS_DEVICE = 'this computer'
 
 /** A stopped routine's result in plain words: "Stopped by switching the routine off." */
 function stoppedText(why: string): string {
@@ -487,7 +493,11 @@ export class Runner {
     if (clean === '' && attachments.length === 0) return
     // The person handed these files over: the agent may open them without asking again.
     if (attachments.length > 0) this.allowFiles(attachments.map((attachment) => attachment.path))
-    const prepared = await prepareMessage(clean, attachments)
+    // A hand-off from his Live voice assistant (shared/sender.ts): not his words, so it is a call's hand-off (never his
+    // bubble) and the agent reads what it is.
+    const live = liveFromInput({ live: (origin as { live?: unknown } | undefined)?.live })
+    const prepared = await prepareMessage(live === null ? clean : liveLabel(live) + clean, attachments)
+    if (live !== null && via === undefined) via = callVia(typeof (origin as { name?: unknown } | undefined)?.name === 'string' ? String((origin as { name: string }).name) : '')
     // Which device it was sent from (docs/devices-protocol.md s8): the wire caller's, else this node's own.
     // Not the person's own words (a call handing over its work): the row says who, so no window draws it as his.
     const meta: JsonObject = {
@@ -495,6 +505,7 @@ export class Runner {
       ...chatTag(chat),
       ...this.originMeta(origin as JsonObject | undefined),
       ...(via === undefined ? {} : { via: via as unknown as JsonObject }),
+      ...(live === null ? {} : { live: live as unknown as JsonObject }),
     }
     const line = this.line(chat)
 
@@ -783,23 +794,26 @@ export class Runner {
   }
 
   /** Answer a question card, now or after a restart. */
-  async answer(itemId: string, answer: string): Promise<void> {
+  async answer(itemId: string, answer: string, by = THIS_DEVICE): Promise<void> {
     const row = await this.store.get('chat_item', itemId)
     if (row === null || row.kind !== 'question') return
     const meta = parseMeta(row.meta)
     if (typeof meta['helper'] === 'string' && this.helpers?.answer !== undefined) {
-      if (await this.helpers.answer(itemId, answer)) return
+      if (await this.helpers.answer(itemId, answer, by)) return
     }
-    const answered = typeof meta['answer'] === 'string' && meta['answer'] !== ''
-    const waiter = this.askWaiters.get(itemId)
     const chat = chatOf(row)
-
-    await this.store.upsert('chat_item', {
-      id: row.id,
-      kind: row.kind,
-      text: row.text,
-      meta: JSON.stringify({ ...meta, answer }),
-    })
+    // The first answer is claimed in one step on the row (runtime/card-claim.ts): only the request that wins
+    // resumes the waiter or starts the continuation. A later one is told what the card already says.
+    const claim = await claimCard(this.store, itemId, 'answer', answer, by, this.now())
+    if (claim === null) return
+    const waiter = this.askWaiters.get(itemId)
+    if (!claim.won) {
+      // The card was answered where the waiter is not (another brain, replicated): the waiter proceeds with what the
+      // card shows. Only the winner ever starts a continuation.
+      if (waiter !== undefined) waiter(claim.entry.value)
+      if (claim.entry.value !== answer) throw new CardDecidedError('answer', claim.entry)
+      return
+    }
     this.waiting.delete(itemId)
     this.emitFor(chat, { type: 'chat_changed' })
 
@@ -807,7 +821,6 @@ export class Runner {
       waiter(answer)
       return
     }
-    if (answered) return
     await this.continueAfterCard(`The user answered your question "${row.text}" with: ${answer}`, chat)
   }
 
@@ -822,31 +835,43 @@ export class Runner {
       if (row.kind !== 'approval') continue
       const meta = parseMeta(row.meta)
       if (meta['scope'] !== 'computer' || (typeof meta['decision'] === 'string' && meta['decision'] !== '')) continue
-      await this.decide(row.id, 'approve')
-      count += 1
+      try {
+        await this.decide(row.id, 'approve')
+        count += 1
+      } catch (error) {
+        // Someone decided it between the list and now: theirs stands.
+        if (!(error instanceof CardDecidedError)) throw error
+      }
     }
     return count
   }
 
-  /** Approve or decline an approval card, now or after a restart. */
-  async decide(itemId: string, decision: Decision): Promise<void> {
+  /**
+   * Approve or decline an approval card, now or after a restart. The first decision wins (runtime/card-claim.ts,
+   * review finding R1): it is claimed in one step on the row, and only that request resumes the waiter or starts a
+   * continuation. The same decision again is quiet; a different one throws "already decided: <decision> by <device>",
+   * which the window and the phone show. `by`: the device the request came from.
+   */
+  async decide(itemId: string, decision: Decision, by = THIS_DEVICE): Promise<void> {
     const row = await this.store.get('chat_item', itemId)
     if (row === null || row.kind !== 'approval') return
     const meta = parseMeta(row.meta)
     if (typeof meta['helper'] === 'string' && this.helpers?.decide !== undefined) {
-      if (await this.helpers.decide(itemId, decision)) return
+      if (await this.helpers.decide(itemId, decision, by)) return
     }
-    const decided = typeof meta['decision'] === 'string' && meta['decision'] !== ''
-    const waiter = this.decisionWaiters.get(itemId)
     const summary = typeof meta['summary'] === 'string' ? meta['summary'] : row.text
     const chat = chatOf(row)
 
-    await this.store.upsert('chat_item', {
-      id: row.id,
-      kind: row.kind,
-      text: row.text,
-      meta: JSON.stringify({ ...meta, decision }),
-    })
+    const claim = await claimCard(this.store, itemId, 'decision', decision, by, this.now())
+    if (claim === null) return
+    const waiter = this.decisionWaiters.get(itemId)
+    if (!claim.won) {
+      // Decided where the waiter is not (another brain, replicated): the waiter proceeds with what the card shows,
+      // never with this request. Only the winner ever starts a continuation.
+      if (waiter !== undefined) waiter(claim.entry.value === 'approve')
+      if (claim.entry.value !== decision) throw new CardDecidedError('decision', claim.entry)
+      return
+    }
     this.waiting.delete(itemId)
     this.emitFor(chat, { type: 'chat_changed' })
 
@@ -854,7 +879,6 @@ export class Runner {
       waiter(decision === 'approve')
       return
     }
-    if (decided) return
     const verb = decision === 'approve' ? 'approved' : 'declined'
     await this.continueAfterCard(`The user ${verb} your request: ${summary}`, chat)
   }
@@ -864,23 +888,19 @@ export class Runner {
    * is told it was a button tap, and the message remembers the tap so the button keeps saying Sent. As on the
    * phone (AgentRuntime.sendQuiet). While a run is active it joins that run as a steering note.
    */
-  async tap(itemId: string, label: string, message: string): Promise<void> {
+  async tap(itemId: string, label: string, message: string, tapId = ''): Promise<void> {
     const clean = message.trim()
     if (clean === '') return
     const row = await this.store.get('chat_item', itemId)
     if (row === null || row.kind !== 'agent') return
     const chat = chatOf(row)
-    const meta = parseMeta(row.meta)
-    const taps = Array.isArray(meta['taps']) ? meta['taps'].filter((t): t is string => typeof t === 'string') : []
-    if (!taps.includes(clean)) {
-      await this.store.upsert('chat_item', {
-        id: row.id,
-        kind: row.kind,
-        text: row.text,
-        meta: JSON.stringify({ ...meta, taps: [...taps, clean].slice(-50) }),
-      })
-      this.emitFor(chat, { type: 'chat_changed' })
-    }
+    // Record, then dispatch, and the record is the check (review finding F2): in one step on the row, so a retry
+    // of the same tap (`tapId` from the client: the window, the phone, a mini-app) never reaches the model twice,
+    // even after a restart. A deliberate second tap carries a new id. An old client sends none: the same words on
+    // the same message within a few seconds count as one tap (runtime/card-claim.ts).
+    const fresh = await claimTap(this.store, itemId, clean, tapId.trim().slice(0, 100), this.now())
+    if (fresh === null || !fresh) return
+    this.emitFor(chat, { type: 'chat_changed' })
     const note = quietTapNote(label, clean)
     const line = this.line(chat)
     if (line.running) {
@@ -1007,7 +1027,10 @@ export class Runner {
    * queue, steer or block what the person types, and it leaves no turn rows behind. If it needs the
    * person, it posts a question or approval card and ends with "Waiting for you".
    */
-  async runRoutine(trigger: TriggerRow): Promise<RoutineRunResult> {
+  async runRoutine(source: TriggerRow, slot?: { key: string; fence: number }): Promise<RoutineRunResult> {
+    // The slot's key goes into the run: whatever it does outside (a message, a post, a mail) can dedupe on it, so a slot
+    // that two brains both ran (a cut link) does its side effects once.
+    const trigger: TriggerRow = slot === undefined ? source : { ...source, prompt: `${source.prompt}\n\n[Run key ${slot.key}. If a tool or service you call takes an idempotency key or can be checked for an earlier result, use this key, and do not repeat anything already done for it.]` }
     if (this.routineRunning) return { text: 'Another routine is still running.', waiting: false }
     this.routineRunning = true
     this.routineWaiting = false

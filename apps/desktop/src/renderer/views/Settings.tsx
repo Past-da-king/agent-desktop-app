@@ -14,6 +14,7 @@ import { VOICES } from '@agent/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
+import { chatHint, guidesHint } from '../../shared/capture-privacy'
 import type { Route } from '../state/route'
 import { accountsOf } from '@agent/core'
 import { kindLine } from '../lib/ai'
@@ -42,6 +43,7 @@ import { WakeLog } from './settings/WakeLog'
 import { SettingsRail, DEFAULT_SECTION } from './settings/Rail'
 import { DateTimeControl, HotkeyControl, NumberControl, SelectControl, SliderControl, TextControl, TimeControl } from './settings/Controls'
 import { SectionBlock, SettingRow } from './settings/Row'
+import { GuideModelRow, ShowMeKeyRows } from './settings/ShowMeSettings'
 import { PromptRulesSettings } from './PromptRules'
 import { takeSettingsSection } from '../lib/settings-jump'
 import { VaultSettings } from './Vault'
@@ -586,6 +588,41 @@ function AgentsSection({ settings, put, resetRow }: SectionProps): JSX.Element {
           Routines
         </Button>
       </SettingRow>
+      <GuideModelRow settings={settings} put={put} resetRow={resetRow} />
+      <SettingRow spec={row('decisionsEnabled')} changed={changedNow(row('decisionsEnabled'), settings)} onReset={() => resetRow(row('decisionsEnabled'))}>
+        <Switch on={settings?.decisionsEnabled ?? false} label="Fast decisions" onToggle={(next) => put({ decisionsEnabled: next })} />
+      </SettingRow>
+      {settings?.decisionsEnabled === true ? (
+        <>
+          <SettingRow spec={row('decisionsBackend')} changed={changedNow(row('decisionsBackend'), settings)} onReset={() => resetRow(row('decisionsBackend'))}>
+            <SelectControl
+              label="Decision model"
+              value={settings?.decisionsBackend ?? 'gemini'}
+              options={[
+                { value: 'gemini', label: 'Gemini' },
+                { value: 'jev', label: 'Jev' },
+                { value: 'openai', label: 'OpenAI' },
+                { value: 'llm', label: 'My own model' },
+              ]}
+              onChange={(value) => put({ decisionsBackend: value as SettingsValues['decisionsBackend'] })}
+            />
+          </SettingRow>
+          <SettingRow spec={row('decisionsThreshold')} changed={changedNow(row('decisionsThreshold'), settings)} onReset={() => resetRow(row('decisionsThreshold'))}>
+            <SelectControl
+              label="How sure before it acts"
+              value={String(settings?.decisionsThreshold ?? 0.9)}
+              options={[
+                { value: '0.7', label: '70%' },
+                { value: '0.8', label: '80%' },
+                { value: '0.9', label: '90%' },
+                { value: '0.95', label: '95%' },
+                { value: '0.99', label: '99%' },
+              ]}
+              onChange={(value) => put({ decisionsThreshold: Number(value) })}
+            />
+          </SettingRow>
+        </>
+      ) : null}
     </SectionBlock>
   )
 }
@@ -1187,6 +1224,63 @@ function PrivacySection({ settings, put, resetRow, navigate }: SectionProps): JS
       </SettingRow>
       <div className="divider" />
       <SettingRow
+        spec={row('agentCursor')}
+        changed={changedNow(row('agentCursor'), settings)}
+        onReset={() => resetRow(row('agentCursor'))}
+      >
+        <Switch on={settings?.agentCursor ?? true} label="Show the agent cursor" onToggle={(next) => put({ agentCursor: next })} />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
+        spec={row('agentRealInput')}
+        changed={changedNow(row('agentRealInput'), settings)}
+        onReset={() => resetRow(row('agentRealInput'))}
+      >
+        <Switch on={settings?.agentRealInput ?? false} label="Let the agent use your mouse and keyboard as a last resort" onToggle={(next) => put({ agentRealInput: next })} />
+      </SettingRow>
+      <SettingRow
+        spec={row('inputLockIdleSeconds')}
+        changed={changedNow(row('inputLockIdleSeconds'), settings)}
+        onReset={() => resetRow(row('inputLockIdleSeconds'))}
+      >
+        <SelectControl
+          label="Be still for this long before it starts"
+          value={String(settings?.inputLockIdleSeconds ?? 10)}
+          options={[
+            { value: '5', label: '5 seconds' },
+            { value: '10', label: '10 seconds' },
+            { value: '20', label: '20 seconds' },
+            { value: '30', label: '30 seconds' },
+            { value: '60', label: '1 minute' },
+          ]}
+          onChange={(value) => put({ inputLockIdleSeconds: Number(value) })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
+        spec={{ ...row('hideGuidesFromCapture'), description: guidesHint(agent.platform) }}
+        changed={changedNow(row('hideGuidesFromCapture'), settings)}
+        onReset={() => resetRow(row('hideGuidesFromCapture'))}
+      >
+        <Switch
+          on={settings?.hideGuidesFromCapture ?? true}
+          label="Hide guides from screen sharing"
+          onToggle={(next) => put({ hideGuidesFromCapture: next })}
+        />
+      </SettingRow>
+      <SettingRow
+        spec={{ ...row('hideChatFromCapture'), description: chatHint(agent.platform) }}
+        changed={changedNow(row('hideChatFromCapture'), settings)}
+        onReset={() => resetRow(row('hideChatFromCapture'))}
+      >
+        <Switch
+          on={settings?.hideChatFromCapture ?? false}
+          label="Hide the chat from screen sharing"
+          onToggle={(next) => put({ hideChatFromCapture: next })}
+        />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow
         spec={row('showDeveloperSettings')}
         changed={changedNow(row('showDeveloperSettings'), settings)}
         onReset={() => resetRow(row('showDeveloperSettings'))}
@@ -1368,6 +1462,7 @@ function AdvancedSection({ settings, put, resetRow }: SectionProps): JSX.Element
       >
         <HotkeyControl label="Quick chat shortcut" value={settings?.quickAskHotkey ?? ''} onSave={(next) => put({ quickAskHotkey: next })} />
       </SettingRow>
+      <ShowMeKeyRows settings={settings} put={put} resetRow={resetRow} />
       <SettingRow spec={row('syncUrl')} changed={changedNow(row('syncUrl'), settings)} onReset={() => resetRow(row('syncUrl'))}>
         <TextControl
           label="Sync server"

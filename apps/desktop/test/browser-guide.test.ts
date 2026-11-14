@@ -13,10 +13,11 @@ import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 
 import { chromium, type Browser, type CDPSession, type Frame, type Page } from 'playwright-core'
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import { findTarget, formatGuide, GuideRuns, runGuide, type GuideHost, type GuideStep } from '../src/main/browser/guide'
 import { evaluateIn, FrameSessions, type GuideLink } from '../src/main/browser/guide-host'
+import { DRAWS, guideOn, type RecordingSurface } from './helpers/outside-surface'
 
 function findChrome(): string | null {
   const env = process.env.CHROME_PATH
@@ -105,7 +106,7 @@ async function linkFor(page: Page): Promise<GuideLink & { refresh(): Promise<voi
     for (const listener of listeners) listener(method, params, sid)
   }
   const wire = (session: CDPSession, sid?: string): void => {
-    for (const method of ['Runtime.executionContextDestroyed', 'Runtime.executionContextsCleared', 'Page.frameNavigated'] as const) {
+    for (const method of ['Runtime.executionContextDestroyed', 'Runtime.executionContextsCleared', 'Page.frameNavigated', 'Runtime.bindingCalled'] as const) {
       session.on(method, (params: unknown) => emit(method, params as Record<string, unknown>, sid))
     }
   }
@@ -167,6 +168,7 @@ async function hostFor(page: Page): Promise<{ host: GuideHost; frames: FrameSess
       page.on('framenavigated', handler)
       return () => page.off('framenavigated', handler)
     },
+    onReport: (listener) => frames.onReport(listener),
     loading: () => false,
     ready: async (ms) => {
       await page.waitForLoadState('domcontentloaded', { timeout: ms }).catch(() => undefined)
@@ -204,9 +206,13 @@ async function overlays(page: Page): Promise<number> {
 
 const centre = (b: number[]): { x: number; y: number } => ({ x: (b[0] ?? 0) + (b[2] ?? 0) / 2, y: (b[1] ?? 0) + (b[3] ?? 0) / 2 })
 
-suite('browser_guide in a real Chromium', () => {
+suite.each(DRAWS)('browser_guide in a real Chromium (ring drawn by: %s)', (draw) => {
   let browser: Browser
   let page: Page
+  // Every test runs twice: the page draws its own ring, or it only reports and something outside draws (the private
+  // overlay). His click, typing, the chain, frames, re-renders, timeout and cancel must be the same on both.
+  let guide = guideOn(draw).run
+  let surface: RecordingSurface | null = null
 
   beforeAll(async () => {
     const a = await serve((path) => ({ '/p1': page1(), '/p2': page2(), '/p3': page3(), '/inner': inner(), '/re': rerender(), '/done': '<!doctype html><title>Done</title><h1>Done</h1>' })[path] ?? null)
@@ -227,6 +233,16 @@ suite('browser_guide in a real Chromium', () => {
   beforeEach(async () => {
     await page?.close().catch(() => undefined)
     page = await browser.newPage({ viewport: { width: 1000, height: 700 } })
+    const on = guideOn(draw)
+    guide = on.run
+    surface = on.surface
+  })
+
+  afterEach(async () => {
+    if (surface === null) return
+    // Drawn outside: every step that began was ended (nothing stays on the screen), and the page painted nothing.
+    expect(surface.ended).toEqual(surface.begun.map((step) => step.token))
+    if (surface.begun.length > 0) expect(surface.reports.some((report) => report.shown)).toBe(true)
   })
 
   it('finds targets by name, role and nth in the page, a same-origin frame and a cross-origin frame', async () => {
@@ -249,7 +265,7 @@ suite('browser_guide in a real Chromium', () => {
     await page.goto(`${A()}/p1`)
     const { host } = await hostFor(page)
     const steps: GuideStep[] = [{ target: { name: 'Next page', role: 'button' }, label: 'Click Next page' }]
-    const run = runGuide(host, steps, { timeoutMs: 10_000 })
+    const run = guide(host, steps, { timeoutMs: 10_000 })
     const o = await waitOverlay(page.mainFrame())
     const el = await page.locator('#go').boundingBox()
     expect(el).not.toBeNull()
@@ -260,6 +276,22 @@ suite('browser_guide in a real Chromium', () => {
     const [lx = 0, ly = 0, lw = 0, lh = 0] = o.label
     const overlaps = lx < el!.x + el!.width && lx + lw > el!.x && ly < el!.y + el!.height && ly + lh > el!.y
     expect(overlaps).toBe(false)
+    const painted = await page.evaluate(() => getComputedStyle(document.querySelector('[data-agent-guide]')!).visibility)
+    if (surface === null) {
+      expect(painted).toBe('visible')
+    } else {
+      // Drawn outside: nothing of the guide is painted in the page, and the page said exactly where the target is.
+      expect(painted).toBe('hidden')
+      await expect.poll(() => surface!.last()?.shown ?? false, { timeout: 3000 }).toBe(true)
+      const told = surface.last()!
+      expect(Math.abs(told.box!.x - el!.x)).toBeLessThanOrEqual(0.5)
+      expect(Math.abs(told.box!.y - el!.y)).toBeLessThanOrEqual(0.5)
+      expect(Math.abs(told.box!.width - el!.width)).toBeLessThanOrEqual(0.5)
+      expect(Math.abs(told.box!.height - el!.height)).toBeLessThanOrEqual(0.5)
+      expect([told.vw, told.vh]).toEqual([1000, 700])
+      expect([told.tag!.x, told.tag!.y, told.tag!.width, told.tag!.height]).toEqual(o.label)
+      expect(surface.current()).toMatchObject({ label: 'Click Next page', n: 1, total: 1 })
+    }
     const clickedAt = Date.now()
     await page.mouse.click(el!.x + el!.width / 2, el!.y + el!.height / 2)
     const result = await run
@@ -277,7 +309,7 @@ suite('browser_guide in a real Chromium', () => {
   it('ignores a synthetic click; only his trusted click counts', async () => {
     await page.goto(`${A()}/p1`)
     const { host } = await hostFor(page)
-    const run = runGuide(host, [{ target: { name: 'Something else' }, label: 'Click it' }], { timeoutMs: 10_000 })
+    const run = guide(host, [{ target: { name: 'Something else' }, label: 'Click it' }], { timeoutMs: 10_000 })
     await waitOverlay(page.mainFrame())
     let settled = false
     void run.then(() => (settled = true))
@@ -296,7 +328,7 @@ suite('browser_guide in a real Chromium', () => {
   it('scrolls a target out of sight into view and follows it on scroll', async () => {
     await page.goto(`${A()}/p1`)
     const { host } = await hostFor(page)
-    const run = runGuide(host, [{ target: { name: 'Far down' }, label: 'Click Far down' }], { timeoutMs: 10_000 })
+    const run = guide(host, [{ target: { name: 'Far down' }, label: 'Click Far down' }], { timeoutMs: 10_000 })
     const o = await waitOverlay(page.mainFrame())
     expect((o.box[1] ?? -1) >= 0 && (o.box[1] ?? 9999) < 700).toBe(true)
     await page.mouse.wheel(0, -120)
@@ -304,6 +336,8 @@ suite('browser_guide in a real Chromium', () => {
     const el = (await page.locator('#far').boundingBox())!
     const after = await waitOverlay(page.mainFrame())
     expect(Math.abs((after.box[1] ?? 0) - el.y)).toBeLessThanOrEqual(1)
+    // Drawn outside: the page told where the target went the moment it scrolled.
+    if (surface !== null) expect(Math.abs((surface.last()?.box?.y ?? -999) - el.y)).toBeLessThanOrEqual(0.5)
     await page.mouse.click(el.x + 3, el.y + 3)
     expect((await run).outcome).toBe('clicked')
   })
@@ -318,7 +352,7 @@ suite('browser_guide in a real Chromium', () => {
       { target: { name: 'Confirm' }, label: 'Click Confirm' },
     ]
     const shown: number[] = []
-    const run = runGuide(host, steps, { timeoutMs: 20_000, onStep: (e) => e.kind === 'shown' && shown.push(e.n) })
+    const run = guide(host, steps, { timeoutMs: 20_000, onStep: (e) => e.kind === 'shown' && shown.push(e.n) })
     for (const [n, selector] of [[1, '#go'], [2, '#open']] as const) {
       await expect.poll(() => shown.includes(n), { timeout: 6000 }).toBe(true)
       await waitOverlay(page.mainFrame())
@@ -357,7 +391,7 @@ suite('browser_guide in a real Chromium', () => {
     await page.goto(`${A()}/p3`)
     await page.frameLocator('#cross').locator('#fb').waitFor()
     const { host } = await hostFor(page)
-    const run = runGuide(host, [{ target: { name: 'Inside frame' }, label: 'Click inside the frame' }], { timeoutMs: 10_000 })
+    const run = guide(host, [{ target: { name: 'Inside frame' }, label: 'Click inside the frame' }], { timeoutMs: 10_000 })
     const cross = page.frames().find((f) => f.url().includes(`localhost:${portB}`))!
     const o = await waitOverlay(cross)
     const local = await cross.evaluate(() => { const r = document.getElementById('fb')!.getBoundingClientRect(); return [r.left, r.top, r.width, r.height] })
@@ -376,7 +410,7 @@ suite('browser_guide in a real Chromium', () => {
   it('stops the chain early when the next target is not on the page, with what is there', async () => {
     await page.goto(`${A()}/p1`)
     const { host } = await hostFor(page)
-    const run = runGuide(host, [
+    const run = guide(host, [
       { target: { name: 'Something else' }, label: 'Click it' },
       { target: { name: 'Create Pixel' }, label: 'Click Create Pixel' },
     ], { timeoutMs: 10_000, nextFindMs: 600 })
@@ -394,7 +428,7 @@ suite('browser_guide in a real Chromium', () => {
   it('survives a re-render: the ring finds the new element by name', async () => {
     await page.goto(`${A()}/re`)
     const { host } = await hostFor(page)
-    const run = runGuide(host, [{ target: { name: 'Keep going' }, label: 'Click Keep going' }], { timeoutMs: 10_000 })
+    const run = guide(host, [{ target: { name: 'Keep going' }, label: 'Click Keep going' }], { timeoutMs: 10_000 })
     await waitOverlay(page.mainFrame())
     await new Promise((r) => setTimeout(r, 900))
     const el = (await page.locator('button').boundingBox())!
@@ -407,15 +441,26 @@ suite('browser_guide in a real Chromium', () => {
   it('I did it and Skip on the label end the step; their clicks never reach the page', async () => {
     await page.goto(`${A()}/p1`)
     const { host } = await hostFor(page)
-    const run = runGuide(host, [
+    const run = guide(host, [
       { target: { name: 'Something else' }, label: 'Click it' },
       { target: { name: 'Far down' }, label: 'Then this' },
     ], { timeoutMs: 10_000 })
     let o = await waitOverlay(page.mainFrame())
-    await page.mouse.click(centre(o.ok).x, centre(o.ok).y)
-    await new Promise((r) => setTimeout(r, 300))
-    o = await waitOverlay(page.mainFrame())
-    await page.mouse.click(centre(o.skip).x, centre(o.skip).y)
+    if (surface === null) {
+      await page.mouse.click(centre(o.ok).x, centre(o.ok).y)
+      await new Promise((r) => setTimeout(r, 300))
+      o = await waitOverlay(page.mainFrame())
+      await page.mouse.click(centre(o.skip).x, centre(o.skip).y)
+    } else {
+      // Drawn outside: the two buttons are in the overlay window; pressing one ends the step in the page.
+      // A click where the page's own (unpainted) buttons are laid out reaches nothing of the guide.
+      await page.mouse.click(centre(o.ok).x, centre(o.ok).y)
+      await new Promise((r) => setTimeout(r, 200))
+      expect(surface.ended.length).toBe(0)
+      surface.current()!.act('done')
+      await expect.poll(() => surface!.begun.length, { timeout: 5000 }).toBe(2)
+      surface.current()!.act('skipped')
+    }
     const result = await run
     expect(result.steps.map((s) => s.outcome)).toEqual(['done', 'skipped'])
     expect(await page.evaluate(() => (window as unknown as { __ownClicks: number }).__ownClicks)).toBe(0)
@@ -424,7 +469,7 @@ suite('browser_guide in a real Chromium', () => {
   it('times out with what the page shows, and the overlay is gone', async () => {
     await page.goto(`${A()}/p1`)
     const { host } = await hostFor(page)
-    const result = await runGuide(host, [{ target: { name: 'Something else' }, label: 'Click it' }], { timeoutMs: 1200 })
+    const result = await guide(host, [{ target: { name: 'Something else' }, label: 'Click it' }], { timeoutMs: 1200 })
     expect(result.outcome).toBe('timeout')
     expect(result.url).toContain('/p1')
     await new Promise((r) => setTimeout(r, 100))
@@ -437,7 +482,7 @@ suite('browser_guide in a real Chromium', () => {
     const runs = new GuideRuns()
     const mine = runs.start('tab-1', 'helper:h1')
     const other = runs.start('tab-2', 'main')
-    const run = runGuide(host, [{ target: { name: 'Something else' }, label: 'Click it' }], { timeoutMs: 20_000, signal: mine.abort.signal })
+    const run = guide(host, [{ target: { name: 'Something else' }, label: 'Click it' }], { timeoutMs: 20_000, signal: mine.abort.signal })
     await waitOverlay(page.mainFrame())
     const at = Date.now()
     expect(runs.endOwner('helper:h1')).toBe(1)

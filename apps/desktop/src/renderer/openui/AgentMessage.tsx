@@ -29,7 +29,8 @@ export function AgentMessage({ item }: { item: ChatItem }): JSX.Element {
         if (text.trim() !== '') void chat.send(text)
       },
       act: (label, message) => {
-        void chat.tap(item.id, label, message)
+        // One id per tap, kept by every retry of it; a deliberate second tap is a new one.
+        void chat.tap(item.id, label, message, crypto.randomUUID())
       },
       openUrl,
       tapped: new Set(tapKey === '' ? [] : tapKey.split('\u0000')),
