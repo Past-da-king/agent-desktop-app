@@ -1027,7 +1027,10 @@ export class Runner {
    * queue, steer or block what the person types, and it leaves no turn rows behind. If it needs the
    * person, it posts a question or approval card and ends with "Waiting for you".
    */
-  async runRoutine(trigger: TriggerRow): Promise<RoutineRunResult> {
+  async runRoutine(source: TriggerRow, slot?: { key: string; fence: number }): Promise<RoutineRunResult> {
+    // The slot's key goes into the run: whatever it does outside (a message, a post, a mail) can dedupe on it, so a slot
+    // that two brains both ran (a cut link) does its side effects once.
+    const trigger: TriggerRow = slot === undefined ? source : { ...source, prompt: `${source.prompt}\n\n[Run key ${slot.key}. If a tool or service you call takes an idempotency key or can be checked for an earlier result, use this key, and do not repeat anything already done for it.]` }
     if (this.routineRunning) return { text: 'Another routine is still running.', waiting: false }
     this.routineRunning = true
     this.routineWaiting = false

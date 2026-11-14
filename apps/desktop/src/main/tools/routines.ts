@@ -25,7 +25,7 @@ import {
 } from '@agent/core'
 
 import { isBuiltinRoutine } from '../memory/routine'
-import type { DataStore } from '../runtime/data'
+import { updateLive, type DataStore } from '../runtime/data'
 import { parseWhen } from './tasks'
 
 const KINDS: Array<TriggerRow['kind']> = ['at', 'daily', 'interval', 'event']
@@ -149,7 +149,8 @@ function routineUpdate(store: DataStore, now: () => Date): Tool {
       const said = [spec === '' ? '' : `runs ${plainSchedule(row.kind, spec)}`, enabled === null ? '' : enabled ? 'switched on' : 'switched off']
         .filter((part) => part !== '')
         .join(' and ')
-      await store.upsert('trigger', { id: row.id, ...(spec === '' ? {} : { spec }), ...(enabled === null ? {} : { enabled }) })
+      const changed = await updateLive(store, 'trigger', row.id, () => ({ ...(spec === '' ? {} : { spec }), ...(enabled === null ? {} : { enabled }) }))
+      if (changed === null) return `No routine #${id}.`
       await ctx.activity(`Changed routine: ${row.name}`, { tool: 'routine_update' })
       return `Routine #${row.id} now ${said}.`
     },

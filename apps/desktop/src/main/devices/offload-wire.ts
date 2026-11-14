@@ -10,7 +10,7 @@ import { MAIN_CHAT, NO_LIMIT_CAP, accountsOf, resolvePick, type AiAccount, type 
 
 import { brainFor, isBrain, type ProviderFactory } from '../runtime/brains'
 import type { HelperManager, OffloadLink } from '../runtime/helpers'
-import { Offload, TAKE_BACK_MS, type NodeCapacity, type PlaceResult } from '../runtime/offload'
+import { Offload, TAKE_BACK_MS, type NodeCapacity, type PlaceResult, type SlotClaim } from '../runtime/offload'
 import type { ChatVia } from '../tools/projects'
 import { devicesState, ownBrainIds } from './sync'
 
@@ -59,7 +59,8 @@ export interface OffloadWire {
   /** Where a new project chat runs (project_chat_start). */
   placeChat(chat: string, project: ProjectRow, brief: string, device?: string): Promise<PlaceResult | null>
   /** Whether this brain runs a due routine slot. */
-  claimRoutine(trigger: TriggerRow): Promise<boolean>
+  /** The authoritative claim on one slot of a routine: null/false stands down, else the claim (key, fence, verify). */
+  claimRoutine(trigger: TriggerRow, slotKey: string): Promise<SlotClaim | null>
   /** Whether this brain runs a day's End of day memory pass (the person's own computer first). */
   claimDaily(day: string): Promise<boolean>
   /** The chat runner as the window and other devices use it: placed chats go to their brain. */
@@ -282,9 +283,9 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
       }
       return placed
     },
-    claimRoutine: async (trigger) => {
+    claimRoutine: async (trigger, slotKey) => {
       const pick = resolvePick(settings.get(), undefined, 'main')
-      return offload.claimRoutine(trigger.id, String(trigger.lastRunAt ?? 0), { text: `${trigger.name}\n${trigger.prompt}`, account: pick.account, ...(trigger.device === undefined || trigger.device === '' ? {} : { device: trigger.device }) })
+      return offload.claimSlot(trigger.id, slotKey, { text: `${trigger.name}\n${trigger.prompt}`, account: pick.account, ...(trigger.device === undefined || trigger.device === '' ? {} : { device: trigger.device }) })
     },
     // The pass's report and its Undo live on the computer that ran it, so the person's own computer goes first and
     // a server does it only when no computer claimed the day within the grace.

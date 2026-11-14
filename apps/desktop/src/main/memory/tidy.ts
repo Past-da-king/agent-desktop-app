@@ -432,7 +432,8 @@ export class MemoryTidy {
           removed += 1
         }
       } else {
-        await this.deps.store.upsert('memory', { ...before })
+        // An undo is an explicit restore: the page may have been deleted since.
+        await this.deps.store.upsert('memory', { ...before }, { restore: true })
         restored += 1
       }
     }

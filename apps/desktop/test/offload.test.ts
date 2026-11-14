@@ -14,7 +14,7 @@ import { startFakeAi, type FakeAi, type FakeReply } from '../../../packages/core
 import { waitFor } from '../../../packages/core/test/helpers'
 import { Store } from '../src/main/db'
 import { HelperManager, type OffloadLink } from '../src/main/runtime/helpers'
-import { choosePlacement, Offload, ROUTINE_GRACE_MS, type PlaceCandidate } from '../src/main/runtime/offload'
+import { choosePlacement, Offload, SLOT_STANDIN_MS, type PlaceCandidate } from '../src/main/runtime/offload'
 import { Scheduler } from '../src/main/runtime/scheduler'
 import { buildWorkerToolset } from '../src/main/runtime/toolset'
 import { TurnLeases, rankedBrains } from '../src/main/runtime/turns'
@@ -476,13 +476,14 @@ describe('routines on one brain only', () => {
     await waitFor(async () => (await srv.offload.candidates()).some((each) => each.id === 'dev_pc' && each.up), 5000)
     const req = { text: 'Morning brief', account: LEGACY_ACCOUNT }
     // The PC prefers the server for it: it leaves the slot.
-    expect(await pc.offload.claimRoutine('r1', '0', req, 0)).toBe(false)
+    expect(await pc.offload.claimRoutine('r1', '0', req)).toBe(false)
     // The server prefers itself: it claims.
-    expect(await srv.offload.claimRoutine('r1', '0', req, 50)).toBe(true)
+    expect(await srv.offload.claimRoutine('r1', '0', req)).toBe(true)
     await waitFor(async () => (await pc.db.get('job', 'routine-r1@0')) !== null, 3000)
-    expect(await pc.offload.claimRoutine('r1', '0', req, 0)).toBe(false)
+    expect(await pc.offload.claimRoutine('r1', '0', req)).toBe(false)
 
-    // Another slot the server never claims: after the grace, the PC runs it.
+    // Another slot the server never claims while it is heard from: the PC stands down. Only when the server has been
+    // silent for the whole stand-in time (the lease ran out) does the PC take the slot.
     let now = Date.now()
     const late = new Offload({
       store: pc.db,
@@ -494,9 +495,9 @@ describe('routines on one brain only', () => {
       handle: async () => true,
       now: () => now,
     })
-    expect(await late.claimRoutine('r1', '1', req, 0)).toBe(false)
-    now += ROUTINE_GRACE_MS + 1
-    expect(await late.claimRoutine('r1', '1', req, 0)).toBe(true)
+    expect(await late.claimRoutine('r1', '1', req)).toBe(false)
+    now += SLOT_STANDIN_MS + 1
+    expect(await late.claimRoutine('r1', '1', req)).toBe(true)
   })
 
   it('a project chat placed here carries the commands-and-files choice of the computer that placed it', async () => {

@@ -8,11 +8,24 @@
 import type { TriggerRow } from '@agent/core'
 
 import type { DataStore } from './data'
+import { updateLive } from './data'
 import { isLimitFailure, limitRetryLeft, limitWaitMs, waitWords } from './limit-backoff'
 import type { RoutineRunResult } from './runner'
 
+/**
+ * One slot of a routine as the brain that runs it holds it: `key` is the same on every brain for the same slot
+ * (routine id + the slot's time), so a tool or message that supports an idempotency key can dedupe on it; `fence` is the
+ * monotonic token the claim authority gave this claim; `verify` asks the authority again that this brain still holds
+ * it (checked before the run starts).
+ */
+export interface RoutineSlot {
+  key: string
+  fence: number
+  verify?: () => Promise<boolean>
+}
+
 export interface RoutineRunner {
-  runRoutine(trigger: TriggerRow): Promise<RoutineRunResult>
+  runRoutine(trigger: TriggerRow, slot?: { key: string; fence: number }): Promise<RoutineRunResult>
 }
 
 /** Called once a routine finishes with a result worth a notification. */
@@ -38,12 +51,14 @@ export interface SchedulerDeps {
    * Devices (s12): every brain holds the same routines, so a due one runs on exactly one of them. False: another
    * brain runs this slot (its lastRunAt arrives by replication). Absent: this brain runs every routine (alone).
    */
-  claim?: (trigger: TriggerRow) => Promise<boolean>
+  claim?: (trigger: TriggerRow, slotKey: string) => Promise<boolean | RoutineSlot>
   /**
    * Decisions (docs/decisions.md): asked before a routine that opted in (deltaCheck) runs. skip: true skips this run (nothing
    * new); anything else, an error included, runs it as always. Absent: every routine runs.
    */
   precheck?: (trigger: TriggerRow) => Promise<{ skip: boolean; reason: string }>
+  /** The zone daily times are read in (an IANA name). Absent: the zone of this computer. */
+  timeZone?: string
 }
 
 export const SCHEDULER_INTERVAL_MS = 30_000
@@ -61,7 +76,8 @@ export class Scheduler {
   private readonly notifyRoutine: RoutineResultNotice
   private readonly runBuiltin: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
   private readonly runEvent: ((trigger: TriggerRow) => Promise<RoutineRunResult>) | null
-  private readonly claim: ((trigger: TriggerRow) => Promise<boolean>) | null
+  private readonly claim: ((trigger: TriggerRow, slotKey: string) => Promise<boolean | RoutineSlot>) | null
+  private readonly timeZone: string | undefined
   private readonly precheck: ((trigger: TriggerRow) => Promise<{ skip: boolean; reason: string }>) | null
   /** Slots another brain took (claim said no), by routine id, with the lastRunAt they were due at. */
   private readonly elsewhere = new Map<string, number | null>()
@@ -86,6 +102,7 @@ export class Scheduler {
     this.runBuiltin = deps.runBuiltin ?? null
     this.runEvent = deps.runEvent ?? null
     this.claim = deps.claim ?? null
+    this.timeZone = deps.timeZone
     this.precheck = deps.precheck ?? null
   }
 
@@ -159,12 +176,10 @@ export class Scheduler {
         }
         continue
       }
-      if (isBuiltin(trigger) || !trigger.enabled || !isDue(trigger, now)) continue
+      if (isBuiltin(trigger) || !trigger.enabled || !isDue(trigger, now, this.timeZone)) continue
       try {
-        if (this.claim !== null && !(await this.claim(trigger))) {
-          this.elsewhere.set(trigger.id, trigger.lastRunAt)
-          continue
-        }
+        // The slot is checked again, and claimed, inside the queue: by the time this job reaches the front the routine
+        // may have run (by hand, or on another brain) or been paused or deleted.
         await this.runExclusive(() => this.execute(trigger, false))
       } catch {
         // A routine that cannot be recorded must not stop the scheduler for every other routine.
@@ -177,6 +192,23 @@ export class Scheduler {
     const fresh = await this.store.get('trigger', trigger.id)
     if (fresh === null) return
     if (!fresh.enabled && !force) return
+
+    // A tick's job is checked against the row and the clock as they are NOW (a manual run or another brain may have
+    // run the slot while this waited in the queue). "Run now" and a limit retry are explicit and skip this.
+    let slot: RoutineSlot | null = null
+    if (!force) {
+      if (isBuiltin(fresh) || !isDue(fresh, this.now(), this.timeZone)) return
+      if (this.claim !== null) {
+        const claimed = await this.claim(fresh, slotKey(fresh, this.now(), this.timeZone))
+        if (claimed === false) {
+          this.elsewhere.set(fresh.id, fresh.lastRunAt)
+          return
+        }
+        if (claimed !== true) slot = claimed
+      }
+      // The authority still says this brain holds the slot: checked before the slot is recorded.
+      if (slot?.verify !== undefined && !(await slot.verify())) return
+    }
 
     // The slot is taken the moment the run starts (28 Oct 2026: a run cut off by an update, or killed, left the day's
     // slot open, and the next start ran it again unseen). Whatever happens to this run, this slot never runs again.
@@ -195,7 +227,14 @@ export class Scheduler {
         outcome = await this.runEvent(fresh)
       } else {
         const verdict = fresh.deltaCheck === true && this.precheck !== null ? await this.precheck(fresh).catch(() => ({ skip: false, reason: 'error' })) : { skip: false, reason: '' }
-        outcome = verdict.skip ? { text: 'Skipped: ' + verdict.reason, waiting: false, skipped: true } : await this.runner.runRoutine(fresh)
+        // The fencing token is checked once more right before the run starts, and the slot key goes into the run.
+        if (!verdict.skip && slot?.verify !== undefined && !(await slot.verify())) {
+          outcome = { text: 'Skipped: another brain holds this slot.', waiting: false, skipped: true }
+        } else {
+          outcome = verdict.skip
+            ? { text: 'Skipped: ' + verdict.reason, waiting: false, skipped: true }
+            : await this.runner.runRoutine(fresh, slot === null ? undefined : { key: slot.key, fence: slot.fence })
+        }
       }
     } catch (error) {
       outcome = {
@@ -217,13 +256,14 @@ export class Scheduler {
       ? WAITING_RESULT
       : (clip(outcome.text.trim(), LAST_RESULT_CHARS - again.length) || 'No result.') + again
 
-    await this.store.upsert('trigger', {
-      id: fresh.id,
+    // Only the run is recorded, on the row as it is now: a pause or an edit made during the run stays, and a routine
+    // deleted during the run stays deleted (the store refuses to bring it back). A one-off switches itself off only
+    // if it is still the same one-off (not moved to another time meanwhile).
+    await updateLive(this.store, 'trigger', fresh.id, (current) => ({
       lastRunAt: finishedAt,
       lastResult: result,
-      // A one-off has done its job. Everything else keeps its own paused/running state.
-      enabled: fresh.kind === 'at' ? false : fresh.enabled,
-    })
+      ...(fresh.kind === 'at' && current.kind === 'at' && current.spec === fresh.spec ? { enabled: false } : {}),
+    }))
 
     // A retry that hit the limit again says nothing: the person was told at the first one.
     if (!outcome.waiting && outcome.skipped !== true && !(retrying && hits > 1)) this.notifyRoutine(fresh.id, fresh.name, result)
@@ -249,7 +289,7 @@ function isBuiltin(trigger: TriggerRow): boolean {
  * run today (so a closed app catches up once today, never once per missed day). interval: enough
  * minutes since the last run, or since it was created when it has never run.
  */
-export function isDue(trigger: TriggerRow, now: number): boolean {
+export function isDue(trigger: TriggerRow, now: number, timeZone?: string): boolean {
   switch (trigger.kind) {
     case 'at': {
       const at = Date.parse(trigger.spec)
@@ -259,9 +299,9 @@ export function isDue(trigger: TriggerRow, now: number): boolean {
     case 'daily': {
       const minutes = minutesOfDay(trigger.spec)
       if (minutes === null) return false
-      const todayAt = startOfLocalDay(now) + minutes * 60_000
+      const todayAt = dailySlotAt(now, minutes, timeZone)
       if (now < todayAt) return false
-      if (trigger.lastRunAt !== null && startOfLocalDay(trigger.lastRunAt) === startOfLocalDay(now)) return false
+      if (trigger.lastRunAt !== null && dayKey(trigger.lastRunAt, timeZone) === dayKey(now, timeZone)) return false
       // Missed by more than a few minutes (closed, asleep): skipped unless it says catch up. A run started today
       // and cut off counts as run (lastRunAt is set as it starts).
       if (now - todayAt > CATCH_UP_MS && trigger.catchUp !== true) return false
@@ -289,6 +329,87 @@ export function minutesOfDay(spec: string): number | null {
   if (hours === undefined || minutes === undefined) return null
   if (hours > 23 || minutes > 59) return null
   return hours * 60 + minutes
+}
+
+/**
+ * The key of the slot a routine is due for, the same on every brain: daily is its day and time, a one-off its moment,
+ * an interval the run it follows. With the routine id it is the idempotency key of that run.
+ */
+export function slotKey(trigger: TriggerRow, now: number, timeZone?: string): string {
+  switch (trigger.kind) {
+    case 'daily':
+      return `${dayKey(now, timeZone)}T${trigger.spec}`
+    case 'at':
+      return trigger.spec
+    default:
+      return `i${trigger.lastRunAt ?? trigger.createdAt}`
+  }
+}
+
+interface Wall {
+  day: string
+  minutes: number
+}
+
+const formatters = new Map<string, Intl.DateTimeFormat>()
+
+/** The wall clock in `timeZone` (the zone of this computer when absent) at `stamp`: its date and minutes after midnight. */
+function wallAt(stamp: number, timeZone?: string): Wall {
+  const zone = timeZone ?? ''
+  // The computer's zone can change while the app runs (TZ in tests), so it is not cached.
+  let format = zone === '' ? undefined : formatters.get(zone)
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat('en-CA', {
+      ...(zone === '' ? {} : { timeZone: zone }),
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+    if (zone !== '') formatters.set(zone, format)
+  }
+  const parts: Record<string, string> = {}
+  for (const part of format.formatToParts(new Date(stamp))) parts[part.type] = part.value
+  return { day: `${parts['year']}-${parts['month']}-${parts['day']}`, minutes: Number(parts['hour']) * 60 + Number(parts['minute']) }
+}
+
+function dayKey(stamp: number, timeZone?: string): string {
+  return wallAt(stamp, timeZone).day
+}
+
+/**
+ * The moment the local wall clock reads `minutes` after midnight on the day `now` falls on: built from the wall-clock
+ * time itself, never by adding elapsed minutes to midnight, so it is right on the days the clock changes. A time the
+ * day skips (the spring gap) is the first valid minute after it; a time the day has twice (the fall) is the first one.
+ */
+export function dailySlotAt(now: number, minutes: number, timeZone?: string): number {
+  const today = wallAt(now, timeZone)
+  const [year, month, day] = today.day.split('-').map(Number) as [number, number, number]
+  // The wanted wall-clock time read as if it were UTC; the zone's offset around it settles the real moment.
+  const asUtc = Date.UTC(year, month - 1, day, 0, minutes)
+  const offsetAt = (stamp: number): number => {
+    const minute = stamp - (((stamp % 60_000) + 60_000) % 60_000)
+    const wall = wallAt(minute, timeZone)
+    const [y, m, d] = wall.day.split('-').map(Number) as [number, number, number]
+    return Date.UTC(y, m - 1, d, 0, wall.minutes) - minute
+  }
+  const candidates = new Set<number>()
+  for (const probe of [asUtc - 86_400_000, asUtc, asUtc + 86_400_000]) {
+    const moment = asUtc - offsetAt(probe)
+    const wall = wallAt(moment, timeZone)
+    if (wall.day === today.day && wall.minutes === minutes) candidates.add(moment)
+  }
+  if (candidates.size > 0) return Math.min(...candidates)
+  // The clock skips this time: the first valid minute at or after it.
+  let moment = asUtc - offsetAt(asUtc - 86_400_000)
+  for (let step = 0; step < 24 * 60; step += 1) {
+    const before = wallAt(moment - 60_000, timeZone)
+    if (before.day !== today.day || before.minutes < minutes) break
+    moment -= 60_000
+  }
+  return moment
 }
 
 export function startOfLocalDay(stamp: number): number {

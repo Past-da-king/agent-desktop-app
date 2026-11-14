@@ -147,6 +147,8 @@ export class WorkerStore {
       this.insidePath(dir, name)
       if (name === MANIFEST) throw new Error('worker.json is written from the manifest fields, not as a file.')
     }
+    // Written again on purpose (a worker made, or made again, under this id): it is a worker once more.
+    this.removed.delete(manifest.id)
     mkdirSync(join(dir, 'state'), { recursive: true })
     for (const [name, content] of entries) {
       const target = this.insidePath(dir, name)
@@ -169,6 +171,7 @@ export class WorkerStore {
   }
 
   remove(id: string): void {
+    this.removed.add(id)
     rmSync(this.dirOf(id), { recursive: true, force: true })
     this.db.prepare('DELETE FROM worker_state WHERE id = ?').run(id)
     this.db.prepare('DELETE FROM worker_events WHERE worker = ?').run(id)
@@ -222,9 +225,13 @@ export class WorkerStore {
     }
   }
 
+  /** Workers deleted while the app ran: a late write from their dying process must not bring anything of them back. */
+  private readonly removed = new Set<string>()
+
   patchState(id: string, patch: Partial<WorkerRuntimeState>): WorkerRuntimeState {
     const next = { ...this.state(id), ...patch, day: dayKey(this.now()) }
-    if (!this.open) return next
+    // A worker deleted while its process was still talking: its late exit or output lines leave no state behind.
+    if (!this.open || this.removed.has(id)) return next
     this.db
       .prepare('INSERT INTO worker_state(id, json) VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json')
       .run(id, JSON.stringify(next))
@@ -235,7 +242,7 @@ export class WorkerStore {
 
   /** Stores an event. Null when the same worker already sent this dedupeKey (a duplicate, dropped). */
   addEvent(worker: string, input: WorkerEventInput): WorkerEvent | null {
-    if (!this.open) return null
+    if (!this.open || this.removed.has(worker)) return null
     const receivedAt = this.now()
     const event: WorkerEvent = {
       id: `e_${randomUUID().replace(/-/g, '').slice(0, 16)}`,

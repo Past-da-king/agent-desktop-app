@@ -26,6 +26,7 @@ import {
   rosterName,
   userMsg,
   type AgentEvent,
+  type RowInput,
   type ChatEvent,
   type Decision,
   type LlmProvider,
@@ -37,7 +38,7 @@ import {
 } from '@agent/core'
 
 import { siteFromCall, siteOf, stuckPhrase, urlFromResult, type ToolInFlight } from './stuck-tool'
-import { listWhere, type DataStore } from './data'
+import { ifStillThere, listWhere, type DataStore } from './data'
 import { CardDecidedError, claimCard } from './card-claim'
 import { helperHold, helperState } from '../../shared/helper-cards'
 import { liveRuns } from './live-runs'
@@ -2616,7 +2617,7 @@ export class HelperManager implements HelperHost {
         this.runStarts.delete(event.call.id)
         const record = await finishRun(event.call, event.result, isError, started)
         if (existing !== null) {
-          await this.store.upsert('chat_item', {
+          await this.writeCard({
             id: existing,
             kind: 'activity',
             text: isError ? `${summary} failed` : summary,
@@ -2687,7 +2688,7 @@ export class HelperManager implements HelperHost {
       updateActivity: async (id, text, meta) => {
         const rowId = this.activityIds.get(id)
         if (rowId === undefined) return
-        await this.store.upsert('chat_item', {
+        await this.writeCard({
           id: rowId,
           kind: 'activity',
           text,
@@ -2893,12 +2894,17 @@ export class HelperManager implements HelperHost {
     if (pending.timer !== null) clearTimeout(pending.timer)
     const row = await this.store.get('chat_item', id)
     if (row === null) return
-    await this.store.upsert('chat_item', {
+    await this.writeCard({
       id: row.id,
       kind: row.kind,
       text: row.text,
       meta: JSON.stringify({ ...parseMeta(row.meta), ...pending.patch }),
     })
+  }
+
+  /** Updates a card this run read earlier. A card the person deleted meanwhile stays deleted. */
+  private async writeCard(input: RowInput<'chat_item'>): Promise<void> {
+    await ifStillThere(this.store.upsert('chat_item', input))
   }
 
   private async appendTurn(thread: string, message: Msg): Promise<void> {

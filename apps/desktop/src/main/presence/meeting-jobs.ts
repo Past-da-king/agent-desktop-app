@@ -11,7 +11,7 @@
  */
 import type { TriggerRow } from '@agent/core'
 
-import type { DataStore } from '../runtime/data'
+import { updateLive, type DataStore } from '../runtime/data'
 
 export const MOVE_AHEAD_MS = 2 * 60_000
 
@@ -109,10 +109,8 @@ export async function advanceMeetingJob(store: DataStore, meeting: EndedMeeting,
   // Already due within the two minutes: leave it, it runs on its own time.
   if (Date.parse(job.spec) <= target) return { moved: false, why: 'due-anyway', routineId: job.id, name: job.name }
   const to = localIso(target)
-  await store.upsert('trigger', {
-    id: job.id,
-    spec: to,
-    movedEarly: { from: job.spec, at: now, why, ...(meeting.eventId === '' ? {} : { eventId: meeting.eventId }) },
-  })
+  // The job may have run or been deleted since it was read: only a job still there and still waiting is moved.
+  const moved = await updateLive(store, 'trigger', job.id, (current) => (waiting(current) ? { spec: to, movedEarly: { from: job.spec, at: now, why, ...(meeting.eventId === '' ? {} : { eventId: meeting.eventId }) } } : null))
+  if (moved === null || moved.movedEarly === undefined || moved.spec !== to) return { moved: false, why: 'no-job' }
   return { moved: true, routineId: job.id, name: job.name, from: job.spec, to }
 }

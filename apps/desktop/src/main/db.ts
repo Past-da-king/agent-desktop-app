@@ -43,6 +43,8 @@ interface StoredRow {
   stamp: string
   deleted: boolean
   payload: Record<string, unknown>
+  /** The row was brought back after a delete (an explicit restore) and has not been deleted since. */
+  restored?: boolean
   /** An old step made light (archiveSlice): the payload here is its full body, kept in `bodies`. */
   archived?: boolean
 }
@@ -106,6 +108,21 @@ const LIST_SLICE_ROWS = 1000
 
 /** Longest stretch of store calls before the event loop gets a turn (Store.turn). */
 const STORE_SLICE_MS = 30
+
+/**
+ * A write reached a row that was deleted (its tombstone is still there). A write that only updates a row must never
+ * bring a deleted row back: the caller catches this and drops its write. Bringing a row back is a decision, made
+ * with `upsert(entity, row, { restore: true })`.
+ */
+export class RowDeletedError extends Error {
+  constructor(
+    readonly entity: string,
+    readonly rowId: string,
+  ) {
+    super(`The ${entity} ${rowId} was deleted.`)
+    this.name = 'RowDeletedError'
+  }
+}
 
 export const ENTITY_NAMES: readonly EntityName[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease', 'job', 'prompt_rule', 'wakeup', 'miniapp']
 
@@ -231,6 +248,10 @@ export class Store implements SyncStore {
         UNIQUE(entity, cid)
       );
     `)
+    // A row brought back after a delete says so, so another replica lets it beat the tombstone (added 14 Nov 2026).
+    if (!this.db.prepare('PRAGMA table_info(rows)').all().some((column) => column['name'] === 'restored')) {
+      this.db.exec('ALTER TABLE rows ADD COLUMN restored INTEGER NOT NULL DEFAULT 0')
+    }
     // The change log (docs/devices-protocol.md s7) starts with every row there is, so a new peer gets them all.
     if (!hadLog) this.db.exec("INSERT OR REPLACE INTO change_log(entity, cid, via) SELECT entity, cid, '' FROM rows ORDER BY stamp")
 
@@ -573,7 +594,7 @@ export class Store implements SyncStore {
 
   // ---- writing ----
 
-  async upsert<E extends EntityName>(entity: E, input: RowInput<E>): Promise<EntityMap[E]> {
+  async upsert<E extends EntityName>(entity: E, input: RowInput<E>, options: { restore?: boolean } = {}): Promise<EntityMap[E]> {
     this.assertEntity(entity)
     await this.turn()
     const raw = input as Record<string, unknown>
@@ -581,15 +602,18 @@ export class Store implements SyncStore {
     const id = typeof suppliedId === 'string' && suppliedId !== '' ? suppliedId : randomUUID()
     const existing = this.readRow(entity, id)
     const timestamp = this.now()
+    // A deleted row stays deleted: a write that carries an id it read earlier (a snapshot taken before the delete)
+    // must not bring it back. Only an explicit restore does, and it starts from a clean row, not the deleted one.
+    if (existing !== null && existing.deleted && options.restore !== true) throw new RowDeletedError(entity, id)
 
     const payload: Record<string, unknown> = { ...defaultsFor(entity) }
-    if (existing !== null) Object.assign(payload, existing.payload)
+    if (existing !== null && !existing.deleted) Object.assign(payload, existing.payload)
     for (const [key, value] of Object.entries(raw)) {
       if (key === 'id' || value === undefined) continue
       // No vault value is ever written into a synced row (vault/redact.ts): chat items, turns, memory, tasks.
       payload[key] = redactDeep(value)
     }
-    if (existing === null && typeof payload.createdAt !== 'number') payload.createdAt = timestamp
+    if ((existing === null || existing.deleted) && typeof payload.createdAt !== 'number') payload.createdAt = timestamp
     if (UPDATED_AT_ENTITIES.has(entity)) payload.updatedAt = timestamp
 
     const writer = currentWriter()
@@ -598,15 +622,17 @@ export class Store implements SyncStore {
       const stamp = encodeStamp(this.hlc.now())
       this.db
         .prepare(
-          `INSERT INTO rows(entity, cid, stamp, deleted, payload, local)
-           VALUES(?, ?, ?, 0, ?, 1)
+          `INSERT INTO rows(entity, cid, stamp, deleted, payload, local, restored)
+           VALUES(?, ?, ?, 0, ?, 1, ?)
            ON CONFLICT(entity, cid) DO UPDATE SET
              stamp = excluded.stamp,
              deleted = 0,
              payload = excluded.payload,
-             local = 1`,
+             local = 1,
+             restored = excluded.restored`,
         )
-        .run(entity, id, stamp, JSON.stringify(payload))
+        // Bringing back a deleted row marks it (and its later edits) so other replicas let it beat the tombstone.
+        .run(entity, id, stamp, JSON.stringify(payload), existing?.deleted === true || existing?.restored === true ? 1 : 0)
       if (existing?.archived === true) this.dropBody(entity, id)
       this.logChange(entity, id, '')
     })
@@ -665,7 +691,7 @@ export class Store implements SyncStore {
       if (entity === 'memory' && !existing.deleted) this.keepVersion(id, existing.payload, null, writer)
       const stamp = encodeStamp(this.hlc.now())
       this.db
-        .prepare('UPDATE rows SET stamp = ?, deleted = 1, local = 1 WHERE entity = ? AND cid = ?')
+        .prepare('UPDATE rows SET stamp = ?, deleted = 1, local = 1, restored = 0 WHERE entity = ? AND cid = ?')
         .run(stamp, entity, id)
       if (existing.archived === true) this.dropBody(entity, id)
       this.logChange(entity, id, '')
@@ -937,7 +963,7 @@ export class Store implements SyncStore {
     const after = afterStamp === null ? null : decodeStamp(afterStamp)
     const changes: Change[] = []
     const statement = this.db.prepare(
-      'SELECT r.cid AS cid, r.stamp AS stamp, r.deleted AS deleted, COALESCE(b.payload, r.payload) AS payload FROM rows r LEFT JOIN bodies b ON b.entity = r.entity AND b.cid = r.cid WHERE r.entity = ? AND r.local = 1',
+      'SELECT r.cid AS cid, r.stamp AS stamp, r.deleted AS deleted, r.restored AS restored, COALESCE(b.payload, r.payload) AS payload FROM rows r LEFT JOIN bodies b ON b.entity = r.entity AND b.cid = r.cid WHERE r.entity = ? AND r.local = 1',
     )
     for (const entity of ENTITY_NAMES) {
       for (const row of statement.all(entity)) {
@@ -951,6 +977,7 @@ export class Store implements SyncStore {
           deleted: stored.deleted,
           stamp: stored.stamp,
           payload: { ...stored.payload },
+          ...(stored.restored === true && !stored.deleted ? { restore: true } : {}),
         })
       }
     }
@@ -1018,7 +1045,16 @@ export class Store implements SyncStore {
       }
       if (existing !== null) {
         const local = decodeStamp(existing.stamp)
-        if (local !== null && compareStamps(local, remote) >= 0) continue
+        // A tombstone beats a write that does not carry the explicit restore flag, whatever its stamp: a stale
+        // device writing a row it had not yet heard was deleted must not bring it back. Our tombstone is announced
+        // again so that device receives it.
+        if (existing.deleted && !change.deleted && change.restore !== true) {
+          this.logChange(change.entity, change.id, '')
+          continue
+        }
+        // And the other way: an incoming tombstone takes a live row that was never restored, even one edited later.
+        const tombstoneTakes = !existing.deleted && change.deleted && existing.restored !== true
+        if (!tombstoneTakes && local !== null && compareStamps(local, remote) >= 0) continue
         // A helper's end beats a stale "working" write of the same run (another device wrote it from the card as it
         // was before the end reached it): ours is kept and stamped again, so it reaches that device and wins there too.
         if (!existing.deleted && !change.deleted && endedBeatsWorking(change.entity, existing.payload, change.payload)) {
@@ -1035,15 +1071,16 @@ export class Store implements SyncStore {
 
       this.db
         .prepare(
-          `INSERT INTO rows(entity, cid, stamp, deleted, payload, local)
-           VALUES(?, ?, ?, ?, ?, 0)
+          `INSERT INTO rows(entity, cid, stamp, deleted, payload, local, restored)
+           VALUES(?, ?, ?, ?, ?, 0, ?)
            ON CONFLICT(entity, cid) DO UPDATE SET
              stamp = excluded.stamp,
              deleted = excluded.deleted,
              payload = excluded.payload,
-             local = 0`,
+             local = 0,
+             restored = excluded.restored`,
         )
-        .run(change.entity, change.id, change.stamp, change.deleted ? 1 : 0, JSON.stringify(payload))
+        .run(change.entity, change.id, change.stamp, change.deleted ? 1 : 0, JSON.stringify(payload), change.restore === true && !change.deleted ? 1 : 0)
       if (existing?.archived === true) this.dropBody(change.entity, change.id)
       this.logChange(change.entity, change.id, via)
       touched.push(change.deleted ? { entity: change.entity, id: change.id, deleted: true } : { entity: change.entity, row: { id: change.id, ...payload } as EntityMap[EntityName] })
@@ -1099,7 +1136,7 @@ export class Store implements SyncStore {
     if (only !== null && only.length === 0) return { changes: [], cursor: after }
     const entries = this.db
       .prepare(
-        `SELECT l.seq AS seq, l.entity AS entity, l.cid AS cid, l.via AS via, r.stamp AS stamp, r.deleted AS deleted, COALESCE(b.payload, r.payload) AS payload
+        `SELECT l.seq AS seq, l.entity AS entity, l.cid AS cid, l.via AS via, r.stamp AS stamp, r.deleted AS deleted, r.restored AS restored, COALESCE(b.payload, r.payload) AS payload
          FROM change_log l LEFT JOIN rows r ON r.entity = l.entity AND r.cid = l.cid LEFT JOIN bodies b ON b.entity = l.entity AND b.cid = l.cid
          WHERE l.seq > ?${only === null ? '' : ` AND l.entity IN (${only.map(() => '?').join(', ')})`} ORDER BY l.seq LIMIT ?`,
       )
@@ -1118,6 +1155,7 @@ export class Store implements SyncStore {
         stamp: stringField(entry['stamp']),
         payload: parsePayload(entry['payload']),
         seq: cursor,
+        ...(numberField(entry['restored']) === 1 && numberField(entry['deleted']) !== 1 ? { restore: true } : {}),
       })
     }
     return { changes, cursor }
@@ -1171,7 +1209,7 @@ export class Store implements SyncStore {
 
   private readRow(entity: EntityName, id: string): StoredRow | null {
     const row = this.db
-      .prepare('SELECT cid, stamp, deleted, payload FROM rows WHERE entity = ? AND cid = ?')
+      .prepare('SELECT cid, stamp, deleted, payload, restored FROM rows WHERE entity = ? AND cid = ?')
       .get(entity, id)
     if (row === undefined) return null
     const stored = rowFromSql(row)
@@ -1363,6 +1401,7 @@ function rowFromSql(row: Record<string, SQLOutputValue>): StoredRow {
     stamp: stringField(row['stamp']),
     deleted: numberField(row['deleted']) === 1,
     payload: parsePayload(row['payload']),
+    ...(numberField(row['restored']) === 1 ? { restored: true } : {}),
   }
 }
 

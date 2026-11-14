@@ -35,7 +35,14 @@ export const SCAN_MS = 60_000
 export const RETRY_SCAN_MS = 3_000
 /** A start nobody took within this long (no job lease) is run where it was placed from. */
 export const TAKE_BACK_MS = 45_000
-/** A routine slot the preferred brain has not claimed within this long is run by whichever brain sees it next. */
+/**
+ * A routine slot belongs to its home brain (the one placement picks, or the one the routine is pinned to). Another
+ * brain only stands in for it when every brain ahead of it has not been heard from for this long: the lease on the
+ * slot has run out. Shorter than that, a quiet or cut-off home brain keeps the slot and the others stand down.
+ * See docs/devices-routine-claims.md.
+ */
+export const SLOT_STANDIN_MS = 15 * 60_000
+/** Kept for older callers; a slot is no longer taken after this wait (see SLOT_STANDIN_MS). */
 export const ROUTINE_GRACE_MS = 90_000
 /** Handled messages are kept this long, then removed. */
 const KEEP_DONE_MS = 24 * 3_600_000
@@ -51,6 +58,17 @@ export interface NodeCapacity {
   active: number
   /** It has a browser for the browser tools (only its own sign-ins, none of another computer's). */
   browser: boolean
+}
+
+/**
+ * A brain's claim on one routine slot: `key` is the slot's idempotency key (same on every brain), `fence` the token
+ * the claim was written with (it rises each time the slot is claimed again), `verify` asks the store whether this brain
+ * still holds the claim (the row is still its own, at the same fence).
+ */
+export interface SlotClaim {
+  key: string
+  fence: number
+  verify: () => Promise<boolean>
 }
 
 export type JobOp = 'start' | 'steer' | 'push' | 'stop' | 'answer' | 'decide' | 'result' | 'bounce' | 'post' | 'chatstop'
@@ -421,25 +439,81 @@ export class Offload {
    * claim and then claims itself, so a slot is never lost when the preferred one is down. The newest claim wins;
    * a claim is read again after a short settle so two brains that claimed together agree.
    */
-  async claimRoutine(triggerId: string, slot: string, req: PlaceRequest, settleMs = 2_500): Promise<boolean> {
+  async claimRoutine(triggerId: string, slot: string, req: PlaceRequest): Promise<boolean> {
+    return (await this.claimSlot(triggerId, slot, req)) !== null
+  }
+
+  /**
+   * The authoritative claim on one slot of a routine (every brain holds the same routines). There is no vote and no
+   * wait for replication: the slot has one authority, its HOME brain (where placement puts the routine, or the brain
+   * it is pinned to), and only the authority writes the claim. Another brain stands in only when every brain ahead of
+   * it in the order has been silent for SLOT_STANDIN_MS (the lease ran out). The claim carries a fencing token (rises
+   * with every claim of the slot) and a key (routine id + slot) that goes into the run, so what the run does outside
+   * can be deduped. `verify` is asked right before the run starts. Null: this brain does not run the slot.
+   */
+  async claimSlot(triggerId: string, slot: string, req: PlaceRequest): Promise<SlotClaim | null> {
     const self = this.deps.selfId()
-    if (self === '') return true
-    const others = await this.candidates()
-    if (others.length === 0) return true
-    const id = `routine-${triggerId}@${slot}`
+    const key = `${triggerId}@${slot}`
+    const id = `routine-${key}`
+    const holds = (fence: number): SlotClaim => ({
+      key,
+      fence,
+      verify: async () => {
+        const row = await this.deps.store.get('job', id)
+        return row !== null && this.isSelf(row.device) && fenceOf(row) === fence
+      },
+    })
+    if (self === '') return { key, fence: 1, verify: async () => true }
+    const { order, nodes } = await this.slotOrder(req)
+    if (order.length <= 1) return { key, fence: 1, verify: async () => true }
+
     const existing = await this.deps.store.get('job', id)
-    if (existing !== null && existing.device !== '') return this.isSelf(existing.device) && existing.status !== 'done'
-    const placed = await this.place(req)
-    if (placed.device !== null && others.some((each) => each.id === placed.device && each.up)) {
-      const since = this.routineWait.get(id) ?? this.now()
-      this.routineWait.set(id, since)
-      if (this.now() - since < ROUTINE_GRACE_MS) return false
+    const claimed = existing !== null && existing.device !== ''
+    // Someone holds it. This brain holds it only if the claim is its own.
+    if (claimed && !this.isSelf(existing.device)) return null
+    if (claimed) return holds(fenceOf(existing))
+
+    // The brains ahead of this one: while any of them was heard from within the lease, the slot is theirs.
+    const now = this.now()
+    for (const other of order.slice(0, order.findIndex((each) => this.isSelf(each)))) {
+      const beat = nodes.find((row) => row.device === other)?.at
+      const since = beat ?? this.routineWait.get(`absent-${other}`) ?? now
+      if (beat === undefined) this.routineWait.set(`absent-${other}`, since)
+      else this.routineWait.delete(`absent-${other}`)
+      if (now - since < SLOT_STANDIN_MS) return null
     }
-    this.routineWait.delete(id)
-    await this.deps.store.upsert('job', { id, kind: 'claim', device: self, from: self, helper: `${triggerId}@${slot}`, op: 'routine', status: 'on', at: this.now() })
-    if (settleMs > 0) await new Promise((resolve) => setTimeout(resolve, settleMs))
-    const after = await this.deps.store.get('job', id)
-    return after !== null && this.isSelf(after.device)
+    const fence = (existing === null ? 0 : fenceOf(existing)) + 1
+    await this.deps.store.upsert('job', { id, kind: 'claim', device: self, from: self, helper: key, op: 'routine', status: 'on', info: JSON.stringify({ fence }), at: now })
+    return holds(fence)
+  }
+
+  /**
+   * The brains in the order they hold a routine slot: its home brain first (the one placement picks as if every brain
+   * were up, or the one it is pinned to), then the rest, servers before computers, then by priority and id.
+   */
+  private async slotOrder(req: PlaceRequest): Promise<{ order: string[]; nodes: JobRow[] }> {
+    const self = this.deps.selfId()
+    const devices = (await this.deps.store.list('device')).filter((row) => !row.revoked && row.roles.includes('brain'))
+    const nodes = await this.rows('node')
+    const selfRow = devices.find((row) => this.isSelf(row.id)) ?? null
+    const selfKind = selfRow?.kind ?? this.deps.capacity().kind
+    const selfNames = [...new Set([selfRow?.name ?? '', this.deps.capacity().name, hostname()].filter((each) => each !== ''))]
+    // Placement as if every brain were up and free: the home of a slot must not move when a brain blinks.
+    const forced = (await this.candidates()).map((each) => ({ ...each, up: true, capacity: { ...each.capacity, cap: Math.max(1, each.capacity.cap), active: 0, accounts: [...new Set([...each.capacity.accounts, req.account])] } }))
+    const placed = choosePlacement({ ...req, selfNames }, forced, selfKind, this.deps.mode())
+    const home = placed.device ?? self
+    const rank = (id: string): [number, number, string] => {
+      const row = id === self ? selfRow : (devices.find((each) => each.id === id) ?? null)
+      const kind = row?.kind ?? (id === self ? selfKind : 'desktop')
+      return [kind === 'server' ? 0 : 1, row?.priority ?? 0, id]
+    }
+    const ids = [...new Set([self, ...devices.map((row) => row.id)])].filter((id) => id !== home)
+    ids.sort((a, b) => {
+      const [ka, pa, ia] = rank(a)
+      const [kb, pb, ib] = rank(b)
+      return ka - kb || pa - pb || ia.localeCompare(ib)
+    })
+    return { order: [home, ...ids], nodes }
   }
 
   // ---- inside ---------------------------------------------------------------------------------------------------
@@ -461,6 +535,16 @@ export class Offload {
     for (const row of await this.rows('msg')) {
       if (row.status === 'done' && row.at < cutoff && this.isSelf(row.device)) await this.deps.store.remove('job', row.id)
     }
+  }
+}
+
+/** The fencing token of a claim row (0 for a claim written before tokens existed). */
+export function fenceOf(row: { info: string }): number {
+  try {
+    const fence = (JSON.parse(row.info) as { fence?: unknown }).fence
+    return typeof fence === 'number' && Number.isFinite(fence) ? fence : 0
+  } catch {
+    return 0
   }
 }
 

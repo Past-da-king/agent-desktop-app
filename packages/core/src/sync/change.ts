@@ -15,6 +15,12 @@ export interface Change {
   stamp: string
   payload: Record<string, unknown>
   seq?: number
+  /**
+   * Set only on a row that was explicitly brought back after a delete (a restore). A tombstone beats every other
+   * remote write, whatever its stamp; this flag is the one thing that lets a write beat it. Absent from old peers,
+   * whose writes therefore never resurrect a deleted row.
+   */
+  restore?: boolean
 }
 
 const ENTITY_NAMES: readonly EntityName[] = [
@@ -45,7 +51,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 /** Parse one change from server JSON. Null when the shape is not usable (the caller skips it). */
 export function changeFromJson(value: unknown): Change | null {
   if (!isRecord(value)) return null
-  const { entity, id, deleted, stamp, payload, seq } = value
+  const { entity, id, deleted, stamp, payload, seq, restore } = value
   if (!isEntityName(entity)) return null
   if (typeof id !== 'string' || id === '') return null
   if (typeof stamp !== 'string' || stamp === '') return null
@@ -57,6 +63,7 @@ export function changeFromJson(value: unknown): Change | null {
     payload: isRecord(payload) ? payload : {},
   }
   if (typeof seq === 'number' && Number.isFinite(seq)) change.seq = seq
+  if (restore === true) change.restore = true
   return change
 }
 
@@ -70,5 +77,6 @@ export function changeToJson(change: Change): Record<string, unknown> {
     payload: change.payload,
   }
   if (change.seq !== undefined) out.seq = change.seq
+  if (change.restore === true) out.restore = true
   return out
 }

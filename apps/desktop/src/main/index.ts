@@ -1753,7 +1753,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       if (eventRouter === null) throw new Error('Event routines are not ready yet.')
       return eventRouter.runNow(trigger)
     },
-    claim: (trigger) => placedWire.claimRoutine(trigger),
+    claim: async (trigger, slotKey) => (await placedWire.claimRoutine(trigger, slotKey)) ?? false,
     precheck: decisions.precheck,
   })
   // Background scripts show as runs with a stop, and end with the routine or helper that started them.
