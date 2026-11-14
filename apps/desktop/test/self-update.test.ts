@@ -8,7 +8,8 @@
  * held open, real installer exit codes, a real rollback).
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -110,15 +111,34 @@ function setup(patch: Partial<SelfUpdateDeps> = {}, behave: Behave = 'ready'): R
     relaunchEnv: { AGENT_USER_DATA: 'C:\\data' },
     pollMs: 5,
     launcherReadyMs: 300,
+    releaseKeys: [TEST_KEY.release],
     ...patch,
   })
   return { updater, dir, started, quits, told, busy }
 }
 
+const TEST_KEY = (() => {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+  const der = publicKey.export({ type: 'spki', format: 'der' })
+  const id = createHash('sha256').update(der.subarray(der.length - 32)).digest('hex').slice(0, 16)
+  return { privateKey, release: { id, publisher: 'Test Publisher', publicKey: der.toString('base64') } }
+})()
+
+/** A release the way tools/release/sign-release.mjs makes it: the file and its signed manifest. */
 function installer(dir: string, name: string): string {
   const path = join(dir, name)
   writeFileSync(path, 'MZ')
+  const version = versionOfInstaller(name, 'Agent')
+  if (version !== null) {
+    const payload = JSON.stringify({ product: 'Agent', version, file: name, size: 2, sha256: createHash('sha256').update('MZ').digest('hex'), publisher: 'Test Publisher', commit: 'abc1234', createdAt: '2026-11-14T00:00:00Z' })
+    writeFileSync(`${path}.release.json`, JSON.stringify({ format: 1, payload, keyId: TEST_KEY.release.id, signature: sign(null, Buffer.from(payload), TEST_KEY.privateKey).toString('base64') }))
+  }
   return path
+}
+
+/** The person says yes on the approval card. */
+function yes(updater: SelfUpdater, path: string, chat: string): ReturnType<SelfUpdater['install']> {
+  return updater.install(path, chat, async () => true)
 }
 
 async function until(check: () => boolean, ms = 3000): Promise<void> {
@@ -145,11 +165,11 @@ describe('self update', () => {
 
   it('refuses what it cannot install, without touching anything', async () => {
     const { updater, dir, started } = setup()
-    expect((await updater.install(join(dir, 'missing.exe'), 'main')).text).toMatch(/no file/)
-    expect((await updater.install(installer(dir, 'Thing-1.0.0-setup.exe'), 'main')).text).toMatch(/not an installer of this app/)
-    expect((await updater.install(installer(dir, 'Agent-0.2.40-setup.exe'), 'main')).text).toMatch(/older/)
-    expect((await setup({ packaged: false }).updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'main')).text).toMatch(/development run/)
-    expect((await setup({ platform: 'linux' }).updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'main')).text).toMatch(/Windows only/)
+    expect((await yes(updater, join(dir, 'missing.exe'), 'main')).text).toMatch(/no file/)
+    expect((await yes(updater, installer(dir, 'Thing-1.0.0-setup.exe'), 'main')).text).toMatch(/not an installer of this app/)
+    expect((await yes(updater, installer(dir, 'Agent-0.2.40-setup.exe'), 'main')).text).toMatch(/older/)
+    expect((await yes(setup({ packaged: false }).updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'main')).text).toMatch(/development run/)
+    expect((await yes(setup({ platform: 'linux' }).updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'main')).text).toMatch(/Windows only/)
     expect(started).toEqual([])
     expect(existsSync(join(dir, 'update-pending.json'))).toBe(false)
   })
@@ -157,20 +177,21 @@ describe('self update', () => {
   it('the launcher is started outside the app (not as a detached child) with a script and parameters for this exact install', async () => {
     const { updater, dir, started, quits, busy } = setup()
     const path = installer(dir, 'Agent-0.2.53-setup.exe')
-    expect((await updater.install(path, 'chat_42')).ok).toBe(true)
+    expect((await yes(updater, path, 'chat_42')).ok).toBe(true)
     busy.on = false
     await until(() => quits.length > 0)
     // Two separate processes: the launcher, and the watchdog that finishes the update if the launcher is killed.
     expect(started).toHaveLength(2)
-    expect(started[1]).toMatch(/ -File "[^"]+launcher\.ps1" "[^"]+params\.json" -Role watchdog$/)
+    expect(started[1]).toMatch(/ -File "[^"]+launcher\.ps1" "[^"]+params\.json" -ExpectSha256 [0-9a-f]{64} -Role watchdog$/)
     const line = started[0]!
-    expect(line).toMatch(/powershell\.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[^"]+launcher\.ps1" "[^"]+params\.json"$/)
+    expect(line).toMatch(/powershell\.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "[^"]+launcher\.ps1" "[^"]+params\.json" -ExpectSha256 [0-9a-f]{64}$/)
     const params = JSON.parse(readFileSync(/"([^"]+params\.json)"/.exec(line)![1]!, 'utf8')) as Record<string, unknown>
     expect(params).toMatchObject({
       appPid: 999_999,
       installDir: join(dir, 'app'),
       exe: join(dir, 'app', 'Agent.exe'),
-      installer: path,
+      installer: join(dir, 'update-staging', readdirSync(join(dir, 'update-staging'))[0]!, 'Agent-0.2.53-setup.exe'),
+      installerSha256: createHash('sha256').update('MZ').digest('hex'),
       wanted: '0.2.53',
       env: { AGENT_USER_DATA: 'C:\\data' },
     })
@@ -191,8 +212,8 @@ describe('self update', () => {
 
   it('waits for the turn to end before anything starts', async () => {
     const { updater, dir, started, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
-    expect((await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')).text).toMatch(/already waiting/)
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
+    expect((await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')).text).toMatch(/already waiting/)
     await new Promise((resolve) => setTimeout(resolve, 60))
     expect(started).toEqual([])
     expect(quits).toEqual([])
@@ -204,7 +225,7 @@ describe('self update', () => {
   it('never quits into nothing: a launcher or watchdog that cannot start, or never runs, leaves the app up and tells the chat why', async () => {
     for (const behave of ['throw', 'silent', 'no-watchdog', 'watchdog-throws'] as const) {
       const { updater, dir, quits, told, busy } = setup({}, behave)
-      await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_7')
+      await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_7')
       busy.on = false
       await until(() => told.length > 0)
       expect(quits).toEqual([])
@@ -215,13 +236,13 @@ describe('self update', () => {
       expect(told[0]?.text).toContain('still on 0.2.52')
       expect(existsSync(join(dir, 'update-pending.json'))).toBe(false)
       // It can be tried again.
-      expect((await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_7')).ok).toBe(true)
+      expect((await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_7')).ok).toBe(true)
     }
   })
 
   it('after the restart: success names the installed and the running version', async () => {
     const { updater, dir, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
     busy.on = false
     await until(() => quits.length > 0)
     const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
@@ -235,7 +256,7 @@ describe('self update', () => {
 
   it('after the restart: a failure says the real reason, never just "did not take"', async () => {
     const { updater, dir, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
     busy.on = false
     await until(() => quits.length > 0)
     const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
@@ -267,24 +288,24 @@ describe('self update', () => {
     expect(silent).toMatch(/left no result at .*result\.json and no log at .*launcher\.log/)
   })
 
-  it('a reinstall of the same version that failed is a failure, though the running version matches', async () => {
+  it('a launcher that reported a failure is a failure even when the running version already matches the wanted one', async () => {
     const { updater, dir, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.52-setup.exe'), 'chat_9')
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_9')
     busy.on = false
     await until(() => quits.length > 0)
     const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
     writeFileSync(
       join(note.work, 'result.json'),
-      JSON.stringify(result({ wanted: '0.2.52', stage: 'checking that no file is in use', error: 'a file of the app is still in use after 20 s: C:\\A\\resources\\app.asar, held by node.exe (pid 18560, C:\\node.exe)' })),
+      JSON.stringify(result({ wanted: '0.2.53', stage: 'checking that no file is in use', error: 'a file of the app is still in use after 20 s: C:\\A\\resources\\app.asar, held by node.exe (pid 18560, C:\\node.exe)' })),
     )
-    const after = setup({ userData: dir, currentVersion: '0.2.52' }).updater.resume()!
+    const after = setup({ userData: dir, currentVersion: '0.2.53' }).updater.resume()!
     expect(after.ok).toBe(false)
-    expect(resumeNote(after)).toMatch(/FAILED: wanted 0\.2\.52 .* Reason: while checking that no file is in use: .*app\.asar, held by node\.exe \(pid 18560/)
+    expect(resumeNote(after)).toMatch(/FAILED: wanted 0\.2\.53 .* Reason: while checking that no file is in use: .*app\.asar, held by node\.exe \(pid 18560/)
   })
 
   it('after the restart: a launcher that was killed and finished by the watchdog says so', async () => {
     const { updater, dir, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
     busy.on = false
     await until(() => quits.length > 0)
     const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
@@ -296,7 +317,7 @@ describe('self update', () => {
 
   it('after the restart: when the new version would not start and the old one was put back, the reason says so', async () => {
     const { updater, dir, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
     busy.on = false
     await until(() => quits.length > 0)
     const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
@@ -311,7 +332,7 @@ describe('self update', () => {
 
   it('after the restart: a launcher that left no word and no watchdog finished is reported as exactly that', async () => {
     const { updater, dir, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
     busy.on = false
     await until(() => quits.length > 0)
     const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
@@ -322,7 +343,7 @@ describe('self update', () => {
 
   it('after the restart: waits for the launcher to write its last word before reading the outcome', async () => {
     const { updater, dir, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
     busy.on = false
     await until(() => quits.length > 0)
     const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
@@ -339,7 +360,7 @@ describe('self update', () => {
 
   it('after the restart: does not wait for a launcher that went quiet', async () => {
     const { updater, dir, quits, busy } = setup()
-    await updater.install(installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
+    await yes(updater, installer(dir, 'Agent-0.2.53-setup.exe'), 'chat_42')
     busy.on = false
     await until(() => quits.length > 0)
     const note = JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8')) as { work: string }
@@ -423,6 +444,10 @@ function bed(exitAfterMs = 1500, oldApp: 'stays' | 'dies' = 'stays'): Bed {
   return { root, appDir, exe, marker, argsLog: join(root, 'installer-args.txt'), appPid: app.pid! }
 }
 
+function sha256Of(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+
 interface Run {
   work: string
   launcher: number
@@ -443,12 +468,13 @@ async function startBoth(b: Bed, installerPath: string, wanted: string, extra: R
       appPid: b.appPid, installDir: b.appDir, exe: b.exe, installer: installerPath, wanted,
       result: join(work, 'result.json'), log: join(work, 'launcher.log'), backup: join(b.root, 'backup'),
       env: { AGENT_USER_DATA: 'C:\\test-data' }, exitTimeoutSec: 20, settleTimeoutSec: 5, lockTimeoutSec: 3, installerTimeoutSec: 60,
-      appName: 'AgentTest', installCmd: join(work, 'install.cmd'), installerExitFile: join(work, 'installer.exit'),
+      appName: 'AgentTest', installCmd: join(work, 'install.cmd'), installerExitFile: join(work, 'installer.exit'), installerSha256: sha256Of(installerPath),
       appUpSec: 6, stageLimitSec: 60, watchdogMaxSec: 240, noteDir: b.root, noToast: true, ...extra,
     }),
   )
-  const launcher = await startViaWmi(launcherCommandLine(script, params))
-  const watchdog = await startViaWmi(launcherCommandLine(script, params, undefined, 'watchdog'))
+  const digest = typeof extra['cmdSha256'] === 'string' ? extra['cmdSha256'] : typeof extra['installerSha256'] === 'string' ? extra['installerSha256'] : sha256Of(installerPath)
+  const launcher = await startViaWmi(launcherCommandLine(script, params, undefined, 'launcher', digest))
+  const watchdog = await startViaWmi(launcherCommandLine(script, params, undefined, 'watchdog', digest))
   expect(launcher).toBeGreaterThan(0)
   expect(watchdog).toBeGreaterThan(0)
   return { work, launcher, watchdog }
@@ -646,4 +672,47 @@ describe.runIf(onWindows)('the update launcher on Windows (real WMI start, real 
     const note = readFileSync(join(b.root, 'AgentTest update failed.txt'), 'utf8')
     expect(note).toContain('could not be opened again')
     expect(note).toContain('launcher.log')
-  }, 180_000)})
+  }, 180_000)
+
+  it('S1: an installer whose bytes are not the signed ones is never started; the app folder is left as it was and the old app opens', async () => {
+    const b = bed()
+    const fresh = join(b.root, 'new.exe')
+    makeApp(fresh, '0.2.53', b.marker)
+    const setup = join(b.root, 'Agent-0.2.53-setup.exe')
+    makeInstaller(setup, { from: fresh, to: b.exe, code: 0, argsLog: b.argsLog })
+    // The digest the app signed off is of some other file: this is a swap after the check.
+    const r = await runLauncher(b, setup, '0.2.53', { installerSha256: createHash('sha256').update('the signed bytes').digest('hex') })
+    expect(r).toMatchObject({ ok: false, installerStarted: false, installedVersion: '0.2.52', rolledBack: false, appUp: true, finalized: true })
+    expect(r.error).toMatch(/changed after it was checked/)
+    expect(existsSync(b.argsLog)).toBe(false)
+    expect(existsSync(join(b.root, 'backup'))).toBe(false)
+    await until(() => existsSync(b.marker))
+    expect(readFileSync(b.marker, 'utf8')).toContain('0.2.52')
+  }, 120_000)
+
+  it('S1: a launcher that was given no digest refuses to run an installer', async () => {
+    const b = bed()
+    const fresh = join(b.root, 'new.exe')
+    makeApp(fresh, '0.2.53', b.marker)
+    const setup = join(b.root, 'Agent-0.2.53-setup.exe')
+    makeInstaller(setup, { from: fresh, to: b.exe, code: 0, argsLog: b.argsLog })
+    const r = await runLauncher(b, setup, '0.2.53', { installerSha256: '' })
+    expect(r.installerStarted).toBe(false)
+    expect(r.error).toMatch(/no installer digest/)
+    expect(existsSync(b.argsLog)).toBe(false)
+  }, 120_000)
+
+  it('S1: a parameters file edited to another digest than the one the app gave the launcher is refused', async () => {
+    const b = bed()
+    const fresh = join(b.root, 'new.exe')
+    makeApp(fresh, '0.2.53', b.marker)
+    const setup = join(b.root, 'Agent-0.2.53-setup.exe')
+    makeInstaller(setup, { from: fresh, to: b.exe, code: 0, argsLog: b.argsLog })
+    const run = await startBoth(b, setup, '0.2.53', { installerSha256: createHash('sha256').update('x').digest('hex'), cmdSha256: sha256Of(setup) })
+    // The command line (the app's memory) carries the real digest; the parameters file was edited to another one.
+    expect(run.launcher).toBeGreaterThan(0)
+    const r = await finished(run)
+    expect(r.installerStarted).toBe(false)
+    expect(existsSync(b.argsLog)).toBe(false)
+  }, 120_000)
+})

@@ -3,7 +3,12 @@
  * app_update), with no clicks:
  *
  *  1. The installer is checked: a file named like this app's own installers (`<productName>-<version>-setup.exe`),
- *     a version that is not older than this one, and an app that was installed (a development run cannot).
+ *     a version that is NEWER than this one, and an app that was installed (a development run cannot). It must carry a
+ *     signed release manifest (`<installer>.release.json`, release-verify.ts, signed with a pinned Ed25519 release key)
+ *     whose size and sha256 match the file; the verified bytes are copied into `<userData>/update-staging/` and only that
+ *     copy ever runs. The person is asked through the app's approval card ("Install Agent <version>, verified publisher,
+ *     key, sha256") and only his yes schedules anything. The launcher hashes the staged copy again, through a handle
+ *     that nobody else can write to, immediately before it starts it (LAUNCHER_PS1, OpenVerified).
  *  2. A note is written to `<userData>/update-pending.json` (versions, the chat that asked, when).
  *  3. When the turn that asked has ended (so its reply is in the chat and nothing is cut off), the app writes a
  *     launcher script and its parameters to `<userData>/updates/<version>-<time>/` and starts it through WMI
@@ -34,12 +39,19 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
+import { RELEASE_KEYS, confirmationText, stageInstaller, verifyRelease, verifyStaged, type ReleaseKey, type VerifiedRelease } from './release-verify'
+
 export interface PendingUpdate {
   from: string
   to: string
   chat: string
+  /** The staged, verified copy the launcher runs (a controlled folder under userData), never the file the agent named. */
   installer: string
   at: number
+  /** The signed digest of that copy and who signed it (release-verify.ts). */
+  sha256?: string
+  publisher?: string
+  keyId?: string
   /** The folder holding this attempt's launcher, parameters, result and log. */
   work?: string
   /** The launcher's and the watchdog's process ids, once started. */
@@ -82,6 +94,9 @@ export interface LauncherParams {
   installDir: string
   exe: string
   installer: string
+  /** The signed sha256 and size of the installer: the launcher hashes the file again right before it starts it. */
+  installerSha256: string
+  installerSize: number
   wanted: string
   result: string
   log: string
@@ -137,9 +152,15 @@ export interface SelfUpdateDeps {
   maxWaitMs?: number
   /** The most to wait for the launcher to say it runs before giving up (and not quitting). */
   launcherReadyMs?: number
+  /** The release keys an installer may be signed by (default: the keys pinned in release-verify.ts; tests pass their own). */
+  releaseKeys?: ReleaseKey[]
 }
 
+/** Asks the person (the app's own approval card, which an agent cannot answer); true only on his yes. */
+export type ConfirmInstall = (summary: string, details?: string) => Promise<boolean>
+
 const NOTE_FILE = 'update-pending.json'
+const STAGING_DIR = 'update-staging'
 const UPDATES_DIR = 'updates'
 const READY_LINE = 'launcher running'
 const WATCHDOG_READY_LINE = 'watchdog running'
@@ -185,8 +206,9 @@ function powershellExe(): string {
 }
 
 /** The command line WMI runs: the launcher script with its parameters file. */
-export function launcherCommandLine(script: string, params: string, powershell = powershellExe(), role: ScriptRole = 'launcher'): string {
-  return `"${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${script}" "${params}"${role === 'launcher' ? '' : ` -Role ${role}`}`
+export function launcherCommandLine(script: string, params: string, powershell = powershellExe(), role: ScriptRole = 'launcher', expectSha256 = ''): string {
+  // The signed digest also travels on the command line (memory, not a file), so the launcher can tell when the parameters file was changed.
+  return `"${powershell}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${script}" "${params}"${expectSha256 === '' ? '' : ` -ExpectSha256 ${expectSha256}`}${role === 'launcher' ? '' : ` -Role ${role}`}`
 }
 
 /** The one script runs in two separate processes: the launcher does the update, the watchdog finishes it if the launcher dies. */
@@ -226,7 +248,7 @@ export function startViaWmi(commandLine: string): Promise<number> {
  * The launcher. Run as `powershell -File launcher.ps1 params.json`; never needs this app to be alive. Every step is
  * logged; result.json is rewritten after each stage so a launcher that dies part way still says where.
  */
-export const LAUNCHER_PS1 = String.raw`param([string]$ParamsFile, [string]$Role = 'launcher')
+export const LAUNCHER_PS1 = String.raw`param([string]$ParamsFile, [string]$ExpectSha256 = '', [string]$Role = 'launcher')
 $ErrorActionPreference = 'Stop'
 $p = Get-Content -Raw -LiteralPath $ParamsFile | ConvertFrom-Json
 $dir = $p.installDir.TrimEnd('\')
@@ -285,6 +307,28 @@ public static class AgentRmHolders {
   $ids = @()
   try { $ids = [AgentRmHolders]::For($file) } catch { }
   @($ids | ForEach-Object { $q = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $_) -ErrorAction SilentlyContinue; [ordered]@{ pid = [int]$_; name = $(if ($q) { [string]$q.Name } else { '?' }); path = $(if ($q) { [string]$q.ExecutablePath } else { $null }) } })
+}
+# The signed digest the installer must have: the one on the command line (kept in memory by the app), which must agree
+# with the parameters file. A launcher that was given none refuses to run anything.
+function WantedDigest {
+  $fromFile = ([string]$p.installerSha256).Trim().ToLowerInvariant()
+  $fromCmd = ([string]$ExpectSha256).Trim().ToLowerInvariant()
+  if ($fromCmd -and $fromFile -and $fromCmd -ne $fromFile) { throw 'the installer digest in the parameters file is not the one the app gave this launcher: the update was tampered with, nothing was installed' }
+  $d = $(if ($fromCmd) { $fromCmd } else { $fromFile })
+  if ($d -notmatch '^[0-9a-f]{64}$') { throw 'no installer digest was given to the launcher: it will not run an unverified installer' }
+  return $d
+}
+# Hash the installer through ONE open handle that lets nobody write or delete it, and hand the handle back so it can be
+# held until the installer has been started and has finished: what was hashed is what runs.
+function OpenVerified([string]$want) {
+  $h = [IO.File]::Open($p.installer, 'Open', 'Read', 'Read')
+  try {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $have = ([BitConverter]::ToString($sha.ComputeHash($h)) -replace '-', '').ToLowerInvariant()
+    $sha.Dispose()
+    if ($have -ne $want -or ($p.installerSize -and $h.Length -ne [int64]$p.installerSize)) { throw ('the installer ' + $p.installer + ' changed after it was checked (sha256 ' + $have.Substring(0, 12) + ' instead of ' + $want.Substring(0, 12) + '): it was not run') }
+    return $h
+  } catch { $h.Dispose(); throw }
 }
 function SameVersion([string]$have, [string]$want) { if (-not $have) { return $false }; $h = $have.Trim(); $w = $want.Trim(); return ($h -eq $w) -or ($h -eq ($w + '.0')) }
 function Mirror([string]$from, [string]$to) { & robocopy $from $to /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null; return $LASTEXITCODE }
@@ -455,7 +499,7 @@ function Finish([string]$by) {
     Log ('FAILED: ' + $msg)
     Notify ($p.appName + ' update failed') $msg
   }
-  if ($up -and ($newOk -or $r.rolledBack) -and (Test-Path -LiteralPath $p.backup)) { Remove-Item -LiteralPath $p.backup -Recurse -Force -ErrorAction SilentlyContinue }
+  if ($up -and ($newOk -or $r.rolledBack -or -not $r.installerStarted) -and (Test-Path -LiteralPath $p.backup)) { Remove-Item -LiteralPath $p.backup -Recurse -Force -ErrorAction SilentlyContinue }
   $r.stage = $(if ($r.ok) { 'done' } else { 'finished without the update' })
   $r.finalized = $true
   Save
@@ -500,8 +544,13 @@ if ($Role -eq 'watchdog') {
 
 # ---- the launcher ----
 $backedUp = $false
+$hold = $null
 try {
   $r.launcherPid = $PID
+  $wantDigest = WantedDigest
+  # First check, before the app folder is touched; the last check is just before the installer starts.
+  $early = OpenVerified $wantDigest; $early.Dispose()
+  Log ('installer digest checked: ' + $wantDigest.Substring(0, 12))
   Log ('launcher running pid ' + $PID + ': app pid ' + $p.appPid + ', ' + $p.installer + ' -> ' + $dir + ' (wanted ' + $p.wanted + ')')
   Stage 'waiting for the app to exit'
   $deadline = (Get-Date).AddSeconds($p.exitTimeoutSec)
@@ -542,6 +591,9 @@ try {
   # for good with the app closed. Clear the mark, and start the installer with CreateProcess (no shell, no warning).
   try { Unblock-File -LiteralPath $p.installer -ErrorAction Stop; Log 'cleared the downloaded-file mark on the installer' } catch { Log ('could not clear the downloaded-file mark: ' + $_.Exception.Message) }
   Remove-Item -LiteralPath $p.installerExitFile -Force -ErrorAction SilentlyContinue
+  # Last check, immediately before the start, through a handle that stays open (nobody can write to the file) until the installer has ended.
+  $hold = OpenVerified $wantDigest
+  Log 'installer digest checked again just before starting it'
   $psi = New-Object Diagnostics.ProcessStartInfo
   $psi.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
   $psi.Arguments = '/d /s /c ""' + $p.installCmd + '" "' + $p.installer + '" "' + $dir + '" "' + $p.installerExitFile + '""'
@@ -557,6 +609,7 @@ try {
   $r.error = [string]$_.Exception.Message
   Log ('FAILED while ' + $r.stage + ': ' + $r.error)
 }
+if ($hold) { try { $hold.Dispose() } catch { } }
 try { Finish 'launcher' } catch {
   $r.error = 'the launcher failed while finishing: ' + $_.Exception.Message
   Log ('FAILED: ' + $r.error)
@@ -581,27 +634,61 @@ export class SelfUpdater {
   }
 
   /** Checks the installer and, when it is fine, schedules the install and restart for when the turn has ended. */
-  async install(path: string, chat: string): Promise<{ ok: boolean; text: string; from?: string; to?: string }> {
+  async install(path: string, chat: string, confirm: ConfirmInstall): Promise<{ ok: boolean; text: string; from?: string; to?: string }> {
     const from = this.deps.currentVersion
     if (this.deps.platform !== 'win32') return { ok: false, text: 'Updating itself from an installer works on Windows only.' }
     if (!this.deps.packaged) return { ok: false, text: 'This is a development run of the app, not an installed one: there is nothing to update.' }
-    if (this.scheduled) return { ok: false, text: 'An update is already waiting for this turn to end.' }
+    if (this.scheduled) return { ok: false, text: 'An update is already waiting for this turn to end (or for the person to confirm it).' }
     if (!existsSync(path) || !statSync(path).isFile()) return { ok: false, text: `There is no file at ${path}.` }
     const to = versionOfInstaller(path, this.deps.productName)
     if (to === null) return { ok: false, text: `${basename(path)} is not an installer of this app: they are named ${this.deps.productName}-<version>-setup.exe.` }
-    if (compareVersions(to, from) < 0) return { ok: false, text: `That installer is ${to}, older than this app (${from}). Nothing was done.` }
-    const note: PendingUpdate = { from, to, chat, installer: path, at: this.now() }
-    writeFileSync(this.noteFile, JSON.stringify(note, null, 2), 'utf8')
+    const order = compareVersions(to, from)
+    if (order < 0) return { ok: false, text: `That installer is ${to}, older than this app (${from}). Nothing was done.` }
+    if (order === 0) return { ok: false, text: `That installer is ${to}, the version already running. Only a newer signed release is installed. Nothing was done.` }
+    // One update at a time, from the first check to the restart (the person may take minutes to answer the card).
     this.scheduled = true
-    this.deps.log?.('Update scheduled', { from, to })
-    void this.whenIdle(chat).then(() => this.go(note))
-    const same = compareVersions(to, from) === 0
+    const refuse = (text: string): { ok: false; text: string } => {
+      this.scheduled = false
+      this.deps.log?.('Update refused', { from, to, reason: text })
+      return { ok: false, text }
+    }
+    // 1. Only a release signed by a pinned key, whose bytes are exactly the signed ones.
+    const keys = this.deps.releaseKeys ?? RELEASE_KEYS
+    const verdict = await verifyRelease(path, { product: this.deps.productName, version: to, keys })
+    if (!verdict.ok) return refuse(`${verdict.reason} Tell the person exactly this.`)
+    const release = verdict.release
+    // 2. The verified bytes are copied to a folder the app owns and the copy is checked again; only the copy ever runs.
+    const staged = await stageInstaller(path, release, join(this.deps.userData, STAGING_DIR), this.now())
+    if (!staged.ok) return refuse(staged.reason)
+    const discard = (): void => rmSync(staged.dir, { recursive: true, force: true })
+    // 3. His yes, to this exact version, publisher and key. No card answered, no install.
+    const { summary, details } = confirmationText(from, release)
+    let yes = false
+    try {
+      yes = await confirm(summary, details)
+    } catch {
+      yes = false
+    }
+    if (!yes) {
+      discard()
+      return refuse(`The person did not approve installing Agent ${to} (verified publisher ${release.publisher}, key ${release.fingerprint}). Nothing was installed and the app was not restarted.`)
+    }
+    // The card can sit for a while: the staged copy must still be the signed file now.
+    const still = await verifyStaged(staged.path, release)
+    if (!still.ok) {
+      discard()
+      return refuse(still.reason)
+    }
+    const note: PendingUpdate = { from, to, chat, installer: staged.path, at: this.now(), sha256: release.sha256, publisher: release.publisher, keyId: release.keyId }
+    writeFileSync(this.noteFile, JSON.stringify(note, null, 2), 'utf8')
+    this.deps.log?.('Update scheduled', { from, to, publisher: release.publisher, key: release.keyId, sha256: release.sha256 })
+    void this.whenIdle(chat).then(() => this.go(note, release))
     return {
       ok: true,
       from,
       to,
       text:
-        `${same ? `Reinstalling ${to}` : `Updating ${from} -> ${to}`}: when this reply is done the app closes, installs silently and opens again (about a minute or two). ` +
+        `Updating ${from} -> ${to} (verified publisher ${release.publisher}, he confirmed it): when this reply is done the app closes, installs silently and opens again (about a minute or two). ` +
         'You will get a note in this chat when it is back, saying whether it worked and, if not, exactly why. Tell the person the app is restarting for the update; do not start other work in this turn.',
     }
   }
@@ -621,7 +708,7 @@ export class SelfUpdater {
   }
 
   /** Writes this attempt's launcher and parameters; returns the paths. */
-  prepare(note: PendingUpdate): { work: string; script: string; params: string; values: LauncherParams } {
+  prepare(note: PendingUpdate, release: Pick<VerifiedRelease, 'sha256' | 'size'>): { work: string; script: string; params: string; values: LauncherParams } {
     const root = join(this.deps.userData, UPDATES_DIR)
     mkdirSync(root, { recursive: true })
     pruneAttempts(root, 4)
@@ -633,6 +720,8 @@ export class SelfUpdater {
       installDir: dirname(exe),
       exe,
       installer: note.installer,
+      installerSha256: release.sha256,
+      installerSize: release.size,
       wanted: note.to,
       result: join(work, 'result.json'),
       log: join(work, 'launcher.log'),
@@ -658,19 +747,26 @@ export class SelfUpdater {
     return { work, script, params, values }
   }
 
-  private async go(note: PendingUpdate): Promise<void> {
+  private async go(note: PendingUpdate, release: VerifiedRelease): Promise<void> {
     const fail = (why: string): void => {
       this.scheduled = false
       rmSync(this.noteFile, { force: true })
+      rmSync(dirname(note.installer), { recursive: true, force: true })
       this.deps.log?.('Update could not start', { message: why })
       this.deps.tell?.(
         note.chat,
         `[App update FAILED before the app closed: ${why}. The app did not restart and is still on ${this.deps.currentVersion}. Tell the person exactly this.]`,
       )
     }
+    // The staged copy is checked once more now, from the signed digest held in memory, before anything is written or started.
+    const staged = await verifyStaged(note.installer, release)
+    if (!staged.ok) {
+      fail(staged.reason)
+      return
+    }
     let prepared: ReturnType<SelfUpdater['prepare']>
     try {
-      prepared = this.prepare(note)
+      prepared = this.prepare(note, release)
     } catch (error) {
       fail(`could not write the update launcher: ${error instanceof Error ? error.message : String(error)}`)
       return
@@ -690,13 +786,13 @@ export class SelfUpdater {
     let pid: number
     let watchdog: number
     try {
-      pid = await start(launcherCommandLine(prepared.script, prepared.params))
+      pid = await start(launcherCommandLine(prepared.script, prepared.params, undefined, 'launcher', release.sha256))
     } catch (error) {
       fail(error instanceof Error ? error.message : String(error))
       return
     }
     try {
-      watchdog = await start(launcherCommandLine(prepared.script, prepared.params, undefined, 'watchdog'))
+      watchdog = await start(launcherCommandLine(prepared.script, prepared.params, undefined, 'watchdog', release.sha256))
     } catch (error) {
       stop(pid)
       fail(`the update watchdog could not start: ${error instanceof Error ? error.message : String(error)}`)
@@ -760,6 +856,8 @@ export class SelfUpdater {
       return null
     }
     rmSync(this.noteFile, { force: true })
+    // The update is over (whatever came of it): the staged installer is not needed any more.
+    rmSync(join(this.deps.userData, STAGING_DIR), { recursive: true, force: true })
     if (typeof note.from !== 'string' || typeof note.to !== 'string') return null
     const now = this.deps.currentVersion
     const chat = typeof note.chat === 'string' && note.chat !== '' ? note.chat : 'main'

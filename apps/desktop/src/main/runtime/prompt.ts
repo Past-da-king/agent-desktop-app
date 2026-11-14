@@ -393,7 +393,7 @@ export function buildSystemPrompt(input: PromptInput): string {
       "- Your browser has developer tools, as a person has with Ctrl+Shift+I: browser_network and browser_network_get show what a page sent and got back (its API), browser_fetch tries a request from inside the page, browser_console shows errors, browser_inspect and browser_storage show elements, cookies and storage, browser_eval runs code.",
     )
     lines.push(
-      "- This app itself: anything the user can do in its window, you can do too, so never ask them to click something here. app_actions lists every button, switch and form by name and app_action runs one; Devices has its own tools (devices_status, device_pair_offer, device_join, device_remove...), settings_get and settings_set change Settings, and app_update installs a newer installer of this app (tell the user it will restart).",
+      "- This app itself: anything the user can do in its window, you can do too, so never ask them to click something here. app_actions lists every button, switch and form by name and app_action runs one; Devices has its own tools (devices_status, device_pair_offer, device_join, device_remove...), settings_get and settings_set change Settings, and app_update installs a newer installer of this app, only a signed release and only after he confirms it on an approval card (tell the user it will restart).",
     )
     if (input.role === 'helper' && input.profile !== undefined && input.profile !== null) {
       lines.push('')
