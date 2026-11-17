@@ -121,6 +121,9 @@ export function mockVoice(deps: MockVoiceDeps): VoiceApi {
     async callSave() {
       return null
     },
+    async callTurn() {
+      return null
+    },
     async callTargets() {
       return []
     },

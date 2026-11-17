@@ -1689,6 +1689,16 @@ export type LiveTokenResult =
   | { ok: true; token: string; url: string; model: string; voice: string; expiresAt: number }
   | { ok: false; needsKey: boolean; error: string }
 
+/** One finished turn of a Live call, written into the main chat as it happens (a re-send of the same index updates it). */
+export interface DeviceCallTurn {
+  session: string
+  startedAt: number
+  index: number
+  who: 'you' | 'agent'
+  text: string
+  at: number
+}
+
 /** A call a paired device held: what was said, in order. */
 export interface DeviceCall {
   startedAt: number
@@ -1745,6 +1755,8 @@ export interface VoiceApi {
   liveToken(): Promise<LiveTokenResult>
   /** A paired device's call on this computer's agent: its transcript lands in this chat as a call row. */
   callSave(call: DeviceCall): Promise<{ itemId: string } | null>
+  /** A paired device's Live call, one finished turn at a time as it happens: merged into the call's row by session and index. */
+  callTurn(turn: DeviceCallTurn): Promise<{ itemId: string } | null>
   /** For a paired device's call: who is here to talk to (the main agent, projects and their chats, helpers). */
   callTargets(): Promise<CallTarget[]>
   /** For a paired device's call: hand a message to the main agent, a project (chat) or a helper, by forgiving name. */
