@@ -25,6 +25,7 @@ import type {
 } from '@agent/core'
 
 import { buildSystemPrompt } from '../runtime/prompt'
+import { mergeTurn, sessionOf, type LiveTurn } from '../runtime/live-calls'
 import { promptRulesFor } from '../runtime/prompt-rules'
 import { callVia, senderLine, viaFromMeta, type ChatVia } from '../../shared/sender'
 import { listWhere, type DataStore } from '../runtime/data'
@@ -243,7 +244,10 @@ export class VoiceService {
   async callSave(call: DeviceCall): Promise<{ itemId: string } | null> {
     if (call.lines.length === 0) return null
     const lines = call.lines.map((line, index) => ({ id: `d${index}`, who: line.who, text: line.text, at: line.at }))
+    // The turns were written as they happened (callTurn): the final record finishes THAT row, it never adds a second one.
+    const existing = call.session === undefined ? undefined : await this.liveRow(call.session)
     const row = await this.deps.store.upsert('chat_item', {
+      ...(existing === undefined ? {} : { id: existing.id }),
       kind: 'call',
       text: callText(lines.length, call.durationMs, call.source === 'live'),
       createdAt: call.startedAt,
@@ -251,6 +255,8 @@ export class VoiceService {
         durationMs: call.durationMs,
         endedAt: call.startedAt + call.durationMs,
         lines: lines.map((line) => ({ who: line.who, text: line.text, at: line.at })),
+        // Kept by index so a turn that arrives after the final record still lands on its own line.
+        turns: Object.fromEntries(lines.map((line, index) => [String(index), { who: line.who, text: line.text, at: line.at }])),
         visuals: 0,
         handoffs: call.handoffs?.length ?? 0,
         device: true,
@@ -260,6 +266,38 @@ export class VoiceService {
       }),
     })
     return { itemId: row.id }
+  }
+
+  /** One call row per Live session: turns for the same session are merged one at a time, so two arriving together never make two rows. */
+  private readonly liveRows = new Map<string, string>()
+  private liveChain: Promise<unknown> = Promise.resolve()
+
+  private async liveRow(session: string): Promise<{ id: string; meta: string } | undefined> {
+    const known = this.liveRows.get(session)
+    const all = await listWhere(this.deps.store, 'chat_item', { kind: 'call', newestFirst: true, limit: 60 })
+    const found = all.find((row) => (known !== undefined ? row.id === known : sessionOf(row) === session))
+    if (found !== undefined) this.liveRows.set(session, found.id)
+    return found === undefined ? undefined : { id: found.id, meta: found.meta }
+  }
+
+  /** A turn of a paired device's Live call, into the main chat as it happens: one collapsed call row per session, fully readable by the main agent. */
+  callTurn(turn: LiveTurn): Promise<{ itemId: string } | null> {
+    const run = this.liveChain.then(async () => {
+      const existing = await this.liveRow(turn.session)
+      const meta = mergeTurn(existing?.meta ?? '{}', turn)
+      const lines = (meta['lines'] as unknown[]).length
+      const row = await this.deps.store.upsert('chat_item', {
+        ...(existing === undefined ? {} : { id: existing.id }),
+        kind: 'call',
+        text: callText(lines, Number(meta['durationMs']), true),
+        createdAt: turn.startedAt,
+        meta: JSON.stringify(meta),
+      })
+      this.liveRows.set(turn.session, row.id)
+      return { itemId: row.id }
+    })
+    this.liveChain = run.catch(() => undefined)
+    return run
   }
 
   // ---- the live call ---------------------------------------------------------------------

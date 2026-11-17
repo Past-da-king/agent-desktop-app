@@ -451,6 +451,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       noteAudio: rpc('voice.noteAudio'),
       liveToken: rpc('voice.liveToken'),
       callSave: rpc('voice.callSave'),
+      callTurn: rpc('voice.callTurn'),
       callTargets: rpc('voice.callTargets'),
       callHandoff: rpc('voice.callHandoff'),
       callStart: async () => ({ ok: false, message: 'Live calls work on the computer itself for now.' }),

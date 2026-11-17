@@ -9,6 +9,7 @@ import { liveFromInput } from '../../shared/sender'
 import { messageOrigin, originWithLive } from '../devices/origin'
 import type { IpcMainLike } from '../ipc'
 import { callHandoff, callTargets, type CallHandoffDeps } from './handoff'
+import { liveTurn } from '../runtime/live-calls'
 import type { VoiceService } from './service'
 
 export interface IpcMainOnLike {
@@ -54,6 +55,7 @@ export function registerVoiceIpc(
   })
   ipcMain.handle(CHANNELS.voice.liveToken, async () => voice.liveToken())
   ipcMain.handle(CHANNELS.voice.callSave, async (_event, record) => voice.callSave(deviceCall(record)))
+  ipcMain.handle(CHANNELS.voice.callTurn, async (_event, turn) => voice.callTurn(liveTurn(turn)))
   ipcMain.handle(CHANNELS.voice.callTargets, async () => (handoff === undefined ? [] : callTargets(handoff)))
   ipcMain.handle(CHANNELS.voice.callHandoff, async (event, raw) => {
     const input = handoffInput(raw)

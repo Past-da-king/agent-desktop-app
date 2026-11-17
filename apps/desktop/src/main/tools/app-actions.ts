@@ -218,6 +218,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'voice.noteAudio': no('Play a voice note in the chat', 'the window fetches the sound to play it; the agent makes notes with voice_note'),
   'voice.liveToken': no('A one-use token for a live call', 'the window spends it the moment a call opens'),
   'voice.callSave': no('Save a finished call into the chat', 'the window saves it when a call ends'),
+  'voice.callTurn': no('Write one turn of a live call into the chat as it happens', 'the phone writes its own live call as it goes'),
   'voice.callTargets': no('List who a live call can hand work to', 'the call screen reads it while a call is open; the agent already knows its chats and helpers'),
   'voice.callHandoff': no('Hand work from a live call to an agent', 'the voice on a call does it; the agent itself delegates with its own tools'),
   'voice.callStart': no('Start a voice call', MICROPHONE),

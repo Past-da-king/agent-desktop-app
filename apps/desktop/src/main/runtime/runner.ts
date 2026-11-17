@@ -6,6 +6,7 @@
  * left running becomes "Interrupted", and a card answered later starts a fresh turn with the answer.
  */
 import { sendScope } from './send-once'
+import { liveCallSection } from './live-calls'
 import {
   AgentLoop,
   MAIN_CHAT,
@@ -1522,7 +1523,7 @@ export class Runner {
     history.push(first)
     await this.appendTurn(first, chat, signal)
 
-    const system = buildSystemPrompt({
+    const baseSystem = buildSystemPrompt({
       settings: current,
       now: new Date(this.now()),
       platform: process.platform,
@@ -1541,6 +1542,8 @@ export class Runner {
       environment: this.environment(),
       ...(this.timeZone === undefined ? {} : { timeZone: this.timeZone }),
     })
+    // His recent Live calls, in full: the main agent answers "what did I ask on the call?" from the real words (runtime/live-calls.ts).
+    const system = baseSystem + (await this.liveCallPrompt(chat))
     const context = this.toolContext(signal, 'main', chat)
     const loop = new AgentLoop({ provider, model, tools: this.tools, interruptible: (call) => isInterruptible(call.name, call.input) })
 
@@ -1630,7 +1633,21 @@ export class Runner {
     return shell === undefined ? own : { ...own, shell }
   }
 
+  /** The recent Live calls as the main agent reads them ('' for a project chat, a routine or when there were none). */
+  private async liveCallPrompt(chat: string): Promise<string> {
+    if (chat !== MAIN_CHAT) return ''
+    try {
+      return liveCallSection(await listWhere(this.store, 'chat_item', { kind: 'call', newestFirst: true, limit: 12 }), this.now())
+    } catch {
+      return ''
+    }
+  }
+
   private async cliSystem(text: string, role: 'main' | 'routine', routineName: string | undefined, chat: string, cli: CliId): Promise<string> {
+    return (await this.cliSystemBase(text, role, routineName, chat, cli)) + (role === 'main' ? await this.liveCallPrompt(chat) : '')
+  }
+
+  private async cliSystemBase(text: string, role: 'main' | 'routine', routineName: string | undefined, chat: string, cli: CliId): Promise<string> {
     const current = role === 'main' ? this.settingsFor(chat) : this.settings.get()
     return buildSystemPrompt({
       settings: current,

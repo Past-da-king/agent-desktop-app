@@ -267,6 +267,7 @@ const api: AgentApi = {
     noteAudio: (file) => call<Uint8Array | null>(CHANNELS.voice.noteAudio, file),
     liveToken: () => call<LiveTokenResult>(CHANNELS.voice.liveToken),
     callSave: (record) => call<{ itemId: string } | null>(CHANNELS.voice.callSave, record),
+    callTurn: (turn) => call<{ itemId: string } | null>(CHANNELS.voice.callTurn, turn),
     callTargets: () => call<CallTarget[]>(CHANNELS.voice.callTargets),
     callHandoff: (input) => call<CallHandoffResult>(CHANNELS.voice.callHandoff, input),
     callStart: () => call<{ ok: boolean; message: string }>(CHANNELS.voice.callStart),
