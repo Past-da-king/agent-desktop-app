@@ -543,6 +543,8 @@ export class HelperManager implements HelperHost {
   private readonly queue: string[] = []
   private readonly active = new Set<string>()
   private readonly inbox = new Map<string, InboxNote[]>()
+  /** Each helper's code (meta.runMark), read once. */
+  private readonly marks = new Map<string, string>()
   /** What happened to the messages sent to each helper this brain runs (kept on its card as meta.steers). */
   private readonly steerLogs = new Map<string, SteerRecord[]>()
   private readonly metaFlushes = new Map<string, Promise<void>>()
@@ -1017,7 +1019,9 @@ export class HelperManager implements HelperHost {
     // A new run: its own key, so its end is told once, whatever the last run's notice was.
     const token = this.freshToken()
     const parentHelper = stringField(meta['parentHelper'])
-    const mark = newMark()
+    // One code for the helper's whole life: a resumed engine session keeps the system prompt of its first run, so a new
+    // code per run made every push arrive with a code the helper's prompt did not hold (18 Nov 2026).
+    const mark = await this.markFor(id)
     const fresh = { token, mark, lastStepAt: this.now(), ...(parentHelper === '' ? {} : { parentHelper }), ...(options.steerIds === undefined ? {} : { pushSteers: options.steerIds }) }
     const marked = steerFrame(mark, options.from ?? 'creator', message)
     if (brain.kind === 'plan') {
@@ -1745,6 +1749,7 @@ export class HelperManager implements HelperHost {
   }
 
   private async runHelper(run: HelperRun): Promise<void> {
+    run.mark = await this.markFor(run.id)
     const brain = brainFor(this.brainDeps(), run.pick)
     if (!isBrain(brain)) {
       await this.finish(run, 'failed', brain.message)
@@ -3121,10 +3126,25 @@ export class HelperManager implements HelperHost {
     await this.finish(run, state, result)
   }
 
-  /** This run's code: in its system prompt and in every real message it is sent. */
+  /** This helper's code: in its system prompt and in every real message it is sent, in every run it ever has. */
   private markOf(run: HelperRun): string {
-    run.mark ??= newMark()
+    run.mark ??= this.marks.get(run.id) ?? newMark()
     return run.mark
+  }
+
+  /**
+   * The helper's code, kept on its card so a push, a restart, a rebuilt session or another computer all use the one its
+   * prompts already hold. It is never in a tool result, a file or a result the helper hands back.
+   */
+  private async markFor(id: string): Promise<string> {
+    const known = this.marks.get(id)
+    if (known !== undefined) return known
+    const row = await this.store.get('chat_item', id).catch(() => null)
+    const kept = row === null ? '' : stringField(parseMeta(row.meta)['runMark'])
+    const mark = /^[0-9a-f]{8}$/.test(kept) ? kept : newMark()
+    this.marks.set(id, mark)
+    if (mark !== kept && row !== null) await this.updateMeta(id, { runMark: mark })
+    return mark
   }
 
   /** How the engine gets the messages sent to this run, and how the app learns they were read. */
