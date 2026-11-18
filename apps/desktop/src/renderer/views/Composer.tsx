@@ -16,7 +16,8 @@ import { IconButton, Kbd } from '../ui/bits'
 import { Icon } from '../ui/Icon'
 import { DictateButton } from '../voice/DictateButton'
 import { DictationDraft } from '../voice/DictationDraft'
-import { isEditable, useDictationDraft } from '../voice/dictationBox'
+import { isEditable, useDictationStore, useDictationDraft } from '../voice/dictationBox'
+import { dictatingFor, sendAfterDictation } from '../voice/dictationSettle'
 import { RecoverChips } from '../voice/RecoverChips'
 import { AttachmentChip } from './AttachmentChip'
 import { MentionPicker } from './MentionPicker'
@@ -203,11 +204,33 @@ export const Composer = memo(
       beforeLive.current = { shown: area.value, start: area.selectionStart, end: area.selectionEnd }
     }
 
+    // A send pressed while his dictation is still being written down waits for those words (voice/dictationSettle.ts).
+    const [waitingForWords, setWaitingForWords] = useState(false)
     const send = (): void => {
-      const value = text.trim()
-      if (value === '' && attachments.length === 0) return
+      if (waitingForWords) return
+      if (dictatingFor(useDictationStore.getState().view, chatId)) {
+        setWaitingForWords(true)
+        void sendAfterDictation(
+          chatId,
+          {
+            view: () => useDictationStore.getState().view,
+            subscribe: (listener) => useDictationStore.subscribe(listener),
+            stop: (id) => void agent.dictation.toggle('plain', id).catch(() => undefined),
+          },
+          sendNow,
+          () => toast('Your words are not written down yet, so nothing was sent. Retry the dictation, then send.'),
+        ).finally(() => setWaitingForWords(false))
+        return
+      }
+      sendNow()
+    }
+    const sendNow = (): void => {
+      // Read at this moment: the dictation's words may have landed since the button was pressed.
+      const store = useDrafts.getState()
+      const value = (store.texts[chatId] ?? '').trim()
       const sentFrom = chatId
-      const sent = attachments
+      const sent = store.files[chatId] ?? NO_FILES
+      if (value === '' && sent.length === 0) return
       onSend()
       // The box empties at once; the words stay on disk until the message was accepted.
       useDrafts.getState().sending(sentFrom)
@@ -470,9 +493,10 @@ export const Composer = memo(
               onClick={send}
               aria-label={running ? 'Send while it works' : 'Send'}
               title={running ? 'Send. About this job, it joins in; something else, it runs alongside.' : 'Send'}
-              disabled={text.trim() === '' && attachments.length === 0}
+              disabled={(text.trim() === '' && attachments.length === 0 && !dictatingHere) || waitingForWords}
+              aria-busy={waitingForWords}
             >
-              <Icon name="arrow" size={22} />
+              {waitingForWords ? <span className="send-spin" aria-hidden="true" /> : <Icon name="arrow" size={22} />}
             </button>
           )}
         </div>

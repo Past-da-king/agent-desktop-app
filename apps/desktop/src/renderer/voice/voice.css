@@ -190,3 +190,4 @@
   .orb-blob,.orb.is-connecting .orb-core,.dictate-mic.working{animation:none}
 }
 .call-sheet:focus{outline:none}
+.send-spin{display:inline-block;width:18px;height:18px;border-radius:50%;border:3px solid color-mix(in srgb,currentColor 30%,transparent);border-top-color:currentColor;animation:dict-spin .8s linear infinite}
