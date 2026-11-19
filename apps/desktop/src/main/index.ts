@@ -42,6 +42,7 @@ import { createScreenControl } from './agent-cursor/wire'
 import { makeCdpRung } from './agent-cursor/cdp-rung'
 import { runTypingProbe } from './browser/typing-probe'
 import { runFocusProbe } from './browser/focus-probe'
+import { runBrowserBridge, runIframeProbe } from './browser/iframe-probe'
 import { disposeAgentDesktop } from './tools/agent-desktop'
 import type { ScreenControl } from './agent-cursor/control'
 import type { NativeScreenReader } from './showme/native'
@@ -1060,6 +1061,23 @@ async function startServices(win: BrowserWindow): Promise<void> {
       const out = process.env['AGENT_TURNSTILE_PROBE_OUT']?.trim() ?? ''
       const waitMs = Number(process.env['AGENT_TURNSTILE_PROBE_WAIT_MS'] ?? '30000')
       void runTurnstileProbe(browser, turnstileProbeUrl, out, Number.isFinite(waitMs) ? waitMs : 30_000, () => app.quit())
+    }, 3000)
+  }
+  // The cross-origin iframe input proof (browser/iframe-probe.ts). Never set in normal use.
+  const iframeProbeUrl = process.env['AGENT_IFRAME_PROBE']?.trim() ?? ''
+  if (iframeProbeUrl !== '') {
+    setTimeout(() => {
+      const browser = agentBrowser
+      if (browser === null) return
+      const points = JSON.parse(process.env['AGENT_IFRAME_PROBE_POINTS'] ?? '{}') as { button: { x: number; y: number }; field: { x: number; y: number }; editable: { x: number; y: number } }
+      void runIframeProbe(browser, iframeProbeUrl, process.env['AGENT_IFRAME_PROBE_LOG'] ?? '', points, process.env['AGENT_IFRAME_PROBE_OUT'] ?? '', () => app.quit(), process.env['AGENT_IFRAME_PROBE_SHOTS'] ?? '', process.env['AGENT_IFRAME_PROBE_EXPAND'] === '1')
+    }, 3000)
+  }
+  // The real-site proof bridge (browser/iframe-probe.ts). Never set in normal use.
+  const bridgeDir = process.env['AGENT_BROWSER_BRIDGE']?.trim() ?? ''
+  if (bridgeDir !== '') {
+    setTimeout(() => {
+      if (agentBrowser !== null) runBrowserBridge(agentBrowser, bridgeDir)
     }, 3000)
   }
   // The computer switched light/dark while the theme follows it: a ring showing now changes with it.

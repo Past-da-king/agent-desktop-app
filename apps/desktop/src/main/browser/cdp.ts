@@ -9,13 +9,39 @@
  * so every point is multiplied by the current draw scale first.
  *
  * The debugger is attached once per tab and kept: detaching drops every emulation override.
+ *
+ * Frames in other processes. Chromium puts a cross-origin iframe in its own process (an out-of-process iframe, OOPIF).
+ * In an ordinary tab a mouse event sent to the page is routed into the frame under the pointer. In a <webview> guest
+ * it is not (measured on Electron 44.9: a click on a button two cross-origin iframes deep focused the outer iframe
+ * element and never reached the button, whatever the coordinates or the view size), so editors that live in nested
+ * cross-origin frames (Office for the web, Google Docs and Slides, canvases) ignored every click. Keys and
+ * Input.insertText follow the focused frame and do arrive. So for a guest a mouse gesture is routed here: the frame
+ * under the point is found by hit-testing down through the frames (DOM.getNodeForLocation, which sees the iframe
+ * element and its box in each frame's own viewport), the debugger attaches to that frame's own target
+ * (Target.setAutoAttach, flat sessions) and the same events are sent on that session with frame-local
+ * coordinates. They are as trusted as any other (isTrusted, pointerType mouse) and nothing is injected into the frame.
  */
 
 export interface DebuggerLike {
   isAttached(): boolean
   attach(protocolVersion?: string): void
   detach(): void
-  sendCommand(method: string, params?: Record<string, unknown>): Promise<unknown>
+  /** `sessionId` addresses a child target (a frame in another process) attached with Target.attachToTarget flatten. */
+  sendCommand(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<unknown>
+  /** Protocol events, for the frames' sessions: (event, method, params, sessionId of the session it came on). */
+  on?(event: 'message', listener: (event: unknown, method: string, params: Record<string, unknown>, sessionId?: string) => void): unknown
+}
+
+/** Where a mouse gesture goes: the page itself, or the frame's own session with the point in that frame's viewport. */
+export interface Route {
+  /** Absent: the page's own session. */
+  sessionId?: string
+  /** The frame's top left corner in view pixels (page viewport pixels when there is no session). */
+  originX: number
+  originY: number
+  /** The gesture's first point, to find the frame again if its session went away. */
+  from: Point
+  scale: number
 }
 
 export interface Point {
@@ -97,6 +123,15 @@ export class Cdp {
    * a real finger tap.
    */
   guest = false
+  /** Route mouse gestures into frames in other processes (a guest only). Off only to compare against the old behaviour. */
+  frames = true
+  /** Frames in other processes the debugger is attached to (Target.setAutoAttach, flat sessions), by frame id. */
+  private readonly frameSessions = new Map<string, { sessionId: string; parent: string }>()
+  /** Sessions that already auto-attach to their own child frames ('' is the page). */
+  private readonly watching = new Set<string>()
+  private listening = false
+  /** Where a mouse gesture went when it went into another frame, or why it could not (the app's log). */
+  trace: ((line: string) => void) | undefined = undefined
 
   constructor(dbg: DebuggerLike, timeoutMs = 10_000) {
     this.dbg = dbg
@@ -113,18 +148,147 @@ export class Cdp {
     }
   }
 
-  async send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  async send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<unknown> {
     if (!this.ensure()) throw new Error('the page debugger is not available')
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
-        this.dbg.sendCommand(method, params),
+        sessionId === undefined ? this.dbg.sendCommand(method, params) : this.dbg.sendCommand(method, params, sessionId),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error(`${method} timed out`)), this.timeoutMs)
         }),
       ])
     } finally {
       if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  /**
+   * The frame under a point (view pixels), found by hit-testing down through iframe elements. Only for a guest page
+   * and a mouse; anything that goes wrong answers the page itself, which is what always happened before.
+   */
+  async route(p: Point, scale: number): Promise<Route> {
+    const page: Route = { originX: 0, originY: 0, from: p, scale }
+    if (!this.guest || !this.frames || this.touch || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return page
+    const s = Number.isFinite(scale) && scale > 0 ? scale : 1
+    let route = page
+    let at = 'start'
+    let session: string | undefined
+    // Frame-local point in CSS pixels, as DOM.* wants it.
+    let lx = p.x / s
+    let ly = p.y / s
+    try {
+      for (let depth = 0; depth < MAX_FRAME_DEPTH; depth++) {
+        at = `hit ${depth}`
+        const hit = objectOf(
+          await this.send('DOM.getNodeForLocation', { x: Math.round(lx), y: Math.round(ly), ignorePointerEventsNone: true }, session),
+        )
+        const backendNodeId = hit['backendNodeId']
+        if (typeof backendNodeId !== 'number') break
+        at = `describe ${depth}`
+        const node = objectOf(objectOf(await this.send('DOM.describeNode', { backendNodeId }, session))['node'])
+        const frameId = node['frameId']
+        if (!/^i?frame$/i.test(String(node['nodeName'] ?? '')) || typeof frameId !== 'string' || node['contentDocument'] !== undefined) break
+        at = `box ${depth}`
+        const box = objectOf(objectOf(await this.send('DOM.getBoxModel', { backendNodeId }, session))['model'])['content']
+        if (!Array.isArray(box) || box.length < 2 || typeof box[0] !== 'number' || typeof box[1] !== 'number') break
+        at = `attach ${depth}`
+        const child = await this.frameSession(frameId, session)
+        if (child === null) break
+        lx -= box[0]
+        ly -= box[1]
+        session = child
+        route = { sessionId: child, originX: p.x - lx * s, originY: p.y - ly * s, from: p, scale }
+      }
+    } catch (error) {
+      this.trace?.(`frame routing stopped at ${at} (${Math.round(lx)},${Math.round(ly)} of ${Math.round(p.x)},${Math.round(p.y)} scale ${s}): ${error instanceof Error ? error.message : String(error)}`)
+      return route
+    }
+    if (route.sessionId !== undefined) this.trace?.(`mouse routed into a frame in another process at ${Math.round(p.x)},${Math.round(p.y)}`)
+    return route
+  }
+
+  /**
+   * The session of a frame in another process. Chromium lets a page's own debugger find its child frames only through
+   * auto-attach (Target.attachToTarget is refused for it): ask the parent to attach to its children, take each one as
+   * its event arrives (and ask it for its own children, for frames nested deeper), and wait a moment for this one.
+   */
+  private async frameSession(frameId: string, parent: string | undefined): Promise<string | null> {
+    this.listen()
+    const from = parent ?? ''
+    const found = (): string | null => {
+      const known = this.frameSessions.get(frameId)
+      return known !== undefined && known.parent === from ? known.sessionId : null
+    }
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt === 1) this.watching.delete(from)
+        await this.autoAttach(parent)
+        const until = Date.now() + 500
+        let id = found()
+        while (id === null && Date.now() < until) {
+          await sleep(20)
+          id = found()
+        }
+        if (id !== null) return id
+      }
+    } catch (error) {
+      this.trace?.(`frame session failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return null
+  }
+
+  private async autoAttach(session: string | undefined): Promise<void> {
+    const key = session ?? ''
+    if (this.watching.has(key)) return
+    this.watching.add(key)
+    try {
+      await this.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, session)
+    } catch (error) {
+      this.watching.delete(key)
+      throw error
+    }
+  }
+
+  /** Remembers the frames the debugger attaches to, and attaches to theirs in turn. */
+  private listen(): void {
+    if (this.listening || this.dbg.on === undefined) return
+    this.listening = true
+    this.dbg.on('message', (_event, method, params, sessionId) => {
+      if (method === 'Target.attachedToTarget') {
+        const info = objectOf(params['targetInfo'])
+        const child = params['sessionId']
+        const id = info['targetId']
+        if (typeof child !== 'string' || typeof id !== 'string' || info['type'] !== 'iframe') return
+        this.frameSessions.set(id, { sessionId: child, parent: sessionId ?? '' })
+        void this.autoAttach(child).catch(() => undefined)
+      } else if (method === 'Target.detachedFromTarget') {
+        const gone = params['sessionId']
+        for (const [id, entry] of this.frameSessions) {
+          if (entry.sessionId !== gone) continue
+          this.frameSessions.delete(id)
+          this.watching.delete(entry.sessionId)
+        }
+      }
+    })
+  }
+
+  /** One mouse event on the route's session, with the point made frame-local. A session that went away is dropped and the frame found again. */
+  private async mouse(route: Route, params: Record<string, unknown>, again = true): Promise<void> {
+    if (route.sessionId === undefined) {
+      await this.send('Input.dispatchMouseEvent', params)
+      return
+    }
+    const local = { ...params, x: round2(Number(params['x']) - route.originX), y: round2(Number(params['y']) - route.originY) }
+    try {
+      await this.send('Input.dispatchMouseEvent', local, route.sessionId)
+    } catch (error) {
+      if (!again) throw error
+      // The frame's session went away (it navigated or closed): attach afresh once, and send there.
+      this.frameSessions.clear()
+      this.watching.clear()
+      Object.assign(route, await this.route(route.from, route.scale))
+      await this.mouse(route, params, false)
     }
   }
 
@@ -139,11 +303,12 @@ export class Cdp {
       }
       return
     }
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
+    const route = await this.route(p, scale)
+    await this.mouse(route, { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
     for (let n = 1; n <= clickCount; n++) {
-      await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button, buttons: 1, clickCount: n })
+      await this.mouse(route, { type: 'mousePressed', x: p.x, y: p.y, button, buttons: 1, clickCount: n })
       await sleep(12)
-      await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button, buttons: 0, clickCount: n })
+      await this.mouse(route, { type: 'mouseReleased', x: p.x, y: p.y, button, buttons: 0, clickCount: n })
     }
   }
 
@@ -161,7 +326,8 @@ export class Cdp {
   async hover(at: Point, scale: number): Promise<void> {
     if (this.touch) return
     const p = toView(at, scale)
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
+    const route = await this.route(p, scale)
+    await this.mouse(route, { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
   }
 
   async hold(at: Point, scale: number, ms: number): Promise<void> {
@@ -172,10 +338,11 @@ export class Cdp {
       await this.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
       return
     }
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
-    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 })
+    const route = await this.route(p, scale)
+    await this.mouse(route, { type: 'mouseMoved', x: p.x, y: p.y, buttons: 0 })
+    await this.mouse(route, { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 })
     await sleep(ms)
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1 })
+    await this.mouse(route, { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1 })
   }
 
   /** Moves along a path with intermediate steps: sliders and drag-to-verify ignore instant jumps. */
@@ -193,12 +360,13 @@ export class Cdp {
       await this.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
       return
     }
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: a.x, y: a.y, buttons: 0 })
-    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: a.x, y: a.y, button: 'left', buttons: 1, clickCount: 1 })
+    const route = await this.route(a, scale)
+    await this.mouse(route, { type: 'mouseMoved', x: a.x, y: a.y, buttons: 0 })
+    await this.mouse(route, { type: 'mousePressed', x: a.x, y: a.y, button: 'left', buttons: 1, clickCount: 1 })
     for (let i = 1; i <= steps; i++) {
       const t = i / steps
       const ease = t * t * (3 - 2 * t)
-      await this.send('Input.dispatchMouseEvent', {
+      await this.mouse(route, {
         type: 'mouseMoved',
         x: a.x + (b.x - a.x) * ease,
         y: a.y + (b.y - a.y) * ease,
@@ -207,7 +375,7 @@ export class Cdp {
       })
       await sleep(16)
     }
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: b.x, y: b.y, button: 'left', buttons: 0, clickCount: 1 })
+    await this.mouse(route, { type: 'mouseReleased', x: b.x, y: b.y, button: 'left', buttons: 0, clickCount: 1 })
   }
 
   async wheel(at: Point, scale: number, deltaY: number): Promise<void> {
@@ -217,7 +385,8 @@ export class Cdp {
       await this.send('Input.synthesizeScrollGesture', { x: p.x, y: p.y, yDistance: -deltaY * scale, speed: 1200, gestureSourceType: 'touch' })
       return
     }
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: p.x, y: p.y, deltaX: 0, deltaY })
+    const route = await this.route(p, scale)
+    await this.mouse(route, { type: 'mouseWheel', x: p.x, y: p.y, deltaX: 0, deltaY })
   }
 
   /** Types as one trusted text insertion: beforeinput and input fire as for a real keyboard. */
@@ -249,4 +418,15 @@ export function toView(at: Point, scale: number): Point {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Frames nested this deep are followed; more is a page that is not a document editor. */
+const MAX_FRAME_DEPTH = 8
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+function objectOf(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
 }

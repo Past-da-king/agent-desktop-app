@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Script } from 'node:vm'
 
-import { app, BrowserWindow, clipboard as systemClipboard, Menu, screen, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard as systemClipboard, Menu, nativeImage, screen, session as electronSession, shell, webContents as allWebContents, WebContentsView } from 'electron'
 import type { DownloadItem, Session, WebContents, WebPreferences } from 'electron'
 
 import type { BrowserBounds, BrowserHandOver, BrowserPageSpec, BrowserState, BrowserTab } from '@agent/core'
@@ -81,6 +81,7 @@ import { formatUpload, uploadFiles, type UploadHost, type UploadTarget } from '.
 import { brandLook, type BrandLook } from '../../shared/brand'
 import type { AgentCursors } from '../overlay/agent-cursor'
 import { browserCursorAt, cursorLabel } from './agent-cursor-link'
+import { shotResize } from './shot-size'
 import { FocusGuard, FORGET_ACTIVE_JS, guardDebugger, HOST_HAS_KEYBOARD_JS, keyToEvents, RESTORE_ACTIVE_JS, SAVE_ACTIVE_JS, type FocusProbe } from './focus-keeper'
 import { formatGuide, GuideRuns, guideShowsFullSize, runGuide, type GuideHost } from './guide'
 import { evaluateIn, FrameSessions } from './guide-host'
@@ -1227,6 +1228,15 @@ export class AgentBrowser implements BrowserDriver, BrowserProDriver {
       return null
     }
     this.shotProblem = ''
+    // Back to the page's own pixels, so a point read off the picture is a point of the page (shot-size.ts).
+    try {
+      const picture = nativeImage.createFromBuffer(png)
+      const page = await withDeadline(this.run(tab, '[innerWidth, innerHeight]', 1_500), 2_000).catch(() => null)
+      const to = Array.isArray(page) ? shotResize(picture.getSize(), { width: Number(page[0]), height: Number(page[1]) }) : null
+      if (to !== null) png = picture.resize({ width: to.width, height: to.height, quality: 'best' }).toPNG()
+    } catch {
+      // A picture that cannot be resized goes out as it is.
+    }
     try {
       const path = join(this.screenshotsDir, `shot-${Date.now()}-${++this.shotSeq}.png`)
       writeFileSync(path, png)
@@ -2611,6 +2621,9 @@ ${await this.snapshot()}`
       siteCss: [],
     }
     tab.cdp.guest = view === null
+    // AGENT_FRAME_ROUTING=0 switches frame routing off, to compare against the old behaviour in a proof run.
+    tab.cdp.frames = process.env['AGENT_FRAME_ROUTING'] !== '0'
+    tab.cdp.trace = (line) => this.logLine('frame input', { detail: line })
     guardDebugger(wc.debugger, this.focusGuard)
     this.tabs.push(tab)
     this.wireTab(tab)
