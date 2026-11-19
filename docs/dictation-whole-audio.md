@@ -68,3 +68,11 @@ isiZulu had been cleaned up already):
 | gemini-3.1-flash-lite | 0.11 | 3 of 3 | 10, 10, 10 | his words as said, 2 s |
 | gemini-3.5-flash-lite | 0.10 | 3 of 3 | 6, 8, 8 ("StratEdge", "MacQuarie") | ok |
 | gemini-3.6-flash | 0.8 | 2 of 2 (429 on the third) | 10, 10, 10 | ok, 5 to 17 s |
+
+## The headless node (agent-node), 20 Nov 2026
+
+A phone linked to agent-node (not to the computer's app) gets the same instant send. The wiring is shared code, not a copy:
+`main/dictation/instant.ts` (queue, runner hold, `voice.takeAudio`, resume at start) and `main/dictation/take-batch.ts`
+(the one whole-audio pass with the phone's names and languages merged in front of memory's). `main/index.ts` and
+`headless/runtime.ts` both call them. The node has no microphone, so `chat.send` `dictation.handOff` never applies there.
+Proof: `apps/desktop/test/headless-instant-send.test.ts`.
