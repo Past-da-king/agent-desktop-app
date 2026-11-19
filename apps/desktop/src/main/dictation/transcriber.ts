@@ -340,14 +340,22 @@ export function speechLanguages(system: string[], locale: string): string[] {
   const english = tags.filter((tag) => /^en\b/i.test(tag))
   const others = tags.filter((tag) => !/^en\b/i.test(tag))
   const out = [...english, ...others].slice(0, MAX_SPEECH_LANGUAGES)
-  const region = tags.map((tag) => tag.split('-')[1]).find((part) => part !== undefined && /^[A-Za-z]{2}$/.test(part))
+  // Neighbours of every region the person has a tag for, in order (en-GB, en-US, en-ZA: only ZA has neighbours here),
+  // so a list led by en-GB or en-US still brings in isiZulu and Afrikaans for a person in South Africa.
+  const regions: string[] = []
+  for (const tag of tags) {
+    const part = tag.split('-')[1]
+    if (part !== undefined && /^[A-Za-z]{2}$/.test(part) && !regions.includes(part.toUpperCase())) regions.push(part.toUpperCase())
+  }
   const have = new Set(out.map((tag) => tag.split('-')[0]?.toLowerCase()))
-  for (const next of NEIGHBOURS[(region ?? '').toUpperCase()] ?? []) {
-    if (out.length >= MAX_SPEECH_LANGUAGES) break
-    const language = next.split('-')[0]?.toLowerCase()
-    if (have.has(language)) continue
-    out.push(next)
-    have.add(language)
+  for (const region of regions) {
+    for (const next of NEIGHBOURS[region] ?? []) {
+      if (out.length >= MAX_SPEECH_LANGUAGES) break
+      const language = next.split('-')[0]?.toLowerCase()
+      if (have.has(language)) continue
+      out.push(next)
+      have.add(language)
+    }
   }
   return out
 }

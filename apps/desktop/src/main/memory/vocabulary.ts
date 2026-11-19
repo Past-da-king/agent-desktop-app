@@ -52,7 +52,19 @@ export const EMPTY_VOCABULARY: Vocabulary = { names: [], aliases: [] }
 export function vocabularyFrom(rows: MemoryRow[]): Vocabulary {
   // A name never carries a secret; anything the redactor would touch is left out altogether.
   const usable = (value: string): boolean => value.length >= 2 && value.length <= MAX_NAME && redactSecrets(value).text === value
-  const ordered = [...rows].sort((a, b) => Number(a.status === 'closed') - Number(b.status === 'closed') || b.updatedAt - a.updatedAt)
+  // Open before closed, then the pages he pinned and the people, organisations and projects before a page that only has
+  // aliases, then the newest. The list is capped, so the names he uses all day must not be pushed out by recent noise.
+  // How many pages link to each name ([[Name]] in a body): what he talks about most comes first, from his own memory.
+  const links = new Map<string, number>()
+  for (const row of rows) {
+    for (const match of row.body.matchAll(/\[\[([^\]|#]{2,60})\]\]/g)) {
+      const key = (match[1] ?? '').trim().toLowerCase()
+      links.set(key, (links.get(key) ?? 0) + 1)
+    }
+  }
+  const linked = (row: MemoryRow): number => [row.title, ...aliasList(row.aliases ?? '')].reduce((sum, name) => sum + (links.get(nameTerm(name)?.toLowerCase() ?? name.toLowerCase()) ?? 0), 0)
+  const weight = (row: MemoryRow): number => (row.pinned ? 0 : NAMED_KINDS.has(row.kind) ? 1 : 2)
+  const ordered = [...rows].sort((a, b) => Number(a.status === 'closed') - Number(b.status === 'closed') || weight(a) - weight(b) || linked(b) - linked(a) || b.updatedAt - a.updatedAt)
   const names: string[] = []
   const seenNames = new Set<string>()
   const aliases: Vocabulary['aliases'] = []

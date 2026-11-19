@@ -18,7 +18,7 @@ export interface IpcMainOnLike {
 
 const MAX_KEY = 8192
 const MAX_SPEAK = 20_000
-const MAX_DICTATION = 16_000 * 2 * 60 * 5
+const MAX_DICTATION = 16_000 * 2 * 60 * 10
 const MAX_CHUNK = 64 * 1024
 /** A linked device sends its recording about a second at a time; allow a few seconds of slack. */
 const MAX_RECORD_CHUNK = 16_000 * 2 * 10
