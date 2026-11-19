@@ -27,7 +27,15 @@ import { dictationTarget, type DictationSurface } from './target'
 import { BoxDelivery, dictationRoute, type BoxTarget } from './box'
 import { EVENTS } from '../../shared/channels'
 import { safeSend } from '../alive'
-import { LiveTranscriber, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, speechLanguages } from './transcriber'
+import { LiveTranscriber, MAX_SPEECH_LANGUAGES, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, speechLanguages } from './transcriber'
+
+export interface HandedOffTake {
+  id: string
+  live: string
+  pcm: Buffer
+  /** The whole-take text, once it is there: the kept recording's transcript. */
+  final: (text: string) => void
+}
 
 export interface DictationSetup {
   controller: DictationController
@@ -36,7 +44,12 @@ export interface DictationSetup {
   /** The message box's microphone in one of the app's windows: the words go into that window (and its chat). */
   toggleFrom(sender: WebContents, mode: 'plain' | 'clean', chat?: string | null): void
   /** A whole saved recording to text, the way a dictation's fallback does it (bounded by `signal`). */
-  transcribe(pcm: Buffer, signal: AbortSignal): Promise<BatchResult>
+  transcribe(pcm: Buffer, signal: AbortSignal, extra?: { names?: string[]; languages?: string[] }): Promise<BatchResult>
+  /**
+   * Instant send: end the dictation going into this chat's box (or the shortcut's) WITHOUT waiting for its words and hand
+   * its audio and live caption over; null when nothing is being dictated for that chat.
+   */
+  handOff(chat: string): HandedOffTake | null
   /** The dictation going into the window `sender` belongs to, for a window that just reloaded. */
   currentFor(sender: unknown): DictationView | null
   /** A window says whether the words it was sent are really there. */
@@ -245,9 +258,9 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
   }
 
   /** Every way a recording becomes text ends here, transcribed as heard and then names spelled right. */
-  async function batch(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
-    const names = words
-    const result = await batchRaw(pcm, signal, onUpdate)
+  async function batch(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void, extra?: { names?: string[]; languages?: string[] }): Promise<BatchResult> {
+    const names = cleanVocabulary([...(extra?.names ?? []), ...words])
+    const result = await batchRaw(pcm, signal, onUpdate, extra)
     return result.ok ? { ok: true, text: spellNames(result.text, names) } : result
   }
 
@@ -259,8 +272,11 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
    * speaks. Nothing is sent through the live model a second time (that was the old fallback, and it is the same weaker
    * transcriber that got the words wrong in the first place).
    */
-  async function batchRaw(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
-    const speech = { names: words, languageCodes: languages(), mode: 'verbatim' as const }
+  async function batchRaw(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void, extra?: { names?: string[]; languages?: string[] }): Promise<BatchResult> {
+    // A linked phone's own names go in front of the ones memory gives, and its languages in front of this computer's.
+    const own = languages()
+    const sent = (extra?.languages ?? []).concat(own).filter((tag, index, all) => all.findIndex((other) => other.toLowerCase() === tag.toLowerCase()) === index)
+    const speech = { names: cleanVocabulary([...(extra?.names ?? []), ...words]), languageCodes: sent.slice(0, MAX_SPEECH_LANGUAGES), mode: 'verbatim' as const }
     // The whole recording in ONE request, however long (19 Nov 2026): the model hears everything at once and infers what
     // a live pass gets wrong. Too long for an inline request, voice.transcribe uploads it first. Only when that fails
     // twice does it go in pieces cut at quiet moments, and that is logged.
@@ -329,7 +345,13 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
       }
       controller.toggle(mode)
     },
-    transcribe: (pcm, signal) => batch(pcm, signal),
+    transcribe: (pcm, signal, extra) => batch(pcm, signal, undefined, extra),
+    handOff: (chat) => {
+      // Only the dictation that was started from this chat's own box (or the shortcut's, when no chat is named).
+      if (recordAs.source === 'mic' && recordAs.chat !== null && recordAs.chat !== chat) return null
+      const taken = controller.handOff()
+      return taken === null ? null : { id: taken.id, live: taken.live, pcm: taken.pcm, final: (text) => void taken.rec?.final(text) }
+    },
     currentFor: (sender) => {
       if (draftTarget === null || draftTarget.isDestroyed() || draftTarget.webContents !== sender) return null
       const view = controller.currentView()

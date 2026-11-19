@@ -581,6 +581,14 @@ function UserRow({ item }: { item: ChatItem }): JSX.Element {
   const pending = parseMeta(item.meta)['route'] === 'pending'
   // A message from another chat (the main agent, or a project chat) says who sent it.
   const via = viaOf(item)
+  // A dictated message (instant send): what was heard while he spoke, until the whole take is written down in its place.
+  const dictation = parseMeta(item.meta)['dictation'] as { id?: string; pending?: boolean; failed?: boolean } | undefined
+  const [retrying, setRetrying] = useState(false)
+  const retryTake = (): void => {
+    if (dictation?.id === undefined || retrying) return
+    setRetrying(true)
+    void agent.voice.takeAudio({ id: dictation.id, retry: true }).finally(() => setRetrying(false))
+  }
   return (
     <div className={`u-row${via === null ? '' : ' via'}`}>
       {via === null ? null : (
@@ -595,6 +603,20 @@ function UserRow({ item }: { item: ChatItem }): JSX.Element {
           {files.map((file) => (
             <MessageAttachment key={`${file.path}-${file.name}`} file={file} />
           ))}
+        </div>
+      ) : null}
+      {dictation?.pending === true ? (
+        <div className="u-route pending refining" role="status" title="Written down from the whole recording in a moment">
+          <Icon name="clock" size={14} />
+          Refining
+        </div>
+      ) : dictation?.failed === true ? (
+        <div className="u-route failed" role="status">
+          <Icon name="mic" size={14} />
+          Sent as heard
+          <button type="button" className="u-retry" onClick={retryTake} disabled={retrying}>
+            Retry
+          </button>
         </div>
       ) : null}
       {route !== '' ? (

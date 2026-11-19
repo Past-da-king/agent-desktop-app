@@ -3,7 +3,7 @@
  * touching the shared handlers. Arguments are checked: the renderer is untrusted.
  */
 import { CHANNELS, EVENTS } from '../../shared/channels'
-import type { DeviceCall } from '@agent/core'
+import type { DeviceCall, VoiceTakeAck, VoiceTakeInput } from '@agent/core'
 
 import { liveFromInput } from '../../shared/sender'
 import { messageOrigin, originWithLive } from '../devices/origin'
@@ -33,16 +33,25 @@ export function registerVoiceIpc(
    * and languages, rather than the plain one here (11 Nov 2026: a phone's dictation reached the desktop with no
    * vocabulary at all, so his names came back as whatever the model guessed).
    */
-  transcribeDevice?: (pcm: Buffer) => Promise<{ ok: boolean; text?: string; error?: string }>,
+  transcribeDevice?: (pcm: Buffer, extra?: WholeExtra) => Promise<{ ok: boolean; text?: string; error?: string }>,
+  /** Instant send: a dictated message's audio, by recording id (dictation/pending.ts). */
+  takeAudio?: (input: VoiceTakeInput) => Promise<VoiceTakeAck>,
 ): void {
   ipcMain.handle(CHANNELS.voice.setKey, async (_event, key) => {
     if (typeof key !== 'string' || key.length > MAX_KEY) throw new Error('key must be text')
     voice.setKey(key)
   })
   ipcMain.handle(CHANNELS.voice.check, async () => voice.check())
-  ipcMain.handle(CHANNELS.voice.transcribe, async (_event, pcm) => {
+  ipcMain.handle(CHANNELS.voice.transcribe, async (_event, pcm, rawExtra) => {
     const audio = bytes(pcm, MAX_DICTATION)
-    return transcribeDevice === undefined ? voice.transcribe(audio) : transcribeDevice(audio)
+    // `{whole: true, names, languages}` (phone 0.15.75): the audio is the entire take, so ONE pass with these names and
+    // languages added to the computer's own. Without it the call is a piece, as before.
+    const extra = wholeExtra(rawExtra)
+    return transcribeDevice === undefined ? voice.transcribe(audio) : transcribeDevice(audio, extra)
+  })
+  ipcMain.handle(CHANNELS.voice.takeAudio, async (_event, raw) => {
+    if (takeAudio === undefined) return { ok: false, error: 'This computer cannot take dictated audio.' }
+    return takeAudio(takeInput(raw))
   })
   ipcMain.handle(CHANNELS.voice.speak, async (_event, text) => {
     if (typeof text !== 'string' || text.length > MAX_SPEAK) throw new Error('text must be text')
@@ -161,4 +170,39 @@ function handoffInput(raw: unknown): { target: string; message: string; kind: 'm
     kind: kind === 'main' || kind === 'project' || kind === 'helper' ? kind : '',
     newChat: record['newChat'] === true,
   }
+}
+
+export interface WholeExtra {
+  whole: boolean
+  names: string[]
+  languages: string[]
+}
+
+function strings(value: unknown, max: number, each: number): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '' && item.length <= each).slice(0, max) : []
+}
+
+/** The second argument of voice.transcribe, checked: undefined when it is not the whole-take form. */
+export function wholeExtra(raw: unknown): WholeExtra | undefined {
+  if (typeof raw !== 'object' || raw === null || (raw as { whole?: unknown }).whole !== true) return undefined
+  const input = raw as { names?: unknown; languages?: unknown }
+  return { whole: true, names: strings(input.names, 100, 60), languages: strings(input.languages, 6, 12) }
+}
+
+/** The input of voice.takeAudio, checked (the device is trusted to be paired, not to send well-formed data). */
+export function takeInput(raw: unknown): VoiceTakeInput {
+  if (typeof raw !== 'object' || raw === null) throw new Error('take must be an object')
+  const input = raw as Record<string, unknown>
+  const id = input['id']
+  if (typeof id !== 'string' || !/^[\w:-]{1,64}$/.test(id)) throw new Error('id must be a recording id')
+  const out: VoiceTakeInput = { id }
+  if (typeof input['chat'] === 'string' && /^[\w:-]{1,100}$/.test(input['chat'])) out.chat = input['chat']
+  if (input['audio'] !== undefined && input['audio'] !== null) out.audio = new Uint8Array(bytes(input['audio'], MAX_DICTATION))
+  if (typeof input['caption'] === 'string') out.caption = input['caption'].slice(0, 200_000)
+  if (input['retry'] === true) out.retry = true
+  const names = strings(input['names'], 100, 60)
+  if (names.length > 0) out.names = names
+  const languages = strings(input['languages'], 6, 12)
+  if (languages.length > 0) out.languages = languages
+  return out
 }

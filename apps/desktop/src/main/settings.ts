@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { hostname as osHostname } from 'node:os'
 import { dirname } from 'node:path'
 
-import { DEFAULT_SETTINGS, NO_LIMIT_CAP, VOICES, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings, cleanRoster, knownRoster } from '@agent/core'
+import { DEFAULT_SETTINGS, NO_LIMIT_CAP, VOICES, DICTATION_MODELS, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings, cleanRoster, knownRoster } from '@agent/core'
 
 import { upgradeHotkeys } from './hotkeys'
 import { validQuietHours } from '../shared/wakeups'
@@ -32,6 +32,7 @@ const STRING_ENUMS: Partial<Record<keyof Settings, readonly string[]>> = {
   mascot: ['scout', 'ghost', 'clover', 'bloom', 'puff', 'gem', 'pebble', 'heart', 'bun'],
   shell: ['always', 'ask', 'never'],
   voiceName: VOICES.map((voice) => voice.id),
+  dictationModel: DICTATION_MODELS.map((model) => model.id),
   recordingAudioKeep: ['today', 'week', 'always'],
   decisionsBackend: ['gemini', 'jev', 'openai', 'llm'],
 }

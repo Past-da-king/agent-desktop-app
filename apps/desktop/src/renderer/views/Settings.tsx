@@ -10,7 +10,7 @@
  * AI accounts, the folders, the devices) is never emptied by one button.
  */
 import type { AiAccount, AiPicks, GitLogEntry, Settings as SettingsValues } from '@agent/core'
-import { VOICES } from '@agent/core'
+import { DICTATION_MODELS, VOICES } from '@agent/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { agent } from '../bridge'
@@ -718,6 +718,14 @@ function VoiceSection({ settings, put, resetRow }: SectionProps): JSX.Element {
             {checking ? 'Checking...' : 'Check'}
           </Button>
         ) : null}
+      </SettingRow>
+      <SettingRow spec={row('dictationModel')} changed={changedNow(row('dictationModel'), settings)} onReset={() => resetRow(row('dictationModel'))}>
+        <SelectControl
+          label="Dictation model"
+          value={settings?.dictationModel || DICTATION_MODELS[0]?.id || ''}
+          options={DICTATION_MODELS.map((option) => ({ value: option.id, label: `${option.label}, about ${option.centsPerMinute.toFixed(2)} cents a minute` }))}
+          onChange={(value) => put({ dictationModel: value })}
+        />
       </SettingRow>
       <SettingRow spec={row('voiceName')} changed={changedNow(row('voiceName'), settings)} onReset={() => resetRow(row('voiceName'))}>
         <SelectControl

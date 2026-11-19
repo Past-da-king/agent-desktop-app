@@ -37,6 +37,7 @@ export const SHARED_SETTINGS = [
   'theme',
   'notifications',
   'voiceName',
+  'dictationModel',
   'speakReplies',
   'dailyMemoryAt',
   'mode',

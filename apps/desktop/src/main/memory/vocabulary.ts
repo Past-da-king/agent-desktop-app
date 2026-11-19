@@ -85,7 +85,37 @@ export function vocabularyFrom(rows: MemoryRow[]): Vocabulary {
       aliases.push({ heard, name })
     }
   }
-  return { names, aliases }
+  return { names: withStems(names), aliases }
+}
+
+/**
+ * The stem several longer names share ("Strat Edge" from "Strat Edge Solutions", "Strat Edge ID" and "Strat Edge
+ * Intelligence"): what he says on its own most of the time, so it is a name of its own, placed before the first name
+ * that carries it. Taken from the data, never listed by hand.
+ */
+export function withStems(names: string[]): string[] {
+  const counts = new Map<string, number>()
+  for (const name of names) {
+    const parts = name.split(' ')
+    if (parts.length >= 3) {
+      const stem = parts.slice(0, 2).join(' ')
+      counts.set(stem.toLowerCase(), (counts.get(stem.toLowerCase()) ?? 0) + 1)
+    }
+  }
+  const have = new Set(names.map((name) => name.toLowerCase()))
+  const out: string[] = []
+  for (const name of names) {
+    const parts = name.split(' ')
+    if (parts.length >= 3) {
+      const stem = parts.slice(0, 2).join(' ')
+      if ((counts.get(stem.toLowerCase()) ?? 0) >= 2 && !have.has(stem.toLowerCase())) {
+        have.add(stem.toLowerCase())
+        out.push(stem)
+      }
+    }
+    out.push(name)
+  }
+  return out
 }
 
 /**

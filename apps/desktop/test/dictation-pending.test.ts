@@ -15,7 +15,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }))
 const pcm = Buffer.alloc(32_000 * 10, 1)
 function make(overrides: Partial<PendingDeps> = {}) {
   const replaced: Array<[string, string]> = []
-  const batch = vi.fn(async () => ({ ok: true as const, text: 'Clean text' }))
+  const batch = vi.fn(async (_pcm: Buffer, _signal: AbortSignal, _extra: { names: string[]; languages: string[] }) => ({ ok: true as const, text: 'Clean text' }))
   const deps: PendingDeps = { dir, batch, replace: (take, text) => void replaced.push([take.id, text]), log: () => undefined, ...overrides }
   return { takes: new PendingTakes(deps), replaced, batch }
 }
@@ -74,6 +74,33 @@ describe('instant send: pending takes', () => {
     const third = make()
     expect(await third.takes.resume()).toBe(0)
     expect(third.batch).not.toHaveBeenCalled()
+  })
+
+  it('the message can be in the chat before its audio: the agent waits for the take, then gets the clean text', async () => {
+    const { takes, batch } = make()
+    const early = takes.settled('t5', 5000, 'caption')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await takes.accept({ id: 't5', chat: 'main', live: 'caption', pcm, names: ['Strat Edge'], languages: ['en-ZA', 'zu-ZA'] })
+    expect(await early).toEqual({ id: 't5', text: 'Clean text', clean: true, note: null })
+    expect(batch.mock.calls[0]?.[2]).toEqual({ names: ['Strat Edge'], languages: ['en-ZA', 'zu-ZA'] })
+  })
+
+  it('no audio ever arrives: the agent still gets the caption and the note at the cap', async () => {
+    const { takes } = make()
+    expect(await takes.settled('t6', 30, 'only caption')).toEqual({ id: 't6', text: 'only caption', clean: false, note: FAILED_NOTE })
+  })
+
+  it('a resend of a failed take runs it again; a resend of a done take does nothing', async () => {
+    let ok = false
+    const batch = vi.fn(async () => (ok ? { ok: true as const, text: 'Fixed' } : { ok: false as const, error: 'busy' }))
+    const { takes, replaced } = make({ batch })
+    await takes.accept({ id: 't7', chat: null, live: 'c', pcm })
+    await takes.settled('t7', 5000)
+    ok = true
+    expect((await takes.accept({ id: 't7', chat: null, live: 'c', pcm })).duplicate).toBe(true)
+    expect(await takes.settled('t7', 5000)).toMatchObject({ text: 'Fixed', clean: true })
+    await takes.accept({ id: 't7', chat: null, live: 'c', pcm })
+    expect(replaced).toEqual([['t7', 'Fixed']])
   })
 
   it('the cap is 30 s plus half a second per second said, at most 100 s', () => {
