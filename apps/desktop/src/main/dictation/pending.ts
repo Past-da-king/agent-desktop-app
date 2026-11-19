@@ -58,6 +58,10 @@ export interface PendingDeps {
   replace: (take: TakeRecord, text: string) => Promise<void> | void
   log: (message: string, fields?: Record<string, string | number | boolean>) => void
   now?: () => number
+  /** A Retry was accepted: the message is marked Refining again until the pass answers. */
+  retrying?: (take: TakeRecord) => Promise<void> | void
+  /** The pass of a Retry failed again: the message says Sent as heard again. */
+  retryFailed?: (take: TakeRecord) => Promise<void> | void
 }
 
 export class PendingTakes {
@@ -65,6 +69,8 @@ export class PendingTakes {
   private readonly running = new Map<string, Promise<void>>()
   private readonly waiters = new Map<string, Array<(settled: Settled) => void>>()
   private readonly records = new Map<string, TakeRecord>()
+  // Takes whose running pass is a Retry (their message was marked Refining again, so a new failure must say so).
+  private readonly retried = new Set<string>()
 
   constructor(deps: PendingDeps) {
     this.deps = deps
@@ -125,6 +131,12 @@ export class PendingTakes {
     record.state = 'queued'
     delete record.error
     await this.save(record)
+    this.retried.add(id)
+    try {
+      await this.deps.retrying?.(record)
+    } catch (error) {
+      this.deps.log('Dictation take could not mark its message Refining', { id, reason: error instanceof Error ? error.message : String(error) })
+    }
     this.start(id)
     return true
   }
@@ -186,6 +198,7 @@ export class PendingTakes {
     if (result.ok && result.text.trim() !== '') {
       record.state = 'done'
       record.text = result.text.trim()
+      this.retried.delete(id)
       await this.save(record)
       // Replace first, then free the agent's turn: it must read the clean text, never the caption.
       try {
@@ -200,6 +213,13 @@ export class PendingTakes {
     record.error = result.ok ? 'The take came back empty.' : result.error
     await this.save(record)
     this.deps.log('Dictation take failed', { id, reason: record.error })
+    if (this.retried.delete(id)) {
+      try {
+        await this.deps.retryFailed?.(record)
+      } catch (error) {
+        this.deps.log('Dictation take could not mark its message failed again', { id, reason: error instanceof Error ? error.message : String(error) })
+      }
+    }
     this.release({ id, text: record.live, clean: false, note: FAILED_NOTE })
   }
 
