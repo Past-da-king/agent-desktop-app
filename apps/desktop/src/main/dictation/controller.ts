@@ -62,6 +62,8 @@ export interface DictationDeps {
   cleanUp: (text: string) => Promise<string>
   /** Puts names memory knows were mis-heard right (memory/vocabulary.ts), on every dictation. */
   fixNames?: (text: string) => Promise<string>
+  /** The live caption is only a preview: names put right in it by sound (no waiting, never typed). */
+  previewFix?: (text: string) => string
   /**
    * Puts the words where they go. 'inserted' only when the window confirmed they are there; 'unconfirmed' when it did
    * not, and the recording is offered back by the message box.
@@ -127,9 +129,9 @@ const TYPE_LIMIT_MS = 15_000
  */
 export const CANCEL_GRACE_MS = 1500
 
-/** The default finishing limit: 30 s, plus one for every two said, at most 100 s. */
+/** The default finishing limit: 30 s, plus one for every two said, at most 150 s (a whole-recording pass plus one retry). */
 export function defaultFinishLimitMs(bytes: number): number {
-  return Math.min(100_000, Math.round(30_000 + (bytes / BYTES_PER_SECOND) * 500))
+  return Math.min(150_000, Math.round(30_000 + (bytes / BYTES_PER_SECOND) * 500))
 }
 
 interface Session {
@@ -401,9 +403,12 @@ export class DictationController {
     this.sequence += 1
     const id = this.sequence
     const transcriber = this.deps.transcriber({
-      onUpdate: (text, interim) => {
+      onUpdate: (rawText, rawInterim) => {
         const current = this.session
         if (current === null || current.id !== id) return
+        const fix = this.deps.previewFix ?? ((value: string): string => value)
+        const text = fix(rawText)
+        const interim = fix(rawInterim)
         current.text = text
         current.interim = interim
         current.rec?.words(text, interim)

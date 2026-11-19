@@ -18,7 +18,7 @@ import { applyAliases, EMPTY_VOCABULARY, vocabularyBrief, type Vocabulary } from
 import type { RecordingHandle, Recordings } from '../recordings/store'
 import { CLEANUP_MODELS, cleanUp } from './cleanup'
 import { DictationController, type BatchResult } from './controller'
-import { transcribeInChunks } from './chunks'
+import { transcribeWhole } from './whole'
 import { addedNames, stripInjectedNames } from './injected'
 import { respellNames } from './respell'
 import { electronClipboard, keySenderFor, typeText, type KeySender, type TypeOutcome } from './paste'
@@ -45,9 +45,6 @@ export interface DictationSetup {
   undeliveredChanged(): void
   dispose(): void
 }
-
-/** A recording up to this long goes to the speech model in one request (a base64 wav of it still fits inline). */
-const WHOLE_MAX_BYTES = 16_000 * 2 * 60 * 3
 
 export interface DictationSetupDeps {
   voice: VoiceService
@@ -214,6 +211,7 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
       }
       return cleaned
     },
+    previewFix: (text) => respellNames(text, words).text,
     fixNames: async (text) => spellNames(applyAliases(text, (await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY), words),
     type: async (text) => typeInto(text),
     mask: () => keys?.mask(),
@@ -263,19 +261,13 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
    */
   async function batchRaw(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void): Promise<BatchResult> {
     const speech = { names: words, languageCodes: languages(), mode: 'verbatim' as const }
-    // Up to about three minutes goes up as one request in one piece (a wav of it fits the inline limit); longer ones
-    // in two-minute pieces cut at quiet moments, a couple at a time.
-    if (pcm.length <= WHOLE_MAX_BYTES) {
-      const whole = await deps.voice.transcribe(pcm, { ...speech, signal })
-      if (whole.ok) return { ok: true, text: whole.text }
-      if (signal.aborted) return { ok: false, error: 'Cancelled.' }
-      deps.log('Dictation whole transcribe failed', { reason: whole.error })
-      return { ok: false, error: whole.error }
-    }
-    return transcribeInChunks(pcm, (piece, pieceSignal) => deps.voice.transcribe(piece, { ...speech, signal: pieceSignal }), {
-      signal,
-      ...(onUpdate === undefined ? {} : { onUpdate }),
+    // The whole recording in ONE request, however long (19 Nov 2026): the model hears everything at once and infers what
+    // a live pass gets wrong. Too long for an inline request, voice.transcribe uploads it first. Only when that fails
+    // twice does it go in pieces cut at quiet moments, and that is logged.
+    return transcribeWhole(pcm, signal, {
+      one: (audio, audioSignal) => deps.voice.transcribe(audio, { ...speech, signal: audioSignal }),
       log: deps.log,
+      ...(onUpdate === undefined ? {} : { onUpdate }),
     })
   }
 

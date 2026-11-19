@@ -93,7 +93,7 @@ export function callTranscript(lines: ReadonlyArray<{ who: string; text: string 
 const KEY = 'geminiKey'
 
 /** The longest one transcription call may take. */
-export const TRANSCRIBE_MAX_MS = 90_000
+export const TRANSCRIBE_MAX_MS = 150_000
 
 /** How long a recording of `bytes` (16 kHz PCM16) may take to transcribe: 30 s, plus one for every two said. */
 export function transcribeLimitMs(bytes: number): number {
@@ -101,7 +101,7 @@ export function transcribeLimitMs(bytes: number): number {
   return Math.min(TRANSCRIBE_MAX_MS, Math.round(30_000 + seconds * 500))
 }
 const RECENT_CHAT = 12
-const MAX_DICTATION_BYTES = 16_000 * 2 * 60 * 5 // five minutes
+const MAX_DICTATION_BYTES = 16_000 * 2 * 60 * 10 // ten minutes, one request (inline, or uploaded when long)
 const MAX_CHUNK_BYTES = 64 * 1024
 
 export class VoiceService {
@@ -162,7 +162,7 @@ export class VoiceService {
   ): Promise<VoiceResult<{ text: string }>> {
     if (this.key() === null) return { ok: false, error: 'Add a Gemini key in Settings to talk.' }
     if (pcm.length === 0) return { ok: true, text: '' }
-    if (pcm.length > MAX_DICTATION_BYTES) return { ok: false, error: 'That recording is too long. Keep it under five minutes.' }
+    if (pcm.length > MAX_DICTATION_BYTES) return { ok: false, error: 'That recording is too long. Keep it under ten minutes.' }
     const timeout = AbortSignal.timeout(options.timeoutMs ?? transcribeLimitMs(pcm.length))
     const signal = options.signal === undefined ? timeout : AbortSignal.any([options.signal, timeout])
     try {

@@ -531,7 +531,7 @@ describe('DictationController: never an endless wait', () => {
     const { defaultFinishLimitMs } = await import('../src/main/dictation/controller')
     expect(defaultFinishLimitMs(0)).toBe(30_000)
     expect(defaultFinishLimitMs(16_000 * 2 * 60)).toBe(60_000)
-    expect(defaultFinishLimitMs(16_000 * 2 * 600)).toBe(100_000)
+    expect(defaultFinishLimitMs(16_000 * 2 * 600)).toBe(150_000)
   })
 })
 

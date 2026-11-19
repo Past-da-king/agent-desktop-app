@@ -349,12 +349,30 @@ export async function transcribe(
 ): Promise<string> {
   if (pcm.length === 0) return ''
   const wav = wavFromPcm(pcm, INPUT_RATE)
+  // The whole recording goes in ONE request (19 Nov 2026): inline up to the limit, else uploaded once and read by reference.
+  let uploaded: { uri: string; name: string } | null = null
+  if (wav.length > INLINE_MAX_WAV_BYTES) uploaded = await uploadAudio(deps, wav, options.signal)
+  try {
+    return await transcribeRecording(deps, wav, uploaded, choice, options)
+  } finally {
+    if (uploaded !== null) void deleteFile(deps, uploaded.name)
+  }
+}
+
+async function transcribeRecording(
+  deps: GeminiDeps,
+  wav: Buffer,
+  uploaded: { uri: string; name: string } | null,
+  choice: ModelChoice,
+  options: { names?: string[]; languageCodes?: string[]; mode?: 'verbatim' | 'smart'; signal?: AbortSignal },
+): Promise<string> {
   const vocabulary = cleanTerms(options.names ?? [])
   const languageCodes = (options.languageCodes ?? []).map((code) => code.trim()).filter((code) => code !== '').slice(0, 6)
   // 1. The speech model, when the key can see it: languages, vocabulary and the mode go in the request itself.
   for (const model of preferring(choice.transcribe, TRANSCRIBE_MODELS).filter((model) => /transcribe/.test(model) && !/live/.test(model))) {
     try {
-      const text = await transcribeWithSpeechModel(deps, model, wav.toString('base64'), {
+      const text = await transcribeWithSpeechModel(deps, model, uploaded === null ? wav.toString('base64') : '', {
+        ...(uploaded === null ? {} : { fileUri: uploaded.uri }),
         languageCodes,
         vocabulary,
         mode: options.mode ?? 'verbatim',
@@ -371,7 +389,7 @@ export async function transcribe(
   const names = vocabulary.slice(0, 100)
   const hint =
     (names.length === 0 ? '' : ` Names the speaker may say, spelled as they should be written: ${names.join(', ')}. Use this list only to spell a name that is clearly spoken; never write a name that is not said.`) +
-    (languageCodes.length === 0 ? '' : ` He speaks ${languageCodes.join(' and ')}, often mixing languages inside one sentence; write each word in the language he said it in.`) +
+    (languageCodes.length === 0 ? '' : ` He speaks ${languageCodes.join(', ')}, often mixing languages inside one sentence (English and isiZulu especially). Write exactly what was said, each word in the language he said it in; never translate and never leave a language out.`) +
     ' Write nothing for silence, breathing or noise.'
   const general = preferring(choice.transcribe, [...TRANSCRIBE_FALLBACKS, ...TRANSCRIBE_MODELS]).filter((model) => !/transcribe/.test(model))
   return eachModel(general, [404, 429, 503], async (model) => {
@@ -389,7 +407,7 @@ export async function transcribe(
                   'Reply with the transcript only. If nobody speaks, reply with nothing.' +
                   hint,
               },
-              { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } },
+              uploaded === null ? { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } } : { fileData: { mimeType: 'audio/wav', fileUri: uploaded.uri } },
             ],
           },
         ],
@@ -401,6 +419,83 @@ export async function transcribe(
   })
 }
 
+/** A wav bigger than this goes up through the Files API (inline requests are capped at 20 MB in all, base64 included). */
+export const INLINE_MAX_WAV_BYTES = 12 * 1024 * 1024
+
+/** Upload a recording (resumable upload, then wait until Google has processed it). Throws a GeminiError. */
+async function uploadAudio(deps: GeminiDeps, wav: Buffer, signal?: AbortSignal): Promise<{ uri: string; name: string }> {
+  const key = deps.key()
+  if (key === null || key.trim() === '') throw new GeminiError(401, 'No key')
+  const fetcher = deps.fetchImpl ?? fetch
+  const headers = { 'x-goog-api-key': key.trim() }
+  const guard = async <T>(run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run()
+    } catch (error) {
+      if (error instanceof GeminiError) throw error
+      if (signal?.aborted === true) throw new GeminiError(-1, 'cancelled')
+      throw new GeminiError(0, 'unreachable')
+    }
+  }
+  const start = await guard(() =>
+    fetcher(`${GEMINI_BASE}/upload/v1beta/files`, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'x-goog-upload-protocol': 'resumable',
+        'x-goog-upload-command': 'start',
+        'x-goog-upload-header-content-length': String(wav.length),
+        'x-goog-upload-header-content-type': 'audio/wav',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ file: { display_name: 'dictation' } }),
+      ...(signal === undefined ? {} : { signal }),
+    }),
+  )
+  const target = start.headers.get('x-goog-upload-url')
+  if (!start.ok || target === null) throw new GeminiError(start.ok ? 502 : start.status, 'upload not started')
+  const sent = await guard(() =>
+    fetcher(target, {
+      method: 'POST',
+      headers: { 'x-goog-upload-offset': '0', 'x-goog-upload-command': 'upload, finalize', 'content-length': String(wav.length) },
+      body: new Blob([wav as unknown as BlobPart]),
+      ...(signal === undefined ? {} : { signal }),
+    }),
+  )
+  const sentText = await sent.text().catch(() => '')
+  if (!sent.ok) throw new GeminiError(sent.status, errorMessage(sentText))
+  let file = fileOf(sentText)
+  for (let wait = 0; file !== null && file.state === 'PROCESSING' && wait < 30; wait += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    if (signal?.aborted === true) throw new GeminiError(-1, 'cancelled')
+    const poll = await guard(() => fetcher(`${GEMINI_BASE}/v1beta/${file?.name ?? ''}`, { headers, ...(signal === undefined ? {} : { signal }) }))
+    file = fileOf(await poll.text().catch(() => ''))
+  }
+  if (file === null || file.state === 'FAILED' || file.uri === '') throw new GeminiError(502, 'upload failed')
+  return { uri: file.uri, name: file.name }
+}
+
+function fileOf(text: string): { uri: string; name: string; state: string } | null {
+  try {
+    const parsed = JSON.parse(text) as { file?: { uri?: unknown; name?: unknown; state?: unknown }; uri?: unknown; name?: unknown; state?: unknown }
+    const f = parsed.file ?? parsed
+    if (typeof f.uri !== 'string' || typeof f.name !== 'string') return null
+    return { uri: f.uri, name: f.name, state: typeof f.state === 'string' ? f.state : 'ACTIVE' }
+  } catch {
+    return null
+  }
+}
+
+async function deleteFile(deps: GeminiDeps, name: string): Promise<void> {
+  try {
+    const key = deps.key()
+    if (key === null) return
+    await (deps.fetchImpl ?? fetch)(`${GEMINI_BASE}/v1beta/${name}`, { method: 'DELETE', headers: { 'x-goog-api-key': key.trim() } })
+  } catch {
+    // Google drops uploads after 48 hours anyway.
+  }
+}
+
 /** The Interactions API: the speech-to-text model, with its own transcription settings. */
 export const INTERACTIONS_URL = `${GEMINI_BASE}/v1beta/interactions`
 
@@ -410,6 +505,8 @@ export interface SpeechRequest {
   vocabulary?: string[]
   mode?: 'verbatim' | 'smart'
   signal?: AbortSignal
+  /** The recording as an uploaded file (Files API) instead of inline bytes, for one too long to go inline. */
+  fileUri?: string
 }
 
 /** The request body for one transcription (exported so a test can pin its shape). */
@@ -421,7 +518,7 @@ export function speechBody(model: string, wavBase64: string, options: SpeechRequ
   if (vocabulary.length > 0) config['custom_vocabulary'] = vocabulary
   return {
     model: `models/${model}`,
-    input: [{ type: 'user_input', content: [{ type: 'audio', data: wavBase64, mime_type: 'audio/wav' }] }],
+    input: [{ type: 'user_input', content: [options.fileUri !== undefined ? { type: 'audio', uri: options.fileUri, mime_type: 'audio/wav' } : { type: 'audio', data: wavBase64, mime_type: 'audio/wav' }] }],
     generation_config: { transcription_config: config },
   }
 }

@@ -105,5 +105,90 @@ export function respellNames(text: string, names: readonly string[]): { text: st
   }
   let out = text
   for (const replacement of replacements.reverse()) out = out.slice(0, replacement.start) + replacement.name + out.slice(replacement.end)
+  const inContext = respellInContext(out, candidates)
+  return { text: inContext.text, changed: [...changed, ...inContext.changed] }
+}
+
+/** Ordinary business words that mark a company name being talked about (language, not anyone's names). */
+const COMPANY_WORDS = new Set(['team', 'letterhead', 'platform', 'tender', 'tenders', 'website', 'site', 'company', 'project', 'projects', 'bid', 'bids', 'invoice', 'proposal', 'brand', 'logo', 'office', 'directors', 'staff', 'client', 'clients', 'app', 'module', 'email'])
+/** Words before or after a window that mean he is talking ABOUT the mistake, not making it ("it said started edge instead of"). */
+const META_WORDS = new Set(['said', 'says', 'saying', 'say', 'instead', 'spelled', 'spelt', 'spell', 'spelling', 'called', 'supposed', 'written', 'write', 'wrote', 'typed', 'types', 'heard', 'hear', 'transcribed', 'transcribes', 'wrong', 'misheard', 'confuses', 'confused', 'quote'])
+const NEAR = 4
+
+/** How far a heard first word is from the name's first word, with a trailing -ed or -a said away ("started", "strata"). */
+function firstWordDistance(heard: string, nameWord: string): number {
+  const a = soundKey(heard)
+  const b = soundKey(nameWord)
+  if (a === '' || b === '') return 99
+  const stripped = a.length > b.length + 1 ? a.replace(/(ed|a|s|ing)$/, '') : a
+  return Math.min(editDistance(a, b, 3), editDistance(stripped, b, 3))
+}
+
+/**
+ * Names of several words said wrong only in their FIRST word ("started edge", "that edge", "strata edge", "strat-ed edge"
+ * for "Strat Edge"), put right when the words around them show a company is being talked about. Built from the names list
+ * by sound, not from a map: the later words must be the name's own, the first must be close in sound, and either another
+ * word of a longer name that starts the same way ("Strat Edge Solutions", "Strat CMS" gives Solutions and CMS) or an
+ * ordinary business word (team, letterhead, tender) must stand next to it. Left alone: a window with no company next to it
+ * ("on that edge of the table"), talk ABOUT the mistake ("it said started edge instead of Strat Edge") and any sentence
+ * that already has the name spelled right.
+ */
+export function respellInContext(text: string, names: readonly string[]): { text: string; changed: Array<{ heard: string; name: string }> } {
+  const multi = [...new Set(names.map((name) => name.trim()).filter((name) => /\s/.test(name) && name.length >= 5))]
+  if (multi.length === 0 || text.trim() === '') return { text, changed: [] }
+  const words = tokens(text)
+  const lower = words.map((word) => word.word.toLowerCase().replace(/[-'’]+$/g, ''))
+  // The sentence of every word, to see whether the name is already there right.
+  const sentenceOf: number[] = []
+  let sentence = 0
+  words.forEach((word, index) => {
+    sentenceOf[index] = sentence
+    const next = words[index + 1]
+    if (next !== undefined && /[.!?]/.test(text.slice(word.end, next.start))) sentence += 1
+  })
+  const replacements: Array<{ start: number; end: number; name: string }> = []
+  const changed: Array<{ heard: string; name: string }> = []
+  const claimed = new Set<number>()
+  for (const name of multi.sort((a, b) => b.length - a.length)) {
+    const parts = name.split(/\s+/)
+    const head = parts[0] ?? ''
+    const rest = parts.slice(1).map((part) => part.toLowerCase())
+    // Words that make this name's company clear: the further words of longer names sharing its start, and the business words.
+    const company = new Set<string>(COMPANY_WORDS)
+    for (const other of multi) {
+      const otherParts = other.split(/\s+/)
+      if (other !== name && (otherParts[0] ?? '').toLowerCase() === head.toLowerCase()) for (const word of otherParts.slice(1)) company.add(word.toLowerCase())
+    }
+    for (const word of rest) company.delete(word)
+    for (let index = 0; index + parts.length <= words.length; index += 1) {
+      const window = words.slice(index, index + parts.length)
+      if (window.some((_, offset) => claimed.has(index + offset))) continue
+      const first = window[0]
+      const last = window[parts.length - 1]
+      if (first === undefined || last === undefined) continue
+      if (!/^[\p{L}\p{N}'’-]+(?:[ \t]+[\p{L}\p{N}'’-]+)*$/u.test(text.slice(first.start, last.end))) continue
+      if (lower.slice(index, index + parts.length).join(' ') === name.toLowerCase()) continue
+      // "strat-ed edge" is the head plus an extra bit: the first token alone is the heard head.
+      if (!rest.every((part, offset) => soundKey(lower[index + 1 + offset] ?? '') === soundKey(part))) continue
+      const heardHead = lower[index] ?? ''
+      if (firstWordDistance(heardHead, head) > 2 || heardHead === head.toLowerCase()) continue
+      // Talk about the mistake is left as said.
+      const before = lower.slice(Math.max(0, index - NEAR), index)
+      const after = lower.slice(index + parts.length, index + parts.length + NEAR)
+      if ([...before, ...after].some((word) => META_WORDS.has(word))) continue
+      // A sentence that already has the name spelled right is not touched.
+      const here = sentenceOf[index] ?? 0
+      const exact = lower.some((_, at) => sentenceOf[at] === here && lower.slice(at, at + parts.length).join(' ') === name.toLowerCase())
+      if (exact) continue
+      const around = [...lower.slice(Math.max(0, index - NEAR), index), ...lower.slice(index + parts.length, index + parts.length + NEAR)]
+      // Three or more words matching ("strat-ed edge solutions") are their own evidence; two need a company word beside them.
+      if (parts.length < 3 && !around.some((word) => company.has(word))) continue
+      replacements.push({ start: first.start, end: last.end, name })
+      changed.push({ heard: text.slice(first.start, last.end), name })
+      for (let offset = 0; offset < parts.length; offset += 1) claimed.add(index + offset)
+    }
+  }
+  let out = text
+  for (const replacement of replacements.sort((a, b) => b.start - a.start)) out = out.slice(0, replacement.start) + replacement.name + out.slice(replacement.end)
   return { text: out, changed }
 }
