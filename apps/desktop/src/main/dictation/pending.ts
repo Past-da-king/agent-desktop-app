@@ -25,6 +25,9 @@ export interface TakeRecord {
   /** The live caption that was sent with the message. */
   live: string
   state: TakeState
+  /** Names and languages the device sending the take wants in the pass (merged with the computer's own). */
+  names?: string[]
+  languages?: string[]
   /** The clean text, once the pass finished. */
   text?: string
   error?: string
@@ -50,7 +53,7 @@ export function holdCapMs(bytes: number): number {
 export interface PendingDeps {
   dir: string
   /** The one whole-audio pass (dictation `batch`: names spelled, languages told). */
-  batch: (pcm: Buffer, signal: AbortSignal) => Promise<BatchResult>
+  batch: (pcm: Buffer, signal: AbortSignal, extra: { names: string[]; languages: string[] }) => Promise<BatchResult>
   /** The message in the chat becomes the clean text, in place (keyed by the take's id). */
   replace: (take: TakeRecord, text: string) => Promise<void> | void
   log: (message: string, fields?: Record<string, string | number | boolean>) => void
@@ -68,16 +71,32 @@ export class PendingTakes {
   }
 
   /** Take a take; resolves once it is safely on disk. The pass runs in the background. */
-  async accept(input: { id: string; chat: string | null; live: string; pcm: Buffer }): Promise<{ accepted: boolean; duplicate: boolean }> {
+  async accept(input: { id: string; chat: string | null; live: string; pcm: Buffer; names?: string[]; languages?: string[] }): Promise<{ accepted: boolean; duplicate: boolean; state: TakeState }> {
     if (!ID_PATTERN.test(input.id)) throw new Error('id must be a recording id')
     const have = (await this.load(input.id)) ?? null
-    if (have !== null) return { accepted: true, duplicate: true }
-    const record: TakeRecord = { id: input.id, chat: input.chat, live: input.live, state: 'queued', acceptedAt: (this.deps.now ?? Date.now)() }
+    if (have !== null) {
+      // The same take again: never a second pass, except a failed one, which the device's resend runs again.
+      if (have.state === 'failed') {
+        await fsp.writeFile(this.pcmFile(input.id), input.pcm)
+        await this.retry(input.id)
+        return { accepted: true, duplicate: true, state: 'queued' }
+      }
+      return { accepted: true, duplicate: true, state: have.state }
+    }
+    const record: TakeRecord = {
+      id: input.id,
+      chat: input.chat,
+      live: input.live,
+      state: 'queued',
+      ...(input.names === undefined ? {} : { names: input.names.slice(0, 100) }),
+      ...(input.languages === undefined ? {} : { languages: input.languages.slice(0, 6) }),
+      acceptedAt: (this.deps.now ?? Date.now)(),
+    }
     await fsp.mkdir(this.deps.dir, { recursive: true })
     await fsp.writeFile(this.pcmFile(input.id), input.pcm)
     await this.save(record)
     this.start(record.id)
-    return { accepted: true, duplicate: false }
+    return { accepted: true, duplicate: false, state: 'queued' }
   }
 
   /** At start: every take that was waiting or running when the app closed carries on. */
@@ -118,15 +137,17 @@ export class PendingTakes {
    * What the agent reads for this take: waits for the clean text, at most `capMs` (default: the take's own cap). A take
    * that is already done answers at once; one that failed or timed out answers with the caption and a note.
    */
-  async settled(id: string, capMs?: number): Promise<Settled | null> {
+  async settled(id: string, capMs?: number, live = ''): Promise<Settled | null> {
     const record = await this.load(id)
-    if (record === null) return null
-    if (record.state === 'done') return { id, text: record.text ?? record.live, clean: true, note: null }
-    if (record.state === 'failed') return { id, text: record.live, clean: false, note: FAILED_NOTE }
-    const cap = capMs ?? holdCapMs((await this.size(id)) ?? 0)
+    if (record !== null && record.state === 'done') return { id, text: record.text ?? record.live, clean: true, note: null }
+    if (record !== null && record.state === 'failed') return { id, text: record.live, clean: false, note: FAILED_NOTE }
+    // The audio may still be on its way (the message is in the chat before the device uploads the take): wait for it
+    // under the longest cap; once it is here the cap is the take's own.
+    const cap = capMs ?? (record === null ? 100_000 : holdCapMs((await this.size(id)) ?? 0))
+    const fallback = record?.live ?? live
     return new Promise<Settled>((resolve) => {
       const list = this.waiters.get(id) ?? []
-      const timer = setTimeout(() => finish({ id, text: record.live, clean: false, note: FAILED_NOTE }), cap)
+      const timer = setTimeout(() => finish({ id, text: fallback, clean: false, note: FAILED_NOTE }), cap)
       const finish = (settled: Settled): void => {
         clearTimeout(timer)
         const waiting = this.waiters.get(id) ?? []
@@ -135,6 +156,11 @@ export class PendingTakes {
       }
       list.push(finish)
       this.waiters.set(id, list)
+      // It may have finished between the look above and now.
+      void this.load(id).then((again) => {
+        if (again?.state === 'done') finish({ id, text: again.text ?? again.live, clean: true, note: null })
+        else if (again?.state === 'failed') finish({ id, text: again.live, clean: false, note: FAILED_NOTE })
+      })
     })
   }
 
@@ -153,7 +179,7 @@ export class PendingTakes {
     try {
       const pcm = await fsp.readFile(this.pcmFile(id))
       const limit = holdCapMs(pcm.length)
-      result = await this.deps.batch(pcm, AbortSignal.timeout(limit))
+      result = await this.deps.batch(pcm, AbortSignal.timeout(limit), { names: record.names ?? [], languages: record.languages ?? [] })
     } catch (error) {
       result = { ok: false, error: error instanceof Error ? error.message : 'Could not transcribe that.' }
     }

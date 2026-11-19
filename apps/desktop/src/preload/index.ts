@@ -45,6 +45,7 @@ import type {
   SystemInfo,
   Unsubscribe,
   VoiceResult,
+  VoiceTakeAck,
   WorkerEvent,
   WorkerInfo,
   WorkerLogLine,
@@ -280,6 +281,7 @@ const api: AgentApi = {
     recordStart: (info) => call<string | null>(CHANNELS.voice.recordStart, info),
     recordChunk: (id, pcm) => call<void>(CHANNELS.voice.recordChunk, id, pcm),
     recordEnd: (id, outcome) => call<void>(CHANNELS.voice.recordEnd, id, outcome),
+    takeAudio: (input) => call<VoiceTakeAck>(CHANNELS.voice.takeAudio, input),
   },
 
   hotkeys: {

@@ -345,7 +345,7 @@ export async function transcribe(
   deps: GeminiDeps,
   pcm: Buffer,
   choice: ModelChoice,
-  options: { names?: string[]; languageCodes?: string[]; mode?: 'verbatim' | 'smart'; signal?: AbortSignal } = {},
+  options: { names?: string[]; languageCodes?: string[]; mode?: 'verbatim' | 'smart'; signal?: AbortSignal; model?: string } = {},
 ): Promise<string> {
   if (pcm.length === 0) return ''
   const wav = wavFromPcm(pcm, INPUT_RATE)
@@ -364,12 +364,16 @@ async function transcribeRecording(
   wav: Buffer,
   uploaded: { uri: string; name: string } | null,
   choice: ModelChoice,
-  options: { names?: string[]; languageCodes?: string[]; mode?: 'verbatim' | 'smart'; signal?: AbortSignal },
+  options: { names?: string[]; languageCodes?: string[]; mode?: 'verbatim' | 'smart'; signal?: AbortSignal; model?: string },
 ): Promise<string> {
   const vocabulary = cleanTerms(options.names ?? [])
   const languageCodes = (options.languageCodes ?? []).map((code) => code.trim()).filter((code) => code !== '').slice(0, 6)
   // 1. The speech model, when the key can see it: languages, vocabulary and the mode go in the request itself.
-  for (const model of preferring(choice.transcribe, TRANSCRIBE_MODELS).filter((model) => /transcribe/.test(model) && !/live/.test(model))) {
+  // A model chosen in settings (`options.model`): a speech model leads the speech list; any other model skips it and reads the
+  // file with the prompt below (the same one pass, with the same names and languages).
+  const chosen = (options.model ?? '').trim()
+  const speechModels = chosen !== '' && !/transcribe/.test(chosen) ? [] : preferring(chosen !== '' ? chosen : choice.transcribe, TRANSCRIBE_MODELS).filter((model) => /transcribe/.test(model) && !/live/.test(model))
+  for (const model of speechModels) {
     try {
       const text = await transcribeWithSpeechModel(deps, model, uploaded === null ? wav.toString('base64') : '', {
         ...(uploaded === null ? {} : { fileUri: uploaded.uri }),
@@ -391,8 +395,26 @@ async function transcribeRecording(
     (names.length === 0 ? '' : ` Names the speaker may say, spelled as they should be written: ${names.join(', ')}. Use this list only to spell a name that is clearly spoken; never write a name that is not said.`) +
     (languageCodes.length === 0 ? '' : ` He speaks ${languageCodes.join(', ')}, often mixing languages inside one sentence (English and isiZulu especially). Write exactly what was said, each word in the language he said it in; never translate and never leave a language out.`) +
     ' Write nothing for silence, breathing or noise.'
-  const general = preferring(choice.transcribe, [...TRANSCRIBE_FALLBACKS, ...TRANSCRIBE_MODELS]).filter((model) => !/transcribe/.test(model))
-  return eachModel(general, [404, 429, 503], async (model) => {
+  const general = preferring(chosen !== '' && !/transcribe/.test(chosen) ? chosen : choice.transcribe, [...TRANSCRIBE_FALLBACKS, ...TRANSCRIBE_MODELS]).filter((model) => !/transcribe/.test(model))
+  try {
+    return await generalPass(general)
+  } catch (error) {
+    // The chosen general model could not (quota, busy): the speech model gets the same audio before giving up.
+    if (options.signal?.aborted === true || speechModels.length > 0) throw error
+    const fallback = TRANSCRIBE_MODELS.filter((model) => /transcribe/.test(model) && !/live/.test(model))
+    for (const model of fallback) {
+      try {
+        const text = await transcribeWithSpeechModel(deps, model, uploaded === null ? wav.toString('base64') : '', { ...(uploaded === null ? {} : { fileUri: uploaded.uri }), languageCodes, vocabulary, mode: options.mode ?? 'verbatim', ...(options.signal === undefined ? {} : { signal: options.signal }) })
+        if (text !== '') return text
+      } catch {
+        // The next one, then the first error is the answer.
+      }
+    }
+    throw error
+  }
+
+  function generalPass(models: string[]): Promise<string> {
+    return eachModel(models, [404, 429, 503], async (model) => {
     const body = await post(
       deps,
       model,
@@ -416,7 +438,8 @@ async function transcribeRecording(
       options.signal,
     )
     return textOf(body)
-  })
+    })
+  }
 }
 
 /** A wav bigger than this goes up through the Files API (inline requests are capped at 20 MB in all, base64 included). */

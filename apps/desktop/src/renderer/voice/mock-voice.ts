@@ -173,6 +173,9 @@ export function mockVoice(deps: MockVoiceDeps): VoiceApi {
     async recordChunk() {
       return undefined
     },
+    async takeAudio() {
+      return { ok: true, state: 'done' }
+    },
     async recordEnd() {
       return undefined
     },

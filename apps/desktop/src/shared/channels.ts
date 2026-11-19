@@ -149,6 +149,7 @@ export const CHANNELS = {
     recordStart: 'agent:voice.recordStart',
     recordChunk: 'agent:voice.recordChunk',
     recordEnd: 'agent:voice.recordEnd',
+    takeAudio: 'agent:voice.takeAudio',
   },
   hotkeys: {
     status: 'agent:hotkeys.status',

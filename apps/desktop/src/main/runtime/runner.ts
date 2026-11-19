@@ -60,6 +60,7 @@ import { buildSystemPrompt, type ProjectContext } from './prompt'
 import type { CliId } from './cli-agent'
 import { quietTapNote } from './openui-prompt'
 import { prepareMessage, type PreparedMessage } from './attachment-text'
+import type { PendingTakes } from '../dictation/pending'
 import { branchChat, chatOf, chatTag, handoffText, threadFor } from './chat-lines'
 import {
   CLASSIFIER_SYSTEM,
@@ -521,6 +522,82 @@ export class Runner {
     // His own message joining running work carries where he is too (it is read at once, mid-step).
     const presence = via === undefined ? await this.presenceNote(line.chat, row.meta) : ''
     await this.routeBusy(line, row.id, clean, prepared, attachments.length > 0, presence, sinceLastMs)
+  }
+
+  // ---- instant send (19 Nov 2026) ----------------------------------------------------------------------------------
+
+  private takes: PendingTakes | null = null
+  /** take id -> the message row it belongs to. */
+  private readonly takeRows = new Map<string, string>()
+
+  /** The queue that writes dictated takes down (dictation/pending.ts). Without it a dictated message is sent as it is. */
+  setTakes(takes: PendingTakes): void {
+    this.takes = takes
+  }
+
+  /**
+   * A dictated message: it is in the chat at once with its live caption, marked pending (meta.dictation), and he never
+   * waits. The agent's turn waits for the whole-take text (at most the take's cap), the row is replaced in place with it,
+   * and only then does the agent read it. If the pass failed or timed out the agent gets the caption plus a short note
+   * and the row says so (meta.dictation.failed), which shows Retry.
+   */
+  async sendDictated(text: string, attachments: Attachment[], chat: string = MAIN_CHAT, origin: MessageOrigin | JsonObject | undefined, take: string): Promise<void> {
+    const takes = this.takes
+    if (takes === null) return this.send(text, attachments, chat, origin)
+    if (attachments.length > 0) this.allowFiles(attachments.map((attachment) => attachment.path))
+    const caption = text.trim()
+    const meta: JsonObject = {
+      attachments: attachments as unknown as JsonObject[],
+      ...chatTag(chat),
+      ...this.originMeta(origin as JsonObject | undefined),
+      dictation: { id: take, pending: true },
+    }
+    const row = await this.addUserItem(chat, caption === '' ? '…' : caption, JSON.stringify(meta))
+    this.takeRows.set(take, row.id)
+    const line = this.line(chat)
+    line.lastUserAt = this.now()
+    void this.afterTake(line, row.id, take, caption, attachments)
+  }
+
+  private async afterTake(line: ChatLine, rowId: string, take: string, caption: string, attachments: Attachment[]): Promise<void> {
+    const takes = this.takes
+    if (takes === null) return
+    const settled = await takes.settled(take, undefined, caption).catch(() => null)
+    const clean = settled?.clean === true
+    const said = (settled?.text ?? caption).trim() === '' ? caption : (settled?.text ?? caption)
+    await this.refineDictated(take, said, clean).catch(() => undefined)
+    if (this.disposing) return
+    const forAgent = settled?.note ? `${said}\n(${settled.note})` : said
+    const prepared = await prepareMessage(forAgent, attachments)
+    if (!line.running) {
+      this.budget?.reset()
+      line.goal = said
+      await this.begin(line, prepared.text, prepared.images, null)
+      return
+    }
+    await this.routeBusy(line, rowId, said, prepared, attachments.length > 0, '', 0)
+  }
+
+  /** The row of a dictated message becomes `text`, in place; `clean` false marks the take failed (Retry). */
+  async refineDictated(take: string, text: string, clean: boolean, chat: string | null = null): Promise<void> {
+    const rowId = this.takeRows.get(take) ?? (await this.rowOfTake(take, chat ?? MAIN_CHAT))
+    if (rowId === null) return
+    const row = await this.store.get('chat_item', rowId)
+    if (row === null) return
+    const meta = parseMeta(row.meta)
+    meta['dictation'] = { id: take, pending: false, ...(clean ? { final: true } : { failed: true }) }
+    await this.store.upsert('chat_item', { id: row.id, kind: row.kind, text: text === '' ? row.text : text, meta: JSON.stringify(meta) })
+    this.emitFor(chatOf(row), { type: 'chat_changed' })
+  }
+
+  private async rowOfTake(take: string, chat: string): Promise<string | null> {
+    // After a restart the map is empty: look at that chat's latest messages of his, by index.
+    const rows = this.store.listWhere === undefined ? [] : await this.store.listWhere('chat_item', { chat, kind: 'user', limit: 60 })
+    for (const row of rows) {
+      const dictation = parseMeta(row.meta)['dictation'] as { id?: unknown } | undefined
+      if (dictation?.id === take) return row.id
+    }
+    return null
   }
 
   /** The presence note for one of his messages (already stored), or '' when there is none. */

@@ -124,6 +124,8 @@ export interface Settings {
   hasVoiceKey: boolean
   /** The Gemini prebuilt voice the call and read-aloud use (see VOICES). */
   voiceName: string
+  /** Which Gemini model writes a dictated take down (one pass over the whole audio; see DICTATION_MODELS). */
+  dictationModel: string
   /** Speak each finished agent reply aloud with Gemini TTS. */
   speakReplies: boolean
   /**
@@ -294,6 +296,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shell: 'ask',
   hasVoiceKey: false,
   voiceName: 'Kore',
+  dictationModel: 'gemini-3.1-flash-lite',
   speakReplies: false,
   recordingAudioKeep: 'today',
   decisionsEnabled: false,
@@ -1069,6 +1072,11 @@ export interface ListWhere {
 export interface ChatSendOptions {
   /** The chat the person replied from on a project's card: the project's answer is shown there too. */
   replyIn?: string
+  /**
+   * Instant send: the message is a dictated one. `handOff: true` ends the mic going into this chat's box now and takes its
+   * audio (the desktop); `id` + `caption` is a linked device's message whose audio follows (VoiceApi.takeAudio).
+   */
+  dictation?: { handOff?: boolean; id?: string; caption?: string }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1625,6 +1633,21 @@ export interface VoiceOption {
   feel: string
 }
 
+/** A Gemini model that can write a dictated take down, with what it costs (Google's pricing page, 19 Nov 2026). */
+export interface DictationModelOption {
+  id: string
+  label: string
+  /** About what one minute of speech costs on the paid tier, in US cents. */
+  centsPerMinute: number
+}
+
+export const DICTATION_MODELS: DictationModelOption[] = [
+  { id: 'gemini-3.5-transcribe', label: 'Gemini 3.5 Transcribe (made for speech)', centsPerMinute: 0.54 },
+  { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite', centsPerMinute: 0.11 },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', centsPerMinute: 0.1 },
+  { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', centsPerMinute: 0.8 },
+]
+
 /** Gemini's prebuilt voices, the ones worth offering first. */
 export const VOICES: VoiceOption[] = [
   { id: 'Kore', feel: 'Firm' },
@@ -1640,6 +1663,27 @@ export const VOICES: VoiceOption[] = [
   { id: 'Vindemiatrix', feel: 'Gentle' },
   { id: 'Algenib', feel: 'Gravelly' },
 ]
+
+/** A dictated message's audio, by recording id (VoiceApi.takeAudio). `audio` is the whole take, 16 kHz mono PCM16. */
+export interface VoiceTakeInput {
+  id: string
+  chat?: string | null
+  audio?: Uint8Array
+  /** The caption that went with the message; used when the pass cannot be had. */
+  caption?: string
+  retry?: boolean
+  /** Names and languages the device wants in the pass, merged with the computer's own. */
+  names?: string[]
+  languages?: string[]
+}
+
+export interface VoiceTakeAck {
+  ok: boolean
+  /** queued, running, done or failed: where the take is. */
+  state?: string
+  duplicate?: boolean
+  error?: string
+}
 
 export type VoiceResult<T> = ({ ok: true } & T) | { ok: false; error: string }
 
@@ -1778,6 +1822,13 @@ export interface VoiceApi {
   recordChunk(id: string, pcm: Uint8Array): Promise<void>
   /** The recording ended: its words, or why there are none (the audio stays either way). */
   recordEnd(id: string, outcome: { text?: string; error?: string; cancelled?: boolean }): Promise<void>
+  /**
+   * Instant send (19 Nov 2026): the audio of a dictated message whose row is already in the chat (chat.send with
+   * `dictation: {id, pending: true, caption}`). The computer runs ONE pass over it, replaces the row in place and frees
+   * the agent's turn. Same `id` again is the same take (idempotent); with `retry: true` and no audio a failed take is run
+   * again from the audio the computer kept.
+   */
+  takeAudio(input: VoiceTakeInput): Promise<VoiceTakeAck>
 }
 
 export type Unsubscribe = () => void

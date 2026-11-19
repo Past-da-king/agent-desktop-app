@@ -106,11 +106,15 @@ export interface DictationDeps {
 
 /** Where a dictation's audio and words go while it happens (a recordings/store.ts handle). */
 export interface RecordingSink {
+  /** The recording's id on disk (a take handed off for instant send is keyed by it). */
+  readonly id?: string
   audio(pcm: Buffer): void
   words(text: string, interim?: string): void
   stop(ended?: 'done' | 'cancelled' | 'failed'): Promise<void>
   final(text: string): Promise<void>
   failed(error: string, cancelled?: boolean): Promise<void>
+  /** The words reached where they were going (here: the chat), so the recording is not offered back. */
+  delivered?(state: 'confirmed' | 'dismissed'): Promise<void>
 }
 
 type State = 'idle' | 'starting' | 'listening' | 'finishing' | 'cleaning' | 'typing'
@@ -292,6 +296,31 @@ export class DictationController {
   stop(): void {
     if (this.state === 'starting' || this.state === 'listening') void this.finish()
     else if (this.canRetry) void this.retry()
+  }
+
+  /**
+   * Instant send (19 Nov 2026): he pressed Send while the mic was on or its words were still being written down. The
+   * dictation ends NOW with nothing typed: its audio and what was heard so far go to the caller, who sends the message
+   * with that caption and has the whole take written down in the background. Null when there is nothing to hand over.
+   */
+  handOff(): { id: string; live: string; pcm: Buffer; rec: RecordingSink | null } | null {
+    const session = this.session
+    if (session === null || (this.state !== 'starting' && this.state !== 'listening' && this.state !== 'finishing' && this.state !== 'cleaning')) return null
+    if (session.bytes === 0) return null
+    const fix = this.deps.previewFix ?? ((value: string): string => value)
+    const live = (session.text !== '' ? session.text : fix(session.transcriber.text())).trim()
+    const pcm = Buffer.concat(session.chunks)
+    const id = session.rec?.id ?? `d-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
+    session.abort?.abort(new Error('Handed off.'))
+    this.log('Dictation handed off for instant send', { bytes: pcm.length })
+    this.end(session)
+    this.clearHide()
+    this.releaseDismiss()
+    this.deps.pill.hide()
+    this.view({ ...this.lastView, phase: 'hidden', canRetry: false })
+    // The message is in the chat: this recording is not something to offer back.
+    void session.rec?.delivered?.('confirmed')
+    return { id, live, pcm, rec: session.rec }
   }
 
   /** Transcribe the kept recording again, and type it where the first try would have. */

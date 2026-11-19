@@ -104,6 +104,11 @@ export type Broadcast = (channel: string, payload?: unknown) => void
 export interface ChatRunner {
   /** `origin`: the device the message came from (devices/origin.ts), kept on the user row as meta.origin. */
   send(text: string, attachments?: Attachment[], chat?: string, origin?: MessageOrigin): Promise<void>
+  /**
+   * Instant send (runtime/runner.ts): the message is in the chat NOW with `text` (the live caption) marked pending; the
+   * agent's turn waits for the take `id` to be written down (dictation/pending.ts), at most its cap.
+   */
+  sendDictated?(text: string, attachments: Attachment[], chat: string | undefined, origin: MessageOrigin | undefined, id: string): Promise<void>
   stop(chat?: string): void
   state(chat?: string): RunState
   /** Several chats at once: every chat with something going on. */
@@ -163,7 +168,17 @@ export interface BrowserControl {
 
 import { phoneDictationNote, type Recordings } from './recordings/store'
 
+/** Instant send, wired in index.ts (dictation/pending.ts and the dictation controller). */
+export interface InstantSendDeps {
+  /** End the dictation going into `chat`'s box now; its audio and live caption, or null. */
+  handOff(chat: string): { id: string; live: string; pcm: Buffer; final: (text: string) => void } | null
+  accept(input: { id: string; chat: string | null; live: string; pcm: Buffer }): Promise<unknown>
+  /** Remember what to do with the whole-take text when it lands (the kept recording's transcript). */
+  keepFinal(id: string, final: (text: string) => void): void
+}
+
 export interface IpcDeps {
+  instant?: InstantSendDeps
   /** His recordings on disk; a linked phone's dictations land here too. */
   recordings?: Recordings
   store: Store
@@ -223,6 +238,28 @@ const EMPTY_BROWSER: BrowserState = {
 export function registerIpc(deps: IpcDeps): () => void {
   const { store, settings, secrets, account, ipcMain, windows } = deps
   // A message that names a project with '@' goes to that project's chat, from the window and every linked device alike.
+  /** `dictation` in the send options: a message whose words are still being written down from its audio (instant send). */
+  const sendMaybeDictated = async (text: string, attachments: Attachment[], target: string | undefined, origin: MessageOrigin | undefined, rawOptions: unknown): Promise<boolean> => {
+    const options = typeof rawOptions === 'object' && rawOptions !== null ? (rawOptions as Record<string, unknown>)['dictation'] : undefined
+    if (typeof options !== 'object' || options === null || deps.chat.sendDictated === undefined || deps.instant === undefined) return false
+    const dictation = options as { handOff?: unknown; id?: unknown; caption?: unknown }
+    if (dictation.handOff === true) {
+      // The desktop's own box or shortcut: stop the mic now and take its audio; no waiting for the words.
+      const taken = deps.instant.handOff(target ?? 'main')
+      if (taken === null) return false
+      await deps.instant.accept({ id: taken.id, chat: target ?? null, live: taken.live, pcm: taken.pcm })
+      deps.instant.keepFinal(taken.id, taken.final)
+      const words = [text.trim(), taken.live].filter((part) => part !== '').join(' ')
+      await deps.chat.sendDictated(words, [...attachments], target, origin, taken.id)
+      return true
+    }
+    // A linked phone: the message goes in with its caption and the audio follows (voice.takeAudio) under the same id.
+    if (typeof dictation.id === 'string' && /^[\w:-]{1,64}$/.test(dictation.id)) {
+      await deps.chat.sendDictated(text, [...attachments], target, origin, dictation.id)
+      return true
+    }
+    return false
+  }
   const mentionDeps = { store, state: (each: string) => deps.chat.state(each) }
   const chat = withMentions(deps.chat, mentionDeps)
   const send: Broadcast = deps.broadcast ?? (() => undefined)
@@ -488,6 +525,7 @@ export function registerIpc(deps: IpcDeps): () => void {
       const routed = await replyToProjectChat(mentionDeps, text, attachments, target, replyIn, (words, files, to) => (origin !== undefined ? raw.send(words, files, to, origin) : raw.send(words, files, to)))
       if (routed) return
     }
+    if (await sendMaybeDictated(text, attachments, target, origin, rawOptions)) return
     if (origin !== undefined) await chat.send(text, attachments, target, origin)
     else if (target === undefined) await chat.send(text, attachments)
     else await chat.send(text, attachments, target)
@@ -510,6 +548,7 @@ export function registerIpc(deps: IpcDeps): () => void {
           const routed = await replyToProjectChat(mentionDeps, text, attachments, target, replyIn, (words, files, to) => (origin !== undefined ? raw.send(words, files, to, origin) : raw.send(words, files, to)))
           if (routed) return
         }
+        if (await sendMaybeDictated(text, attachments, target, origin, input)) return
         await chat.send(text, attachments, target, origin)
       },
     )

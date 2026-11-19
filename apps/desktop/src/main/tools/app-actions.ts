@@ -228,6 +228,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'voice.recordStart': no('Start keeping a recording on disk', MICROPHONE),
   'voice.recordChunk': no('Write recorded audio to disk', MICROPHONE),
   'voice.recordEnd': no('Finish a kept recording', MICROPHONE),
+  'voice.takeAudio': no('Hand over the audio of a dictated message to be written down', MICROPHONE),
   // Hotkeys and dictation
   'hotkeys.status': free('Hotkeys and whether each works (Settings > Hotkeys)'),
   'hotkeys.pause': free('Pause or resume the hotkeys', 'paused'),

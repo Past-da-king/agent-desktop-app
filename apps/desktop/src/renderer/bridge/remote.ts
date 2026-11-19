@@ -463,6 +463,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
       recordStart: rpc('voice.recordStart'),
       recordChunk: rpc('voice.recordChunk'),
       recordEnd: rpc('voice.recordEnd'),
+      takeAudio: rpc('voice.takeAudio'),
     },
 
     hotkeys: { status: async () => [], pause: async () => undefined },

@@ -172,6 +172,7 @@ export class VoiceService {
           names: options.names ?? [],
           ...(options.languageCodes === undefined ? {} : { languageCodes: options.languageCodes }),
           ...(options.mode === undefined ? {} : { mode: options.mode }),
+          model: this.deps.settings.get().dictationModel,
           signal,
         }),
       }

@@ -170,3 +170,44 @@ describe('names ranked by how often memory links them', () => {
     expect(vocabularyFrom(rows).names.slice(0, 2)).toEqual(['Strat Edge', 'Rarely Used'])
   })
 })
+
+describe('multi-word names and their stems reach the pass', () => {
+  it('Strat Edge Intelligence is in the list, and the stem Strat Edge shared by longer names is added', () => {
+    const rows = ['Strat Edge Intelligence', 'Strat Edge Solutions', 'Strat Edge ID', 'LondaCorp'].map((title) => row(title, { kind: 'organisation' }))
+    const names = vocabularyFrom(rows).names
+    expect(names).toEqual(expect.arrayContaining(['Strat Edge Intelligence', 'Strat Edge Solutions', 'Strat Edge ID', 'Strat Edge', 'LondaCorp']))
+    expect(vocabularyFrom([row('Strat Edge Intelligence', { kind: 'organisation' })]).names).toEqual(['Strat Edge Intelligence'])
+  })
+})
+
+describe('the dictation model is a setting', () => {
+  function fakeFetch(handler: (url: string) => Response) {
+    const seen: string[] = []
+    const impl = (async (url: string | URL) => {
+      seen.push(String(url))
+      return handler(String(url))
+    }) as unknown as typeof fetch
+    return { impl, seen }
+  }
+  const reply = (text: string): Response => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 })
+
+  it('a general model chosen in settings reads the whole file itself, with the names and languages, one request', async () => {
+    const fetch = fakeFetch(() => reply('Sawubona, Strat Edge.'))
+    const text = await transcribe({ key: () => 'k', fetchImpl: fetch.impl }, pcmOf(188), DEFAULT_CHOICE, { names: NAMES, languageCodes: ['en-ZA', 'zu-ZA'], model: 'gemini-3.1-flash-lite' })
+    expect(text).toBe('Sawubona, Strat Edge.')
+    expect(fetch.seen).toHaveLength(1)
+    expect(fetch.seen[0]).toContain('/models/gemini-3.1-flash-lite:generateContent')
+  })
+
+  it('when that model is out of quota the speech model gets the same audio', async () => {
+    const fetch = fakeFetch((url) => (url.endsWith('/interactions') ? new Response(JSON.stringify({ output_text: 'from the speech model' }), { status: 200 }) : new Response('{}', { status: 429 })))
+    const text = await transcribe({ key: () => 'k', fetchImpl: fetch.impl }, pcmOf(30), DEFAULT_CHOICE, { names: NAMES, model: 'gemini-3.1-flash-lite' })
+    expect(text).toBe('from the speech model')
+  })
+
+  it('a speech model chosen in settings uses the Interactions request as before', async () => {
+    const fetch = fakeFetch(() => new Response(JSON.stringify({ output_text: 'speech' }), { status: 200 }))
+    await transcribe({ key: () => 'k', fetchImpl: fetch.impl }, pcmOf(30), DEFAULT_CHOICE, { names: NAMES, model: 'gemini-3.5-transcribe' })
+    expect(fetch.seen).toEqual([expect.stringMatching(/\/interactions$/)])
+  })
+})
