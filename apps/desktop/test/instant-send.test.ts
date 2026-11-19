@@ -37,7 +37,14 @@ async function rig(batch: ConstructorParameters<typeof PendingTakes>[0]['batch']
   })
   const dir = mkdtempSync(join(tmpdir(), 'takes-'))
   dirs.push(dir)
-  const takes = new PendingTakes({ dir, batch, replace: (take, text) => runner.refineDictated(take.id, text, true), log: () => undefined })
+  const takes = new PendingTakes({
+    dir,
+    batch,
+    replace: (take, text) => runner.refineDictated(take.id, text, true),
+    retrying: (take) => runner.markRefining(take.id, take.chat),
+    retryFailed: (take) => runner.refineDictated(take.id, '', false, take.chat),
+    log: () => undefined,
+  })
   runner.setTakes(takes)
   const close = async (): Promise<void> => {
     runner.dispose()
@@ -92,6 +99,31 @@ describe('instant send: the runner', () => {
       await close()
     }
   }, 15_000)
+
+  it('a Retry shows Refining again, and a Retry that fails again goes back to Sent as heard', async () => {
+    let release: (value: { ok: false; error: string }) => void = () => undefined
+    let calls = 0
+    const { db, runner, takes, close } = await rig(async () => {
+      calls += 1
+      return calls === 1 ? { ok: false, error: 'busy' } : new Promise<{ ok: false; error: string }>((resolve) => (release = resolve))
+    })
+    try {
+      await runner.sendDictated('caption', [], MAIN_CHAT, undefined, 'take4')
+      await takes.accept({ id: 'take4', chat: MAIN_CHAT, live: 'caption', pcm })
+      for (let i = 0; i < 200 && !JSON.parse((await userRow(db)).meta).dictation?.failed; i += 1) await sleep(20)
+      expect(JSON.parse((await userRow(db)).meta).dictation).toEqual({ id: 'take4', pending: false, failed: true })
+      expect(await takes.retry('take4')).toBe(true)
+      expect(JSON.parse((await userRow(db)).meta).dictation).toEqual({ id: 'take4', pending: true })
+      expect((await userRow(db)).text).toBe('caption')
+      for (let i = 0; i < 200 && calls < 2; i += 1) await sleep(10)
+      release({ ok: false, error: 'busy again' })
+      for (let i = 0; i < 200 && JSON.parse((await userRow(db)).meta).dictation?.pending; i += 1) await sleep(20)
+      expect(JSON.parse((await userRow(db)).meta).dictation).toEqual({ id: 'take4', pending: false, failed: true })
+      expect((await userRow(db)).text).toBe('caption')
+    } finally {
+      await close()
+    }
+  }, 20_000)
 
   it('a retry that works replaces the row in place', async () => {
     let ok = false

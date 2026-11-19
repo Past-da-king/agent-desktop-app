@@ -590,6 +590,18 @@ export class Runner {
     this.emitFor(chatOf(row), { type: 'chat_changed' })
   }
 
+  /** A Retry started: the row of a dictated message shows Refining again; its words stay as they are until the pass answers. */
+  async markRefining(take: string, chat: string | null = null): Promise<void> {
+    const rowId = this.takeRows.get(take) ?? (await this.rowOfTake(take, chat ?? MAIN_CHAT))
+    if (rowId === null) return
+    const row = await this.store.get('chat_item', rowId)
+    if (row === null) return
+    const meta = parseMeta(row.meta)
+    meta['dictation'] = { id: take, pending: true }
+    await this.store.upsert('chat_item', { id: row.id, kind: row.kind, text: row.text, meta: JSON.stringify(meta) })
+    this.emitFor(chatOf(row), { type: 'chat_changed' })
+  }
+
   private async rowOfTake(take: string, chat: string): Promise<string | null> {
     // After a restart the map is empty: look at that chat's latest messages of his, by index.
     const rows = this.store.listWhere === undefined ? [] : await this.store.listWhere('chat_item', { chat, kind: 'user', limit: 60 })

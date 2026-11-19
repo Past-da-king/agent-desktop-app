@@ -2012,6 +2012,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
         takeFinals.get(take.id)?.(text)
         takeFinals.delete(take.id)
       },
+      retrying: (take) => runner?.markRefining(take.id, take.chat),
+      retryFailed: (take) => runner?.refineDictated(take.id, '', false, take.chat),
       log: (message, fields) => logger.info(message, fields),
     })
     pendingTakes = queue
