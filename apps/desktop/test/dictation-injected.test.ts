@@ -194,9 +194,11 @@ describe('names are spelled right after transcription, only for words that were 
     // 11 Nov 2026: the one-call transcription is what gets typed, so it carries his own vocabulary and languages. The
     // live session stays plain, and every transcript still goes through respellNames, which only corrects words said.
     const setup = readFileSync(join(__dirname, '../src/main/dictation/setup.ts'), 'utf8')
-    expect(setup).toMatch(/languageCodes: sent\.slice\(0, MAX_SPEECH_LANGUAGES\), mode: 'verbatim'/)
-    expect(setup).toContain('...words]')
-    expect(setup).toContain('respellNames(text, names)')
+    // The pass lives in take-batch.ts since 20 Nov 2026, shared with the headless node.
+    const batch = readFileSync(join(__dirname, '../src/main/dictation/take-batch.ts'), 'utf8')
+    expect(batch).toMatch(/languageCodes: sent\.slice\(0, MAX_SPEECH_LANGUAGES\), mode: 'verbatim'/)
+    expect(batch).toContain('...own]')
+    expect(batch).toContain('respellNames(text, names)')
     // The live session's own request still carries no name list: it is only the caption he watches.
     expect(JSON.stringify(setupMessage({ model: 'gemini-3.5-transcribe-live', languageCodes: ['en-ZA'] }))).not.toContain('customVocabulary')
     const factory = /new LiveTranscriber\(\{[\s\S]*?\}\)/.exec(setup)

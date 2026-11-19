@@ -11,7 +11,7 @@ import { mkdirSync } from 'node:fs'
 import { hostname as osHostname } from 'node:os'
 import { join } from 'node:path'
 
-import { EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, providerFor, type Tool } from '@agent/core'
+import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, providerFor, type Tool } from '@agent/core'
 import { Recordings } from '../main/recordings/store'
 import { recoveredNoticeText, startRecordingsUpkeep } from '../main/recordings/upkeep'
 import { chatTag } from '../main/runtime/chat-lines'
@@ -35,7 +35,11 @@ import { guardTools } from '../main/vault/guard'
 import { VAULT_EVENTS } from '../shared/vault-channels'
 import { registerVoiceIpc } from '../main/voice/ipc'
 import { HelperFeed } from '../main/devices/helper-feed'
-import { VoiceService } from '../main/voice/service'
+import { VoiceService, transcribeLimitMs } from '../main/voice/service'
+import { createInstantSend } from '../main/dictation/instant'
+import { createTakeBatch } from '../main/dictation/take-batch'
+import { speechLanguages } from '../main/dictation/transcriber'
+import { dictationWordsFromProjects, vocabularyFrom } from '../main/memory/vocabulary'
 import { EventRouter } from '../main/workers/router'
 import { killLeftover, killTree, spawnWorker } from '../main/workers/spawn'
 import { WorkerStore } from '../main/workers/store'
@@ -651,6 +655,25 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       log: (message, fields) => logger.info(message, fields),
     })
   }
+  // Instant send (dictation/instant.ts, the same code the desktop app runs): a phone's dictated message is in the chat at
+  // once, its whole take is written down here in one pass, and the agent's turn starts when the clean text lands.
+  const takeBatch = createTakeBatch({
+    voice,
+    languages: () => speechLanguages([], Intl.DateTimeFormat().resolvedOptions().locale),
+    vocabulary: async () => vocabularyFrom(await store.list('memory')),
+    extraWords: async () => {
+      const own = [settings.get().userName, settings.get().agentName].filter((name) => name.trim() !== '' && name !== DEFAULT_SETTINGS.agentName)
+      return [...own, ...dictationWordsFromProjects(await store.list('project')).slice(0, 30)]
+    },
+    log: (message, fields) => logger.info(message, fields),
+  })
+  const instant = createInstantSend({
+    dir,
+    batch: (pcm, signal, extra) => takeBatch(pcm, signal, undefined, extra),
+    runner: () => theRunner,
+    log: (message, fields) => logger.info(message, fields),
+  })
+  void instant.resume().then((count) => (count > 0 ? logger.info('Dictation takes resumed', { count }) : undefined))
   // A linked phone's call hands its work to the main agent, a project chat or a helper here (main/voice/handoff.ts).
   const callStore = store
   const callRunner = theRunner
@@ -664,9 +687,15 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     state: (chat) => callRunner.state(chat),
     agentName: () => settings.get().agentName,
     delegated: (chat, project, brief) => projectAgents.delegated(chat, project, brief),
-  })
+  }, (pcm, extra) => {
+    // A linked phone's recording gets the phone's names and languages in front of this node's own: one pass over the whole take.
+    void recordings.keepPhoneAudio(pcm)
+    return takeBatch(pcm, AbortSignal.timeout(transcribeLimitMs(pcm.length)), undefined, extra)
+  }, (input) => instant.takeAudio(input))
 
   const disposeIpc = registerIpc({
+    // No microphone on this node: a phone's take arrives by voice.takeAudio, the desktop's hand-off never applies.
+    instant: { handOff: () => null, accept: async (input) => void (await instant.queue.accept(input)), keepFinal: (id, final) => void instant.takeFinals.set(id, final) },
     recordings,
     store,
     settings,

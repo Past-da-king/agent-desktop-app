@@ -18,8 +18,8 @@ import { applyAliases, EMPTY_VOCABULARY, vocabularyBrief, type Vocabulary } from
 import type { RecordingHandle, Recordings } from '../recordings/store'
 import { CLEANUP_MODELS, cleanUp } from './cleanup'
 import { DictationController, type BatchResult } from './controller'
-import { transcribeWhole } from './whole'
-import { addedNames, stripInjectedNames } from './injected'
+import { createTakeBatch, spellNames as spellNamesShared } from './take-batch'
+import { addedNames } from './injected'
 import { respellNames } from './respell'
 import { electronClipboard, keySenderFor, typeText, type KeySender, type TypeOutcome } from './paste'
 import { PillWindow, type PillOptions } from './pill'
@@ -27,7 +27,7 @@ import { dictationTarget, type DictationSurface } from './target'
 import { BoxDelivery, dictationRoute, type BoxTarget } from './box'
 import { EVENTS } from '../../shared/channels'
 import { safeSend } from '../alive'
-import { LiveTranscriber, MAX_SPEECH_LANGUAGES, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, speechLanguages } from './transcriber'
+import { LiveTranscriber, TRANSCRIBE_LIVE_MODELS, cleanVocabulary, speechLanguages } from './transcriber'
 
 export interface HandedOffTake {
   id: string
@@ -225,7 +225,7 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
       return cleaned
     },
     previewFix: (text) => respellNames(text, words).text,
-    fixNames: async (text) => spellNames(applyAliases(text, (await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY), words),
+    fixNames: async (text) => spellNamesShared(applyAliases(text, (await deps.vocabulary?.().catch(() => null)) ?? EMPTY_VOCABULARY), words, deps.log),
     type: async (text) => typeInto(text),
     mask: () => keys?.mask(),
     pill: pillWithDraft,
@@ -244,48 +244,9 @@ export function createDictation(deps: DictationSetupDeps): DictationSetup {
     deps.log('Dictation left out a stretch of only names', { characters: stretch.length })
   }
 
-  function withoutInjected(text: string, names: string[]): string {
-    const stripped = stripInjectedNames(text, names)
-    for (const stretch of stripped.dropped) injected(stretch)
-    return stripped.text
-  }
-
-  /** Mis-heard names respelled (only words that were said), then any stretch of nothing but names left out. */
-  function spellNames(text: string, names: string[]): string {
-    const respelled = respellNames(text, names)
-    if (respelled.changed.length > 0) deps.log('Dictation respelled names', { count: respelled.changed.length })
-    return withoutInjected(respelled.text, names)
-  }
-
-  /** Every way a recording becomes text ends here, transcribed as heard and then names spelled right. */
-  async function batch(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void, extra?: { names?: string[]; languages?: string[] }): Promise<BatchResult> {
-    const names = cleanVocabulary([...(extra?.names ?? []), ...words])
-    const result = await batchRaw(pcm, signal, onUpdate, extra)
-    return result.ok ? { ok: true, text: spellNames(result.text, names) } : result
-  }
-
-  /**
-   * The recording itself, through Google's speech model (11 Nov 2026).
-   *
-   * This, not the live captions, is what he gets typed: the same audio, read in one go by the model made for
-   * transcribing, with his languages and his own names and projects. The live session is only what he watches while he
-   * speaks. Nothing is sent through the live model a second time (that was the old fallback, and it is the same weaker
-   * transcriber that got the words wrong in the first place).
-   */
-  async function batchRaw(pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void, extra?: { names?: string[]; languages?: string[] }): Promise<BatchResult> {
-    // A linked phone's own names go in front of the ones memory gives, and its languages in front of this computer's.
-    const own = languages()
-    const sent = (extra?.languages ?? []).concat(own).filter((tag, index, all) => all.findIndex((other) => other.toLowerCase() === tag.toLowerCase()) === index)
-    const speech = { names: cleanVocabulary([...(extra?.names ?? []), ...words]), languageCodes: sent.slice(0, MAX_SPEECH_LANGUAGES), mode: 'verbatim' as const }
-    // The whole recording in ONE request, however long (19 Nov 2026): the model hears everything at once and infers what
-    // a live pass gets wrong. Too long for an inline request, voice.transcribe uploads it first. Only when that fails
-    // twice does it go in pieces cut at quiet moments, and that is logged.
-    return transcribeWhole(pcm, signal, {
-      one: (audio, audioSignal) => deps.voice.transcribe(audio, { ...speech, signal: audioSignal }),
-      log: deps.log,
-      ...(onUpdate === undefined ? {} : { onUpdate }),
-    })
-  }
+  /** Every way a recording becomes text ends here (take-batch.ts, shared with the headless node): one whole pass, names spelled right. */
+  const takeBatch = createTakeBatch({ voice: deps.voice, languages, ...(deps.vocabulary === undefined ? {} : { vocabulary: deps.vocabulary }), ...(deps.extraWords === undefined ? {} : { extraWords: deps.extraWords }), log: deps.log }, () => words)
+  const batch = (pcm: Buffer, signal: AbortSignal, onUpdate?: (text: string, interim: string) => void, extra?: { names?: string[]; languages?: string[] }): Promise<BatchResult> => takeBatch(pcm, signal, onUpdate, extra)
 
   /**
    * The words into a window, confirmed by that window. Never `insertText` into whatever has the focus: that reports

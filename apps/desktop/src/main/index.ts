@@ -74,7 +74,8 @@ import { HotkeyManager } from './hotkeys'
 import { cachedLister, likelyHolder, listProcesses } from './hotkey-holders'
 import { createDictation, type DictationSetup } from './dictation/setup'
 import { speechLanguages } from './dictation/transcriber'
-import { PendingTakes } from './dictation/pending'
+import type { PendingTakes } from './dictation/pending'
+import { createInstantSend } from './dictation/instant'
 import { Recordings } from './recordings/store'
 import { recoveredNoticeText, startRecordingsUpkeep, type Upkeep } from './recordings/upkeep'
 import { chatTag } from './runtime/chat-lines'
@@ -356,6 +357,8 @@ let dictation: DictationSetup | null = null
 /** Instant send: dictated takes written down in the background (dictation/pending.ts), and what to do with each text. */
 let pendingTakes: PendingTakes | null = null
 const takeFinals = new Map<string, (text: string) => void>()
+/** The voice.takeAudio handler (dictation/instant.ts), set once dictation is up. */
+let takeAudioHandler: ((input: import('@agent/core').VoiceTakeInput) => Promise<import('@agent/core').VoiceTakeAck>) | null = null
 let agentBrowser: AgentBrowser | null = null
 let disposeIpc: (() => void) | null = null
 let disposeStore: (() => void) | null = null
@@ -1969,18 +1972,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     if (dictation !== null) return dictation.transcribe(pcm, AbortSignal.timeout(transcribeLimitMs(pcm.length)), extra)
     const service = voice
     return service === null ? Promise.resolve({ ok: false, text: '', error: 'Voice is not ready.' }) : service.transcribe(pcm)
-  }, async (input) => {
-    // Instant send, the phone's half: its message is already in the chat; this is the audio for it, by recording id.
-    const takes = pendingTakes
-    if (takes === null) return { ok: false, error: 'This computer cannot take dictated audio yet.' }
-    if (input.audio === undefined) {
-      if (input.retry !== true) return { ok: false, error: 'The take has no audio.' }
-      const ok = await takes.retry(input.id)
-      return { ok, state: ok ? 'queued' : ((await takes.state(input.id))?.state ?? 'unknown') }
-    }
-    const result = await takes.accept({ id: input.id, chat: input.chat ?? null, live: input.caption ?? '', pcm: Buffer.from(input.audio), ...(input.names === undefined ? {} : { names: input.names }), ...(input.languages === undefined ? {} : { languages: input.languages }) })
-    return { ok: true, state: result.state, duplicate: result.duplicate }
-  })
+  }, (input) => (takeAudioHandler === null ? Promise.resolve({ ok: false, error: 'This computer cannot take dictated audio yet.' }) : takeAudioHandler(input)))
 
   // Dictation anywhere: the pill window holds the microphone, the words are typed into the app in front.
   const voiceService = voice
@@ -2004,21 +1996,16 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // Instant send: a dictated message is in the chat at once; the whole take is written down here in the background,
   // survives the app closing (queued on disk by recording id) and frees the agent's turn when the clean text lands.
   {
-    const queue = new PendingTakes({
-      dir: join(app.getPath('userData'), 'voice-notes', 'pending-takes'),
+    const instant = createInstantSend({
+      dir: app.getPath('userData'),
       batch: (pcm, signal, extra) => (dictation === null ? Promise.resolve({ ok: false as const, error: 'Dictation is not ready.' }) : dictation.transcribe(pcm, signal, extra)),
-      replace: async (take, text) => {
-        await runner?.refineDictated(take.id, text, true, take.chat)
-        takeFinals.get(take.id)?.(text)
-        takeFinals.delete(take.id)
-      },
-      retrying: (take) => runner?.markRefining(take.id, take.chat),
-      retryFailed: (take) => runner?.refineDictated(take.id, '', false, take.chat),
+      runner: () => runner ?? null,
+      takeFinals,
       log: (message, fields) => logger.info(message, fields),
     })
-    pendingTakes = queue
-    runner?.setTakes(queue)
-    void queue.resume().then((count) => (count > 0 ? logger.info('Dictation takes resumed', { count }) : undefined))
+    pendingTakes = instant.queue
+    takeAudioHandler = instant.takeAudio
+    void instant.resume().then((count) => (count > 0 ? logger.info('Dictation takes resumed', { count }) : undefined))
   }
   // A recording the last run left unfinished (a crash, an update's restart) is finished from what is on disk, he is
   // told once in its chat, and audio the keep setting no longer keeps is deleted; then again every night.
