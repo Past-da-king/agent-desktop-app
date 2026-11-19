@@ -28,6 +28,7 @@ import { makeHandOver, pageMenuItems } from './hand-over'
 import { Cdp, KEY_NAMES } from './cdp'
 import { emailsIn } from './people'
 import { PRESENCE_SCRIPT } from './presence'
+import { TouchProfileHost, touchProfileOf } from './touch-profile'
 import { watchDevtools } from './devtools'
 import type { NetEntry } from './devtools-log'
 import {
@@ -198,6 +199,8 @@ interface Tab {
   loadError: string | null
   /** insertCSS keys of the site's own fixes in the current document. */
   siteCss: string[]
+  /** Keeps the no-touch profile of a desktop view in the page and its frames (touch-profile.ts). */
+  touchHost: TouchProfileHost | null
 }
 
 export interface AgentBrowserOptions {
@@ -2081,6 +2084,8 @@ ${await this.snapshot()}`
       // auto-attach on just below.
       if (!this.frameSessions.has(tab.id)) this.frameSessions.set(tab.id, new FrameSessions(debuggerLink(wc)))
       await this.attachVault(wc, () => this.personTab === tab.id)
+      // A desktop view reports no touch even on a touchscreen PC, in the page and in every frame (touch-profile.ts).
+      tab.touchHost ??= new TouchProfileHost(debuggerLink(wc))
     }
     await this.applyEmulation(tab)
   }
@@ -2110,6 +2115,7 @@ ${await this.snapshot()}`
           // An emulation step a page refuses (touch on a crashed renderer) is not worth failing the view for.
         }
       }
+      await tab.touchHost?.apply(touchProfileOf(view)).catch(() => undefined)
     } else {
       try {
         wc.setUserAgent(userAgentFor(view, this.engine))
@@ -2619,6 +2625,7 @@ ${await this.snapshot()}`
       status: null,
       loadError: null,
       siteCss: [],
+      touchHost: null,
     }
     tab.cdp.guest = view === null
     // AGENT_FRAME_ROUTING=0 switches frame routing off, to compare against the old behaviour in a proof run.
