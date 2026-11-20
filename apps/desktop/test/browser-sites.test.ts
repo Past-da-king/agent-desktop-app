@@ -72,6 +72,30 @@ describe('site profiles', () => {
     expect(again.get('https://shop.example')).toBeNull()
   })
 
+  it('one time, forgets phone views the old rule recorded by itself and keeps ones set by hand', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sites-mig-'))
+    const file = join(dir, 'browser-sites.json')
+    writeFileSync(file, JSON.stringify({
+      version: 1,
+      defaultView: presetView('desktop'),
+      sites: {
+        'auto.example': { at: 1, view: presetView('phone'), outcome: 'works', reason: 'as a desktop browser: the page loaded empty' },
+        'auto-fixed.example': { at: 1, view: presetView('phone'), outcome: 'works', css: ['.x{display:none}'] },
+        'hand.example': { at: 1, view: presetView('phone'), outcome: 'works', pinned: true, reason: 'chosen by hand' },
+        'desk.example': { at: 1, view: presetView('desktop'), outcome: 'works' },
+      },
+    }))
+    const store = new SiteStore(file)
+    expect(store.get('https://auto.example/')).toBeNull()
+    expect(store.get('https://auto-fixed.example/')?.view).toBeUndefined()
+    expect(store.get('https://auto-fixed.example/')?.css).toEqual(['.x{display:none}'])
+    expect(store.get('https://hand.example/')?.view?.mode).toBe('phone')
+    expect(store.get('https://desk.example/')?.view?.mode).toBe('desktop')
+    // Runs once: a phone view recorded afterwards (a real refusal that a phone fixed) survives a reload.
+    store.record('https://later.example/', presetView('phone'), 'works', 'as a desktop browser: unsupported')
+    expect(new SiteStore(file).get('https://later.example/')?.view?.mode).toBe('phone')
+  })
+
   it('starts fresh from a damaged file instead of refusing to browse', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sites-'))
     const file = join(dir, 'browser-sites.json')
@@ -88,7 +112,16 @@ describe('reading a page for a refusal', () => {
     expect(assessPage(200, null, 'Just a moment...', 'Checking your browser before accessing').refusal).toBe('human_check')
     expect(assessPage(200, null, '', "Couldn't sign you in. This browser or app may not be secure.").refusal).toBe('signin_refused')
     expect(assessPage(200, null, '', '').refusal).toBe('blank')
+    expect(assessPage(200, null, '', 'Please use a supported browser to open this page.').refusal).toBe('unsupported_browser')
     expect(assessPage(null, 'net::ERR_NAME_NOT_RESOLVED', '', '').refusal).toBe('load_error')
+  })
+
+  it('does not call an app shell blank: a real title or a visible frame is content', () => {
+    // Doc.aspx style: no top-level text, the editor lives in an iframe.
+    expect(assessPage(200, null, 'Deck.pptx', '').refusal).toBe('none')
+    expect(assessPage(200, null, '', '', 1).refusal).toBe('none')
+    expect(assessPage(200, null, ' ', '', 0).refusal).toBe('blank')
+    expect(assessPage(200, null, '', '').refusal).toBe('blank')
   })
 
   it('treats a long page that mentions supported browsers in its footer as fine', () => {
@@ -100,7 +133,7 @@ describe('reading a page for a refusal', () => {
 describe('opening a site the way that works', () => {
   it('tries the other device when refused, remembers the winner and starts there next time', async () => {
     const store = new SiteStore(null)
-    const blankOnDesktop = fakeSite((view) => (view.mode === 'desktop' ? '' : null))
+    const blankOnDesktop = fakeSite((view) => (view.mode === 'desktop' ? 'This browser is not supported. Please use a supported browser.' : null))
     const first = await openAdaptive(blankOnDesktop, store, 'https://app.example/', null)
     expect(first.verdict.refusal).toBe('none')
     expect(first.view.mode).toBe('phone')
@@ -114,24 +147,47 @@ describe('opening a site the way that works', () => {
     expect(second.notes).toContain('Known site')
   })
 
-  it('does not flip devices for a captcha, and says what to do', async () => {
+  it('tries a phone once for a captcha wall, stores nothing when it does not help, and says what to do', async () => {
     const store = new SiteStore(null)
     const site = fakeSite(() => 'Verify you are human')
     const opened = await openAdaptive(site, store, 'https://guarded.example/', null)
     expect(opened.verdict.refusal).toBe('human_check')
-    expect(site.loads).toEqual(['desktop'])
+    expect(site.loads).toEqual(['desktop', 'phone', 'desktop'])
     expect(opened.notes).toContain('browser_handoff')
+    expect(store.get('https://guarded.example')?.view?.mode).toBe('desktop')
   })
 
-  it('goes back to where it started when both devices are refused', async () => {
+  it('does not retry as a phone on an iframe app shell, and stores it as working on desktop', async () => {
     const store = new SiteStore(null)
-    const site = fakeSite(() => '')
-    const opened = await openAdaptive(site, store, 'https://dead.example/', null)
-    expect(opened.triedBoth).toBe(true)
+    const loads: string[] = []
+    let view = presetView('desktop')
+    const port: SitePort = {
+      currentView: () => view,
+      applyView: async (next) => {
+        view = { ...next }
+      },
+      load: async () => {
+        loads.push(view.mode)
+        return { status: 200, error: null, title: 'Deck.pptx', text: '', frames: 1 }
+      },
+    }
+    const opened = await openAdaptive(port, store, 'https://tenant.sharepoint.example/Doc.aspx?x=1', null)
+    expect(loads).toEqual(['desktop'])
+    expect(opened.triedBoth).toBe(false)
     expect(opened.view.mode).toBe('desktop')
+    expect(store.get('https://tenant.sharepoint.example/')?.view?.mode).toBe('desktop')
+  })
+
+  it('does not store a retry that fails to beat the first load, and reloads on the start view', async () => {
+    const store = new SiteStore(null)
+    const site = fakeSite(() => 'Access denied')
+    const opened = await openAdaptive(site, store, 'https://both.example/', null)
+    expect(opened.verdict.refusal).toBe('http_blocked')
+    expect(site.loads).toEqual(['desktop', 'phone', 'desktop'])
     expect(site.currentView().mode).toBe('desktop')
-    expect(store.get('https://dead.example')?.outcome).toBe('refused')
-    expect(opened.notes).toContain('THE SITE REFUSED THIS BROWSER')
+    const profile = store.get('https://both.example/')
+    expect(profile?.view?.mode).toBe('desktop')
+    expect(profile?.outcome).toBe('refused')
   })
 
   it('respects a view the agent asked for and does not second-guess it', async () => {
