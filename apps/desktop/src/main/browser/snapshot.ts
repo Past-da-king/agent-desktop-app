@@ -383,9 +383,22 @@ return { ok: true, reason: '', value: String(match.textContent || '').trim() };
 })()`
 }
 
-/** The text a site profile check reads: status-free, visible text only. */
+/**
+ * The text a site profile check reads: status-free, visible text only, plus how many visible frames of real size
+ * the page holds (an editor that lives in an iframe has almost no text of its own, but it is not a blank page).
+ */
 export function pageTextScript(): string {
-  return `(() => ({ title: document.title, text: String(document.body ? document.body.innerText || '' : '').slice(0, 4000) }))()`
+  return `(() => {
+  let frames = 0;
+  try {
+    for (const f of Array.from(document.querySelectorAll('iframe, frame'))) {
+      const r = f.getBoundingClientRect();
+      const s = getComputedStyle(f);
+      if (r.width >= 200 && r.height >= 150 && s.visibility !== 'hidden' && s.display !== 'none') frames += 1;
+    }
+  } catch (e) {}
+  return { title: document.title, text: String(document.body ? document.body.innerText || '' : '').slice(0, 4000), frames };
+})()`
 }
 
 /**

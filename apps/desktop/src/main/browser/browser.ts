@@ -1430,7 +1430,7 @@ ${await this.snapshot()}`
         await this.applyEmulation(tab)
         this.layout()
         const page = await this.loadAndRead(tab, url)
-        const verdict = assessPage(page.status, page.error, page.title, page.text)
+        const verdict = assessPage(page.status, page.error, page.title, page.text, page.frames)
         if (verdict.refusal === 'none') {
           this.sites.record(url, to, 'works', `retried by the agent after ${viewLabel(from)}`)
           this.emit()
@@ -2193,7 +2193,7 @@ ${await this.snapshot()}`
   }
 
   /** Loads a URL and reports what came back, for the site health check. */
-  private async loadAndRead(tab: Tab, url: string): Promise<{ status: number | null; error: string | null; title: string; text: string }> {
+  private async loadAndRead(tab: Tab, url: string): Promise<{ status: number | null; error: string | null; title: string; text: string; frames: number }> {
     const wc = tab.wc
     tab.status = null
     tab.loadError = null
@@ -2208,19 +2208,19 @@ ${await this.snapshot()}`
     let page = await this.readText(tab)
     // Single-page apps often paint their text a while after load (x.com takes a few seconds): give them up to
     // eight before calling the page empty, so a slow site is never mistaken for one refusing this browser.
-    for (let waited = 0; page.text.trim().length < 25 && tab.loadError === null && waited < 8_000; waited += 500) {
+    for (let waited = 0; page.text.trim().length < 25 && page.title.trim().length <= 2 && page.frames === 0 && tab.loadError === null && waited < 8_000; waited += 500) {
       await this.settle(500)
       page = await this.readText(tab)
     }
-    return { status: tab.status, error: tab.loadError, title: page.title, text: page.text }
+    return { status: tab.status, error: tab.loadError, title: page.title, text: page.text, frames: page.frames }
   }
 
-  private async readText(tab: Tab): Promise<{ title: string; text: string }> {
+  private async readText(tab: Tab): Promise<{ title: string; text: string; frames: number }> {
     try {
       const raw = objectOf(await this.run(tab, pageTextScript(), 8_000))
-      return { title: typeof raw['title'] === 'string' ? raw['title'] : '', text: typeof raw['text'] === 'string' ? raw['text'] : '' }
+      return { title: typeof raw['title'] === 'string' ? raw['title'] : '', text: typeof raw['text'] === 'string' ? raw['text'] : '', frames: typeof raw['frames'] === 'number' ? raw['frames'] : 0 }
     } catch {
-      return { title: safeTitle(tab.wc), text: '' }
+      return { title: safeTitle(tab.wc), text: '', frames: 0 }
     }
   }
 

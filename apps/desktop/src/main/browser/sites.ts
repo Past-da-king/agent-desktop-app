@@ -40,6 +40,8 @@ interface SiteFile {
   muted?: boolean
   /** The browser profile (partition) the person's own tabs open in. */
   person?: string
+  /** Set once the phone views the old adaptive rule recorded by itself have been cleared (see clearAutomaticDeviceChoices). */
+  autoDeviceCleared?: true
 }
 
 const MAX_SITES = 300
@@ -66,7 +68,8 @@ export class SiteStore {
   constructor(file: string | null, now: () => number = Date.now) {
     this.file = file
     this.now = now
-    this.data = { version: 1, defaultView: presetView('desktop'), sites: {} }
+    // A store with no file has nothing recorded by the old rule: nothing to migrate.
+    this.data = { version: 1, defaultView: presetView('desktop'), sites: {}, autoDeviceCleared: true }
     this.load()
   }
 
@@ -198,10 +201,31 @@ export class SiteStore {
           if (profile !== null) sites[site] = profile
         }
       }
-      this.data = { version: 1, defaultView: defaultView ?? presetView('desktop'), sites, ...(raw['muted'] === true ? { muted: true } : {}), ...(typeof raw['person'] === 'string' && raw['person'].startsWith('persist:') ? { person: raw['person'] } : {}) }
+      this.data = { version: 1, defaultView: defaultView ?? presetView('desktop'), sites, ...(raw['muted'] === true ? { muted: true } : {}), ...(typeof raw['person'] === 'string' && raw['person'].startsWith('persist:') ? { person: raw['person'] } : {}), ...(raw['autoDeviceCleared'] === true ? { autoDeviceCleared: true as const } : {}) }
+      this.clearAutomaticDeviceChoices()
     } catch {
       // No file yet, or a damaged one: start fresh rather than refuse to browse.
     }
+  }
+
+  /**
+   * One time: the old adaptive rule called frame-hosted apps "blank", retried them as a phone and remembered that. Entries
+   * the browser recorded by itself with a phone or tablet view are forgotten (their fixes stay); an entry the person or
+   * the agent set by hand with browser_view is marked pinned and is kept. Runs once per store file.
+   */
+  private clearAutomaticDeviceChoices(): void {
+    if (this.data.autoDeviceCleared === true) return
+    for (const [site, profile] of Object.entries(this.data.sites)) {
+      if (profile.pinned === true || profile.view === undefined) continue
+      if (profile.view.mode !== 'phone' && profile.view.mode !== 'tablet') continue
+      delete profile.view
+      delete profile.outcome
+      delete profile.reason
+      const keep = profile.css !== undefined || profile.js !== undefined || profile.headers !== undefined
+      if (!keep) delete this.data.sites[site]
+    }
+    this.data.autoDeviceCleared = true
+    this.save()
   }
 
   private save(): void {
@@ -303,7 +327,9 @@ export interface Verdict {
 
 /** Presenting as a different kind of browser can plausibly change this. A captcha or sign-in refusal will not. */
 export function identityMayHelp(verdict: Verdict): boolean {
-  return verdict.refusal === 'unsupported_browser' || verdict.refusal === 'http_blocked' || verdict.refusal === 'blank'
+  // Only a real refusal signal. A page that merely looks empty (an app shell whose editor lives in a frame) is not one:
+  // presenting as a phone there changes what the site serves without anything having been refused.
+  return verdict.refusal === 'unsupported_browser' || verdict.refusal === 'http_blocked' || verdict.refusal === 'human_check'
 }
 
 const UNSUPPORTED =
@@ -314,8 +340,12 @@ const SIGNIN = /disallowed_useragent|may not be secure|Couldn.t sign you in|isn.
 const NET_ERROR = /net::ERR_[A-Z_]+/
 const BLOCKED_WORDS = /access denied|request blocked|you have been blocked|error 1020|forbidden|not authori[sz]ed to view/i
 
-/** `status` is the main page's HTTP status if known, `error` a load error, `text` the visible text. */
-export function assessPage(status: number | null, error: string | null, title: string, text: string): Verdict {
+/**
+ * `status` is the main page's HTTP status if known, `error` a load error, `text` the visible top-level text, and
+ * `frames` the number of visible frames of real size: content in frames counts, so a page with a title or such a
+ * frame is never called blank.
+ */
+export function assessPage(status: number | null, error: string | null, title: string, text: string, frames = 0): Verdict {
   const t = text.trim()
   const net = NET_ERROR.exec(t)?.[0] ?? (error === null ? null : NET_ERROR.exec(error)?.[0] ?? null)
   if (net !== null && net !== 'net::ERR_ABORTED') {
@@ -341,7 +371,7 @@ export function assessPage(status: number | null, error: string | null, title: s
   match = BLOCKED_WORDS.exec(t)
   if (match !== null && t.length < 400) return { refusal: 'http_blocked', evidence: snippet(t, match.index, match[0].length) }
   if (status !== null && status >= 500 && t.length < 200) return { refusal: 'load_error', evidence: `HTTP ${status}` }
-  if (t.length < 25 && (status === null || status < 400)) return { refusal: 'blank', evidence: 'no visible text' }
+  if (t.length < 25 && title.trim().length <= 2 && frames <= 0 && (status === null || status < 400)) return { refusal: 'blank', evidence: 'no visible text' }
   return { refusal: 'none', evidence: '' }
 }
 
@@ -359,7 +389,7 @@ export interface SitePort {
   currentView(): ViewSpec
   applyView(view: ViewSpec): Promise<void>
   /** Load the URL and report what came back. */
-  load(url: string): Promise<{ status: number | null; error: string | null; title: string; text: string }>
+  load(url: string): Promise<{ status: number | null; error: string | null; title: string; text: string; frames?: number }>
 }
 
 export interface Opened {
@@ -384,7 +414,7 @@ export async function openAdaptive(port: SitePort, store: SiteStore, url: string
   const start = asked ?? store.viewFor(url)
   await port.applyView(start)
   const firstPage = await port.load(url)
-  const first = assessPage(firstPage.status, firstPage.error, firstPage.title, firstPage.text)
+  const first = assessPage(firstPage.status, firstPage.error, firstPage.title, firstPage.text, firstPage.frames ?? 0)
   if (first.refusal === 'none') {
     if (known === null || known.outcome !== 'works' || known.view?.mode !== start.mode) store.record(url, start, 'works')
     const remembered = asked === null && known?.outcome === 'works' && known.view !== undefined
@@ -399,7 +429,7 @@ export async function openAdaptive(port: SitePort, store: SiteStore, url: string
   const second = otherView(start)
   await port.applyView(second)
   const secondPage = await port.load(url)
-  const retry = assessPage(secondPage.status, secondPage.error, secondPage.title, secondPage.text)
+  const retry = assessPage(secondPage.status, secondPage.error, secondPage.title, secondPage.text, secondPage.frames ?? 0)
   if (retry.refusal === 'none') {
     store.record(url, second, 'works', `as a ${modeName(start.mode)} browser: ${REFUSAL_LABEL[first.refusal]}`)
     return {
@@ -409,8 +439,10 @@ export async function openAdaptive(port: SitePort, store: SiteStore, url: string
       triedBoth: true,
     }
   }
-  // Neither worked: go back to the view it started in, and say so.
+  // The retry did not beat the first load: go back to the view it started in and load again there, so the tab is
+  // never left showing a page the other device produced while it reports this one.
   await port.applyView(start)
+  await port.load(url)
   store.record(url, start, 'refused', `${REFUSAL_LABEL[first.refusal]}; also refused as a ${modeName(second.mode)} browser`)
   return { verdict: first, view: start, notes: diagnosis(first, [modeName(start.mode), modeName(second.mode)]), triedBoth: true }
 }
