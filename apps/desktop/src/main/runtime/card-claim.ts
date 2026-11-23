@@ -133,8 +133,9 @@ async function mutateRow<R>(store: DataStore, id: string, step: Step<R>): Promis
  * the continuation. Not won: the entry already there says what the card shows; nothing may be started.
  */
 export async function claimCard(store: DataStore, id: string, field: CardField, value: string, by: string, now: number): Promise<Claim | null> {
-  return mutateRow<Claim>(store, id, (payload) => {
+  return mutateRow<Claim | null>(store, id, (payload) => {
     const meta = metaOfPayload(payload)
+    if (typeof meta['closedAt'] === 'number' && meta['closedAt'] > 0) return { next: null, result: null }
     const existing = entryOf(meta, field)
     if (existing !== null) return { next: null, result: { won: false, entry: existing } }
     const entry: CardEntry = { value, at: now, by }

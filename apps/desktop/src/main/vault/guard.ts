@@ -141,8 +141,8 @@ function scrubbedContext(ctx: ToolContext, scrub: (text: string) => string): Too
     ...ctx,
     activity: (text, meta) => ctx.activity(scrub(text), scrubJson(meta, scrub)),
     updateActivity: (id, text, meta) => ctx.updateActivity(id, scrub(text), scrubJson(meta, scrub)),
-    ask: (question, options, card) => ctx.ask(scrub(question), options.map(scrub), scrubJson(card, scrub)),
-    approve: (summary, details, scope) => ctx.approve(scrub(summary), details === undefined ? undefined : scrub(details), scope),
+    ask: (question, options, card, origin) => ctx.ask(scrub(question), options.map(scrub), scrubJson(card, scrub), origin),
+    approve: (summary, details, scope, origin) => ctx.approve(scrub(summary), details === undefined ? undefined : scrub(details), scope, origin),
     notify: (title, body) => ctx.notify(scrub(title), scrub(body)),
   }
 }

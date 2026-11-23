@@ -165,6 +165,13 @@ export interface Settings {
    * 'ask' asks before every command and before any file outside the granted folders; 'never' runs no commands.
    */
   shell: 'always' | 'ask' | 'never'
+  /**
+   * Agent acts for me on approvals (23 Nov 2026). On: the main agent answers the cards that are not his (deploys,
+   * migrations, settings, deletes inside a task he set, sign-ups, helper and project questions) and only what truly
+   * needs him reaches Needs you. Text sent to people, money and his own hands are always his, in code. Off: every
+   * card asks him, as before.
+   */
+  actsForMe: boolean
   /** Voice: true once a Gemini key is in the secrets module. The key itself never appears here. */
   hasVoiceKey: boolean
   /** The Gemini prebuilt voice the call and read-aloud use (see VOICES). */
@@ -339,6 +346,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notifications: true,
   grantedFolders: [],
   shell: 'ask',
+  actsForMe: true,
   hasVoiceKey: false,
   voiceName: 'Kore',
   dictationModel: 'gemini-3.1-flash-lite',
@@ -1980,7 +1988,12 @@ export interface WakeDeviceStatus {
   checks: Array<{ key: string; label: string; ok: boolean; help: string }>
 }
 
+export interface AnsweredForYou {
+  id: string; at: number; asker: string; summary: string; decision: 'approve' | 'decline' | 'answer'; answer: string; reason: string; rule: string; undo: 'none' | 'retry' | 'reask' | 'revert-setting'; undone: number
+}
+
 export interface AgentApi {
+  acts: { list(): Promise<AnsweredForYou[]>; undo(id: string): Promise<{ ok: boolean; message: string }> }
   platform: AppPlatform
   version: string
 

@@ -504,7 +504,7 @@ export class CliHost {
       const stale = stored !== null && this.sessions()[`${key}#rev`] !== String(PROMPT_REVISION)
       const permission = sdkPermission({
         settings,
-        approve: (summary, details) => request.context.approve(summary, details, 'computer'),
+        approve: (summary, details, origin) => request.context.approve(summary, details, 'computer', origin as { tool: string; input: Record<string, never> } | undefined),
         alsoAllowed: [dir],
       })
       const messages = request.messages

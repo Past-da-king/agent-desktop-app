@@ -183,6 +183,7 @@ const api: AgentApi = {
     attach: (tabId, guestId) => call<boolean>(CHANNELS.browser.attach, tabId, guestId),
   },
 
+  acts: { list: () => call(CHANNELS.acts.list), undo: (id) => call(CHANNELS.acts.undo, id) },
   helpers: {
     stop: (id) => call<boolean>(CHANNELS.helpers.stop, id),
     stopAll: () => call<number>(CHANNELS.helpers.stopAll),

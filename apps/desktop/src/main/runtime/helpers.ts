@@ -1,3 +1,6 @@
+import type { ApprovalOrigin } from '@agent/core'
+import type { ActsForMe } from './acts-for-me'
+import { needsHim, isRoutedPending } from '../../shared/card-state'
 /**
  * Helpers: the worker agents the main agent hands its real work to.
  *
@@ -207,6 +210,7 @@ export interface HelperResources {
 }
 
 export interface HelperManagerDeps {
+  acts?: ActsForMe
   store: DataStore
   /**
    * The app's data folder, where what the provider says about pictures is kept (pictures-catalogue.json,
@@ -509,6 +513,9 @@ const MAX_RESULT_CHARS = 12_000
 const MAX_META_RESULT_CHARS = 6_000
 
 export class HelperManager implements HelperHost {
+  private readonly acts: ActsForMe | undefined
+  hasCardWaiter(id: string): boolean { return this.askWaiters.has(id) || this.decisionWaiters.has(id) }
+
   private readonly store: DataStore
   private readonly settings: SettingsView
   private readonly secrets: SecretsView
@@ -592,6 +599,7 @@ export class HelperManager implements HelperHost {
   private readonly awayNotices: Array<{ to: string; id: string; text: string; info: string }> = []
 
   constructor(deps: HelperManagerDeps) {
+    this.acts = deps.acts
     this.store = deps.store
     this.settings = deps.settings
     this.secrets = deps.secrets
@@ -2703,8 +2711,8 @@ export class HelperManager implements HelperHost {
         })
         this.emit({ type: 'chat_changed' })
       },
-      ask: (question, options) => this.ask(run, question, options, signal),
-      approve: (summary, details, scope) => this.approve(run, summary, details, signal, scope),
+      ask: (question, options, _card, origin) => this.ask(run, question, options, signal, origin),
+      approve: (summary, details, scope, origin) => this.approve(run, summary, details, signal, scope, origin),
       ...(run.shell === undefined ? {} : { shell: run.shell }),
       notify: async (title, body) => {
         if (!this.settings.get().notifications) return
@@ -2723,11 +2731,13 @@ export class HelperManager implements HelperHost {
     question: string,
     options: string[],
     signal: AbortSignal,
+    origin?: ApprovalOrigin,
   ): Promise<string | null> {
     const row = await this.store.upsert('chat_item', {
       kind: 'question',
       text: question,
       meta: JSON.stringify({
+        ...this.acts?.stamp({ kind: 'question', asker: 'helper', askerKey: run.id, origin, summary: question, options }),
         options,
         answer: '',
         helper: run.id,
@@ -2755,7 +2765,8 @@ export class HelperManager implements HelperHost {
       this.askWaiters.set(row.id, finish)
       signal.addEventListener('abort', onAbort, { once: true })
       this.emit({ type: 'chat_changed', ...chatTag(run.chat) })
-      this.emit({ type: 'needs_you', itemId: row.id, ...chatTag(run.chat) })
+      if (isRoutedPending(row)) this.acts?.route(row.id)
+      else this.emit({ type: 'needs_you', itemId: row.id, ...chatTag(run.chat) })
     })
   }
 
@@ -2765,11 +2776,13 @@ export class HelperManager implements HelperHost {
     details: string | undefined,
     signal: AbortSignal,
     scope?: 'computer',
+    origin?: ApprovalOrigin,
   ): Promise<boolean> {
     const row = await this.store.upsert('chat_item', {
       kind: 'approval',
       text: summary,
       meta: JSON.stringify({
+        ...this.acts?.stamp({ kind: 'approval', asker: 'helper', askerKey: run.id, origin, summary, details }),
         summary,
         details: details ?? '',
         decision: '',
@@ -2799,7 +2812,8 @@ export class HelperManager implements HelperHost {
       this.decisionWaiters.set(row.id, finish)
       signal.addEventListener('abort', onAbort, { once: true })
       this.emit({ type: 'chat_changed', ...chatTag(run.chat) })
-      this.emit({ type: 'needs_you', itemId: row.id, ...chatTag(run.chat) })
+      if (isRoutedPending(row)) this.acts?.route(row.id)
+      else this.emit({ type: 'needs_you', itemId: row.id, ...chatTag(run.chat) })
     })
   }
 

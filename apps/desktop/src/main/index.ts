@@ -1,3 +1,4 @@
+import { ActsForMe } from './runtime/acts-for-me'
 import { createWorkersChanged } from './workers/changed'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { hostname as osHostname } from 'node:os'
@@ -289,6 +290,7 @@ let capturePrivacy: CapturePrivacy | null = null
 let agentCursors: AgentCursors | null = null
 let account: AccountService | null = null
 let runner: Runner | null = null
+let disposeActs: (() => void) | null = null
 /** The helpers, so quitting can leave the ones still working for the next start to report (HelperManager.restore). */
 let helperManager: HelperManager | null = null
 /** Turn leases: a turn or helper cut off by a crash resumes on the next start (runtime/turns.ts). */
@@ -1308,7 +1310,29 @@ async function startServices(win: BrowserWindow): Promise<void> {
     // ask_user / request_approval another brain runs here show as cards in that chat on this computer.
     context: (chat, signal) => runner?.deviceContext(chat, signal) ?? {},
   }
-  const helpers = (helperManager = new HelperManager({
+  const acts: ActsForMe = new ActsForMe({
+    store, settings,
+    decide: async (id, decision, by) => { if (runner === null) throw new Error('Agent is starting'); await runner.decide(id, decision, by) },
+    answerQuestion: async (id, answer, by) => { if (runner === null) throw new Error('Agent is starting'); await runner.answer(id, answer, by) },
+    postToMain: async (text) => { await runner?.receive(MAIN_CHAT, text, { from: 'system', name: 'Approvals', chat: '' }) },
+    tellAsker: async (row, text) => {
+      const meta = JSON.parse(row.meta) as Record<string, unknown>
+      if (typeof meta['helper'] === 'string') { await helpers.steer(meta['helper'], text); return }
+      await runner?.deliver(text, typeof meta['chat'] === 'string' ? meta['chat'] : MAIN_CHAT)
+    },
+    setSettings: async (patch) => { settings.save(patch) },
+    hasWaiter: (id) => (runner?.hasCardWaiter(id) ?? false) || helpers.hasCardWaiter(id),
+    liveHelpers: () => new Set(helpers.live().map((h) => h.id)),
+    chatRunning: (chat) => runner?.state(chat).running ?? false,
+    placedElsewhere: (meta) => typeof meta['device'] === 'string' && meta['device'] !== '',
+    needsYou: (id, chat, summary) => {
+      broadcast(EVENTS.chat, { type: 'needs_you', itemId: id, chat })
+      notifier.needsYou(id, 'Needs you', summary)
+    },
+    changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
+  })
+  const helpers: HelperManager = (helperManager = new HelperManager({
+    acts,
     leases,
     dataDir: dir,
     store,
@@ -1430,6 +1454,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     for (const event of ['lock-screen', 'unlock-screen', 'resume'] as const) powerMonitor.on(event as 'resume', () => wakeupService?.kick())
   }
   const tools = buildToolset({
+    cards: { waiting: () => acts.waiting(), answer: (args) => acts.answer(args) },
     showMe: () => showMe?.service ?? null,
     screenControl: screenControlOf,
     git: { kv: gitKv, hook: () => gitHook },
@@ -1512,6 +1537,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
   })
   runner = new Runner({
+    acts,
     dataDir: dir,
     devices: {
       leases,
@@ -1551,6 +1577,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
       for (const path of paths) filePicks.add(path)
     },
   })
+  const actsSweep = setInterval(() => { void acts.sweep().catch(() => undefined) }, 60_000)
+  actsSweep.unref()
+  disposeActs = () => { clearInterval(actsSweep); acts.dispose() }
+  void acts.sweep().catch(() => undefined)
   // Mini-apps (docs/plans/mini-apps.md): the apps agents made, served sandboxed, their bridge run here, looked at
   // offscreen in both themes and widths before he sees them.
   {
@@ -1872,6 +1902,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   })
 
   disposeIpc = registerIpc({
+    acts,
     instant: {
       handOff: (chat) => (pendingTakes === null ? null : (dictation?.handOff(chat) ?? null)),
       accept: async (input) => {
@@ -2122,6 +2153,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
           ...(vaultStore === null ? {} : { vault: vaultStore }),
           passes: ready.passTable(),
           projects: () => store === null ? Promise.resolve([]) : store.list('project'),
+          answeredForYou: async () => (await acts.list()).map(({ at, asker, summary, decision, reason, undone }) => ({ at, asker, summary, decision, reason, undone: undone > 0 })),
           accountLabels: async () => (cliHost === null ? [] : accountLabels(await cliHost.status(accountsOf(settings.get())))),
         },
         ...hooks,
@@ -2184,6 +2216,8 @@ if (refuseToStart) {
   })
 
   app.on('before-quit', () => {
+    disposeActs?.()
+    disposeActs = null
     quitting = true
     disposeIpc?.()
     disposeIpc = null

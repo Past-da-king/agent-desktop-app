@@ -225,3 +225,10 @@ details:not([open])>:not(summary){display:none}
 .dialog::-webkit-scrollbar{width:14px}
 .dialog::-webkit-scrollbar-track{margin:28px 0}
 .dialog::-webkit-scrollbar-thumb{border:5px solid transparent}
+
+/* Approval decisions reuse the dialog, list and typography tokens. */
+.answered-for-you { width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; overflow-wrap: anywhere; }
+.acts-list { list-style: none; padding: 0; margin: 0; }
+.acts-entry { padding: 16px 0; border-top: 1px solid var(--outline-v); display: grid; gap: 8px; }
+.acts-entry p { margin: 0; }
+@media (max-width: 600px) { .scrim:has(.answered-for-you) { align-items: flex-end; padding: 0; } .answered-for-you { width: 100%; max-height: calc(100dvh - 24px); border-bottom-left-radius: 0; border-bottom-right-radius: 0; } }

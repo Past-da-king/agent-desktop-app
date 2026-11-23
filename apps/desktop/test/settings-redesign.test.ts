@@ -76,7 +76,7 @@ describe('the settings rows are the settings', () => {
     expect(rowsOfSection('voice')).toHaveLength(6)
     expect(rowsOfSection('notify')).toHaveLength(8)
     expect(rowsOfSection('appearance')).toHaveLength(4)
-    expect(rowsOfSection('privacy')).toHaveLength(9)
+    expect(rowsOfSection('privacy')).toHaveLength(10)
     expect(rowsOfSection('git')).toHaveLength(4)
     expect(rowsOfSection('advanced')).toHaveLength(14)
   })

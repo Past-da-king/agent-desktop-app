@@ -1,3 +1,4 @@
+import { AnsweredForYouLink } from './AnsweredForYou'
 /**
  * Settings (redesigned 4 Nov 2026, the approved mock-ups): a section rail with the ten sections and their counts, one
  * search field that finds every setting in every section (hidden ones too), one row shape for every setting, and the
@@ -1275,6 +1276,11 @@ function PrivacySection({ settings, put, resetRow, navigate }: SectionProps): JS
           ]}
           onChange={(value) => put({ recordingAudioKeep: value as SettingsValues['recordingAudioKeep'] })}
         />
+      </SettingRow>
+      <div className="divider" />
+      <SettingRow spec={row('actsForMe')} changed={changedNow(row('actsForMe'), settings)} onReset={() => resetRow(row('actsForMe'))}>
+        <Switch on={settings?.actsForMe ?? true} label="Agent acts for me on approvals" onToggle={(next) => put({ actsForMe: next })} />
+        <AnsweredForYouLink />
       </SettingRow>
       <div className="divider" />
       <SettingRow

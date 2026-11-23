@@ -172,6 +172,8 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'helpers.stop': free('Stop a helper (its card > Stop)', 'helperId'),
   'helpers.stopAll': free('Stop every helper'),
   'helpers.dismiss': free('Close a card in the side panel (stops it first if it still works)', 'cardId'),
+  'acts.list': free('Read Answered for you'),
+  'acts.undo': no('Undo an answer made for you', PERSON_ANSWERS),
   'helpers.cards': free('The helper and project-agent cards in the side panel'),
   // Connected apps
   'apps.status': free('Connected apps and accounts (Connections)'),
@@ -414,7 +416,7 @@ function actionTool(deps: AppActionDeps): Tool {
       if (invoker === null || !invoker.has(channel)) return `${method} is not available here (this app has no ${areaOf(method)} part running).`
       if (rule.kind === 'ask' && !(rule.freeFirstArgs?.includes(String(args[0])) ?? false)) {
         const shown = hideSecrets(args, rule)
-        const yes = await ctx.approve(`${rule.about}`, `app_action ${method}(${shown.map((arg) => JSON.stringify(arg)).join(', ')})`)
+        const yes = await ctx.approve(`${rule.about}`, `app_action ${method}(${shown.map((arg) => JSON.stringify(arg)).join(', ')})`, undefined, { tool: 'app_action', input: { method, args: JSON.parse(JSON.stringify(shown)) } })
         if (!yes) return `The person said no; ${method} was not done.`
       }
       let answer: string

@@ -40,6 +40,7 @@ import { voiceNoteTool, type VoiceNoteMaker } from '../tools/voice-note'
 import type { DataStore } from './data'
 import type { EnvironmentService } from './environment'
 import { helperTools } from '../tools/helpers'
+import { cardTools, type CardToolDeps } from '../tools/cards'
 import { gateTool } from '../tools/profile-gate'
 import { profileTools } from '../tools/profiles'
 import { projectTools, type ProjectToolDeps } from '../tools/projects'
@@ -73,6 +74,8 @@ export interface ToolsetDeps extends CoreToolDeps {
   /** Omitted in tests and before the window exists; the browser tools then say it is not open. */
   browser?: BrowserDriver
   agentName?: () => string
+  /** Present for the main agent only: answering cards for him (Agent acts for me on approvals). */
+  cards?: CardToolDeps
   /** Present in the main process: lets the main agent hand work to helpers. */
   helpers?: HelperHost
   /** Present for the main agent: action tools stop after this many steps in one turn. */
@@ -214,9 +217,26 @@ export function drivesBrowser(name: string): boolean {
   return name.startsWith('browser_') || name.startsWith('webapp_') || name === 'vault_fill' || name === 'vault_login' || name === 'vault_passkey'
 }
 
+/**
+ * Every card a tool raises carries the REAL call behind it: the tool name the loop dispatched and its arguments,
+ * stamped here by the app (an inner tool of run_script stamps its own, an outer stamp never overrides one given).
+ * Who may answer the card is decided from that (shared/approval-policy.ts), never from the words the agent wrote.
+ */
+export function withOrigin(tools: Tool[]): Tool[] {
+  return tools.map((tool) => ({
+    spec: tool.spec,
+    run: (input, ctx) =>
+      tool.run(input, {
+        ...ctx,
+        approve: (summary, details, scope, origin) => ctx.approve(summary, details, scope, origin ?? { tool: tool.spec.name, input }),
+        ask: (question, options, card, origin) => ctx.ask(question, options, card, origin ?? { tool: tool.spec.name, input }),
+      }),
+  }))
+}
+
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
   // The vault guard sits outermost of all: what any tool returns, on any path, has vault values taken out.
-  return guardTools(workerToolsets(deps), deps.vault)
+  return guardTools(withOrigin(workerToolsets(deps)), deps.vault)
 }
 
 function workerToolsets(deps: ToolsetDeps): Tool[] {
@@ -316,7 +336,9 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
   if (deps.presence !== undefined) tools.push(...asOwner(presenceTools(deps.presence))) // meeting_ended
   // No step counter any more (21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.
   // The ones added here are guarded too (the worker ones already are; guardTools skips a tool it has wrapped).
-  return guardTools(tools, deps.vault)
+  // The main agent answers cards for him (Agent acts for me on approvals): its tools, never a helper's.
+  if (deps.cards !== undefined) tools.push(...asOwner(cardTools(deps.cards))) // cards_waiting, card_answer
+  return guardTools(withOrigin(tools), deps.vault)
 }
 
 /** Re-exported so a caller only needs this module to build a toolset. */

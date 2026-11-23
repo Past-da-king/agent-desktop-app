@@ -1,3 +1,4 @@
+import { AnsweredForYouLink } from '../views/AnsweredForYou'
 import type { ChatItem } from '@agent/core'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -142,7 +143,7 @@ export function NeedsYou(): JSX.Element | null {
     setPoint('')
   }, [point, all])
   const cards = useMemo(() => waiting.map((item) => ({ item, source: sourceOfChat(chatOf(item), items, projects, agentName) })), [waiting, items, projects, agentName])
-  if (cards.length === 0) return null
+  if (cards.length === 0) return <section className="ny" aria-label="Approvals"><AnsweredForYouLink /></section>
 
   return (
     <section className="ny" aria-label="Waiting on you">
@@ -150,6 +151,7 @@ export function NeedsYou(): JSX.Element | null {
         <span className="eyebrow">NEEDS YOU</span>
         <span className="small muted">{cards.length === 1 ? '1 waiting' : `${cards.length} waiting`}</span>
       </div>
+      <AnsweredForYouLink />
       <ul className="ny-list">
         {(all ? cards : cards.slice(0, SHOWN)).map(({ item, source }) => (
           <WaitingCard
