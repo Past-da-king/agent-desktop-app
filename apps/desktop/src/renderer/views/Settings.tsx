@@ -9,7 +9,7 @@
  * changed. A row says its default and offers Reset only while its value is not the default, and a group of rows (the
  * AI accounts, the folders, the devices) is never emptied by one button.
  */
-import type { AiAccount, AiPicks, GitLogEntry, Settings as SettingsValues } from '@agent/core'
+import type { AiAccount, AiAccountStatus, AiPicks, GitLogEntry, Settings as SettingsValues } from '@agent/core'
 import { DICTATION_MODELS, VOICES } from '@agent/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -35,7 +35,7 @@ import { AiPickRows } from '../ui/AiPickRows'
 import { Mascot, MASCOT_ORDER, MASCOTS } from '../ui/Mascot'
 import { Segmented } from '../ui/Segmented'
 import { Switch } from '../ui/Switch'
-import { AccountDialog } from './AiAccounts'
+import { AccountDialog, FailoverCard, PlanStatus } from './AiAccounts'
 import { DevicesSettings } from './Devices'
 import { outcome, waiting } from './GitSettings'
 import { speakText, stopSpeaking, useSpeaker } from '../voice/speaker'
@@ -243,6 +243,20 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
   const [syncing, setSyncing] = useState(false)
   const signedIn = settings?.signedIn ?? false
   const accounts = settings === null ? [] : accountsOf(settings)
+  // Who each plan account is signed in as and how much of its limit is used: on open, after a change, each minute.
+  const [planStatus, setPlanStatus] = useState<AiAccountStatus[]>([])
+  const accountKey = accounts.map((account) => `${account.id}:${account.kind}`).join(',')
+  useEffect(() => {
+    let alive = true
+    const load = (): void => void agent.settings.accounts.status().then((rows) => alive && setPlanStatus(rows)).catch(() => undefined)
+    load()
+    const timer = setInterval(load, 60_000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [accountKey, adding, editing])
+  const planKinds = (['claude', 'codex'] as const).filter((kind) => accounts.filter((account) => account.kind === kind).length > 1)
   const syncLine = status.syncing
     ? 'Syncing now'
     : status.error
@@ -331,6 +345,7 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
           sub
           below={
             <>
+              {account.kind === 'api' ? null : <PlanStatus status={planStatus.find((each) => each.id === account.id)} />}
               <span className="lbl">Pictures</span>
               <Segmented
                 ariaLabel={`Pictures on ${account.label}`}
@@ -345,8 +360,8 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
             </>
           }
         >
-          <Pill tone={account.kind === 'api' ? (account.hasKey ? 'ok' : 'mute') : 'ok'}>
-            {account.kind === 'api' ? (account.hasKey ? 'Key saved' : 'No key') : 'Plan'}
+          <Pill tone={account.kind === 'api' ? (account.hasKey ? 'ok' : 'mute') : planStatus.find((each) => each.id === account.id)?.signedIn === false ? 'mute' : 'ok'}>
+            {account.kind === 'api' ? (account.hasKey ? 'Key saved' : 'No key') : planStatus.find((each) => each.id === account.id)?.signedIn === false ? 'Signed out' : 'Plan'}
           </Pill>
           <Button variant="text" size="sm" onClick={() => setEditing(account)}>
             Change
@@ -382,6 +397,7 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
           <AiPickRows settings={settings} picks={settings.ai} onChange={(ai: AiPicks) => put({ ai })} />
         </div>
       )}
+      {settings !== null && planKinds.length > 0 ? <FailoverCard settings={settings} accounts={accounts} onChange={(ai: AiPicks) => put({ ai })} /> : null}
       {adding ? <AccountDialog onClose={() => setAdding(false)} /> : null}
       {editing !== null ? <AccountDialog account={editing} onClose={() => setEditing(null)} /> : null}
     </SectionBlock>

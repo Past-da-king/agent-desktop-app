@@ -15,15 +15,21 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import type { AgentEvent, JsonObject } from '@agent/core'
+import type { AgentEvent, AiUsageWindow, JsonObject } from '@agent/core'
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { CodexOptions, Input, ThreadOptions } from '@openai/codex-sdk'
 
+import { claudeLimitWindow, engineHomeEnv, type HomeEntry } from './account-home'
 import type { TurnMessage, TurnMessages } from './note-tools'
 import { SDK_TOOLS } from './sdk-permissions'
 import { markReleased } from '../tools/run-capture'
 
 export type CliId = 'claude' | 'codex'
+
+/** True for the words explainCliFailure gives a turn that stopped on the plan's usage limit. */
+export function isLimitFailure(error: string | undefined): boolean {
+  return error !== undefined && /plan has reached its limit/i.test(error)
+}
 export type EngineAccess = 'free' | 'asked'
 
 /** Where an engine runs: the work's folder when there is one, its private folder too either way. */
@@ -142,6 +148,10 @@ export interface CliTurn {
   onSession?: (sessionId: string) => void
   /** Messages for the model that arrive mid-turn. Each reaches it as a message of its own, between steps. */
   messages?: TurnMessages
+  /** The account's own sign-in home. Absent: the computer's own login, as before accounts had homes. */
+  home?: HomeEntry
+  /** The plan reported how much of a limit is used (Claude's rate_limit_event); told as it arrives. */
+  onUsage?: (window: AiUsageWindow, rejected: boolean) => void
 }
 
 /** Tells the turn its session id when it is new (never throws: keeping it is best effort). */
@@ -180,8 +190,8 @@ export function explainCliFailure(cli: CliId, text: string): string {
   const t = text.toLowerCase()
   if (/log ?in|logged out|not authenticated|authentication|invalid api key|\/login|oauth|credentials|unauthori[sz]ed|401/.test(t)) {
     return cli === 'claude'
-      ? 'Claude is not signed in on this computer. Install Claude Code, run claude once and sign in with your Claude account, then try again.'
-      : 'Codex is not signed in on this computer. Run codex login once and sign in with your ChatGPT account, then try again.'
+      ? 'Claude is not signed in on this computer for this account. Open Settings > AI, choose the account and press Sign in, then try again.'
+      : 'Codex is not signed in on this computer for this account. Open Settings > AI, choose the account and press Sign in, then try again.'
   }
   if (/usage limit|rate limit|limit reached|quota|too many requests|429/.test(t)) {
     return `Your ${name} plan has reached its limit for now. It resets on its own; try again later.`
@@ -201,9 +211,10 @@ function textOf(content: unknown): string {
   return ''
 }
 
-function engineEnv(extra: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = {}
-  for (const [key, value] of Object.entries(process.env)) if (typeof value === 'string') env[key] = value
+function engineEnv(extra: Record<string, string> = {}, home?: HomeEntry): Record<string, string> {
+  // The sign-in home comes from engineHomeEnv and nowhere else (account-home.ts).
+  const env: Record<string, string> = home === undefined ? {} : engineHomeEnv(home)
+  if (home === undefined) for (const [key, value] of Object.entries(process.env)) if (typeof value === 'string') env[key] = value
   delete env['ELECTRON_RUN_AS_NODE']
   delete env['ANTHROPIC_API_KEY'] // the person's plan, not a stray key in the environment
   delete env['OPENAI_API_KEY']
@@ -297,7 +308,7 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         ...(turn.model === undefined || turn.model.trim() === '' ? {} : { model: turn.model.trim() }),
         cwd: engineFolders(turn).cwd,
         ...(engineFolders(turn).extra.length === 0 ? {} : { additionalDirectories: engineFolders(turn).extra }),
-        env: engineEnv(),
+        env: engineEnv({}, turn.home),
         ...(turn.program === null ? {} : { pathToClaudeCodeExecutable: turn.program }),
         abortController,
         // The engine says when it took a streamed message into the conversation: that is "the helper read it".
@@ -353,6 +364,13 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
       if (typeof m['session_id'] === 'string' && m['session_id'] !== '') {
         sessionNamed(turn, sessionId, m['session_id'])
         sessionId = m['session_id']
+      }
+      if (m['type'] === 'rate_limit_event') {
+        const info = (m['rate_limit_info'] ?? {}) as { status?: unknown; rateLimitType?: unknown; utilization?: unknown; resetsAt?: unknown }
+        const window = claudeLimitWindow(info)
+        if (window !== null) turn.onUsage?.(window, info.status === 'rejected')
+        else if (info.status === 'rejected') turn.onUsage?.({ label: 'Limit', usedPercent: 100, resetsAt: typeof info.resetsAt === 'number' ? info.resetsAt * 1000 : null }, true)
+        continue
       }
       if (m['type'] === 'user' && m['isReplay'] === true) {
         // The engine took a streamed message in. The turn's own first prompt comes back this way too: it matches nothing.
@@ -436,7 +454,7 @@ async function runCodex(turn: CliTurn): Promise<CliResult> {
   const settings = codexSettings(turn)
   const codex = new Codex({
     ...(turn.program === null ? {} : { codexPathOverride: turn.program }),
-    env: engineEnv({ AGENT_MCP_TOKEN: turn.mcp.token }),
+    env: engineEnv({ AGENT_MCP_TOKEN: turn.mcp.token }, turn.home),
     config: settings.config,
   })
   const options = settings.thread
@@ -581,9 +599,9 @@ export interface PlanModel {
  * Claude: Claude Code's own supportedModels(), from a session that sends no message. Codex: the model list
  * Codex keeps in CODEX_HOME (models_cache.json), refreshed every time Codex runs.
  */
-export async function planModels(cli: CliId, program: string | null, workDir: string): Promise<PlanModel[]> {
+export async function planModels(cli: CliId, program: string | null, workDir: string, account?: HomeEntry): Promise<PlanModel[]> {
   if (cli === 'codex') {
-    const home = process.env['CODEX_HOME'] ?? join(homedir(), '.codex')
+    const home = account?.dir ?? process.env['CODEX_HOME'] ?? join(homedir(), '.codex')
     try {
       const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8')) as {
         models?: Array<{ slug?: unknown; display_name?: unknown; description?: unknown; visibility?: unknown; priority?: unknown }>
@@ -606,7 +624,7 @@ export async function planModels(cli: CliId, program: string | null, workDir: st
     prompt: idle,
     options: {
       cwd: workDir,
-      env: engineEnv(),
+      env: engineEnv({}, account),
       abortController: abort,
       settingSources: [],
       ...(program === null ? {} : { pathToClaudeCodeExecutable: program }),

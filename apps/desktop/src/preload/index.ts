@@ -50,7 +50,7 @@ import type {
   WorkerInfo,
   WorkerLogLine,
 } from '@agent/core'
-import type { CallHandoffResult, CallTarget, LiveTokenResult } from '@agent/core'
+import type { AiAccountStatus, CallHandoffResult, CallTarget, LiveTokenResult } from '@agent/core'
 import type { VaultAuditEntry, VaultImportResult, VaultItemMeta, VaultPrefs } from '@agent/core'
 import type { DeviceJoinResult, DeviceRow, DevicesStatus, HelperCardsSnapshot, PairingOfferInfo } from '@agent/core'
 import type { MemoryImportPreview, MemoryImportResult, MemoryTidyPlan, MemoryTidyProgress, MemoryVersion, PastChatHit, UpkeepReport, UpkeepSummary } from '@agent/core'
@@ -104,6 +104,7 @@ const api: AgentApi = {
       check: (id) => call<{ ok: boolean; message: string }>(CHANNELS.settings.accounts.check, id),
       listModels: (id) => call<ModelListResult>(CHANNELS.settings.accounts.listModels, id),
       signIn: (id) => call<{ ok: boolean; message: string }>(CHANNELS.settings.accounts.signIn, id),
+      status: () => call<AiAccountStatus[]>(CHANNELS.settings.accounts.status),
       chatBrain: (chat) => call<ChatBrain>(CHANNELS.settings.accounts.chatBrain, chat),
     },
     onChanged: (callback) => on<Settings>(EVENTS.settings, callback),

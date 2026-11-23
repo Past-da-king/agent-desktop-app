@@ -308,6 +308,7 @@ export async function createRemoteAgent(): Promise<AgentApi> {
         listModels: async () => ({ ok: false, models: [], message: 'Choose models on the computer itself.' }),
         signIn: () => notHere('Signing in'),
         chatBrain: rpc('settings.accounts.chatBrain'),
+        status: rpc('settings.accounts.status'),
       },
       onChanged: (callback) =>
         wire.on(EVENTS.settings, (payload) => {

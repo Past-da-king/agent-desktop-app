@@ -24,6 +24,7 @@ export const CHANNELS = {
       listModels: 'agent:accounts.listModels',
       signIn: 'agent:accounts.signIn',
       chatBrain: 'agent:accounts.chatBrain',
+      status: 'agent:accounts.status',
     },
   },
   account: {

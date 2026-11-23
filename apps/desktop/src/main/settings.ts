@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { hostname as osHostname } from 'node:os'
 import { dirname } from 'node:path'
 
-import { DEFAULT_SETTINGS, NO_LIMIT_CAP, VOICES, DICTATION_MODELS, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiPick, type AiPicks, type Settings, cleanRoster, knownRoster } from '@agent/core'
+import { DEFAULT_SETTINGS, NO_LIMIT_CAP, VOICES, DICTATION_MODELS, accountById, legacyFieldsOf, mainPickOf, type AiAccount, type AiFailover, type AiPick, type AiPicks, type Settings, cleanRoster, knownRoster } from '@agent/core'
 
 import { upgradeHotkeys } from './hotkeys'
 import { validQuietHours } from '../shared/wakeups'
@@ -334,7 +334,25 @@ export function picksFrom(raw: unknown): AiPicks | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const o = raw as Record<string, unknown>
   const roster = cleanRoster(o['roster'])
-  return { main: pickFrom(o['main']), helpers: pickFrom(o['helpers']), ...(roster.length > 0 ? { roster } : {}) }
+  const failover = failoverFrom(o['failover'])
+  return { main: pickFrom(o['main']), helpers: pickFrom(o['helpers']), ...(roster.length > 0 ? { roster } : {}), ...(failover === undefined ? {} : { failover }) }
+}
+
+/** The failover rules as stored, cleaned: only the two roles, a boolean, and a short list of account ids. */
+export function failoverFrom(raw: unknown): AiFailover | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const o = raw as Record<string, unknown>
+  const out: AiFailover = {}
+  for (const role of ['main', 'helpers'] as const) {
+    const rule = o[role]
+    if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) continue
+    const r = rule as Record<string, unknown>
+    const order = Array.isArray(r['order'])
+      ? [...new Set((r['order'] as unknown[]).filter((id): id is string => typeof id === 'string').map((id) => id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40)).filter((id) => id !== ''))].slice(0, 24)
+      : []
+    out[role] = { on: r['on'] === true, order }
+  }
+  return out.main === undefined && out.helpers === undefined ? undefined : out
 }
 
 const LEGACY_KEYS = ['mode', 'cli', 'cliModel', 'provider', 'model', 'baseUrl', 'allowHttp', 'hasKey'] as const
@@ -350,6 +368,7 @@ function mirrorAccounts(next: Settings, patched: string[]): void {
     // A pick that names an account that is gone falls back to the first account (mainPickOf); keep it tidy.
     const main = next.accounts.length === 0 ? { account: '', model: '' } : mainPickOf(next, 'main')
     const helpers = next.ai.helpers
+    const failover = failoverFrom(next.ai.failover)
     // The helper models keep only accounts that still exist; the one helpers pick mirrors the first of them.
     const roster = knownRoster(next, next.ai.roster)
     const first = roster[0]
@@ -362,6 +381,7 @@ function mirrorAccounts(next: Settings, patched: string[]): void {
             ? { account: '', model: helpers.account === '' ? helpers.model : '' }
             : helpers,
       ...(roster.length > 0 ? { roster } : {}),
+      ...(failover === undefined ? {} : { failover }),
     }
     Object.assign(next, legacyFieldsOf(accountById(next, main.account), main.model))
     return

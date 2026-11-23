@@ -5,6 +5,8 @@
  */
 import { dirname, join } from 'node:path'
 
+import { accountLabels } from '@agent/core'
+
 import { platformOf } from '../main/devices/facts'
 import { findSidecar } from '../main/devices/net'
 import { attachDevicesSync } from '../main/devices/attach'
@@ -53,7 +55,7 @@ export function headlessFacts(name: string, version: string, urls: string[], fp:
  * be picked.
  */
 export function canRunTurns(runtime: HeadlessRuntime): boolean {
-  if (runtime.accounts.all().some((a) => (a.kind === 'api' ? a.hasKey : runtime.cli.signedIn(a.kind)))) return true
+  if (runtime.accounts.all().some((a) => (a.kind === 'api' ? a.hasKey : runtime.cli.signedIn(a.kind, a.id)))) return true
   return runtime.settings.get().hasKey
 }
 
@@ -117,6 +119,7 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
       vault: runtime.vault,
       passes: node.passTable(),
       projects: () => runtime.store.list('project'),
+      accountLabels: async () => accountLabels(await runtime.cli.status(runtime.accounts.all())),
     },
     ...runtime.devicesHooks,
     pairedPass: () => runtime.secrets.get(PASS_SECRET),

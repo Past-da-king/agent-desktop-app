@@ -705,6 +705,26 @@ export const mockAgent: AgentApi = {
         await delay(1000)
         return { ok: true, message: 'Signed in.' }
       },
+      async status() {
+        const emails = ['ayanda@example.com', 'info@example.org', 'team@example.net']
+        return settings.accounts
+          .filter((a) => a.kind !== 'api')
+          .map((a, n) => ({
+            id: a.id,
+            kind: a.kind,
+            label: a.label,
+            signedIn: true,
+            email: emails[n % emails.length] ?? '',
+            plan: a.kind === 'codex' ? 'Plus' : 'Max 5x',
+            usage: [
+              { label: '5 hours', usedPercent: 42 + n * 30, resetsAt: Date.now() + 3 * 3600_000 },
+              { label: 'Weekly', usedPercent: 18 + n * 20, resetsAt: Date.now() + 3 * 86_400_000 },
+            ],
+            usageAt: Date.now(),
+            limited: false,
+            sharedLogin: n === 0,
+          }))
+      },
       async chatBrain(chat) {
         const project = rows.project.find((p) => p.chats.includes(chat))
         const main = resolvePick(settings, project?.ai, 'main')

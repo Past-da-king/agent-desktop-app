@@ -36,6 +36,7 @@ export const RPC_ALLOWED: ReadonlySet<string> = new Set([
   'settings.get',
   'settings.providers',
   'settings.accounts.chatBrain',
+  'settings.accounts.status',
   'account.status',
   'account.syncNow',
   'data.list',

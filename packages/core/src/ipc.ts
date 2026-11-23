@@ -77,6 +77,49 @@ export interface AiPicks {
    * someone adds a second model); in a project, empty = the main thread's.
    */
   roster?: AiRosterEntry[]
+  /**
+   * When an account hits its limit, retry on another signed-in plan account of the same kind: per role, on or off,
+   * and in which order. Absent = off for every role.
+   */
+  failover?: AiFailover
+}
+
+/** The roles failover is set for. Routines and the memory pass run as `main`. */
+export type AiFailoverRole = 'main' | 'helpers'
+
+export interface AiFailoverRule {
+  on: boolean
+  /** Account ids, tried in this order after the picked one. Accounts of another kind are skipped. */
+  order: string[]
+}
+
+export type AiFailover = Partial<Record<AiFailoverRole, AiFailoverRule>>
+
+/** One usage window a plan reports: "5 hours" 42% used, back to full at resetsAt (epoch ms). */
+export interface AiUsageWindow {
+  label: string
+  usedPercent: number
+  resetsAt: number | null
+}
+
+/**
+ * What a plan account is signed in as, read from its own sign-in home: never a token. This is also the only part
+ * of an account that is sent to the phone and to linked computers (labels, not logins).
+ */
+export interface AiAccountStatus {
+  id: string
+  kind: AiAccountKind
+  label: string
+  signedIn: boolean
+  email: string
+  plan: string
+  usage: AiUsageWindow[]
+  /** When usage was last reported (epoch ms), 0 = never. */
+  usageAt: number
+  /** The plan said it is at its limit and the reset has not come yet. */
+  limited: boolean
+  /** True for the account that still uses the computer's own shared login (~/.claude, ~/.codex). */
+  sharedLogin: boolean
 }
 
 export const NO_PICK: AiPick = { account: '', model: '' }
@@ -393,6 +436,8 @@ export interface AccountsApi {
   listModels(id: string): Promise<ModelListResult>
   /** Runs the plan's own sign-in for a plan account. */
   signIn(id: string): Promise<{ ok: boolean; message: string }>
+  /** Who each plan account is signed in as, its plan and its usage (labels only, never a token). */
+  status(): Promise<AiAccountStatus[]>
   /** What a chat is thinking with (MAIN_CHAT or a project chat id). */
   chatBrain(chat: string): Promise<ChatBrain>
 }

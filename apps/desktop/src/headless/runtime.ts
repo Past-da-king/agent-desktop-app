@@ -238,7 +238,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   setVaultRedactor((text) => vault.redact(text))
   vault.onChange(() => broadcast(VAULT_EVENTS.changed, null))
   migrateLegacyAccount(settings, secrets)
-  const accounts = new AccountStore(settings, secrets)
+  const accounts = new AccountStore(settings, secrets, undefined, (id) => cliHost.forgetAccount(id))
   const brainLocks = new FileBrainLocks(join(dir, 'brain-locks.json'))
   const account = new AccountService(store, settings, secrets)
   const disposeStore = store.onChange(() => account.nudge())

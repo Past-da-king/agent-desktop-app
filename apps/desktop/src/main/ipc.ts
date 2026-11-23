@@ -31,6 +31,7 @@ import {
   accountsOf,
   type AiAccount,
   type AiAccountDraft,
+  type AiAccountStatus,
   type ChatBrain,
   type ProviderId,
 } from '@agent/core'
@@ -126,6 +127,8 @@ export interface ChatRunner {
   planModels?(accountId?: string): Promise<Array<{ id: string; label: string; line: string }>>
   /** What a chat thinks with, for the picker in its header. */
   chatBrain?(chat: string): Promise<ChatBrain>
+  /** Who each plan account is signed in as, its plan and usage. */
+  accountStatus?(): Promise<AiAccountStatus[]>
 }
 
 export interface RoutineService {
@@ -373,6 +376,7 @@ export function registerIpc(deps: IpcDeps): () => void {
     if (accountsStore().find(id) === null) throw new Error('No such account')
     return deps.chat.cliLogin === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.cliLogin(id)
   })
+  handle(CHANNELS.settings.accounts.status, async () => (deps.chat.accountStatus === undefined ? [] : deps.chat.accountStatus()))
   handle(CHANNELS.settings.accounts.chatBrain, async (_event, rawChat) => {
     const chat = requireString(rawChat, 'chat', 64)
     if (deps.chat.chatBrain === undefined) {
