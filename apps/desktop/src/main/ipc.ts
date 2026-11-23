@@ -123,7 +123,9 @@ export interface ChatRunner {
   tap(itemId: string, label: string, message: string, tapId?: string): Promise<void>
   /** Optional: only the real runner can drive an installed AI tool. */
   checkCli?(accountId?: string): Promise<{ ok: boolean; message: string }>
-  cliLogin?(accountId?: string): Promise<{ ok: boolean; message: string }>
+  cliLogin?(accountId?: string, mode?: 'window' | 'code'): Promise<{ ok: boolean; message: string }>
+  signInCode?(accountId: string, code: string): boolean
+  cancelSignIn?(accountId: string): void
   planModels?(accountId?: string): Promise<Array<{ id: string; label: string; line: string }>>
   /** What a chat thinks with, for the picker in its header. */
   chatBrain?(chat: string): Promise<ChatBrain>
@@ -371,10 +373,18 @@ export function registerIpc(deps: IpcDeps): () => void {
       ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
     })
   })
-  handle(CHANNELS.settings.accounts.signIn, async (_event, rawId) => {
+  handle(CHANNELS.settings.accounts.signIn, async (_event, rawId, rawMode) => {
     const id = accountId(rawId)
     if (accountsStore().find(id) === null) throw new Error('No such account')
-    return deps.chat.cliLogin === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.cliLogin(id)
+    const mode = rawMode === 'code' ? 'code' : 'window'
+    return deps.chat.cliLogin === undefined ? { ok: false, message: 'Not available in this build.' } : deps.chat.cliLogin(id, mode)
+  })
+  handle(CHANNELS.settings.accounts.signInCode, async (_event, rawId, rawCode) => {
+    const id = accountId(rawId)
+    return deps.chat.signInCode?.(id, requireString(rawCode, 'code', 2000)) ?? false
+  })
+  handle(CHANNELS.settings.accounts.cancelSignIn, async (_event, rawId) => {
+    deps.chat.cancelSignIn?.(accountId(rawId))
   })
   handle(CHANNELS.settings.accounts.status, async () => (deps.chat.accountStatus === undefined ? [] : deps.chat.accountStatus()))
   handle(CHANNELS.settings.accounts.chatBrain, async (_event, rawChat) => {

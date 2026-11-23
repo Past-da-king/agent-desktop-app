@@ -245,17 +245,33 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
   const accounts = settings === null ? [] : accountsOf(settings)
   // Who each plan account is signed in as and how much of its limit is used: on open, after a change, each minute.
   const [planStatus, setPlanStatus] = useState<AiAccountStatus[]>([])
+  const [signingIn, setSigningIn] = useState<string | null>(null)
+  const signInActive = signingIn !== null || planStatus.some((each) => each.signIn !== undefined)
   const accountKey = accounts.map((account) => `${account.id}:${account.kind}`).join(',')
   useEffect(() => {
     let alive = true
     const load = (): void => void agent.settings.accounts.status().then((rows) => alive && setPlanStatus(rows)).catch(() => undefined)
     load()
-    const timer = setInterval(load, 60_000)
+    // Quick while a sign-in is running, so its address and code show up at once.
+    const timer = setInterval(load, signInActive ? 1500 : 60_000)
     return () => {
       alive = false
       clearInterval(timer)
     }
-  }, [accountKey, adding, editing])
+  }, [accountKey, adding, editing, signInActive])
+
+  /** Runs the plan's own sign-in for one account: in the app's private window, or just the address and a code. */
+  const startSignIn = (account: AiAccount, mode: 'window' | 'code'): void => {
+    setSigningIn(account.id)
+    void agent.settings.accounts
+      .signIn(account.id, mode)
+      .then((result) => toast(result.message))
+      .catch(() => toast('The sign-in did not finish. Try again.'))
+      .finally(() => {
+        setSigningIn(null)
+        put({})
+      })
+  }
   const planKinds = (['claude', 'codex'] as const).filter((kind) => accounts.filter((account) => account.kind === kind).length > 1)
   const syncLine = status.syncing
     ? 'Syncing now'
@@ -345,7 +361,11 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
           sub
           below={
             <>
-              {account.kind === 'api' ? null : <PlanStatus status={planStatus.find((each) => each.id === account.id)} />}
+              {account.kind === 'api' ? null : <PlanStatus
+                  status={planStatus.find((each) => each.id === account.id)}
+                  onPaste={(code) => void agent.settings.accounts.signInCode(account.id, code).then((ok) => !ok && toast('No sign-in is waiting for a code.'))}
+                  onCancel={() => void agent.settings.accounts.cancelSignIn(account.id)}
+                />}
               <span className="lbl">Pictures</span>
               <Segmented
                 ariaLabel={`Pictures on ${account.label}`}
@@ -363,6 +383,16 @@ function AccountSection({ settings, put, resetRow, navigate }: SectionProps): JS
           <Pill tone={account.kind === 'api' ? (account.hasKey ? 'ok' : 'mute') : planStatus.find((each) => each.id === account.id)?.signedIn === false ? 'mute' : 'ok'}>
             {account.kind === 'api' ? (account.hasKey ? 'Key saved' : 'No key') : planStatus.find((each) => each.id === account.id)?.signedIn === false ? 'Signed out' : 'Plan'}
           </Pill>
+          {account.kind === 'api' ? null : (
+            <>
+              <Button variant="tonal" size="sm" disabled={signingIn !== null} onClick={() => startSignIn(account, 'window')}>
+                Sign in
+              </Button>
+              <Button variant="text" size="sm" disabled={signingIn !== null} onClick={() => startSignIn(account, 'code')}>
+                Sign in with a code
+              </Button>
+            </>
+          )}
           <Button variant="text" size="sm" onClick={() => setEditing(account)}>
             Change
           </Button>

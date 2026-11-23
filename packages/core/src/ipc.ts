@@ -120,6 +120,8 @@ export interface AiAccountStatus {
   limited: boolean
   /** True for the account that still uses the computer's own shared login (~/.claude, ~/.codex). */
   sharedLogin: boolean
+  /** A sign-in is running for this account: the address to open and the code to enter (Claude: a code to paste). */
+  signIn?: { url: string; code: string; needsPaste: boolean }
 }
 
 export const NO_PICK: AiPick = { account: '', model: '' }
@@ -435,7 +437,11 @@ export interface AccountsApi {
   /** The models that account can use, asked live. */
   listModels(id: string): Promise<ModelListResult>
   /** Runs the plan's own sign-in for a plan account. */
-  signIn(id: string): Promise<{ ok: boolean; message: string }>
+  signIn(id: string, mode?: 'window' | 'code'): Promise<{ ok: boolean; message: string }>
+  /** Claude's sign-in page shows a code: paste it here. False when no sign-in is waiting for one. */
+  signInCode(id: string, code: string): Promise<boolean>
+  /** Stops a running sign-in. */
+  cancelSignIn(id: string): Promise<void>
   /** Who each plan account is signed in as, its plan and its usage (labels only, never a token). */
   status(): Promise<AiAccountStatus[]>
   /** What a chat is thinking with (MAIN_CHAT or a project chat id). */

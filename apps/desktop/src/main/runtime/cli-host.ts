@@ -5,7 +5,7 @@
  * restarts, and knows whether the person has signed in on this computer.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
@@ -47,6 +47,14 @@ export interface AccountRan {
   account: string
   /** Set when this run is a failover: the account that hit its limit first. */
   failedOverFrom?: string
+}
+
+/** What a running sign-in shows on the account's card. */
+export interface SignInPrompt {
+  url: string
+  code: string
+  /** Claude: the page shows a code the person pastes into the card. */
+  needsPaste: boolean
 }
 
 /** How long an account that hit a limit it gave no reset time for is skipped by failover. */
@@ -300,55 +308,106 @@ export class CliHost {
     }
   }
 
+  /** Sign-ins running now, by account: what to show the person (address, code) and how to reach the engine. */
+  private readonly signIns = new Map<string, { prompt: SignInPrompt; child: ChildProcess }>()
+
+  /** What a running sign-in is waiting for, for the account's card: the address, the code, or a code to paste. */
+  signInPrompt(account: string): SignInPrompt | null {
+    const running = this.signIns.get(account)
+    // Nothing to show until the engine has printed its address (and, for Codex, its code).
+    if (running === undefined || running.prompt.url === '' || (!running.prompt.needsPaste && running.prompt.code === '')) return null
+    return { ...running.prompt }
+  }
+
+  /** Claude shows a code on its sign-in page; the person pastes it and it goes to the engine. False when none is waiting. */
+  submitSignInCode(account: string, code: string): boolean {
+    const running = this.signIns.get(account)
+    const text = code.trim()
+    if (running === undefined || !running.prompt.needsPaste || text === '' || running.child.stdin === null || running.child.stdin.destroyed) return false
+    running.child.stdin.write(`${text}\n`)
+    return true
+  }
+
+  /** Stops a running sign-in. */
+  cancelSignIn(account: string): void {
+    const running = this.signIns.get(account)
+    if (running === undefined) return
+    this.signIns.delete(account)
+    running.child.kill()
+  }
+
+  /** A program that does nothing, for BROWSER: the engine must not open the computer's default browser. */
+  private noBrowser(): string {
+    if (process.platform !== 'win32') return 'true'
+    const file = join(this.workDir, 'no-browser.cmd')
+    if (!existsSync(file)) writeFileSync(file, '@echo off\r\nexit /b 0\r\n')
+    return file
+  }
+
   /**
-   * Runs the engine's own sign-in (`claude auth login`, `codex login`). Both open the browser; any sign-in
-   * address they print is opened too, in case the engine could not open it itself. Up to 10 minutes.
+   * Runs the engine's own sign-in in that account's home, never in the computer's default browser (which is usually
+   * already signed in as ONE account). Codex uses its device flow (`codex login --device-auth`: an address and a
+   * one-time code, no browser); Claude is started with BROWSER set to a no-op and its address is read from its output
+   * (the page shows a code to paste, see submitSignInCode). The address and code are kept for the account's card
+   * (signInPrompt). mode 'window' also hands the address to `openUrl` (the app's own private window); 'code' only
+   * shows it. Up to 10 minutes.
    */
-  login(cli: CliId, openUrl: (url: string) => void, account?: string): Promise<{ ok: boolean; message: string }> {
+  login(cli: CliId, openUrl: (url: string) => void, account?: string, options: { mode?: 'window' | 'code' } = {}): Promise<{ ok: boolean; message: string }> {
     const program = this.engine(cli)
     const name = cli === 'claude' ? 'Claude' : 'ChatGPT'
     if (program === null) return Promise.resolve({ ok: false, message: `The ${name} sign-in is not available in this build.` })
     const entry = this.entry(cli, account)
-    // A fresh home signs in as whoever completes the browser step, never as the computer's login: the engine is given
-    // only this account's folder, so there is nothing else for it to find.
-    const env = { ...engineHomeEnv(entry), ELECTRON_RUN_AS_NODE: undefined }
+    const key = account ?? ''
+    this.cancelSignIn(key)
+    // A fresh home signs in as whoever completes the page, never as the computer's login: the engine is given only
+    // this account's folder, so there is nothing else for it to find.
+    const env: Record<string, string | undefined> = { ...engineHomeEnv(entry), ELECTRON_RUN_AS_NODE: undefined }
+    if (cli === 'claude') env['BROWSER'] = this.noBrowser()
     return new Promise((resolve) => {
-      const child = spawn(program, cli === 'claude' ? ['auth', 'login'] : ['login'], {
+      const child = spawn(program, cli === 'claude' ? ['auth', 'login'] : ['login', '--device-auth'], {
         cwd: this.workDir,
         env,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [cli === 'claude' ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       })
-      const opened = new Set<string>()
+      const prompt: SignInPrompt = { url: '', code: '', needsPaste: cli === 'claude' }
+      this.signIns.set(key, { prompt, child })
+      let opened = false
       let output = ''
       const scan = (chunk: Buffer): void => {
-        const text = chunk.toString('utf8')
+        // The engines colour their output; the address and code are read from the plain text.
+        const text = chunk.toString('utf8').replace(/\u001b\[[0-9;]*m/g, '')
         if (output.length < 8000) output += text
         for (const match of text.matchAll(/https:\/\/[^\s"'<>]+/g)) {
           const url = match[0].replace(/[).,]+$/, '')
-          if (!opened.has(url) && /claude\.ai|anthropic\.com|openai\.com|chatgpt\.com/.test(url)) {
-            opened.add(url)
-            openUrl(url)
-          }
+          if (prompt.url === '' && /claude\.(ai|com)|anthropic\.com|openai\.com|chatgpt\.com/.test(url)) prompt.url = url
+        }
+        if (cli === 'codex' && prompt.code === '') {
+          const code = text.replace(/https:\/\/[^\s]+/g, '').match(/\b([A-Z0-9]{4,5}-[A-Z0-9]{4,6})\b/)
+          if (code?.[1] !== undefined) prompt.code = code[1]
+        }
+        if (!opened && prompt.url !== '' && options.mode === 'window' && (cli === 'claude' || prompt.code !== '')) {
+          opened = true
+          openUrl(prompt.url)
         }
       }
       child.stdout?.on('data', scan)
       child.stderr?.on('data', scan)
+      const finish = (result: { ok: boolean; message: string }): void => {
+        clearTimeout(timer)
+        if (this.signIns.get(key)?.child === child) this.signIns.delete(key)
+        resolve(result)
+      }
       const timer = setTimeout(() => {
         child.kill()
-        resolve({ ok: false, message: 'The sign-in took too long. Try again.' })
+        finish({ ok: false, message: 'The sign-in took too long. Try again.' })
       }, 10 * 60 * 1000)
-      child.once('error', (error) => {
-        clearTimeout(timer)
-        resolve({ ok: false, message: `Could not start the ${name} sign-in: ${error.message}` })
-      })
+      child.once('error', (error) => finish({ ok: false, message: `Could not start the ${name} sign-in: ${error.message}` }))
       child.once('close', (code) => {
-        clearTimeout(timer)
         if (code === 0) {
           const who = identityOf(entry)
-          resolve({ ok: true, message: who.email === '' ? `Signed in to ${name}.` : `Signed in to ${name} as ${who.email}${who.plan === '' ? '' : ` (${who.plan})`}.` })
-        }
-        else resolve({ ok: false, message: output.trim().split('\n').pop()?.slice(0, 200) || `The ${name} sign-in did not finish.` })
+          finish({ ok: true, message: who.email === '' ? `Signed in to ${name}.` : `Signed in to ${name} as ${who.email}${who.plan === '' ? '' : ` (${who.plan})`}.` })
+        } else finish({ ok: false, message: output.trim().split('\n').pop()?.slice(0, 200) || `The ${name} sign-in did not finish.` })
       })
     })
   }
@@ -578,6 +637,7 @@ export class CliHost {
         usageAt: at,
         limited: this.limited(account.id) || windows.some((window) => window.usedPercent >= 100 && (window.resetsAt === null || window.resetsAt > Date.now())),
         sharedLogin: entry.shared,
+        ...(this.signInPrompt(account.id) === null ? {} : { signIn: this.signInPrompt(account.id)! }),
       })
     }
     return out
