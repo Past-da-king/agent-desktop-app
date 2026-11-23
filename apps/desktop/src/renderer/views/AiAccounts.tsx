@@ -471,7 +471,7 @@ const ROLE_LINES: Array<{ role: AiFailoverRole; title: string; line: string }> =
  * Off until switched on.
  */
 export function FailoverCard({ settings, accounts, onChange }: { settings: Parameters<typeof failoverRule>[0]; accounts: AiAccount[]; onChange: (ai: AiPicks) => void }): JSX.Element {
-  const plans = accounts.filter((account) => account.kind !== 'api')
+  const kinds = (['claude', 'codex'] as const).filter((kind) => accounts.filter((account) => account.kind === kind).length > 1)
   const set = (role: AiFailoverRole, on: boolean, order: string[]): void =>
     onChange({ ...settings.ai, failover: { ...(settings.ai.failover ?? {}), [role]: { on, order } } })
   return (
@@ -482,18 +482,25 @@ export function FailoverCard({ settings, accounts, onChange }: { settings: Param
       </div>
       {ROLE_LINES.map(({ role, title, line }) => {
         const rule = failoverRule(settings, role)
-        const known = plans.map((account) => account.id)
-        const order = [...rule.order.filter((id) => known.includes(id)), ...known.filter((id) => !rule.order.includes(id))]
-        const move = (index: number, by: number): void => {
-          const next = [...order]
-          const other = index + by
-          if (other < 0 || other >= next.length) return
-          const a = next[index]
-          const b = next[other]
-          if (a === undefined || b === undefined) return
-          next[index] = b
-          next[other] = a
-          set(role, rule.on, next)
+        // The order of each plan's accounts: the set order first, then the rest in list order. Never across plans.
+        const groups = kinds.map((kind) => {
+          const ids = accounts.filter((account) => account.kind === kind).map((account) => account.id)
+          return { kind, order: [...rule.order.filter((id) => ids.includes(id)), ...ids.filter((id) => !rule.order.includes(id))] }
+        })
+        const write = (next: typeof groups): void => set(role, rule.on, next.flatMap((group) => group.order))
+        const move = (kind: string, index: number, by: number): void => {
+          write(
+            groups.map((group) => {
+              if (group.kind !== kind) return group
+              const order = [...group.order]
+              const a = order[index]
+              const b = order[index + by]
+              if (a === undefined || b === undefined) return group
+              order[index] = b
+              order[index + by] = a
+              return { ...group, order }
+            }),
+          )
         }
         return (
           <div className="ai-fo-role" key={role}>
@@ -502,28 +509,33 @@ export function FailoverCard({ settings, accounts, onChange }: { settings: Param
                 <b>{title}</b>
                 <span>{line}</span>
               </div>
-              <Switch on={rule.on} label={`Fail over for ${title}`} onToggle={(on) => set(role, on, order)} />
+              <Switch on={rule.on} label={`Fail over for ${title}`} onToggle={(on) => set(role, on, groups.flatMap((group) => group.order))} />
             </div>
-            {rule.on ? (
-              <ol className="ai-fo-order">
-                {order.map((id, index) => {
-                  const account = plans.find((each) => each.id === id)
-                  if (account === undefined) return null
-                  return (
-                    <li key={id}>
-                      <span className="ai-fo-n">{index + 1}</span>
-                      <span className="ai-fo-name">{account.label}</span>
-                      <Button variant="text" size="sm" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`Move ${account.label} up`}>
-                        Up
-                      </Button>
-                      <Button variant="text" size="sm" disabled={index === order.length - 1} onClick={() => move(index, 1)} aria-label={`Move ${account.label} down`}>
-                        Down
-                      </Button>
-                    </li>
-                  )
-                })}
-              </ol>
-            ) : null}
+            {rule.on
+              ? groups.map((group) => (
+                  <div key={group.kind}>
+                    <div className="ai-fo-kind">{group.kind === 'claude' ? 'Claude plans' : 'ChatGPT plans'}</div>
+                    <ol className="ai-fo-order">
+                      {group.order.map((id, index) => {
+                        const account = accounts.find((each) => each.id === id)
+                        if (account === undefined) return null
+                        return (
+                          <li key={id}>
+                            <span className="ai-fo-n">{index + 1}</span>
+                            <span className="ai-fo-name">{account.label}</span>
+                            <Button variant="text" size="sm" disabled={index === 0} onClick={() => move(group.kind, index, -1)} aria-label={`Move ${account.label} up`}>
+                              Up
+                            </Button>
+                            <Button variant="text" size="sm" disabled={index === group.order.length - 1} onClick={() => move(group.kind, index, 1)} aria-label={`Move ${account.label} down`}>
+                              Down
+                            </Button>
+                          </li>
+                        )
+                      })}
+                    </ol>
+                  </div>
+                ))
+              : null}
           </div>
         )
       })}
