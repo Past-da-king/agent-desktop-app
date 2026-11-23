@@ -15,12 +15,13 @@ import type { Settings } from '@agent/core'
 import { refuseRealInput } from '../agent-cursor/real-input-guard'
 import { expandHome, insideFolder } from '../tools/files'
 import { engineAccess } from './engine-policy'
+import type { ApprovalOrigin } from '@agent/core'
 
 export type Permission = { allow: true } | { allow: false; message: string }
 
 export interface PermissionDeps {
   settings: () => Settings
-  approve: (summary: string, details: string) => Promise<boolean>
+  approve: (summary: string, details: string, origin?: ApprovalOrigin) => Promise<boolean>
   /** Folders the engine may use freely besides the granted ones (its own work folder). */
   alsoAllowed?: string[]
   platform?: NodeJS.Platform
@@ -62,19 +63,19 @@ export function sdkPermission(deps: PermissionDeps): (name: string, input: Recor
         return { allow: false, message: 'Shell commands are turned off on this computer (Settings, This computer). Do the job another way or ask the user to turn them on.' }
       }
       const command = String(input['command'] ?? '').trim()
-      const ok = await deps.approve('Run a command on this computer', command === '' ? '(empty command)' : command)
+      const ok = await deps.approve('Run a command on this computer', command === '' ? '(empty command)' : command, { tool: name, input: { command } })
       return ok ? { allow: true } : { allow: false, message: 'The user declined this command. Do not run it; find another way or ask.' }
     }
     if (CHANGES.has(name)) {
       const path = pathOf(input)
       if (free || inside(path)) return { allow: true }
-      const ok = await deps.approve('Change a file on this computer', path === '' ? 'A file outside your folders' : path)
+      const ok = await deps.approve('Change a file on this computer', path === '' ? 'A file outside your folders' : path, { tool: name, input: { path } })
       return ok ? { allow: true } : { allow: false, message: 'The user declined this change.' }
     }
     if (READS.has(name)) {
       const path = pathOf(input)
       if (free || path === '' || inside(path)) return { allow: true }
-      const ok = await deps.approve('Read files on this computer', path)
+      const ok = await deps.approve('Read files on this computer', path, { tool: name, input: { path } })
       return ok ? { allow: true } : { allow: false, message: 'The user declined. Ask them to grant the folder in Settings if it is needed.' }
     }
     if (name === 'WebSearch' || name === 'WebFetch' || name.startsWith('mcp__agent__')) return { allow: true }

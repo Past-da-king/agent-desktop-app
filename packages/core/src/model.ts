@@ -158,6 +158,15 @@ export interface Tool {
   run(input: JsonObject, ctx: ToolContext): Promise<string>
 }
 
+/**
+ * The REAL tool call a card stands for: the tool name the loop dispatched and its arguments, stamped by the app (never
+ * by the agent). The app decides who may answer a card from this, not from the words the agent wrote on the card.
+ */
+export interface ApprovalOrigin {
+  tool: string
+  input: JsonObject
+}
+
 /** What a running tool can reach: the person, and who it is running for. */
 export interface ToolContext {
   /** "main" for the user-facing agent; a helper's label otherwise. */
@@ -172,13 +181,13 @@ export interface ToolContext {
   activity(text: string, meta?: JsonObject): Promise<number>
   updateActivity(id: number, text: string, meta?: JsonObject): Promise<void>
   /** Ask the person and wait for the answer. Null when nobody can answer (a background run). */
-  ask(question: string, options: string[], card?: JsonObject): Promise<string | null>
+  ask(question: string, options: string[], card?: JsonObject, origin?: ApprovalOrigin): Promise<string | null>
   /** Ask permission before something that changes the outside world. */
   /**
    * Ask the person to approve. `scope: 'computer'` marks an action that stays on this computer (a command, code,
    * a file): its card can also offer "Always allow on this computer". Anything sent or done elsewhere has no scope.
    */
-  approve(summary: string, details?: string, scope?: 'computer'): Promise<boolean>
+  approve(summary: string, details?: string, scope?: 'computer', origin?: ApprovalOrigin): Promise<boolean>
   notify(title: string, body: string): Promise<void>
   signal: AbortSignal
   /**
