@@ -381,7 +381,8 @@ export class ActsForMe {
         record.undo === 'retry'
           ? `Ayanda undid the decline of "${record.summary}". Try the action again: this time the card goes to him himself.`
           : `Ayanda withdrew the answer "${record.answer ?? ''}" to your question "${record.summary}". Ask him again: this time the question goes to him himself.`
-      await this.deps.tellAsker?.(row, text).catch(() => undefined)
+      if (this.deps.tellAsker === undefined) return { ok: false, message: 'The asker cannot be reached here.' }
+      try { await this.deps.tellAsker(row, text) } catch { return { ok: false, message: 'The asker could not be reached. Try Undo again.' } }
     }
     await this.patch(id, { autoAnswer: { ...record, undone: this.now() } })
     this.deps.changed(chatOf(row))

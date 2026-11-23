@@ -1317,7 +1317,12 @@ async function startServices(win: BrowserWindow): Promise<void> {
     postToMain: async (text) => { await runner?.receive(MAIN_CHAT, text, { from: 'system', name: 'Approvals', chat: '' }) },
     tellAsker: async (row, text) => {
       const meta = JSON.parse(row.meta) as Record<string, unknown>
-      if (typeof meta['helper'] === 'string') { await helpers.steer(meta['helper'], text); return }
+      if (typeof meta['helper'] === 'string') {
+        const id = meta['helper']
+        if (helpers.live().some((helper) => helper.id === id)) await helpers.steer(id, text)
+        else await helpers.push(id, text)
+        return
+      }
       await runner?.deliver(text, typeof meta['chat'] === 'string' ? meta['chat'] : MAIN_CHAT)
     },
     setSettings: async (patch) => { settings.save(patch) },
