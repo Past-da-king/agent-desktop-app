@@ -1,3 +1,6 @@
+import type { ApprovalOrigin } from '@agent/core'
+import type { ActsForMe } from './acts-for-me'
+import { needsHim, isRoutedPending } from '../../shared/card-state'
 /**
  * The chat runner: one conversation, one main line (PLAN.md 5.1).
  *
@@ -166,6 +169,7 @@ export interface RunnerDevices {
 }
 
 export interface RunnerDeps {
+  acts?: ActsForMe
   store: DataStore
   /**
    * The app's data folder. What the provider's catalogue says about pictures, and which models refused one, are kept
@@ -292,6 +296,9 @@ export const JOIN_PICKUP_MS = 120_000
 const CARRY_WAIT_MS = 20_000
 
 export class Runner {
+  private readonly acts: ActsForMe | undefined
+  hasCardWaiter(id: string): boolean { return this.askWaiters.has(id) || this.decisionWaiters.has(id) }
+
   private readonly store: DataStore
   private readonly settings: SettingsView
   private readonly secrets: SecretsView
@@ -346,6 +353,7 @@ export class Runner {
   private activitySeq = 0
 
   constructor(deps: RunnerDeps) {
+    this.acts = deps.acts
     this.store = deps.store
     this.settings = deps.settings
     this.secrets = deps.secrets
@@ -2186,10 +2194,10 @@ export class Runner {
         })
         this.emitFor(chat, { type: 'chat_changed' })
       },
-      ask: (question, options, card) =>
-        role === 'routine' ? this.askInRoutine(question, options) : this.ask(question, options, signal, chat, card),
-      approve: (summary, details, scope) =>
-        role === 'routine' ? this.approveInRoutine(summary, details) : this.approve(summary, details, signal, scope, chat),
+      ask: (question, options, card, origin) =>
+        role === 'routine' ? this.askInRoutine(question, options, origin) : this.ask(question, options, signal, chat, card, origin),
+      approve: (summary, details, scope, origin) =>
+        role === 'routine' ? this.approveInRoutine(summary, details, origin) : this.approve(summary, details, signal, scope, chat, origin),
       notify: async (title, body) => this.sendNotification(title, body, false),
       signal,
       ...this.placedShell(role, chat),
@@ -2202,13 +2210,13 @@ export class Runner {
     return shell === undefined ? {} : { shell }
   }
 
-  private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT, card?: JsonObject): Promise<string | null> {
+  private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT, card?: JsonObject, origin?: ApprovalOrigin): Promise<string | null> {
     const line = this.line(chat)
     const row = await this.store.upsert('chat_item', {
       kind: 'question',
       text: question,
       // `card`: how the window draws it, when it is more than a question (a project to confirm, tools/projects.ts).
-      meta: JSON.stringify({ options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'question', asker: chat === MAIN_CHAT ? 'main' : 'project', askerKey: chat, origin, summary: question, options }), options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI: the person may answer the moment the card appears.
     const pending = new Promise<string | null>((resolve) => {
@@ -2233,23 +2241,25 @@ export class Runner {
 
     this.waiting.set(row.id, chat)
     this.emitFor(chat, { type: 'chat_changed' })
-    this.emitFor(chat, { type: 'needs_you', itemId: row.id })
-    this.sendCardNotification(row.id, 'Your agent has a question', clip(question, MAX_NOTIFICATION_CHARS))
+    if (isRoutedPending(row)) this.acts?.route(row.id)
+    else this.emitFor(chat, { type: 'needs_you', itemId: row.id })
+    if (!isRoutedPending(row)) this.sendCardNotification(row.id, 'Your agent has a question', clip(question, MAX_NOTIFICATION_CHARS))
     return pending
   }
 
   /** Post the card and stop the routine there; nobody is at the desk to answer mid-run. */
-  private async askInRoutine(question: string, options: string[]): Promise<string | null> {
+  private async askInRoutine(question: string, options: string[], origin?: ApprovalOrigin): Promise<string | null> {
     const row = await this.store.upsert('chat_item', {
       kind: 'question',
       text: question,
-      meta: JSON.stringify({ options, answer: '' }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'question', asker: 'routine', askerKey: MAIN_CHAT, origin, summary: question, options }), options, answer: '' }),
     })
     this.routineWaiting = true
     this.waiting.set(row.id, MAIN_CHAT)
     this.emit({ type: 'chat_changed' })
-    this.emit({ type: 'needs_you', itemId: row.id })
-    this.sendCardNotification(row.id, 'Your agent has a question', clip(question, MAX_NOTIFICATION_CHARS))
+    if (isRoutedPending(row)) this.acts?.route(row.id)
+    else this.emit({ type: 'needs_you', itemId: row.id })
+    if (!isRoutedPending(row)) this.sendCardNotification(row.id, 'Your agent has a question', clip(question, MAX_NOTIFICATION_CHARS))
     this.routineController?.abort()
     return null
   }
@@ -2260,12 +2270,13 @@ export class Runner {
     signal: AbortSignal,
     scope?: 'computer',
     chat: string = MAIN_CHAT,
+    origin?: ApprovalOrigin,
   ): Promise<boolean> {
     const line = this.line(chat)
     const row = await this.store.upsert('chat_item', {
       kind: 'approval',
       text: summary,
-      meta: JSON.stringify({ summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }), ...chatTag(chat) }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'approval', asker: chat === MAIN_CHAT ? 'main' : 'project', askerKey: chat, origin, summary, details }), summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI, so an instant decision finds it.
     const pending = new Promise<boolean>((resolve) => {
@@ -2292,23 +2303,25 @@ export class Runner {
 
     this.waiting.set(row.id, chat)
     this.emitFor(chat, { type: 'chat_changed' })
-    this.emitFor(chat, { type: 'needs_you', itemId: row.id })
-    this.sendCardNotification(row.id, 'Approve?', clip(summary, MAX_NOTIFICATION_CHARS))
+    if (isRoutedPending(row)) this.acts?.route(row.id)
+    else this.emitFor(chat, { type: 'needs_you', itemId: row.id })
+    if (!isRoutedPending(row)) this.sendCardNotification(row.id, 'Approve?', clip(summary, MAX_NOTIFICATION_CHARS))
     return pending
   }
 
   /** Post the approval card and stop the routine there; it never decides for the person. */
-  private async approveInRoutine(summary: string, details: string | undefined): Promise<boolean> {
+  private async approveInRoutine(summary: string, details: string | undefined, origin?: ApprovalOrigin): Promise<boolean> {
     const row = await this.store.upsert('chat_item', {
       kind: 'approval',
       text: summary,
-      meta: JSON.stringify({ summary, details: details ?? '', decision: '' }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'approval', asker: 'routine', askerKey: MAIN_CHAT, origin, summary, details }), summary, details: details ?? '', decision: '' }),
     })
     this.routineWaiting = true
     this.waiting.set(row.id, MAIN_CHAT)
     this.emit({ type: 'chat_changed' })
-    this.emit({ type: 'needs_you', itemId: row.id })
-    this.sendCardNotification(row.id, 'Approve?', clip(summary, MAX_NOTIFICATION_CHARS))
+    if (isRoutedPending(row)) this.acts?.route(row.id)
+    else this.emit({ type: 'needs_you', itemId: row.id })
+    if (!isRoutedPending(row)) this.sendCardNotification(row.id, 'Approve?', clip(summary, MAX_NOTIFICATION_CHARS))
     this.routineController?.abort()
     return false
   }
@@ -2499,10 +2512,7 @@ interface CardChange {
  * the window's (renderer/lib/cards.ts isOpenCard), so the rail, Needs you, the tray and the phone always agree.
  */
 export function isOpenCardRow(row: { kind: string; meta: string }): boolean {
-  if (row.kind !== 'question' && row.kind !== 'approval') return false
-  const meta = parseMeta(row.meta)
-  if (row.kind === 'question') return !isSet(meta['answer'])
-  return meta['decision'] !== 'approve' && meta['decision'] !== 'decline'
+  return needsHim(row)
 }
 
 function stringField(value: unknown): string {

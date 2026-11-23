@@ -148,7 +148,7 @@ export class AppGuard {
     }
     if (account === null && resolved.size === 1) account = [...resolved][0] ?? null
     if (asks.length > 0) {
-      const yes = await ctx.approve(`Let your agent ${asks.join(', ')}?`, detail)
+      const yes = await ctx.approve(`Let your agent ${asks.join(', ')}?`, detail, undefined, { tool: 'apps_run', input: { slug: actions[0] ?? '', actions } })
       if (!yes) return { refuse: 'The person declined, or nobody was around to approve. Not done.', account }
     }
     return { account }

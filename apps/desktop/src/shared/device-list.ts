@@ -1,3 +1,4 @@
+import { needsHim } from './card-state'
 /**
  * What a linked device is sent when it lists rows. A phone asks for `chat_item` on every connect; the whole table is
  * hundreds of megabytes on an install that has run for weeks, and one frame that size holds the event loop long enough
@@ -27,9 +28,7 @@ function metaOf(row: { meta?: unknown }): Record<string, unknown> {
 
 /** A question nobody answered or an approval nobody decided. */
 export function isOpenCard(row: { kind?: unknown; meta?: unknown }): boolean {
-  if (row.kind === 'question') return typeof metaOf(row)['answer'] !== 'string' || metaOf(row)['answer'] === ''
-  if (row.kind === 'approval') return typeof metaOf(row)['decision'] !== 'string' || metaOf(row)['decision'] === ''
-  return false
+  return needsHim(row)
 }
 
 /** A helper's own row while it is still working (the phone's helper cards read it). */

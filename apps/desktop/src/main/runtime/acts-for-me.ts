@@ -124,6 +124,7 @@ export class ActsForMe {
   private noteTimer: ReturnType<typeof setTimeout> | null = null
   private readonly queued = new Set<string>()
   private sweeping = false
+  private readonly answering = new Set<string>()
 
   constructor(private readonly deps: ActsDeps) {}
 
@@ -243,6 +244,12 @@ export class ActsForMe {
    */
   async answer(args: AnswerArgs): Promise<ActResult> {
     if (!this.enabled()) return { ok: false, message: 'Refused: "Agent acts for me on approvals" is off, so every card is his.' }
+    if (this.answering.has(args.id)) return { ok: false, message: 'That card is already being answered.' }
+    this.answering.add(args.id)
+    try { return await this.answerOnce(args) } finally { this.answering.delete(args.id) }
+  }
+
+  private async answerOnce(args: AnswerArgs): Promise<ActResult> {
     const reason = args.reason.trim().replace(/\s+/g, ' ').slice(0, 300)
     if (reason === '') return { ok: false, message: 'Say why in one line (reason).' }
     const row = await this.deps.store.get('chat_item', args.id)
@@ -279,6 +286,10 @@ export class ActsForMe {
       if (error instanceof CardDecidedError) return { ok: false, message: `Not done: ${error.message}.` }
       return { ok: false, message: `Not done: ${error instanceof Error ? error.message : 'it did not go through'}.` }
     }
+    const settled = await this.deps.store.get('chat_item', args.id)
+    const winner = settled === null ? {} : metaOfCard(settled)
+    const field = row.kind === 'question' ? 'answer' : 'decision'
+    if (winner[`${field}By`] !== BY_MAIN || winner[field] !== (args.action === 'answer' ? args.answer.trim() : args.action)) return { ok: false, message: 'Another answer won, or the card closed before it was answered.' }
     const undo: UndoKind =
       row.kind === 'question' ? 'reask' : args.action === 'decline' ? 'retry' : revert !== undefined ? 'revert-setting' : 'none'
     const record: AutoAnswer = {
@@ -299,7 +310,7 @@ export class ActsForMe {
 
   /** The values a settings card is about to change, read before it is decided. */
   private revertFor(row: ChatItem): Record<string, unknown> | undefined {
-    const origin = metaOfCard(row)['origin']
+    const origin = metaOfCard(row)['callOrigin']
     if (typeof origin !== 'object' || origin === null) return undefined
     const tool = (origin as Record<string, unknown>)['tool']
     const input = (origin as Record<string, unknown>)['input']
@@ -328,7 +339,7 @@ export class ActsForMe {
   // ---- the list and Undo -------------------------------------------------------------------------------------
 
   async list(limit = 100): Promise<AnsweredEntry[]> {
-    const rows = await listWhere(this.deps.store, 'chat_item', { kinds: ['approval', 'question'], contains: '"autoAnswer"', newestFirst: true, limit: Math.max(1, Math.min(limit, 500)) })
+    const rows = await listWhere(this.deps.store, 'chat_item', { kinds: ['approval', 'question'], contains: 'autoAnswer', newestFirst: true, limit: Math.max(1, Math.min(limit, 500)) })
     const out: AnsweredEntry[] = []
     for (const row of rows) {
       const record = autoAnswerOf(row)
@@ -447,7 +458,7 @@ export class ActsForMe {
     }
     let helperProgressed = false
     if (helperId !== '') {
-      const steps = await listWhere(this.deps.store, 'chat_item', { kind: 'activity', since: row.createdAt, contains: `"helper":"${helperId}"`, limit: 1 }).catch(() => [] as ChatItem[])
+      const steps = await listWhere(this.deps.store, 'chat_item', { kind: 'activity', since: row.createdAt, contains: helperId, limit: 1 }).catch(() => [] as ChatItem[])
       helperProgressed = steps.length > 0
     }
     const facts: StaleFacts = {

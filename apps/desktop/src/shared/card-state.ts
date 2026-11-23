@@ -123,7 +123,7 @@ function clip(value: unknown, depth = 0): unknown {
   if (typeof value === 'object' && value !== null) {
     if (depth > 3) return {}
     const out: Record<string, unknown> = {}
-    for (const [key, each] of Object.entries(value as Record<string, unknown>).slice(0, 30)) out[key] = clip(each, depth + 1)
+    for (const [key, each] of Object.entries(value as Record<string, unknown>).slice(0, 30)) out[key] = /password|secret|token|api.?key|authorization|cookie/i.test(key) ? '[redacted]' : clip(each, depth + 1)
     return out
   }
   return value
@@ -157,7 +157,7 @@ export function stampCard(input: StampInput): Record<string, unknown> {
   const verdict: Verdict = held ? { lane: 'him', rule: 'undo-hold', why: 'Ayanda undid an earlier answer, so this one is his.' } : classifyCard(facts)
   return {
     asker: input.asker,
-    ...(input.origin === undefined ? {} : { origin: { tool: input.origin.tool, input: clip(input.origin.input) } }),
+    ...(input.origin === undefined ? {} : { callOrigin: { tool: input.origin.tool, input: clip(input.origin.input) } }),
     lane: verdict.lane,
     laneRule: verdict.rule,
     laneWhy: verdict.why,
@@ -171,7 +171,7 @@ export function factsOfRow(row: CardLike & { text?: unknown }): CardFacts | null
   const meta = metaOfCard(row)
   const asker = textOf(meta['asker'])
   const askers: Asker[] = ['main', 'helper', 'project', 'routine', 'device', 'unknown']
-  const origin = meta['origin']
+  const origin = meta['callOrigin']
   const parsedOrigin =
     typeof origin === 'object' && origin !== null && typeof (origin as Record<string, unknown>)['tool'] === 'string'
       ? { tool: String((origin as Record<string, unknown>)['tool']), input: (typeof (origin as Record<string, unknown>)['input'] === 'object' && (origin as Record<string, unknown>)['input'] !== null ? ((origin as Record<string, unknown>)['input'] as Record<string, unknown>) : {}) }

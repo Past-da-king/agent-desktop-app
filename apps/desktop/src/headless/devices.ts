@@ -119,6 +119,7 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
       vault: runtime.vault,
       passes: node.passTable(),
       projects: () => runtime.store.list('project'),
+      answeredForYou: async () => (await runtime.acts.list()).map(({ at, asker, summary, decision, reason, undone }) => ({ at, asker, summary, decision, reason, undone: undone > 0 })),
       accountLabels: async () => accountLabels(await runtime.cli.status(runtime.accounts.all())),
     },
     ...runtime.devicesHooks,

@@ -80,6 +80,7 @@ export interface StateBundle {
    * Who each plan account is signed in as, its plan and usage: labels only, built field by field (accountLabels).
    * Never a token and never the contents of a sign-in home. Not part of the bundle's hash and never applied.
    */
+  answeredForYou?: Array<{ at: number; asker: string; summary: string; decision: string; reason: string; undone: boolean }>
   accountLabels?: AiAccountLabel[]
   secrets?: BundleSecrets
 }
@@ -96,6 +97,7 @@ export interface BundleSources {
   /** The Vault: the whole of it travels to another brain, newest wins. */
   vault?: { exportAll(): { changedAt: number; items: unknown[]; prefs?: unknown }; replaceAll(incoming: { changedAt: number; items: unknown[]; prefs?: unknown }, force?: boolean): boolean; onChange?(listener: () => void): () => void }
   /** Labels for the plan accounts (see StateBundle.accountLabels). */
+  answeredForYou?: () => Promise<Array<{ at: number; asker: string; summary: string; decision: string; reason: string; undone: boolean }>>
   accountLabels?: () => Promise<AiAccountLabel[]>
   /** Kept on this device only: the bundle's hash and changedAt. */
   local: { localValue(key: string): string | null; setLocalValue(key: string, value: string): void }
@@ -159,6 +161,9 @@ export class BundleKeeper {
       } catch {
         // Labels are a courtesy: the bundle goes out without them.
       }
+    }
+    if (this.sources.answeredForYou !== undefined) {
+      try { bundle.answeredForYou = (await this.sources.answeredForYou()).map(({ at, asker, summary, decision, reason, undone }) => ({ at, asker, summary, decision, reason, undone })) } catch { /* Labels must not interrupt the bundle. */ }
     }
     return bundle
   }

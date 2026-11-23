@@ -1988,7 +1988,12 @@ export interface WakeDeviceStatus {
   checks: Array<{ key: string; label: string; ok: boolean; help: string }>
 }
 
+export interface AnsweredForYou {
+  id: string; at: number; asker: string; summary: string; decision: 'approve' | 'decline' | 'answer'; answer: string; reason: string; rule: string; undo: 'none' | 'retry' | 'reask' | 'revert-setting'; undone: number
+}
+
 export interface AgentApi {
+  acts: { list(): Promise<AnsweredForYou[]>; undo(id: string): Promise<{ ok: boolean; message: string }> }
   platform: AppPlatform
   version: string
 

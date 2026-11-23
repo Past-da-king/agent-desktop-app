@@ -183,6 +183,7 @@ export interface InstantSendDeps {
 }
 
 export interface IpcDeps {
+  acts?: import('./runtime/acts-for-me').ActsForMe
   instant?: InstantSendDeps
   /** His recordings on disk; a linked phone's dictations land here too. */
   recordings?: Recordings
@@ -280,6 +281,8 @@ export function registerIpc(deps: IpcDeps): () => void {
 
   // ---- settings ----
 
+  handle(CHANNELS.acts.list, async () => deps.acts?.list() ?? [])
+  handle(CHANNELS.acts.undo, async (_event, id) => deps.acts?.undo(String(id)) ?? { ok: false, message: 'Not available here.' })
   handle(CHANNELS.settings.get, async () => settings.get())
 
   handle(CHANNELS.settings.save, async (_event, patch) => {

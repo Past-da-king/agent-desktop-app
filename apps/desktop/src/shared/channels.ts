@@ -82,6 +82,7 @@ export const CHANNELS = {
     usePerson: 'agent:browser.usePerson',
     signOut: 'agent:browser.signOut',
   },
+  acts: { list: 'agent:acts.list', undo: 'agent:acts.undo' },
   helpers: {
     stop: 'agent:helpers.stop',
     stopAll: 'agent:helpers.stopAll',

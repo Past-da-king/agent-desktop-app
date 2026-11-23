@@ -1,3 +1,4 @@
+import { ActsForMe } from '../main/runtime/acts-for-me'
 /**
  * The agent runtime without Electron: the same modules `main/index.ts` startServices composes (Store, settings,
  * secrets, accounts, runner, helpers, routines, memory, connected and learned apps), with small adapters where the
@@ -149,6 +150,7 @@ export class HandlerTable implements IpcMainLike {
 }
 
 export interface HeadlessRuntime {
+  acts: ActsForMe
   dataDir: string
   logger: Logger
   store: Store
@@ -376,7 +378,29 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     },
     log: (line) => logger.info(line),
   })
-  const helpers = new HelperManager({
+  const acts: ActsForMe = new ActsForMe({
+    store, settings,
+    decide: async (id, decision, by) => { if (runner === null) throw new Error('Agent is starting'); await runner.decide(id, decision, by) },
+    answerQuestion: async (id, answer, by) => { if (runner === null) throw new Error('Agent is starting'); await runner.answer(id, answer, by) },
+    postToMain: async (text) => { await runner?.receive(MAIN_CHAT, text, { from: 'system', name: 'Approvals', chat: '' }) },
+    tellAsker: async (row, text) => {
+      const meta = JSON.parse(row.meta) as Record<string, unknown>
+      if (typeof meta['helper'] === 'string') { await helpers.steer(meta['helper'], text); return }
+      await runner?.deliver(text, typeof meta['chat'] === 'string' ? meta['chat'] : MAIN_CHAT)
+    },
+    setSettings: async (patch) => { settings.save(patch) },
+    hasWaiter: (id) => (runner?.hasCardWaiter(id) ?? false) || helpers.hasCardWaiter(id),
+    liveHelpers: () => new Set(helpers.live().map((h) => h.id)),
+    chatRunning: (chat) => runner?.state(chat).running ?? false,
+    placedElsewhere: (meta) => typeof meta['device'] === 'string' && meta['device'] !== '',
+    needsYou: (id, chat, summary) => {
+      broadcast(EVENTS.chat, { type: 'needs_you', itemId: id, chat })
+      notify('Needs you', summary)
+    },
+    changed: () => broadcast(EVENTS.chat, { type: 'chat_changed' }),
+  })
+  const helpers: HelperManager = new HelperManager({
+    acts,
     git: gitHook,
     leases,
     store,
@@ -432,6 +456,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   wakeups.start()
   const tools = guardTools(browserTools([
     ...buildToolset({
+      cards: { waiting: () => acts.waiting(), answer: (args) => acts.answer(args) },
       git: { kv: gitKv, hook: () => gitHook },
       appControl,
       presence,
@@ -500,6 +525,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   })
   const router = eventRouter
   const theRunner = new Runner({
+    acts,
     git: gitHook,
     devices: {
       leases,
@@ -532,6 +558,10 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     },
   })
   runner = theRunner
+  const actsSweep = setInterval(() => { void acts.sweep().catch(() => undefined) }, 60_000)
+  actsSweep.unref()
+  void acts.sweep().catch(() => undefined)
+
   const wire = startOffload({
     store,
     helpers,
@@ -694,6 +724,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   }, (input) => instant.takeAudio(input))
 
   const disposeIpc = registerIpc({
+    acts,
     // No microphone on this node: a phone's take arrives by voice.takeAudio, the desktop's hand-off never applies.
     instant: { handOff: () => null, accept: async (input) => void (await instant.queue.accept(input)), keepFinal: (id, final) => void instant.takeFinals.set(id, final) },
     recordings,
@@ -732,6 +763,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const stopHooks: Array<() => void | Promise<void>> = []
 
   return {
+    acts,
     dataDir: dir,
     logger,
     store,
@@ -792,6 +824,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       await browser?.close()
       leases.stop()
       wire.stop()
+      clearInterval(actsSweep)
+      acts.dispose()
       disposeIpc()
       disposeStore()
       theRunner.dispose()

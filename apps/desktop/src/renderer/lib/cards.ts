@@ -1,3 +1,4 @@
+import { needsHim } from '../../shared/card-state'
 import type { ChatItem } from '@agent/core'
 
 import { metaOf } from './meta'
@@ -16,14 +17,7 @@ export function cardFailText(error: unknown): string {
 }
 
 export function isOpenCard(item: ChatItem): boolean {
-  if (item.kind !== 'question' && item.kind !== 'approval') return false
-  const meta = metaOf(item)
-  if (item.kind === 'question') {
-    const answer = meta['answer']
-    return typeof answer !== 'string' || answer === ''
-  }
-  const decision = meta['decision']
-  return decision !== 'approve' && decision !== 'decline'
+  return needsHim(item)
 }
 
 /** Cards that need the person. `forChat` leaves out cards the mock marks as belonging to Home. */

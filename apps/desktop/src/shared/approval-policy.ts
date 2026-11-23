@@ -138,6 +138,12 @@ function pathVerdict(path: string, deleting: boolean): Verdict {
 }
 
 function appsRun(input: Record<string, unknown>): Verdict {
+  if (Array.isArray(input['actions'])) {
+    for (const slug of input['actions']) {
+      const verdict = appsRun({ slug })
+      if (verdict.lane === 'him') return verdict
+    }
+  }
   const slug = str(input['slug']).toUpperCase()
   if (slug === '') return HIM('unknown', 'No action named.')
   const parts = slug.split('_')
@@ -190,6 +196,11 @@ function appAction(input: Record<string, unknown>): Verdict {
   const method = str(input['method'])
   if (method === '') return HIM('unknown', 'No app action named.')
   if (/(signIn|signin|login|passkey|pair|offer|join|otp|totp|vault|secret|token|password|devices\.|workers\.secret)/i.test(method)) return HIM('hands', 'A sign-in, pairing or secret step.')
+  if (method === 'settings.save') {
+    const args = Array.isArray(input['args']) ? input['args'] : []
+    return settingsVerdict({ values: args[0] })
+  }
+  if (/reset|setKey|setApiKey|setRules|acts\.undo/i.test(method)) return HIM('own-setting', 'It changes a personal boundary or secret.')
   if (/^(settings|accounts|ai)\./i.test(method)) return AGENT('setting', 'A settings change.')
   if (/^(helpers|projects|routines|workers|memory|data|apps|chat|profiles|files|window|browser|miniapps?)\./i.test(method)) return AGENT('app-change', 'An app action.')
   return HIM('unknown', 'An app action the app does not recognise.')

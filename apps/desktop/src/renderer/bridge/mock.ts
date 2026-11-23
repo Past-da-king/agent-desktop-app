@@ -1185,6 +1185,7 @@ export const mockAgent: AgentApi = {
     },
   },
 
+  acts: { list: async () => [], undo: async () => ({ ok: false, message: 'Nothing to undo.' }) },
   helpers: {
     async stop(id) {
       const index = rows.chat_item.findIndex((item) => item.id === id && item.kind === 'helper')

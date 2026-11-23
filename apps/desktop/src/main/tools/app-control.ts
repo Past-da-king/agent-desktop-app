@@ -112,6 +112,7 @@ export const SETTINGS_NEED_APPROVAL: ReadonlySet<string> = new Set([
   'hideGuidesFromCapture',
   'hideChatFromCapture',
   // Real input on his desktop: only he allows it, and only he shortens the idle time it waits for.
+  'actsForMe',
   'agentRealInput',
   'inputLockIdleSeconds',
   // Decisions send text to a decision model and let it skip work: only he turns them on, picks the model or lowers the bar.
@@ -493,7 +494,7 @@ function settingsSetTool(deps: AppControlDeps): Tool {
       if (guarded.length > 0) {
         const current = deps.settings.get() as unknown as Record<string, unknown>
         const details = guarded.map((key) => `${key}: ${JSON.stringify(current[key])} -> ${JSON.stringify(patch[key])}`).join('\n')
-        const yes = await ctx.approve(`Change ${guarded.join(', ')} in Settings`, details)
+        const yes = await ctx.approve(`Change ${guarded.join(', ')} in Settings`, details, undefined, { tool: 'settings_set', input: { values: JSON.parse(JSON.stringify(patch)) } })
         if (!yes) {
           for (const key of guarded) delete patch[key]
           refused.push(...guarded.map((key) => `${key} (the person said no)`))
