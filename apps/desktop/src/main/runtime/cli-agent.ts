@@ -23,6 +23,7 @@ import { claudeLimitWindow, engineHomeEnv, type HomeEntry } from './account-home
 import type { TurnMessage, TurnMessages } from './note-tools'
 import { SDK_TOOLS } from './sdk-permissions'
 import { markReleased } from '../tools/run-capture'
+import { claudeLaunch, codexLaunch, type EngineAccess } from './engine-policy'
 
 export type CliId = 'claude' | 'codex'
 
@@ -30,7 +31,7 @@ export type CliId = 'claude' | 'codex'
 export function isLimitFailure(error: string | undefined): boolean {
   return error !== undefined && /plan has reached its limit/i.test(error)
 }
-export type EngineAccess = 'free' | 'asked'
+export type { EngineAccess } from './engine-policy'
 
 /** Where an engine runs: the work's folder when there is one, its private folder too either way. */
 export function engineFolders(turn: Pick<CliTurn, 'workDir' | 'folder'>): { cwd: string; extra: string[] } {
@@ -39,11 +40,10 @@ export function engineFolders(turn: Pick<CliTurn, 'workDir' | 'folder'>): { cwd:
 }
 
 /**
- * The Codex SDK's settings for one turn. Codex has no hook the app can ask before its own tools run, so:
- *  - Run without asking: workspace-write, so its shell and patches change files in the project folder and the
- *    chat's own folder (with network) and nothing outside them; anything else goes through the app's tools, which
- *    run without asking then too. On Windows the unelevated sandbox is used: the default one refuses every write
- *    there unless an administrator set it up (seen 23 Oct 2026: "rejected by filesystem policy" inside the project);
+ * The Codex SDK's settings for one turn. Codex has no hook the app can ask before its own tools run, so the
+ * computer's shell policy (engine-policy.ts, the one place all engines read it from) decides:
+ *  - Run without asking: no sandbox (danger-full-access), never asks, network on, so its shell reaches WSL, \\wsl.localhost
+ *    paths and ssh as Claude's does (workspace-write on Windows refused all of them: E_ACCESSDENIED, 23 Nov 2026);
  *  - otherwise its own shell is switched off and the sandbox is read-only, so every command and change goes
  *    through the app's tools (shell_run, files_write), which ask the person.
  * The app's tools are attached to every turn (the "agent" MCP server) and declared to the model up front: Codex
@@ -61,7 +61,7 @@ export function codexSettings(
   config: NonNullable<CodexOptions['config']>
   thread: ThreadOptions & { workingDirectory: string }
 } {
-  const free = turn.access === 'free'
+  const launch = codexLaunch(turn.access === 'free' ? 'free' : 'asked', platform)
   const { cwd, extra } = engineFolders(turn)
   return {
     config: {
@@ -77,14 +77,14 @@ export function codexSettings(
           tool_timeout_sec: 6 * 60 * 60,
         },
       },
-      ...(free && platform === 'win32' ? { windows: { sandbox: 'unelevated' } } : {}),
+      ...(launch.windowsSandbox === undefined ? {} : { windows: { sandbox: launch.windowsSandbox } }),
       agents: { enabled: false },
       features: {
         multi_agent_v2: false,
         apps: false,
         plugins: false,
         goals: false,
-        ...(free ? {} : { shell_tool: false, unified_exec: false }),
+        ...(launch.ownShell ? {} : { shell_tool: false, unified_exec: false }),
       },
       skills: { include_instructions: false },
       include_apps_instructions: false,
@@ -94,10 +94,10 @@ export function codexSettings(
       workingDirectory: cwd,
       ...(extra.length === 0 ? {} : { additionalDirectories: extra }),
       skipGitRepoCheck: true,
-      sandboxMode: free ? 'workspace-write' : 'read-only',
-      networkAccessEnabled: free,
+      sandboxMode: launch.sandboxMode,
+      networkAccessEnabled: launch.networkAccessEnabled,
       webSearchEnabled: true,
-      approvalPolicy: 'never',
+      approvalPolicy: launch.approvalPolicy,
       ...(turn.model === undefined || turn.model.trim() === '' ? {} : { model: turn.model.trim() }),
     },
   }
@@ -110,7 +110,7 @@ export function codexRules(turn: Pick<CliTurn, 'workDir' | 'folder' | 'access'>)
   return [
     `- You work in ${cwd}${project ? " (this project's folder)" : ''}.`,
     turn.access === 'free'
-      ? `- The person chose Run without asking: your own shell and apply_patch can change files in that folder${project ? " and your chat's own folder" : ''}. For anything outside it (another folder, WSL, a system setting), use the agent tools shell_run and files_write: they run without asking too. The sandbox is not a blocker.`
+      ? `- The person chose Run without asking: your own shell and apply_patch run with full access on this computer (any folder, WSL and \\\\wsl.localhost paths, ssh, the network), no sandbox. The agent tools shell_run and files_write run without asking too.`
       : '- Your own shell is off here and your sandbox is read-only: run commands and change files with the agent tools (shell_run, files_write, files_move), which ask the person when their settings say so. The sandbox is not a blocker.',
     '- The agent tools are your tools named mcp__agent__* (memory, tasks, browser, apps, delegate and the rest). Helpers are mcp__agent__delegate (when you have it): they run to the end and report back. Codex sub-agents are not available here.',
   ].join('\n')
@@ -320,7 +320,7 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         // Claude Code's own shell and file tools, each asking the app first (canUseTool below): the person's
         // approvals, Shell setting and granted folders decide. Nothing else of Claude Code's is offered.
         tools: SDK_TOOLS,
-        permissionMode: 'default',
+        permissionMode: claudeLaunch(turn.access === 'free' ? 'free' : 'asked').permissionMode,
         allowedTools: ['mcp__agent', 'WebSearch', 'WebFetch'],
         disallowedTools: ['Task', 'Agent', 'KillShell', 'NotebookEdit'],
         // Every one of Claude Code's own tool calls is decided by the app BEFORE it runs. A PreToolUse hook

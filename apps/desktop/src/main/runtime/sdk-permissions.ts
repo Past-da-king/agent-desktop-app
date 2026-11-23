@@ -14,6 +14,7 @@ import type { Settings } from '@agent/core'
 
 import { refuseRealInput } from '../agent-cursor/real-input-guard'
 import { expandHome, insideFolder } from '../tools/files'
+import { engineAccess } from './engine-policy'
 
 export type Permission = { allow: true } | { allow: false; message: string }
 
@@ -52,7 +53,7 @@ export function sdkPermission(deps: PermissionDeps): (name: string, input: Recor
 
   return async (name, input) => {
     // "Run without asking": the person lets the agent act anywhere on this computer.
-    const free = deps.settings().shell === 'always'
+    const free = engineAccess(deps.settings().shell) === 'free'
     if (COMMANDS.has(name)) {
       const real = refuseRealInput(String(input['command'] ?? ''))
       if (real !== null) return { allow: false, message: real }

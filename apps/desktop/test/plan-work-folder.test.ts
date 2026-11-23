@@ -27,15 +27,15 @@ function folder(): string {
 const MCP = { url: 'http://127.0.0.1:1/mcp', token: 't' }
 
 describe('Codex runs in the project folder with the access the person chose', () => {
-  it('Run without asking: workspace-write on the project folder, its private folder added', () => {
+  it('Run without asking: full access, started in the project folder, its private folder added', () => {
     const { thread, config } = codexSettings({ workDir: 'C:\\data\\cli\\codex\\chat_p1', folder: 'C:\\projects\\cms', access: 'free', mcp: MCP }, 'win32')
     expect(thread.workingDirectory).toBe('C:\\projects\\cms')
     expect(thread.additionalDirectories).toEqual(['C:\\data\\cli\\codex\\chat_p1'])
-    expect(thread.sandboxMode).toBe('workspace-write')
+    expect(thread.sandboxMode).toBe('danger-full-access')
     expect(thread.networkAccessEnabled).toBe(true)
     expect(thread.skipGitRepoCheck).toBe(true)
-    // The default Windows sandbox refuses every write unless an administrator set it up.
-    expect(config['windows']).toEqual({ sandbox: 'unelevated' })
+    // Nothing is sandboxed, so no Windows sandbox setting (workspace-write refused WSL and ssh, 23 Nov 2026).
+    expect(config['windows']).toBeUndefined()
     expect(codexSettings({ workDir: '/w', folder: '/p', access: 'free', mcp: MCP }, 'linux').config['windows']).toBeUndefined()
     expect(codexSettings({ workDir: '/w', folder: '/p', access: 'asked', mcp: MCP }, 'win32').config['windows']).toBeUndefined()
   })
