@@ -62,6 +62,8 @@ export class AccountStore {
     private readonly settings: SettingsLike,
     private readonly secrets: SecretsLike,
     private readonly random: () => number = Math.random,
+    /** Told when an account is removed, so its sign-in home goes with it. */
+    private readonly onRemoved?: (id: string) => void,
   ) {}
 
   all(): AiAccount[] {
@@ -138,6 +140,7 @@ export class AccountStore {
     if (!list.some((account) => account.id === id)) return
     this.secrets.delete(keyNameFor(id))
     if (id === LEGACY_ACCOUNT) this.secrets.delete('apiKey')
+    this.onRemoved?.(id)
     const next = list.filter((account) => account.id !== id)
     const current = this.settings.get()
     const clear = (pick: { account: string; model: string }): { account: string; model: string } => (pick.account === id ? { account: '', model: '' } : pick)

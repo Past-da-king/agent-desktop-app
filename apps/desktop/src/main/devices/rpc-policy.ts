@@ -190,6 +190,7 @@ const READ_ONLY_METHODS: ReadonlySet<string> = new Set([
   'settings.get',
   'settings.providers',
   'settings.accounts.chatBrain',
+  'settings.accounts.status',
   'account.status',
   'data.list',
   'data.where',

@@ -2,7 +2,20 @@
  * The AI accounts the person set up, and how the old single choice (mode, provider, model, plan) reads as one of
  * them. Shared by the main process and the window so both see the same list and the same labels.
  */
-import { LEGACY_ACCOUNT, NO_PICK, type AiAccount, type AiAccountKind, type AiPick, type AiPicks, type AiRosterEntry, type Settings } from './ipc'
+import {
+  LEGACY_ACCOUNT,
+  NO_PICK,
+  type AiAccount,
+  type AiAccountKind,
+  type AiAccountStatus,
+  type AiFailoverRole,
+  type AiFailoverRule,
+  type AiPick,
+  type AiPicks,
+  type AiRosterEntry,
+  type AiUsageWindow,
+  type Settings,
+} from './ipc'
 import { providerInfo } from './providers/catalog'
 
 /** 'plan:claude', 'plan:codex' or 'api': a chat can switch within a family mid-way, across families only afresh. */
@@ -207,4 +220,54 @@ export function findRosterEntry(
   if (partial.length === 1) return { entry: partial[0]! }
   const choices = names.map((name) => `"${name}"`).join(', ')
   return { error: partial.length > 1 ? `"${wanted}" matches more than one helper model. Use one of: ${choices}. Nothing was started.` : `No helper model called "${wanted}". Use one of: ${choices}, or leave model out for the first. Nothing was started.` }
+}
+
+// ---- failover: another account of the same plan when one hits its limit ------------------------------------------
+
+/** The failover rule for a role as set; off when nothing was set. */
+export function failoverRule(settings: Settings, role: AiFailoverRole): AiFailoverRule {
+  const rule = settings.ai?.failover?.[role]
+  if (rule === undefined || rule.on !== true) return { on: false, order: Array.isArray(rule?.order) ? rule.order : [] }
+  return { on: true, order: Array.isArray(rule.order) ? rule.order : [] }
+}
+
+/**
+ * The accounts to try, in order, after `accountId` hit its limit: plan accounts of the same kind only (a Claude plan
+ * never fails over to a ChatGPT plan: the session and the tools differ). The set order first, then the rest of that
+ * kind in list order. Empty when failover is off for the role or the account is not a plan.
+ */
+export function failoverIds(settings: Settings, role: AiFailoverRole, accountId: string): string[] {
+  const rule = failoverRule(settings, role)
+  const account = accountById(settings, accountId)
+  if (!rule.on || account === null || account.kind === 'api') return []
+  const same = accountsOf(settings).filter((each) => each.kind === account.kind && each.id !== account.id)
+  const byId = new Map(same.map((each) => [each.id, each]))
+  const out: string[] = []
+  for (const id of rule.order) if (byId.has(id) && !out.includes(id)) out.push(id)
+  for (const each of same) if (!out.includes(each.id)) out.push(each.id)
+  return out
+}
+
+/** What a plan account tells other devices: labels and numbers, nothing that signs anyone in. */
+export interface AiAccountLabel {
+  id: string
+  kind: AiAccountKind
+  label: string
+  email: string
+  plan: string
+  usage: AiUsageWindow[]
+  limited: boolean
+}
+
+/** The labels sent to the phone and to linked computers, built field by field so nothing else can ride along. */
+export function accountLabels(statuses: AiAccountStatus[]): AiAccountLabel[] {
+  return statuses.map((status) => ({
+    id: status.id,
+    kind: status.kind,
+    label: status.label,
+    email: status.email,
+    plan: status.plan,
+    usage: status.usage.map((window) => ({ label: window.label, usedPercent: window.usedPercent, resetsAt: window.resetsAt })),
+    limited: status.limited,
+  }))
 }

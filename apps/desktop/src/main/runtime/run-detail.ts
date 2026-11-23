@@ -341,8 +341,15 @@ const PERSISTED = /<persisted-output>[\s\S]*?Full output saved to:\s*(.+?)\s*$/m
 const PREVIEW = /Preview \(first [^)]*\):\s*\n([\s\S]*?)(?:\n?<\/persisted-output>|$)/
 
 /** The folders Claude Code saves big results in: its own config folder, never anywhere else on the disk. */
+const accountRoots = new Set<string>()
+
+/** An account's own Claude sign-in home: Claude Code saves big results there too, so reading them is allowed. */
+export function addClaudeRoot(dir: string): void {
+  accountRoots.add(resolve(dir))
+}
+
 function claudeRoots(): string[] {
-  const roots = [resolve(homedir(), '.claude')]
+  const roots = [resolve(homedir(), '.claude'), ...accountRoots]
   const custom = process.env['CLAUDE_CONFIG_DIR']?.trim() ?? ''
   if (custom !== '') roots.push(resolve(custom))
   return roots

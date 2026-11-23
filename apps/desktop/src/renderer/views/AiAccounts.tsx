@@ -1,4 +1,4 @@
-import { PROVIDERS, accountsOf, type AiAccount, type AiAccountKind, type AiPicks, type ModelOption, type ProviderId, type ProviderInfo } from '@agent/core'
+import { PROVIDERS, accountsOf, failoverRule, type AiAccount, type AiAccountKind, type AiAccountStatus, type AiFailoverRole, type AiPicks, type ModelOption, type ProviderId, type ProviderInfo } from '@agent/core'
 import { useEffect, useState } from 'react'
 
 import { agent } from '../bridge'
@@ -26,8 +26,22 @@ export function AiAccounts(): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
   const [status, setStatus] = useState<Record<string, { ok: boolean; message: string }>>({})
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const [statuses, setStatuses] = useState<AiAccountStatus[]>([])
+  const accountCount = settings === null ? 0 : accountsOf(settings).length
+  // Who each plan account is signed in as and how much of its limit is used: read again on open, after a change and each minute.
+  useEffect(() => {
+    let alive = true
+    const load = (): void => void agent.settings.accounts.status().then((rows) => alive && setStatuses(rows)).catch(() => undefined)
+    load()
+    const timer = setInterval(load, 60_000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [accountCount, busy, adding, editing])
   if (settings === null) return <div className="card" style={{ padding: 16 }} />
   const accounts = accountsOf(settings)
+  const planKinds = (['claude', 'codex'] as const).filter((kind) => accounts.filter((account) => account.kind === kind).length > 1)
 
   const check = async (account: AiAccount): Promise<void> => {
     setBusy(account.id)
@@ -71,6 +85,7 @@ export function AiAccounts(): JSX.Element {
                   </span>
                 </div>
                 {account.kind === 'api' ? <Pill tone={account.hasKey ? 'ok' : 'mute'}>{account.hasKey ? 'Key saved' : 'No key'}</Pill> : null}
+                {account.kind === 'api' ? null : <PlanStatus status={statuses.find((each) => each.id === account.id)} />}
                 <div className="ai-row-acts">
                   <Button variant="tonal" size="sm" disabled={busy === account.id} onClick={() => void check(account)}>
                     {busy === account.id ? 'Checking...' : 'Check'}
@@ -128,6 +143,8 @@ export function AiAccounts(): JSX.Element {
           <AiPickRows settings={settings} picks={settings.ai} onChange={(ai: AiPicks) => void save({ ai })} />
         </div>
       ) : null}
+
+      {planKinds.length > 0 ? <FailoverCard settings={settings} accounts={accounts} onChange={(ai: AiPicks) => void save({ ai })} /> : null}
 
       {adding ? <AccountDialog onClose={() => setAdding(false)} /> : null}
       {editing !== null ? <AccountDialog account={editing} onClose={() => setEditing(null)} /> : null}
@@ -409,5 +426,124 @@ export function AccountDialog({ account, onClose }: { account?: AiAccount; onClo
         </Button>
       </div>
     </Dialog>
+  )
+}
+
+function resetsIn(at: number | null): string {
+  if (at === null) return ''
+  const minutes = Math.round((at - Date.now()) / 60_000)
+  if (minutes <= 0) return 'resetting now'
+  if (minutes < 90) return `resets in ${minutes} min`
+  const hours = Math.round(minutes / 60)
+  return hours < 48 ? `resets in ${hours} h` : `resets in ${Math.round(hours / 24)} days`
+}
+
+/** Who a plan account is signed in as, its plan, and how much of each limit is used (labels from the plan itself). */
+function PlanStatus({ status }: { status: AiAccountStatus | undefined }): JSX.Element | null {
+  if (status === undefined) return null
+  return (
+    <div className="ai-plan-status">
+      <div className="ai-who">
+        {status.signedIn ? (
+          <>
+            <span className="ai-email">{status.email === '' ? 'Signed in' : status.email}</span>
+            {status.plan === '' ? null : <Pill tone="ok">{status.plan}</Pill>}
+            {status.limited ? <Pill tone="mute">At its limit</Pill> : null}
+          </>
+        ) : (
+          <span className="ai-email muted">Not signed in. Use Change, then Sign in.</span>
+        )}
+        {status.sharedLogin ? <span className="small muted">this computer&apos;s own login</span> : null}
+      </div>
+      {status.usage.length === 0 ? (
+        status.signedIn ? <span className="small muted">Usage shows after the first message on this account.</span> : null
+      ) : (
+        <div className="ai-bars">
+          {status.usage.map((window) => (
+            <div className="ai-bar" key={window.label}>
+              <div className="ai-bar-h">
+                <span>{window.label}</span>
+                <span>
+                  {Math.round(window.usedPercent)}% used{resetsIn(window.resetsAt) === '' ? '' : ` · ${resetsIn(window.resetsAt)}`}
+                </span>
+              </div>
+              <div className="ai-bar-track" role="progressbar" aria-label={`${window.label} used`} aria-valuenow={Math.round(window.usedPercent)} aria-valuemin={0} aria-valuemax={100}>
+                <div className={`ai-bar-fill${window.usedPercent >= 90 ? ' hot' : ''}`} style={{ width: `${Math.min(100, Math.max(0, window.usedPercent))}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const ROLE_LINES: Array<{ role: AiFailoverRole; title: string; line: string }> = [
+  { role: 'main', title: 'Main agent and routines', line: 'Your agent, its chats and routines.' },
+  { role: 'helpers', title: 'Helpers', line: 'Helpers, project helpers and desks.' },
+]
+
+/**
+ * When an account hits its plan's limit: try another signed-in account of the same plan, per role, in this order.
+ * Off until switched on.
+ */
+function FailoverCard({ settings, accounts, onChange }: { settings: Parameters<typeof failoverRule>[0]; accounts: AiAccount[]; onChange: (ai: AiPicks) => void }): JSX.Element {
+  const plans = accounts.filter((account) => account.kind !== 'api')
+  const set = (role: AiFailoverRole, on: boolean, order: string[]): void =>
+    onChange({ ...settings.ai, failover: { ...(settings.ai.failover ?? {}), [role]: { on, order } } })
+  return (
+    <div className="card ai-failover" style={{ padding: 14, marginTop: 10 }}>
+      <div className="ai-default-h">
+        <b>When an account hits its limit</b>
+        <span className="small muted">Carry on with another signed-in account of the same plan, in this order. It is logged which account ran.</span>
+      </div>
+      {ROLE_LINES.map(({ role, title, line }) => {
+        const rule = failoverRule(settings, role)
+        const known = plans.map((account) => account.id)
+        const order = [...rule.order.filter((id) => known.includes(id)), ...known.filter((id) => !rule.order.includes(id))]
+        const move = (index: number, by: number): void => {
+          const next = [...order]
+          const other = index + by
+          if (other < 0 || other >= next.length) return
+          const a = next[index]
+          const b = next[other]
+          if (a === undefined || b === undefined) return
+          next[index] = b
+          next[other] = a
+          set(role, rule.on, next)
+        }
+        return (
+          <div className="ai-fo-role" key={role}>
+            <div className="rowc">
+              <div className="rt">
+                <b>{title}</b>
+                <span>{line}</span>
+              </div>
+              <Switch on={rule.on} label={`Fail over for ${title}`} onToggle={(on) => set(role, on, order)} />
+            </div>
+            {rule.on ? (
+              <ol className="ai-fo-order">
+                {order.map((id, index) => {
+                  const account = plans.find((each) => each.id === id)
+                  if (account === undefined) return null
+                  return (
+                    <li key={id}>
+                      <span className="ai-fo-n">{index + 1}</span>
+                      <span className="ai-fo-name">{account.label}</span>
+                      <Button variant="text" size="sm" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`Move ${account.label} up`}>
+                        Up
+                      </Button>
+                      <Button variant="text" size="sm" disabled={index === order.length - 1} onClick={() => move(index, 1)} aria-label={`Move ${account.label} down`}>
+                        Down
+                      </Button>
+                    </li>
+                  )
+                })}
+              </ol>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
   )
 }

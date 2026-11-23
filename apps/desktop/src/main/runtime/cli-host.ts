@@ -4,19 +4,30 @@
  * app archive in an installed build), keeps each conversation's session id between turns and across
  * restarts, and knows whether the person has signed in on this computer.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { execFile, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 
-import type { AgentEvent, JsonObject, Settings, Tool, ToolContext } from '@agent/core'
+import { accountsOf } from '@agent/core'
+import type { AgentEvent, AiAccount, AiAccountStatus, AiUsageWindow, JsonObject, Settings, Tool, ToolContext } from '@agent/core'
 
-import { planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
+import {
+  AccountHomes,
+  UsageStore,
+  codexUsage,
+  engineHomeEnv,
+  identityFromStatus,
+  identityOf,
+  type HomeEntry,
+} from './account-home'
+import { isLimitFailure, planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
 import { startToolServer, type ToolServer } from './mcp-server'
 import { HELD_STEP, type TurnMessages } from './note-tools'
 import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
 import { SIGN_IN_CHECK_MS, SIGN_IN_RETRY_MS, isSignInFailure, loginFileDead, signInVerdict } from './sign-in-check'
+import { addClaudeRoot } from './run-detail'
 import { usableFolder } from './work-folder'
 
 export type { CliId }
@@ -27,8 +38,25 @@ export interface CliCall {
   input: JsonObject
 }
 
+/** Which account a turn ran on, written to the run log and handed to whoever listens (the app's log, tests). */
+export interface AccountRan {
+  at: number
+  cli: CliId
+  thread: string
+  account: string
+  /** Set when this run is a failover: the account that hit its limit first. */
+  failedOverFrom?: string
+}
+
+/** How long an account that hit a limit it gave no reset time for is skipped by failover. */
+export const LIMIT_PAUSE_MS = 30 * 60_000
+
 export interface CliTurnRequest {
   cli: CliId
+  /** The plan account this turn runs as: its own sign-in home. Absent: the computer's own login (older callers). */
+  accountId?: string
+  /** Other accounts of the same kind to retry on, in order, when this one hits its limit. Empty: no failover. */
+  failover?: string[]
   /**
    * Which conversation this is: 'main' and 'helper:<id>' continue across turns (a pushed helper resumes
    * its own session), 'routine' starts fresh each time.
@@ -104,6 +132,12 @@ export class CliHost {
   private server: ToolServer | null = null
   private readonly sessionsFile: string
   private readonly require: NodeRequire
+  /** Each plan account's own sign-in home (account-home.ts). */
+  readonly homes: AccountHomes
+  readonly usage: UsageStore
+  /** Told which account every run used (and when it was a failover). */
+  onRan: ((ran: AccountRan) => void) | null = null
+  private readonly runLog: string
 
   constructor(
     private readonly workDir: string,
@@ -111,10 +145,30 @@ export class CliHost {
     private readonly settings: () => Settings,
     /** The app folder (app.getAppPath()), where the SDK packages are resolved from. */
     appPath: string,
+    /** Where the sign-in homes and usage are kept; the app's data folder next to cli/ by default. */
+    options: { homes?: AccountHomes; usage?: UsageStore; accounts?: () => AiAccount[]; env?: NodeJS.ProcessEnv; home?: string; root?: string } = {},
   ) {
     mkdirSync(workDir, { recursive: true })
     this.sessionsFile = join(workDir, 'sessions.json')
+    this.runLog = join(workDir, 'account-runs.log')
     this.require = createRequire(join(appPath, 'package.json'))
+    this.homes =
+      options.homes ??
+      new AccountHomes({
+        file: join(workDir, 'account-homes.json'),
+        root: options.root ?? join(dirname(workDir), 'accounts'),
+        accounts: options.accounts ?? (() => accountsOf(this.settings())),
+        ...(options.env === undefined ? {} : { env: options.env }),
+        ...(options.home === undefined ? {} : { home: options.home }),
+      })
+    this.usage = options.usage ?? new UsageStore(join(workDir, 'account-usage.json'))
+  }
+
+  /** The sign-in home for an account of this kind (the computer's own login when no account is named). */
+  entry(cli: CliId, account?: string): HomeEntry {
+    const entry = this.homes.resolve(account, cli)
+    if (cli === 'claude') addClaudeRoot(entry.dir)
+    return entry
   }
 
   /** The engine binary the SDK ships for this computer, or null to let the SDK find it itself. */
@@ -143,35 +197,38 @@ export class CliHost {
     return null
   }
 
-  /** The file that holds this tool's login on this computer. */
-  private loginFile(cli: CliId): string {
-    const home = homedir()
-    if (cli === 'claude') return join(process.env['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude'), '.credentials.json')
-    return join(process.env['CODEX_HOME'] ?? join(home, '.codex'), 'auth.json')
+  /** The file that holds this account's login. */
+  private loginFile(cli: CliId, account?: string): string {
+    return join(this.entry(cli, account).dir, cli === 'claude' ? '.credentials.json' : 'auth.json')
   }
 
   /** When the login file last changed (0 when there is none): a new sign-in, or a refresh, changes it. */
-  private loginStamp(cli: CliId): number {
+  private loginStamp(cli: CliId, account?: string): number {
     try {
-      return statSync(this.loginFile(cli)).mtimeMs
+      return statSync(this.loginFile(cli, account)).mtimeMs
     } catch {
       return 0
     }
   }
 
-  /** The tools whose login is known to be dead on this computer, and the login file's stamp when that was found. */
-  private readonly refused = new Map<CliId, { at: number; stamp: number }>()
-  /** Told when a tool's login is found dead or working again, so the node can say so to the other devices at once. */
-  onSignInChange: ((cli: CliId, usable: boolean) => void) | null = null
+  /** The accounts whose login is known to be dead on this computer, and the login file's stamp when that was found. */
+  private readonly refused = new Map<string, { at: number; stamp: number }>()
+  /** Told when an account's login is found dead or working again, so the node can say so to the other devices at once. */
+  onSignInChange: ((cli: CliId, usable: boolean, account?: string) => void) | null = null
 
-  private refuse(cli: CliId): void {
-    const was = this.refused.has(cli)
-    this.refused.set(cli, { at: Date.now(), stamp: this.loginStamp(cli) })
-    if (!was) this.onSignInChange?.(cli, false)
+  private static key(cli: CliId, account?: string): string {
+    return `${cli}:${account ?? ''}`
   }
 
-  private accept(cli: CliId): void {
-    if (this.refused.delete(cli)) this.onSignInChange?.(cli, true)
+  private refuse(cli: CliId, account?: string): void {
+    const key = CliHost.key(cli, account)
+    const was = this.refused.has(key)
+    this.refused.set(key, { at: Date.now(), stamp: this.loginStamp(cli, account) })
+    if (!was) this.onSignInChange?.(cli, false, account)
+  }
+
+  private accept(cli: CliId, account?: string): void {
+    if (this.refused.delete(CliHost.key(cli, account))) this.onSignInChange?.(cli, true, account)
   }
 
   /**
@@ -180,18 +237,17 @@ export class CliHost {
    * file changes (a new sign-in) or SIGN_IN_RETRY_MS has passed. A computer that cannot answer must not say it can
    * (12 Nov 2026: the server kept a dead Claude login file, said it was ready, and answered the phone with an error).
    */
-  signedIn(cli: CliId): boolean {
-    const home = homedir()
+  signedIn(cli: CliId, account?: string): boolean {
+    const entry = this.entry(cli, account)
     if (cli === 'claude') {
-      const configDir = process.env['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude')
-      // macOS keeps the Claude login in the keychain, so a config folder is the best signal there.
-      if (!(existsSync(join(configDir, '.credentials.json')) || (process.platform === 'darwin' && existsSync(configDir)))) return false
-    } else if (!existsSync(this.loginFile(cli))) return false
-    if (loginFileDead(this.loginFile(cli), Date.now())) return false
-    const refused = this.refused.get(cli)
+      // macOS keeps the computer's own Claude login in the keychain, so its config folder is the best signal there.
+      if (!(existsSync(join(entry.dir, '.credentials.json')) || (process.platform === 'darwin' && entry.shared && existsSync(entry.dir)))) return false
+    } else if (!existsSync(this.loginFile(cli, account))) return false
+    if (loginFileDead(this.loginFile(cli, account), Date.now())) return false
+    const refused = this.refused.get(CliHost.key(cli, account))
     if (refused === undefined) return true
-    if (this.loginStamp(cli) !== refused.stamp || Date.now() - refused.at > SIGN_IN_RETRY_MS) {
-      this.accept(cli)
+    if (this.loginStamp(cli, account) !== refused.stamp || Date.now() - refused.at > SIGN_IN_RETRY_MS) {
+      this.accept(cli, account)
       return true
     }
     return false
@@ -201,12 +257,13 @@ export class CliHost {
    * Asks the engine itself whether the login works (`claude auth status`, `codex login status`: local, free, quick)
    * and remembers the answer. Unknown (no engine, no answer) changes nothing.
    */
-  async checkSignIn(cli: CliId): Promise<boolean | null> {
+  async checkSignIn(cli: CliId, account?: string): Promise<boolean | null> {
     const program = this.engine(cli)
     if (program === null) return null
     const args = cli === 'claude' ? ['auth', 'status'] : ['login', 'status']
+    const env = { ...engineHomeEnv(this.entry(cli, account)), ELECTRON_RUN_AS_NODE: undefined }
     const answer = await new Promise<{ code: number | null; out: string } | null>((resolve) => {
-      execFile(program, args, { timeout: 20_000, windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined } }, (error, stdout, stderr) => {
+      execFile(program, args, { timeout: 20_000, windowsHide: true, env }, (error, stdout, stderr) => {
         const code = error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : null
         resolve(error !== null && code === null ? null : { code, out: `${stdout}\n${stderr}` })
       })
@@ -214,15 +271,21 @@ export class CliHost {
     if (answer === null) return null
     const usable = signInVerdict(cli, answer.code, answer.out)
     if (usable === null) return null
-    if (usable) this.accept(cli)
-    else this.refuse(cli)
+    if (usable) this.accept(cli, account)
+    else this.refuse(cli, account)
     return usable
   }
 
-  /** Checks soon and then every [every] ms, for each tool [clis] names; stop it with the function it returns. */
-  watchSignIn(clis: () => CliId[], every = SIGN_IN_CHECK_MS): () => void {
+  /**
+   * Checks soon and then every [every] ms, for each tool [clis] names (a kind, or { cli, account } for one account's
+   * own sign-in); stop it with the function it returns.
+   */
+  watchSignIn(clis: () => Array<CliId | { cli: CliId; account: string }>, every = SIGN_IN_CHECK_MS): () => void {
     const run = (): void => {
-      for (const cli of clis()) void this.checkSignIn(cli).catch(() => undefined)
+      for (const each of clis()) {
+        const target = typeof each === 'string' ? { cli: each, account: undefined } : each
+        void this.checkSignIn(target.cli, target.account).catch(() => undefined)
+      }
     }
     const first = setTimeout(run, 3_000)
     const timer = setInterval(run, every)
@@ -238,14 +301,18 @@ export class CliHost {
    * Runs the engine's own sign-in (`claude auth login`, `codex login`). Both open the browser; any sign-in
    * address they print is opened too, in case the engine could not open it itself. Up to 10 minutes.
    */
-  login(cli: CliId, openUrl: (url: string) => void): Promise<{ ok: boolean; message: string }> {
+  login(cli: CliId, openUrl: (url: string) => void, account?: string): Promise<{ ok: boolean; message: string }> {
     const program = this.engine(cli)
     const name = cli === 'claude' ? 'Claude' : 'ChatGPT'
     if (program === null) return Promise.resolve({ ok: false, message: `The ${name} sign-in is not available in this build.` })
+    const entry = this.entry(cli, account)
+    // A fresh home signs in as whoever completes the browser step, never as the computer's login: the engine is given
+    // only this account's folder, so there is nothing else for it to find.
+    const env = { ...engineHomeEnv(entry), ELECTRON_RUN_AS_NODE: undefined }
     return new Promise((resolve) => {
       const child = spawn(program, cli === 'claude' ? ['auth', 'login'] : ['login'], {
         cwd: this.workDir,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
+        env,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -274,17 +341,20 @@ export class CliHost {
       })
       child.once('close', (code) => {
         clearTimeout(timer)
-        if (code === 0) resolve({ ok: true, message: `Signed in to ${name}.` })
+        if (code === 0) {
+          const who = identityOf(entry)
+          resolve({ ok: true, message: who.email === '' ? `Signed in to ${name}.` : `Signed in to ${name} as ${who.email}${who.plan === '' ? '' : ` (${who.plan})`}.` })
+        }
         else resolve({ ok: false, message: output.trim().split('\n').pop()?.slice(0, 200) || `The ${name} sign-in did not finish.` })
       })
     })
   }
 
   /** What the plan offers right now, from the engine itself. */
-  async models(cli: CliId): Promise<PlanModel[]> {
+  async models(cli: CliId, account?: string): Promise<PlanModel[]> {
     const dir = join(this.workDir, cli, 'models')
     mkdirSync(dir, { recursive: true })
-    return planModels(cli, this.engine(cli), dir)
+    return planModels(cli, this.engine(cli), dir, this.entry(cli, account))
   }
 
   /** Bumped by forget, so a turn that was running when its thread was forgotten does not save its session back. */
@@ -301,7 +371,49 @@ export class CliHost {
     this.saveSessions(sessions)
   }
 
+  /** True while an account is known to be at its limit (its plan said so, or a turn stopped on it, and the reset is not here). */
+  limited(account: string | undefined, now = Date.now()): boolean {
+    if (account === undefined) return false
+    const until = this.usage.get(account)?.limitedUntil ?? 0
+    return until > now
+  }
+
+  private noteRan(request: CliTurnRequest, account: string | undefined, failedOverFrom?: string): void {
+    const ran: AccountRan = {
+      at: Date.now(),
+      cli: request.cli,
+      thread: request.thread,
+      account: account ?? '',
+      ...(failedOverFrom === undefined ? {} : { failedOverFrom }),
+    }
+    try {
+      appendFileSync(this.runLog, `${new Date(ran.at).toISOString()} ${ran.cli} ${ran.thread} account=${ran.account === '' ? 'shared' : ran.account}${failedOverFrom === undefined ? '' : ` failover-from=${failedOverFrom}`}\n`)
+    } catch {
+      // The log is a courtesy.
+    }
+    this.onRan?.(ran)
+  }
+
+  /**
+   * One turn on the account the request names, and when that account hits its plan's limit, the same turn again on
+   * the next signed-in account of the same kind from request.failover (each with its own sign-in home and its own
+   * session; the new one starts from the full brief). Every run is logged with the account it used.
+   */
   async turn(request: CliTurnRequest): Promise<{ text: string; error?: string }> {
+    this.noteRan(request, request.accountId)
+    let result = await this.turnOn(request)
+    let from = request.accountId
+    for (const next of request.failover ?? []) {
+      if (!isLimitFailure(result.error) || request.signal.aborted) break
+      if (next === from || !this.signedIn(request.cli, next) || this.limited(next)) continue
+      this.noteRan(request, next, from)
+      result = await this.turnOn({ ...request, accountId: next })
+      from = next
+    }
+    return result
+  }
+
+  private async turnOn(request: CliTurnRequest): Promise<{ text: string; error?: string }> {
     const server = await this.ensureServer()
     const token = server.open({
       tools: toolsForTurn(request),
@@ -322,7 +434,9 @@ export class CliHost {
     }
     const folder = usableFolder(request.folder)
     try {
-      const key = `${request.cli}:${request.thread}`
+      const entry = this.entry(request.cli, request.accountId)
+      // The computer's own login keeps the old key, so its conversations carry on; every other account has its own.
+      const key = entry.shared ? `${request.cli}:${request.thread}` : `${request.cli}:${request.accountId ?? ''}:${request.thread}`
       const stored = continues ? (this.sessions()[key] ?? null) : null
       const stale = stored !== null && this.sessions()[`${key}#rev`] !== String(PROMPT_REVISION)
       const permission = sdkPermission({
@@ -335,6 +449,8 @@ export class CliHost {
         runCliTurn({
           cli: request.cli,
           program: this.engine(request.cli),
+          home: entry,
+          onUsage: (window: AiUsageWindow, rejected: boolean) => this.heard(request.accountId, window, rejected),
           system: request.system,
           prompt:
             sessionId === null
@@ -373,12 +489,94 @@ export class CliHost {
         this.saveSessions({ ...this.sessions(), [key]: result.sessionId, [`${key}#rev`]: String(PROMPT_REVISION) })
       }
       // A turn that ends on a dead login settles it for this computer at once; one that ran proves it works.
-      if (isSignInFailure(result.error)) this.refuse(request.cli)
-      else if (result.error === undefined) this.accept(request.cli)
+      if (isSignInFailure(result.error)) this.refuse(request.cli, request.accountId)
+      else if (result.error === undefined) this.accept(request.cli, request.accountId)
+      if (isLimitFailure(result.error) && request.accountId !== undefined && !this.limited(request.accountId)) {
+        const reset = request.cli === 'codex' ? codexUsage(entry.dir).windows.find((window) => window.usedPercent >= 100)?.resetsAt ?? null : null
+        this.usage.set(request.accountId, { limitedUntil: reset !== null && reset > Date.now() ? reset : Date.now() + LIMIT_PAUSE_MS })
+      }
       return result.error === undefined ? { text: result.text } : { text: result.text, error: result.error }
     } finally {
       server.release(token)
     }
+  }
+
+  /** Who an account is signed in as, read from its own sign-in home (no token leaves this). */
+  identity(cli: CliId, account?: string): { signedIn: boolean; email: string; plan: string } {
+    return identityOf(this.entry(cli, account))
+  }
+
+  /** An account was removed: its own sign-in home and usage go (never the computer's shared login). */
+  forgetAccount(account: string): void {
+    this.homes.forget(account)
+    this.usage.forget(account)
+  }
+
+  /** A usage window the Claude engine reported during a turn: kept per account; a rejected one pauses it until the reset. */
+  private heard(account: string | undefined, window: AiUsageWindow, rejected: boolean): void {
+    if (account === undefined) return
+    const kept = (this.usage.get(account)?.windows ?? []).filter((each) => each.label !== window.label)
+    this.usage.set(account, {
+      windows: [...kept, window],
+      at: Date.now(),
+      ...(rejected ? { limitedUntil: window.resetsAt !== null && window.resetsAt > Date.now() ? window.resetsAt : Date.now() + LIMIT_PAUSE_MS } : window.usedPercent < 100 ? { limitedUntil: 0 } : {}),
+    })
+  }
+
+  /**
+   * Who each plan account is signed in as, its plan and its usage. Labels and numbers only: the email and plan come from
+   * the id token's public claims (Codex) and the engine's own config and status (Claude), never a token.
+   */
+  async status(accounts: AiAccount[]): Promise<AiAccountStatus[]> {
+    const out: AiAccountStatus[] = []
+    for (const account of accounts) {
+      if (account.kind === 'api') continue
+      const entry = this.entry(account.kind, account.id)
+      const who = identityOf(entry)
+      let email = who.email
+      let plan = who.plan
+      const signedIn = who.signedIn && this.signedIn(account.kind, account.id)
+      if (account.kind === 'claude' && who.signedIn && (email === '' || plan === '')) {
+        const said = await this.claudeStatusText(account.id)
+        const more = identityFromStatus(said)
+        email = email || more.email
+        plan = plan || more.plan
+      }
+      let windows: AiUsageWindow[] = []
+      let at = 0
+      if (account.kind === 'codex') {
+        const seen = codexUsage(entry.dir)
+        windows = seen.windows
+        at = seen.at
+      }
+      const kept = this.usage.get(account.id)
+      if (account.kind === 'claude' && kept !== null) {
+        windows = kept.windows
+        at = kept.at
+      }
+      out.push({
+        id: account.id,
+        kind: account.kind,
+        label: account.label,
+        signedIn,
+        email,
+        plan,
+        usage: windows,
+        usageAt: at,
+        limited: this.limited(account.id) || windows.some((window) => window.usedPercent >= 100 && (window.resetsAt === null || window.resetsAt > Date.now())),
+        sharedLogin: entry.shared,
+      })
+    }
+    return out
+  }
+
+  private claudeStatusText(account: string): Promise<string> {
+    const program = this.engine('claude')
+    if (program === null) return Promise.resolve('')
+    const env = { ...engineHomeEnv(this.entry('claude', account)), ELECTRON_RUN_AS_NODE: undefined }
+    return new Promise((resolve) => {
+      execFile(program, ['auth', 'status'], { timeout: 15_000, windowsHide: true, env }, (_error, stdout, stderr) => resolve(`${stdout}\n${stderr}`))
+    })
   }
 
   async close(): Promise<void> {

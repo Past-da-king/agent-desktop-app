@@ -53,7 +53,7 @@ import { HANDOFF_CLOSED } from './tools/browser'
 
 import type { AppPlatform } from '@agent/core'
 
-import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, accountsOf, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type MiniAppCheck, type MiniAppRow, type Settings } from '@agent/core'
+import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, accountLabels, accountsOf, MAIN_CHAT, MEMORY_DAILY_ROUTINE, mimeForFile, providerFor, type Attachment, type MiniAppCheck, type MiniAppRow, type Settings } from '@agent/core'
 
 import { registerIpc, type DialogLike, type WindowControls } from './ipc'
 import { AccountService } from './account'
@@ -971,7 +971,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   })
   // The old single AI choice becomes the first account, once; after that the accounts list is the truth.
   migrateLegacyAccount(settings, secrets)
-  const accounts = new AccountStore(settings, secrets)
+  const accounts = new AccountStore(settings, secrets, undefined, (id) => cliHost?.forgetAccount(id))
   const brainLocks = new FileBrainLocks(join(dir, 'brain-locks.json'))
   account = new AccountService(store, settings, secrets)
   disposeStore = store.onChange(() => account?.nudge())
@@ -1207,7 +1207,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
   cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
   // The engine's own word on whether each plan's login works, now and every ten minutes (a dead login is not ready).
-  const stopSignInWatch = cliHost.watchSignIn(() => [...new Set(accountsOf(settings.get()).filter((a) => a.kind !== 'api').map((a) => a.kind as 'claude' | 'codex'))])
+  const stopSignInWatch = cliHost.watchSignIn(() => accountsOf(settings.get()).filter((a) => a.kind !== 'api').map((a) => ({ cli: a.kind as 'claude' | 'codex', account: a.id })))
   app.once('will-quit', stopSignInWatch)
   const leaseStore = store
   leases = new TurnLeases({
@@ -1832,7 +1832,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       planModels: (accountId) => showRunner.planModels(accountId),
       planTurn: async (account, model, system, prompt, signal) => {
         if (cliHost === null || account.kind === 'api') throw new Error('This build cannot run on a plan.')
-        const answer = await cliHost.turn({ cli: account.kind, thread: 'routine', tools: [], system, prompt, ...(model === '' ? {} : { model }), context: showRunner.deviceToolContext(signal), signal, onEvent: async () => undefined, onCall: async () => undefined, onResult: async () => undefined })
+        const answer = await cliHost.turn({ cli: account.kind, accountId: account.id, thread: 'routine', tools: [], system, prompt, ...(model === '' ? {} : { model }), context: showRunner.deviceToolContext(signal), signal, onEvent: async () => undefined, onCall: async () => undefined, onResult: async () => undefined })
         if (answer.error !== undefined) throw new Error(answer.error)
         return answer.text
       },
@@ -2078,7 +2078,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       ready: () => {
         const list = accountsOf(settings.get())
         if (list.length === 0) return settings.get().mode !== 'none'
-        return list.some((account) => account.kind === 'api' || cliHost === null || cliHost.signedIn(account.kind))
+        return list.some((account) => account.kind === 'api' || cliHost === null || cliHost.signedIn(account.kind, account.id))
       },
       busy: () => runner?.state().running ?? false,
       rendererDir: join(__dirname, '../renderer'),
@@ -2118,6 +2118,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
           ...(vaultStore === null ? {} : { vault: vaultStore }),
           passes: ready.passTable(),
           projects: () => store === null ? Promise.resolve([]) : store.list('project'),
+          accountLabels: async () => (cliHost === null ? [] : accountLabels(await cliHost.status(accountsOf(settings.get())))),
         },
         ...hooks,
         imageDir: join(dir, 'attachments', 'from-devices'),

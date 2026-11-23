@@ -91,6 +91,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'settings.accounts.listModels': free("List an AI account's models", 'accountId'),
   'settings.accounts.signIn': ask('Sign in an AI account (Settings > AI > account > Sign in)', 'accountId'),
   'settings.accounts.chatBrain': free('Which AI answers in a chat', 'chatId'),
+  'settings.accounts.status': free('Who each plan account is signed in as, its plan and usage (Settings > AI cards)'),
   // Sync account
   'account.signIn': ask('Sign in to sync (Settings > Account)', '{ email, password, ... }', [0]),
   'account.signOut': ask('Sign out of sync (Settings > Account > Sign out)'),

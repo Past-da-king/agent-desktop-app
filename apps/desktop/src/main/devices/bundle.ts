@@ -20,6 +20,7 @@ import {
   type AccountRules,
   type AgentProfileInfo,
   type AiAccount,
+  type AiAccountLabel,
   type DeviceRow,
   type ProjectRow,
   type Settings,
@@ -75,6 +76,11 @@ export interface StateBundle {
   connectedApps: { rules: Record<string, AccountRules> }
   /** The AI accounts, never with keys (hasKey says whether this node has one). */
   accounts: AiAccount[]
+  /**
+   * Who each plan account is signed in as, its plan and usage: labels only, built field by field (accountLabels).
+   * Never a token and never the contents of a sign-in home. Not part of the bundle's hash and never applied.
+   */
+  accountLabels?: AiAccountLabel[]
   secrets?: BundleSecrets
 }
 
@@ -89,6 +95,8 @@ export interface BundleSources {
   projects?: () => Promise<ProjectRow[]>
   /** The Vault: the whole of it travels to another brain, newest wins. */
   vault?: { exportAll(): { changedAt: number; items: unknown[]; prefs?: unknown }; replaceAll(incoming: { changedAt: number; items: unknown[]; prefs?: unknown }, force?: boolean): boolean; onChange?(listener: () => void): () => void }
+  /** Labels for the plan accounts (see StateBundle.accountLabels). */
+  accountLabels?: () => Promise<AiAccountLabel[]>
   /** Kept on this device only: the bundle's hash and changedAt. */
   local: { localValue(key: string): string | null; setLocalValue(key: string, value: string): void }
   now?: () => number
@@ -145,6 +153,13 @@ export class BundleKeeper {
       accounts: body.accounts,
     }
     if (forBrain) bundle.secrets = body.secrets
+    if (this.sources.accountLabels !== undefined) {
+      try {
+        bundle.accountLabels = await this.sources.accountLabels()
+      } catch {
+        // Labels are a courtesy: the bundle goes out without them.
+      }
+    }
     return bundle
   }
 

@@ -18,6 +18,7 @@ import {
   MAIN_CHAT,
   PROVIDERS,
   accountById,
+  failoverIds,
   findRosterEntry,
   limitOf,
   msgFromJson,
@@ -3074,6 +3075,8 @@ export class HelperManager implements HelperHost {
       const messages = this.turnMessages(run)
       const outcome = await cli.turn({
         cli: brain.cli,
+        accountId: brain.account.id,
+        failover: failoverIds(this.settings.get(), 'helpers', brain.account.id),
         thread: `helper:${run.id}`,
         tools: withNoteTools(run.tools ?? this.workerTools, {
           hold: () => messages.hold(),

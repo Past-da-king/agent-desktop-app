@@ -38,7 +38,7 @@ export interface OffloadWireDeps {
   secrets: { get(name: string): string | null }
   providerFactory: ProviderFactory
   /** Whether this build runs plans, and which ones are signed in here. */
-  cli: { signedIn(cli: 'claude' | 'codex'): boolean; onSignInChange?: ((cli: 'claude' | 'codex', usable: boolean) => void) | null } | null
+  cli: { signedIn(cli: 'claude' | 'codex', account?: string): boolean; onSignInChange?: ((cli: 'claude' | 'codex', usable: boolean, account?: string) => void) | null } | null
   /** The chat runner, once made. */
   runner: () => OffloadRunner | null
   kind: 'desktop' | 'server'
@@ -112,7 +112,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
   }
   const canRun = (account: AiAccount): boolean => {
     if ((cannot.get(account.id) ?? 0) > now()) return false
-    if (account.kind !== 'api') return deps.cli !== null && deps.cli.signedIn(account.kind)
+    if (account.kind !== 'api') return deps.cli !== null && deps.cli.signedIn(account.kind, account.id)
     return isBrain(brainFor({ settings, secrets: deps.secrets, providerFactory: deps.providerFactory, hasCli: deps.cli !== null }, { account: account.id, model: '' }))
   }
   const capacity = (): NodeCapacity => {

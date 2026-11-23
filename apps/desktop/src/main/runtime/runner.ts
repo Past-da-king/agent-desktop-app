@@ -37,6 +37,9 @@ import {
   type ToolContext,
   type TriggerRow,
   accountById,
+  accountsOf,
+  failoverIds,
+  type AiAccountStatus,
   defaultGoodFor,
   isImageRoutingRefusal,
   isUnsupportedImageRefusal,
@@ -1784,6 +1787,8 @@ export class Runner {
     try {
       result = await this.cli.turn({
         cli: brain.cli,
+        accountId: brain.account.id,
+        failover: failoverIds(this.settings.get(), 'main', brain.account.id),
         thread: threadFor(chat),
         // His message rides with the result of the app tool in flight (a read is cut off for it; a change finishes).
         tools: withNoteTools(this.tools, {
@@ -1840,6 +1845,8 @@ export class Runner {
     this.routineController = controller
     const result = await this.cli.turn({
       cli: brain.cli,
+      accountId: brain.account.id,
+      failover: failoverIds(this.settings.get(), 'main', brain.account.id),
       thread: 'routine',
       tools: this.tools,
       system: await this.cliSystem(trigger.prompt, 'routine', trigger.name, MAIN_CHAT, brain.cli),
@@ -1876,6 +1883,8 @@ export class Runner {
       try {
         const result = await this.cli.turn({
           cli: brain.cli,
+          accountId: brain.account.id,
+          failover: failoverIds(this.settings.get(), 'main', brain.account.id),
           thread: 'routine',
           tools: [],
           system,
@@ -1903,6 +1912,12 @@ export class Runner {
     }
   }
 
+  /** Who each plan account is signed in as, its plan and usage (Settings > AI cards). */
+  async accountStatus(): Promise<AiAccountStatus[]> {
+    if (this.cli === undefined) return []
+    return this.cli.status(accountsOf(this.settings.get()))
+  }
+
   /** The chosen plan's own sign-in, then the same tiny check. */
   /** The engine an account runs on: the account's own plan, else the old single choice. */
   private cliOf(accountId?: string): CliId {
@@ -1913,12 +1928,12 @@ export class Runner {
 
   async planModels(accountId?: string): Promise<Array<{ id: string; label: string; line: string }>> {
     if (this.cli === undefined) return []
-    return this.cli.models(this.cliOf(accountId))
+    return this.cli.models(this.cliOf(accountId), accountId)
   }
 
   async cliLogin(accountId?: string): Promise<{ ok: boolean; message: string }> {
     if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a plan.' }
-    const signedIn = await this.cli.login(this.cliOf(accountId), (url) => this.openUrl(url))
+    const signedIn = await this.cli.login(this.cliOf(accountId), (url) => this.openUrl(url), accountId)
     if (!signedIn.ok) return signedIn
     return this.checkCli(accountId)
   }
@@ -1933,6 +1948,7 @@ export class Runner {
     try {
       const result = await this.cli.turn({
         cli,
+        ...(accountId === undefined ? {} : { accountId }),
         thread: 'routine',
         tools: [],
         system: 'Reply with exactly the word OK and nothing else.',
@@ -1945,7 +1961,9 @@ export class Runner {
       })
       if (controller.signal.aborted) return { ok: false, message: `${name} took too long to answer. Try again.` }
       if (result.error !== undefined) return { ok: false, message: result.error }
-      return { ok: true, message: `${name} is signed in and working on your plan.` }
+      const who = this.cli.identity(cli, accountId)
+      const as = who.email === '' ? '' : ` as ${who.email}${who.plan === '' ? '' : ` (${who.plan})`}`
+      return { ok: true, message: `${name} is signed in${as} and working on your plan.` }
     } finally {
       clearTimeout(timer)
     }
