@@ -26,22 +26,8 @@ export function AiAccounts(): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
   const [status, setStatus] = useState<Record<string, { ok: boolean; message: string }>>({})
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
-  const [statuses, setStatuses] = useState<AiAccountStatus[]>([])
-  const accountCount = settings === null ? 0 : accountsOf(settings).length
-  // Who each plan account is signed in as and how much of its limit is used: read again on open, after a change and each minute.
-  useEffect(() => {
-    let alive = true
-    const load = (): void => void agent.settings.accounts.status().then((rows) => alive && setStatuses(rows)).catch(() => undefined)
-    load()
-    const timer = setInterval(load, 60_000)
-    return () => {
-      alive = false
-      clearInterval(timer)
-    }
-  }, [accountCount, busy, adding, editing])
   if (settings === null) return <div className="card" style={{ padding: 16 }} />
   const accounts = accountsOf(settings)
-  const planKinds = (['claude', 'codex'] as const).filter((kind) => accounts.filter((account) => account.kind === kind).length > 1)
 
   const check = async (account: AiAccount): Promise<void> => {
     setBusy(account.id)
@@ -85,7 +71,6 @@ export function AiAccounts(): JSX.Element {
                   </span>
                 </div>
                 {account.kind === 'api' ? <Pill tone={account.hasKey ? 'ok' : 'mute'}>{account.hasKey ? 'Key saved' : 'No key'}</Pill> : null}
-                {account.kind === 'api' ? null : <PlanStatus status={statuses.find((each) => each.id === account.id)} />}
                 <div className="ai-row-acts">
                   <Button variant="tonal" size="sm" disabled={busy === account.id} onClick={() => void check(account)}>
                     {busy === account.id ? 'Checking...' : 'Check'}
@@ -143,8 +128,6 @@ export function AiAccounts(): JSX.Element {
           <AiPickRows settings={settings} picks={settings.ai} onChange={(ai: AiPicks) => void save({ ai })} />
         </div>
       ) : null}
-
-      {planKinds.length > 0 ? <FailoverCard settings={settings} accounts={accounts} onChange={(ai: AiPicks) => void save({ ai })} /> : null}
 
       {adding ? <AccountDialog onClose={() => setAdding(false)} /> : null}
       {editing !== null ? <AccountDialog account={editing} onClose={() => setEditing(null)} /> : null}
@@ -439,7 +422,7 @@ function resetsIn(at: number | null): string {
 }
 
 /** Who a plan account is signed in as, its plan, and how much of each limit is used (labels from the plan itself). */
-function PlanStatus({ status }: { status: AiAccountStatus | undefined }): JSX.Element | null {
+export function PlanStatus({ status }: { status: AiAccountStatus | undefined }): JSX.Element | null {
   if (status === undefined) return null
   return (
     <div className="ai-plan-status">
@@ -487,12 +470,12 @@ const ROLE_LINES: Array<{ role: AiFailoverRole; title: string; line: string }> =
  * When an account hits its plan's limit: try another signed-in account of the same plan, per role, in this order.
  * Off until switched on.
  */
-function FailoverCard({ settings, accounts, onChange }: { settings: Parameters<typeof failoverRule>[0]; accounts: AiAccount[]; onChange: (ai: AiPicks) => void }): JSX.Element {
+export function FailoverCard({ settings, accounts, onChange }: { settings: Parameters<typeof failoverRule>[0]; accounts: AiAccount[]; onChange: (ai: AiPicks) => void }): JSX.Element {
   const plans = accounts.filter((account) => account.kind !== 'api')
   const set = (role: AiFailoverRole, on: boolean, order: string[]): void =>
     onChange({ ...settings.ai, failover: { ...(settings.ai.failover ?? {}), [role]: { on, order } } })
   return (
-    <div className="card ai-failover" style={{ padding: 14, marginTop: 10 }}>
+    <div className="pickwrap ai-failover">
       <div className="ai-default-h">
         <b>When an account hits its limit</b>
         <span className="small muted">Carry on with another signed-in account of the same plan, in this order. It is logged which account ran.</span>

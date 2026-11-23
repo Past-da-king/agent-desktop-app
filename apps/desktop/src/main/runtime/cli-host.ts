@@ -16,6 +16,7 @@ import type { AgentEvent, AiAccount, AiAccountStatus, AiUsageWindow, JsonObject,
 import {
   AccountHomes,
   UsageStore,
+  claudeUsageFromApi,
   codexUsage,
   engineHomeEnv,
   identityFromStatus,
@@ -138,6 +139,7 @@ export class CliHost {
   /** Told which account every run used (and when it was a failover). */
   onRan: ((ran: AccountRan) => void) | null = null
   private readonly runLog: string
+  private readonly fetchImpl: typeof fetch
 
   constructor(
     private readonly workDir: string,
@@ -146,8 +148,9 @@ export class CliHost {
     /** The app folder (app.getAppPath()), where the SDK packages are resolved from. */
     appPath: string,
     /** Where the sign-in homes and usage are kept; the app's data folder next to cli/ by default. */
-    options: { homes?: AccountHomes; usage?: UsageStore; accounts?: () => AiAccount[]; env?: NodeJS.ProcessEnv; home?: string; root?: string } = {},
+    options: { homes?: AccountHomes; usage?: UsageStore; accounts?: () => AiAccount[]; env?: NodeJS.ProcessEnv; home?: string; root?: string; fetch?: typeof fetch } = {},
   ) {
+    this.fetchImpl = options.fetch ?? fetch
     mkdirSync(workDir, { recursive: true })
     this.sessionsFile = join(workDir, 'sessions.json')
     this.runLog = join(workDir, 'account-runs.log')
@@ -549,10 +552,20 @@ export class CliHost {
         windows = seen.windows
         at = seen.at
       }
-      const kept = this.usage.get(account.id)
-      if (account.kind === 'claude' && kept !== null) {
-        windows = kept.windows
-        at = kept.at
+      let kept = this.usage.get(account.id)
+      if (account.kind === 'claude' && who.signedIn) {
+        // Claude Code's own /usage numbers, asked at most every two minutes per account.
+        if (kept === null || Date.now() - kept.at > 2 * 60_000) {
+          const asked = await claudeUsageFromApi(entry.dir, this.fetchImpl)
+          if (asked.length > 0) {
+            this.usage.set(account.id, { windows: asked, at: Date.now() })
+            kept = this.usage.get(account.id)
+          }
+        }
+        if (kept !== null) {
+          windows = kept.windows
+          at = kept.at
+        }
       }
       out.push({
         id: account.id,

@@ -198,3 +198,34 @@ describe('what leaves this computer holds no login', () => {
     expect(Object.keys(labels[0] ?? {}).sort()).toEqual(['email', 'id', 'kind', 'label', 'limited', 'plan', 'usage'])
   })
 })
+
+describe('Claude usage', () => {
+  it("shows the plan's usage from its own /usage numbers, with the account's own token and never in the output", async () => {
+    list = [plan('c1', 'claude'), plan('c2', 'claude')]
+    const seen: string[] = []
+    const asked = new CliHost(join(root, 'cli2'), settings, process.cwd(), {
+      home: fakeHome,
+      root: join(root, 'accounts2'),
+      env: { ...process.env },
+      fetch: (async (_url: string, init?: { headers?: Record<string, string> }) => {
+        seen.push(init?.headers?.['Authorization'] ?? '')
+        return new Response(JSON.stringify({ five_hour: { utilization: 42, resets_at: '2026-11-23T18:00:00+00:00' }, seven_day: { utilization: 60, resets_at: '2026-11-27T03:00:00+00:00' }, seven_day_opus: null }), { status: 200 })
+      }) as unknown as typeof fetch,
+    })
+    for (const id of ['c1', 'c2']) {
+      const dir = asked.entry('claude', id).dir
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: `${SECRET}-${id}`, refreshToken: 'r', subscriptionType: 'max' } }))
+      writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: `${id}@example.com` } }))
+    }
+    const status = await asked.status(list)
+    expect(status.map((each) => [each.email, each.plan, each.usage.map((w) => `${w.label} ${w.usedPercent}`).join(',')])).toEqual([
+      ['c1@example.com', 'Max', '5 hours 42,Weekly 60'],
+      ['c2@example.com', 'Max', '5 hours 42,Weekly 60'],
+    ])
+    // Each account asked with its own token.
+    expect(seen).toEqual([`Bearer ${SECRET}-c1`, `Bearer ${SECRET}-c2`])
+    expect(JSON.stringify(status)).not.toContain(SECRET)
+    await asked.close()
+  })
+})

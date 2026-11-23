@@ -427,3 +427,38 @@ export function claudeLimitWindow(info: { rateLimitType?: unknown; utilization?:
   const resets = typeof info.resetsAt === 'number' ? (info.resetsAt < 1e12 ? info.resetsAt * 1000 : info.resetsAt) : null
   return { label, usedPercent: Math.round(used * 10) / 10, resetsAt: resets }
 }
+
+/**
+ * Claude: the plan's usage as `/usage` in Claude Code shows it, asked of the same endpoint with this account's own
+ * access token (read here, sent only to Anthropic, never returned or logged). Empty when the endpoint does not answer.
+ */
+export async function claudeUsageFromApi(dir: string, fetchImpl: typeof fetch = fetch): Promise<AiUsageWindow[]> {
+  const creds = readJson(join(dir, '.credentials.json'))
+  const oauth = creds !== null && typeof creds === 'object' ? (creds as { claudeAiOauth?: { accessToken?: unknown } }).claudeAiOauth : undefined
+  const token = oauth?.accessToken
+  if (typeof token !== 'string' || token === '') return []
+  try {
+    const response = await fetchImpl('https://api.anthropic.com/api/oauth/usage', {
+      headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' },
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (!response.ok) return []
+    const body = (await response.json()) as Record<string, { utilization?: unknown; resets_at?: unknown } | null>
+    const labels: Array<[string, string]> = [
+      ['five_hour', '5 hours'],
+      ['seven_day', 'Weekly'],
+      ['seven_day_opus', 'Weekly Opus'],
+      ['seven_day_sonnet', 'Weekly Sonnet'],
+    ]
+    const windows: AiUsageWindow[] = []
+    for (const [key, label] of labels) {
+      const w = body[key]
+      if (w === undefined || w === null || typeof w.utilization !== 'number') continue
+      const resets = typeof w.resets_at === 'string' && Number.isFinite(Date.parse(w.resets_at)) ? Date.parse(w.resets_at) : null
+      windows.push({ label, usedPercent: Math.round(w.utilization * 10) / 10, resetsAt: resets })
+    }
+    return windows
+  } catch {
+    return []
+  }
+}

@@ -190,8 +190,8 @@ export function explainCliFailure(cli: CliId, text: string): string {
   const t = text.toLowerCase()
   if (/log ?in|logged out|not authenticated|authentication|invalid api key|\/login|oauth|credentials|unauthori[sz]ed|401/.test(t)) {
     return cli === 'claude'
-      ? 'Claude is not signed in on this computer. Install Claude Code, run claude once and sign in with your Claude account, then try again.'
-      : 'Codex is not signed in on this computer. Run codex login once and sign in with your ChatGPT account, then try again.'
+      ? 'Claude is not signed in on this computer for this account. Open Settings > AI, choose the account and press Sign in, then try again.'
+      : 'Codex is not signed in on this computer for this account. Open Settings > AI, choose the account and press Sign in, then try again.'
   }
   if (/usage limit|rate limit|limit reached|quota|too many requests|429/.test(t)) {
     return `Your ${name} plan has reached its limit for now. It resets on its own; try again later.`
