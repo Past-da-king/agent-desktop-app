@@ -24,6 +24,7 @@ import {
   type HomeEntry,
 } from './account-home'
 import { isLimitFailure, planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
+import { engineAccess } from './engine-policy'
 import { startToolServer, type ToolServer } from './mcp-server'
 import { HELD_STEP, type TurnMessages } from './note-tools'
 import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
@@ -534,7 +535,7 @@ export class CliHost {
           workDir: dir,
           ...(folder === undefined ? {} : { folder }),
           // Read when the turn starts: Run without asking frees the engine's own tools, as it frees Claude's.
-          access: settings().shell === 'always' ? 'free' : 'asked',
+          access: engineAccess(settings().shell),
           signal: request.signal,
           onEvent: request.onEvent,
           ...(messages === undefined ? {} : { messages }),
