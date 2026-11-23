@@ -199,8 +199,10 @@ export interface RunnerDeps {
   environment?: () => EnvironmentReport | null
   /** Runs turns through an installed AI tool on the person's own plan (Claude Code). */
   cli?: CliHost
-  /** Opens a web address in the person's own browser (sign-in pages). */
+  /** Opens a web address in the person's own browser (links the agent shows). */
   openUrl?: (url: string) => void
+  /** Opens a plan sign-in page in the app's own private window, never the default browser (main/signin-window.ts). */
+  openSignInWindow?: (url: string, account: string) => void
   /** The person's profiles and learned app names, for the main agent's PROFILES section. */
   profiles?: () => { profiles: AgentProfileInfo[]; learnedNames: Record<string, string> }
   /** Files the person attached: the agent may open them without asking (the session's picked files). */
@@ -307,6 +309,7 @@ export class Runner {
   private readonly environment: () => EnvironmentReport | null
   private readonly cli: CliHost | undefined
   private readonly openUrl: (url: string) => void
+  private readonly openSignInWindow: (url: string, account: string) => void
   private readonly profilesView: RunnerDeps['profiles']
   private readonly allowFiles: (paths: string[]) => void
   private readonly classifierOverride: Classifier | null | undefined
@@ -365,6 +368,7 @@ export class Runner {
     this.budget = deps.budget
     this.cli = deps.cli
     this.openUrl = deps.openUrl ?? (() => undefined)
+    this.openSignInWindow = deps.openSignInWindow ?? (() => undefined)
     this.profilesView = deps.profiles
     this.environment = deps.environment ?? (() => null)
     this.allowFiles = deps.allowFiles ?? (() => undefined)
@@ -1931,11 +1935,22 @@ export class Runner {
     return this.cli.models(this.cliOf(accountId), accountId)
   }
 
-  async cliLogin(accountId?: string): Promise<{ ok: boolean; message: string }> {
+  async cliLogin(accountId?: string, mode: 'window' | 'code' = 'window'): Promise<{ ok: boolean; message: string }> {
     if (this.cli === undefined) return { ok: false, message: 'This build cannot run on a plan.' }
-    const signedIn = await this.cli.login(this.cliOf(accountId), (url) => this.openUrl(url), accountId)
+    // The sign-in page opens in the app's own private window (openSignInWindow), never the default browser.
+    const signedIn = await this.cli.login(this.cliOf(accountId), (url) => this.openSignInWindow(url, accountId ?? ''), accountId, { mode })
     if (!signedIn.ok) return signedIn
-    return this.checkCli(accountId)
+    const checked = await this.checkCli(accountId)
+    return checked.ok ? { ok: true, message: signedIn.message.replace(/\.$/, '') + ' and working on your plan.' } : checked
+  }
+
+  /** Claude's sign-in page shows a code: it is pasted on the account's card and goes to the engine. */
+  signInCode(accountId: string, code: string): boolean {
+    return this.cli?.submitSignInCode(accountId, code) ?? false
+  }
+
+  cancelSignIn(accountId: string): void {
+    this.cli?.cancelSignIn(accountId)
   }
 
   /** One tiny real turn, so onboarding and Settings can say whether the person's plan works here. */

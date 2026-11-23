@@ -6,6 +6,7 @@ import { CONSOLE_URLS, kindLine } from '../lib/ai'
 import { useSettings } from '../state/useSettings'
 import { AiPickRows } from '../ui/AiPickRows'
 import { Button } from '../ui/Button'
+import { CopyButton } from '../ui/CopyButton'
 import { Dialog } from '../ui/Dialog'
 import { Field } from '../ui/Field'
 import { Icon } from '../ui/Icon'
@@ -422,10 +423,19 @@ function resetsIn(at: number | null): string {
 }
 
 /** Who a plan account is signed in as, its plan, and how much of each limit is used (labels from the plan itself). */
-export function PlanStatus({ status }: { status: AiAccountStatus | undefined }): JSX.Element | null {
+export function PlanStatus({
+  status,
+  onPaste,
+  onCancel,
+}: {
+  status: AiAccountStatus | undefined
+  onPaste?: (code: string) => void
+  onCancel?: () => void
+}): JSX.Element | null {
   if (status === undefined) return null
   return (
     <div className="ai-plan-status">
+      {status.signIn === undefined ? null : <SignInBox kind={status.kind} signIn={status.signIn} onPaste={onPaste} onCancel={onCancel} />}
       <div className="ai-who">
         {status.signedIn ? (
           <>
@@ -539,6 +549,57 @@ export function FailoverCard({ settings, accounts, onChange }: { settings: Param
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * A sign-in that is running for this account: the address to open and the code to enter. Codex shows a one-time code;
+ * Claude's page shows a code that is pasted back here. The address also opens in the app's own private window.
+ */
+function SignInBox({
+  kind,
+  signIn,
+  onPaste,
+  onCancel,
+}: {
+  kind: AiAccountKind
+  signIn: NonNullable<AiAccountStatus['signIn']>
+  onPaste?: (code: string) => void
+  onCancel?: () => void
+}): JSX.Element {
+  const [pasted, setPasted] = useState('')
+  return (
+    <div className="ai-signin" role="group" aria-label="Sign in">
+      <b>{kind === 'codex' ? 'Sign in to ChatGPT' : 'Sign in to Claude'}</b>
+      <span className="small muted">
+        {kind === 'codex'
+          ? 'Open the address in any browser signed in to the right account, and enter this code.'
+          : 'Open the address, sign in to the right account, then paste the code the page shows.'}
+      </span>
+      <div className="ai-signin-url">
+        <code>{signIn.url}</code>
+        <CopyButton text={signIn.url} label="Copy address" />
+      </div>
+      {kind === 'codex' && signIn.code !== '' ? (
+        <div className="ai-signin-code">
+          <span aria-label="One-time code">{signIn.code}</span>
+          <CopyButton text={signIn.code} label="Copy code" />
+        </div>
+      ) : null}
+      {signIn.needsPaste ? (
+        <div className="ai-signin-paste">
+          <Field label="Code from the page" value={pasted} onChange={setPasted} onEnter={() => pasted.trim() !== '' && onPaste?.(pasted)} />
+          <Button variant="tonal" size="sm" disabled={pasted.trim() === ''} onClick={() => onPaste?.(pasted)}>
+            Submit code
+          </Button>
+        </div>
+      ) : null}
+      <div>
+        <Button variant="text" size="sm" onClick={onCancel}>
+          Cancel sign-in
+        </Button>
+      </div>
     </div>
   )
 }

@@ -89,7 +89,9 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'settings.accounts.setKey': ask("Save an AI account's key (Settings > AI > account > key)", 'accountId, key', [1]),
   'settings.accounts.check': free('Check an AI account works (Settings > AI > account > Check)', 'accountId'),
   'settings.accounts.listModels': free("List an AI account's models", 'accountId'),
-  'settings.accounts.signIn': ask('Sign in an AI account (Settings > AI > account > Sign in)', 'accountId'),
+  'settings.accounts.signIn': ask('Sign in an AI account (Settings > AI > account > Sign in)', 'accountId, mode? ("window" | "code")'),
+  'settings.accounts.signInCode': ask("Paste Claude's sign-in code for an account (Settings > AI > account)", 'accountId, code', [1]),
+  'settings.accounts.cancelSignIn': ask('Stop a sign-in that is running (Settings > AI > account)', 'accountId'),
   'settings.accounts.chatBrain': free('Which AI answers in a chat', 'chatId'),
   'settings.accounts.status': free('Who each plan account is signed in as, its plan and usage (Settings > AI cards)'),
   // Sync account

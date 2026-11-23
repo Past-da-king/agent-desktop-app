@@ -705,6 +705,10 @@ export const mockAgent: AgentApi = {
         await delay(1000)
         return { ok: true, message: 'Signed in.' }
       },
+      async signInCode() {
+        return false
+      },
+      async cancelSignIn() {},
       async status() {
         const emails = ['ayanda@example.com', 'info@example.org', 'team@example.net']
         return settings.accounts

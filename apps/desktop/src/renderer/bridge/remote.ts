@@ -309,6 +309,8 @@ export async function createRemoteAgent(): Promise<AgentApi> {
         signIn: () => notHere('Signing in'),
         chatBrain: rpc('settings.accounts.chatBrain'),
         status: rpc('settings.accounts.status'),
+        signInCode: rpc('settings.accounts.signInCode'),
+        cancelSignIn: rpc('settings.accounts.cancelSignIn'),
       },
       onChanged: (callback) =>
         wire.on(EVENTS.settings, (payload) => {

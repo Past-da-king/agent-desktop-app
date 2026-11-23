@@ -23,6 +23,8 @@ export const CHANNELS = {
       check: 'agent:accounts.check',
       listModels: 'agent:accounts.listModels',
       signIn: 'agent:accounts.signIn',
+      signInCode: 'agent:accounts.signInCode',
+      cancelSignIn: 'agent:accounts.cancelSignIn',
       chatBrain: 'agent:accounts.chatBrain',
       status: 'agent:accounts.status',
     },

@@ -48,6 +48,7 @@ import type { ScreenControl } from './agent-cursor/control'
 import type { NativeScreenReader } from './showme/native'
 import { ICON_IMAGE_PX } from '../shared/project-icon'
 import { AccountStore, migrateLegacyAccount } from './accounts'
+import { createSignInWindows } from './signin-window'
 import { FileBrainLocks } from './brain-locks'
 import { HANDOFF_CLOSED } from './tools/browser'
 
@@ -1206,6 +1207,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const workerTools = { store: workers, supervisor }
   // Runs on the person's own plan (Claude Agent SDK / Codex SDK): the main agent and every helper.
   cliHost = new CliHost(join(app.getPath('userData'), 'cli'), () => settings.get(), app.getAppPath())
+  const signInWindows = createSignInWindows({ BrowserWindow })
   // The engine's own word on whether each plan's login works, now and every ten minutes (a dead login is not ready).
   const stopSignInWatch = cliHost.watchSignIn(() => accountsOf(settings.get()).filter((a) => a.kind !== 'api').map((a) => ({ cli: a.kind as 'claude' | 'codex', account: a.id })))
   app.once('will-quit', stopSignInWatch)
@@ -1528,6 +1530,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     openUrl: (url) => {
       void shell.openExternal(url)
     },
+    // Plan sign-in pages open in the app's own private window: the default browser is signed in as another account.
+    openSignInWindow: (url, account) => signInWindows.open(url, account),
     budget,
     locks: brainLocks,
     profiles: () => ({ profiles: apps.profiles.all(), learnedNames: learnedNames() }),
