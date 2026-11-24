@@ -245,7 +245,7 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       schema: schema(['command'], {
         command: str('The exact command line to run'),
         cwd: str('Folder to run it in, defaults to the person\'s home folder'),
-        timeoutSec: int('Seconds before it is stopped, default 60, at most 600'),
+        timeoutSec: int('Seconds before it is stopped, default 60, at most 600 normally; plan fallback supports up to 21600'),
         shell: {
           type: 'string',
           description: 'Which shell to use, when you need a particular one. Only one found on this computer.',
@@ -271,11 +271,11 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       }
 
       const timeoutSec = clamp(
-        Math.trunc(number(input['timeoutSec'], DEFAULT_TIMEOUT_SEC)),
+        Math.trunc(number(input['timeoutSec'], ctx.commandFallback?.timeoutSec ?? DEFAULT_TIMEOUT_SEC)),
         1,
-        MAX_TIMEOUT_SEC,
+        ctx.commandFallback ? 6 * 60 * 60 : MAX_TIMEOUT_SEC,
       )
-      const cwd = text(input['cwd']).trim() || undefined
+      const cwd = text(input['cwd']).trim() || ctx.commandFallback?.cwd || undefined
       if (cwd !== undefined) {
         const info = await fs.stat(cwd).catch(() => null)
         if (info === null || !info.isDirectory()) return `${cwd} is not a folder.`
@@ -352,7 +352,7 @@ async function runCommand(request: RunRequest): Promise<string> {
   // No folder named means the person's home folder, as the tool tells the model, never the app's install folder.
   const cwd = request.cwd ?? (request.deps.home ?? homedir)()
   // A script reads all the output (ToolContext.resultLimit); a model reads the first MAX_OUTPUT_CHARS.
-  const sink = new OutputSink(resultLimitOf(request.ctx, MAX_OUTPUT_CHARS))
+  const sink = new OutputSink(resultLimitOf(request.ctx, request.ctx.commandFallback?.outputChars ?? MAX_OUTPUT_CHARS))
   // The person's copy: stdout and stderr apart, longer than the model's, start and end kept.
   const out = new StreamCapture()
   const err = new StreamCapture()

@@ -31,6 +31,8 @@ import type { DevicesHost, PassTable } from './types'
 
 /** Settings that belong to the person, not to one machine (hotkeys, folders, start-up and sync stay local). */
 export const SHARED_SETTINGS = [
+  'prGateEnabled',
+  'prGateSkillPages',
   'userName',
   'agentName',
   'accent',

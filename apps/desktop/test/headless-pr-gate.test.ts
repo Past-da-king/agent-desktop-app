@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, expect, it, vi } from 'vitest'
 import { startHeadlessRuntime, type HeadlessRuntime } from '../src/headless/runtime'
-import { ATTESTATION_FIELDS } from '../src/main/runtime/pr-gate'
+import { gateForTools, ATTESTATION_FIELDS } from '../src/main/runtime/pr-gate'
 import { testContext, toolNamed } from './support'
 
 let runtime: HeadlessRuntime | null = null
@@ -33,6 +33,7 @@ it('headless main and worker-native gate paths hold, attest, pass once and allow
   expect(await shell.run(command,ctx)).toContain('FAKE_GH_EXECUTED')
   expect(await shell.run(command,ctx)).toContain('NOT RUN')
   expect(await shell.run({command:bin+'/gh pr create --draft --title Example --body Example'},ctx)).toContain('FAKE_GH_EXECUTED')
-  expect(await toolNamed(runtime.mainTools,'pr_gate_check').run({tool:'Bash',input:command},ctx)).toContain('NOT RUN')
+  expect(runtime.mainTools.some(t=>t.spec.name==='pr_gate_check')).toBe(false)
+  expect(await gateForTools(runtime.mainTools)!.check('Bash',command,ctx)).toContain('NOT RUN')
   expect((await runtime.store.list('chat_item')).some(r=>r.kind==='pr_gate'&&r.text==='passed once')).toBe(true)
 },60_000)

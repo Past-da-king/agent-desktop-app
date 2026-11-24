@@ -136,7 +136,7 @@ function runCodeTool(deps: CodeToolDeps): Tool {
         if ('error' in filled) return filled.error
         runnable = filled.code
       }
-      return execute({ language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input, outputLimit: resultLimitOf(ctx, MAX_CODE_OUTPUT_CHARS) })
+      return execute({ language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps: ctx.commandFallback ? {...deps,timeoutMs:ctx.commandFallback.timeoutSec * 1000} : deps, input, executionCwd:ctx.commandFallback?.cwd, outputLimit: resultLimitOf(ctx, ctx.commandFallback?.outputChars ?? MAX_CODE_OUTPUT_CHARS) })
     },
   }
 }
@@ -193,6 +193,7 @@ interface ExecuteRequest {
   input?: JsonObject
   /** How much output to keep: the model's limit, or a script's larger one (ToolContext.resultLimit). */
   outputLimit?: number
+  executionCwd?: string
 }
 
 async function execute(request: ExecuteRequest): Promise<string> {
@@ -239,8 +240,8 @@ async function execute(request: ExecuteRequest): Promise<string> {
   try {
     child = spawnResolved(request.program.path, [...request.program.prefix, script], {
       platform,
-      cwd: folder,
-      env: { ...sanitiseEnv(env), HOME: folder, USERPROFILE: folder, ...extra },
+      cwd: request.executionCwd ?? folder,
+      env: { ...sanitiseEnv(env), ...(request.executionCwd ? {} : {HOME:folder,USERPROFILE:folder}), ...extra },
       detached: platform !== 'win32',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],

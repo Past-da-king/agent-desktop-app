@@ -10,7 +10,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
-import { SCRIPT_TOOL, scriptTools, type JsonObject, type Tool, type ToolContext } from '@agent/core'
+import { SCRIPT_TOOL, scriptTools, resultLimitOf, type JsonObject, type Tool, type ToolContext } from '@agent/core'
 
 export interface ToolServer {
   url: string
@@ -147,7 +147,8 @@ export async function startToolServer(): Promise<ToolServer> {
           text = `Error: ${error instanceof Error ? error.message : String(error)}`
           isError = true
         }
-        if (text.length > 24_000) text = `${text.slice(0, 24_000)}\n...(cut, ${text.length} chars total)`
+        const limit = resultLimitOf(run.context,24_000)
+        if (text.length > limit) text = `${text.slice(0, limit)}\n...(cut, ${text.length} chars total)`
         await run.onResult?.(call, text, isError)
         return { content: [{ type: 'text', text }], isError }
       }

@@ -1,3 +1,4 @@
+import { gateForTools } from './pr-gate'
 /**
  * The piece the Runner talks to when the agent runs on the person's own plan (Claude or ChatGPT) instead
  * of an API key. It owns the local tool server, finds the engine each SDK ships with (unpacked from the
@@ -27,7 +28,7 @@ import { isLimitFailure, planModels, runCliTurn, type CliId, type PlanModel } fr
 import { engineAccess } from './engine-policy'
 import { startToolServer, type ToolServer } from './mcp-server'
 import { HELD_STEP, type TurnMessages } from './note-tools'
-import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
+import { REPLACED_BY_SDK, sdkPermission, type Permission } from './sdk-permissions'
 import { SIGN_IN_CHECK_MS, SIGN_IN_RETRY_MS, isSignInFailure, loginFileDead, signInVerdict } from './sign-in-check'
 import { addClaudeRoot } from './run-detail'
 import { usableFolder } from './work-folder'
@@ -118,13 +119,35 @@ export function threadDelegates(thread: string): boolean {
   return !thread.startsWith('helper:') && thread !== 'routine'
 }
 
+export function planToolContext(request: Pick<CliTurnRequest,'cli'|'context'|'folder'>, settings: Settings): ToolContext {
+  if (request.cli !== 'codex' || !settings.prGateEnabled) return request.context
+  return {...request.context,resultLimit:2_000_000,commandFallback:{
+    cwd: usableFolder(request.folder) ?? process.cwd(),timeoutSec:3600,outputChars:2_000_000,
+  }}
+}
+export function planPermission(
+  request: Pick<CliTurnRequest,'tools'|'context'>,
+  settings: () => Settings,
+  base: (name:string,input:Record<string,unknown>)=>Promise<Permission>,
+): (name:string,input:Record<string,unknown>)=>Promise<Permission> {
+  return async (name,input) => {
+    if (settings().prGateEnabled && (name === 'Bash' || name === 'PowerShell')) {
+      const gate=gateForTools(request.tools)
+      if(!gate) return {allow:false,message:'PR gate unavailable. Use the app shell_run tool.'}
+      const held=await gate.check(name,input as JsonObject,request.context)
+      if(held) return {allow:false,message:held}
+    }
+    return base(name,input)
+  }
+}
+
 /** The tools a plan session is given: no delegate for a helper unless it was granted on purpose (a desk). */
 export function toolsForTurn(request: Pick<CliTurnRequest, 'tools' | 'thread' | 'cli' | 'delegates'>): Tool[] {
   return request.tools.filter(
     (tool) =>
       (request.delegates === true || threadDelegates(request.thread) || !NOT_ON_CLI.test(tool.spec.name)) &&
       // Claude brings its own (better) shell and file tools, asked through the app; Codex keeps the app's.
-      !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name) && !(tool.spec.name === 'shell_run' && request.tools.some(t => t.spec.name === 'pr_gate_check'))),
+      !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name)),
   )
 }
 
@@ -482,7 +505,7 @@ export class CliHost {
       tools: toolsForTurn(request),
       // A script reaches the app's own shell and file tools even where Claude's replace them for the model.
       scriptTools: scriptToolsForTurn(request),
-      context: request.context,
+      context: planToolContext(request,this.settings()),
       onCall: request.onCall,
       onResult: request.onResult,
     })
@@ -535,20 +558,15 @@ export class CliHost {
           workDir: dir,
           ...(folder === undefined ? {} : { folder }),
           // Read when the turn starts: Run without asking frees the engine's own tools, as it frees Claude's.
-          access: settings().prGateEnabled ? 'asked' : engineAccess(settings().shell),
+          access: engineAccess(settings().shell),
+          appCommandsOnly: settings().prGateEnabled,
           signal: request.signal,
           onEvent: request.onEvent,
           ...(messages === undefined ? {} : { messages }),
           permission: async (name, input) => {
             // A message is on its way: this step waits for the model to read it. The message itself never travels here.
             if (messages?.hold() === true) return { allow: false as const, message: HELD_STEP }
-            if (settings().prGateEnabled && (name === 'Bash' || name === 'PowerShell')) {
-              const gate = request.tools.find(t => t.spec.name === 'pr_gate_check')
-              if (!gate) return { allow: false as const, message: 'PR gate unavailable. Use the app shell_run tool.' }
-              const result = await gate.run({ tool: name, input: input as import('@agent/core').JsonObject }, request.context)
-              if (result !== 'allowed') return { allow: false as const, message: result }
-            }
-            return permission(name, input)
+            return planPermission(request,settings,permission)(name,input)
           },
         })
       mkdirSync(dir, { recursive: true })

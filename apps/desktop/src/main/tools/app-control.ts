@@ -96,6 +96,8 @@ export const SETTINGS_READ_ONLY: ReadonlySet<string> = new Set([
  * after the person says yes (the card shows the exact change).
  */
 export const SETTINGS_NEED_APPROVAL: ReadonlySet<string> = new Set([
+  'prGateEnabled',
+  'prGateSkillPages',
   'shell',
   'grantedFolders',
   'allowHttp',

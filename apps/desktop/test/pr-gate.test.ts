@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { reviewableCall } from '../src/main/runtime/pr-gate'
+import { DEFAULT_SETTINGS, type ToolContext } from '@agent/core'
+import { Store } from '../src/main/db'
+import { PrGate, ATTESTATION_FIELDS, withPrGate } from '../src/main/runtime/pr-gate'
 describe('PR reviewability detection', () => {
   it.each([
     'gh pr create --title Test', 'gh pr ready 12', 'gh pr edit 12 --add-reviewer jane',
@@ -34,10 +37,6 @@ describe('PR reviewability detection', () => {
   ])('%s %j', (name,args,expected) => expect(reviewableCall(name as string,args as Record<string, unknown>)).toBe(expected))
 })
 
-import { afterEach, vi } from 'vitest'
-import { DEFAULT_SETTINGS, type ToolContext } from '@agent/core'
-import { Store } from '../src/main/db'
-import { PrGate, ATTESTATION_FIELDS, withPrGate } from '../src/main/runtime/pr-gate'
 const stores: Store[] = []
 afterEach(() => stores.splice(0).forEach(s => s.close()))
 const ctx = {owner:'helper:author-agent',agentLabel:'author-agent',chat:'project-chat'} as ToolContext
@@ -53,7 +52,7 @@ function setup(on = true) {
     const result = await gate.check('shell_run',args,ctx)
     return result!.match(/Gate id: ([a-f0-9-]+)/)![1]!
   }
-  return {store,settings,gate,args,evidence,hold,expire:()=>{now+=600_001}}
+  return {store,settings,gate,args,evidence,hold,expire:()=>{now+=24 * 60 * 60_000 + 1}}
 }
 describe('PR gate flow',()=>{
   it('off passes and draft creates pass freely',async()=>{
@@ -115,7 +114,6 @@ describe('more transports and quoting',()=>{
     ['browser_fetch',{method:'POST',url:'https://api.github.com/graphql',body:'{"query":"mutation { requestReviews(input:{}) {clientMutationId} }"}'}],
     ['browser_eval',{js:'fetch("https://api.github.com/repos/o/r/pulls", {method:"POST",body:JSON.stringify({title:"test"})})'}],
     ['apps_run',{slug:'GITHUB_UPDATE_A_PULL_REQUEST',arguments:{draft:false}}],
-    ['device_tool',{tool:'shell_run',args:{command:'gh pr ready 3'}}],
   ])('detects %s %j',(name,args)=>expect(reviewableCall(name,args)).toBe(true))
   it.each([
     ['shell_run',{command:'gh api repos/o/r/pulls/4 -X PATCH -f title=changed'}],

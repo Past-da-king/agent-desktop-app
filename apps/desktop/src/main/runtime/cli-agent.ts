@@ -55,7 +55,7 @@ export function engineFolders(turn: Pick<CliTurn, 'workDir' | 'folder'>): { cwd:
  * settingSources: [] does for Claude.
  */
 export function codexSettings(
-  turn: Pick<CliTurn, 'workDir' | 'folder' | 'access' | 'model' | 'mcp'>,
+  turn: Pick<CliTurn, 'workDir' | 'folder' | 'access' | 'model' | 'mcp' | 'appCommandsOnly'>,
   platform: NodeJS.Platform = process.platform,
 ): {
   config: NonNullable<CodexOptions['config']>
@@ -84,7 +84,7 @@ export function codexSettings(
         apps: false,
         plugins: false,
         goals: false,
-        ...(launch.ownShell ? {} : { shell_tool: false, unified_exec: false }),
+        ...(launch.ownShell && !turn.appCommandsOnly ? {} : { shell_tool: false, unified_exec: false }),
       },
       skills: { include_instructions: false },
       include_apps_instructions: false,
@@ -140,6 +140,8 @@ export interface CliTurn {
    * anywhere, as Claude's tools do then), 'asked' otherwise (every action goes through the app's tools and cards).
    */
   access?: EngineAccess
+  /** Gate commands through app tools without reducing sandbox or network access. */
+  appCommandsOnly?: boolean
   signal: AbortSignal
   onEvent: (event: AgentEvent) => Promise<void>
   /** Claude: asked before each of Claude Code's own tools runs (see sdk-permissions.ts). */
