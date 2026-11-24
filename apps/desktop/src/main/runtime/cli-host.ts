@@ -124,7 +124,7 @@ export function toolsForTurn(request: Pick<CliTurnRequest, 'tools' | 'thread' | 
     (tool) =>
       (request.delegates === true || threadDelegates(request.thread) || !NOT_ON_CLI.test(tool.spec.name)) &&
       // Claude brings its own (better) shell and file tools, asked through the app; Codex keeps the app's.
-      !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name)),
+      !(request.cli === 'claude' && REPLACED_BY_SDK.has(tool.spec.name) && !(tool.spec.name === 'shell_run' && request.tools.some(t => t.spec.name === 'pr_gate_check'))),
   )
 }
 
@@ -535,13 +535,19 @@ export class CliHost {
           workDir: dir,
           ...(folder === undefined ? {} : { folder }),
           // Read when the turn starts: Run without asking frees the engine's own tools, as it frees Claude's.
-          access: engineAccess(settings().shell),
+          access: settings().prGateEnabled ? 'asked' : engineAccess(settings().shell),
           signal: request.signal,
           onEvent: request.onEvent,
           ...(messages === undefined ? {} : { messages }),
           permission: async (name, input) => {
             // A message is on its way: this step waits for the model to read it. The message itself never travels here.
             if (messages?.hold() === true) return { allow: false as const, message: HELD_STEP }
+            if (settings().prGateEnabled && (name === 'Bash' || name === 'PowerShell')) {
+              const gate = request.tools.find(t => t.spec.name === 'pr_gate_check')
+              if (!gate) return { allow: false as const, message: 'PR gate unavailable. Use the app shell_run tool.' }
+              const result = await gate.run({ tool: name, input: input as import('@agent/core').JsonObject }, request.context)
+              if (result !== 'allowed') return { allow: false as const, message: result }
+            }
             return permission(name, input)
           },
         })

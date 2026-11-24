@@ -1,3 +1,4 @@
+import { PrGateSettings } from './PrGateSettings'
 import { AnsweredForYouLink } from './AnsweredForYou'
 /**
  * Settings (redesigned 4 Nov 2026, the approved mock-ups): a section rail with the ten sections and their counts, one
@@ -1440,7 +1441,8 @@ function GitSection({ settings, put, resetRow }: SectionProps): JSX.Element {
   }
 
   return (
-    <SectionBlock id="git" name="Git and developer" line="What is committed and pushed after a run.">
+    <SectionBlock id="git" name="Git and developer" line="Review gates, commits and pushes.">
+      <PrGateSettings />
       <SettingRow spec={row('gitAutoCommit')} changed={changedNow(row('gitAutoCommit'), settings)} onReset={() => resetRow(row('gitAutoCommit'))}>
         <Switch on={settings?.gitAutoCommit === true} label="Commit after each run" onToggle={(next) => put({ gitAutoCommit: next })} />
       </SettingRow>

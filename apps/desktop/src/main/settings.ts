@@ -164,7 +164,7 @@ function coerce(key: keyof Settings, value: unknown): unknown {
     if (typeof value === 'string') return clamp(value)
     return INVALID
   }
-  if (key === 'grantedFolders') {
+  if (key === 'grantedFolders' || key === 'prGateSkillPages') {
     if (!Array.isArray(value)) return INVALID
     if (!value.every((item) => typeof item === 'string')) return INVALID
     return value.map((item) => clamp(item as string))

@@ -171,6 +171,8 @@ export interface Settings {
    * needs him reaches Needs you. Text sent to people, money and his own hands are always his, in code. Off: every
    * card asks him, as before.
    */
+  prGateEnabled: boolean
+  prGateSkillPages: string[]
   actsForMe: boolean
   /** Voice: true once a Gemini key is in the secrets module. The key itself never appears here. */
   hasVoiceKey: boolean
@@ -346,6 +348,8 @@ export const DEFAULT_SETTINGS: Settings = {
   notifications: true,
   grantedFolders: [],
   shell: 'ask',
+  prGateEnabled: false,
+  prGateSkillPages: [],
   actsForMe: true,
   hasVoiceKey: false,
   voiceName: 'Kore',

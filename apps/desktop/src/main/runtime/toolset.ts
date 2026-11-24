@@ -62,6 +62,7 @@ import { decideTool, type DecisionService } from '../decisions'
 import { calendarTools, type CalendarReader } from '../tools/calendar'
 import { miniAppTools, type MiniAppUi } from '../tools/miniapps'
 import { gitTools, type GitToolDeps } from '../tools/git'
+import { prGateFor, withPrGate } from './pr-gate'
 import { mediaTools, type MediaToolDeps } from '../tools/media'
 
 export interface ToolsetDeps extends CoreToolDeps {
@@ -236,7 +237,11 @@ export function withOrigin(tools: Tool[]): Tool[] {
 
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
   // The vault guard sits outermost of all: what any tool returns, on any path, has vault values taken out.
-  return guardTools(withOrigin(workerToolsets(deps)), deps.vault)
+  const gate = prGateFor(deps.store, () => deps.settings?.get() ?? DEFAULT_SETTINGS)
+  return guardTools(withOrigin(withPrGate([...workerToolsets(deps), ...gate.tools(), {
+    spec: { name: 'pr_gate_check', description: 'Internal native engine permission check. Does not execute a command.', schema: { type: 'object', properties: { tool: { type: 'string' }, input: { type: 'object' } }, required: ['tool', 'input'] } },
+    run: async (input, ctx) => (await gate.check(String(input['tool']), input['input'] as import('@agent/core').JsonObject, ctx)) ?? 'allowed',
+  }], gate)), deps.vault)
 }
 
 function workerToolsets(deps: ToolsetDeps): Tool[] {
