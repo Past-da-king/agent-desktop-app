@@ -32,3 +32,5 @@ A turn pins the exact accepted user row, including an app-owned forwarding refer
 A paired phone's explicit canceled-run answer stays canceled. A still-active command whose originating in-memory context was lost instead returns an unhandled response, allowing a person fallback. Ambiguous transport failure never creates a duplicate native question.
 
 Only an affirmative send directive is eligible for requested-send review. Negated, quoted/mentioned, read, draft and conditional requests retain the protected-send refusal. The command source resolver consumes the same root request format the hub writes, and an integration test passes the real hub-produced record through host resolution. Cancellation tombstones survive periodic context pruning until expiry or terminal command cleanup, and replies validate the authenticated target before observing cancellation state.
+
+The shared-device deadline starts before asynchronous context resolution. A context lookup that exceeds the deadline returns a timeout immediately; a late lookup result cannot start the tool. The abort signal covers both lookup and execution.

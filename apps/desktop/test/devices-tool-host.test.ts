@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Tool, ToolContext } from '@agent/core'
 
@@ -197,6 +197,38 @@ describe('this node\'s tools for other devices', () => {
     shared = { ...shared, shell: true, browser: false }
     expect(host.catalogue().map((t) => t.name)).toEqual(['shell_run', 'ask_user', 'file_send', 'file_receive'])
     expect(await host.run({ kind: 'tool', id: 'c5', tool: 'shell_run', args: {}, chatId: '', deadlineMs: 0 })).toEqual({ ok: true, value: { text: 'ran' } })
+  })
+
+  it('times out a slow context lookup and never executes after it resolves', async () => {
+    vi.useFakeTimers()
+    try {
+      let finishLookup!: (context: ToolContext) => void
+      let lookupSignal!: AbortSignal
+      const run = vi.fn(async () => 'must not execute')
+      const host = new DeviceToolHost({
+        tools: () => [fakeTool('notify_user', run)],
+        context: (signal) => {
+          lookupSignal = signal
+          return new Promise<ToolContext>((resolve) => { finishLookup = resolve })
+        },
+        shared: () => DEFAULT_SHARE,
+        inbox: tempDir(),
+      })
+      let result: DeviceToolResult | undefined
+      const pending = host.run({ kind: 'tool', id: 'slow-context', tool: 'notify_user', args: {}, chatId: '', deadlineMs: 1000 })
+        .then((value) => { result = value })
+      await vi.advanceTimersByTimeAsync(1000)
+      const atDeadline = result
+      await vi.advanceTimersByTimeAsync(100)
+      finishLookup(noCtx(lookupSignal))
+      await pending
+      expect(atDeadline).toEqual({ ok: false, error: 'notify_user took longer than 1 s.' })
+      expect(result).toEqual(atDeadline)
+      expect(lookupSignal.aborted).toBe(true)
+      expect(run).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('stops a tool at its deadline', async () => {
