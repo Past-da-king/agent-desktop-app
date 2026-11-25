@@ -62,7 +62,7 @@ const ORDER: Record<AppRule, number> = { allow: 0, ask: 1, never: 2 }
 export class AppGuard {
   constructor(private readonly deps: GuardDeps) {}
 
-  async check(ctx: ToolContext, actions: string[], account: string | null, detail: string): Promise<Verdict> {
+  async check(ctx: ToolContext, actions: string[], account: string | null, detail: string, arguments_: Record<string, unknown> = {}): Promise<Verdict> {
     if (actions.length === 0) return { account }
     const profile = this.deps.profileOf?.(ctx) ?? null
     const asks: string[] = []
@@ -148,7 +148,7 @@ export class AppGuard {
     }
     if (account === null && resolved.size === 1) account = [...resolved][0] ?? null
     if (asks.length > 0) {
-      const yes = await ctx.approve(`Let your agent ${asks.join(', ')}?`, detail, undefined, { tool: 'apps_run', input: { slug: actions[0] ?? '', actions } })
+      const yes = await ctx.approve(`Let your agent ${asks.join(', ')}?`, detail, undefined, { tool: 'apps_run', input: { slug: actions[0] ?? '', actions, arguments: arguments_ } })
       if (!yes) return { refuse: 'The person declined, or nobody was around to approve. Not done.', account }
     }
     return { account }

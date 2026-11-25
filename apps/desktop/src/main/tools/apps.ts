@@ -118,7 +118,7 @@ function runTool(apps: AppsService): Tool {
         rawArgs !== null && typeof rawArgs === 'object' && !Array.isArray(rawArgs) ? (rawArgs as JsonObject) : {}
       const named = text(input['account']).trim()
       const detail = JSON.stringify(args, null, 2).slice(0, 1500)
-      const verdict = await apps.guard.check(ctx, [slug], named === '' ? null : named, detail)
+      const verdict = await apps.guard.check(ctx, [slug], named === '' ? null : named, detail, args)
       if (verdict.refuse !== undefined) return verdict.refuse
       const what = slug.toLowerCase().replace(/_/g, ' ')
       const id = await ctx.activity(`Using ${what}`, { tool: 'apps' })

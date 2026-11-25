@@ -877,6 +877,8 @@ export class Runner {
       this.emitFor(chat, { type: 'chat_changed' })
       return
     }
+    // Completion notes are not user directives and cannot borrow the last turn's authorization.
+    line.requestId = ''
     await this.begin(line, clean, [], null)
   }
 

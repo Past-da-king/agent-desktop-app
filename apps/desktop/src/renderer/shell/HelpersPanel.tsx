@@ -1,3 +1,4 @@
+import { isLiveCard } from '../../shared/card-state'
 import { ApprovalContext } from '../ui/ApprovalContext'
 import { MAIN_CHAT, type ChatItem, type MascotId, type ProjectRow } from '@agent/core'
 import { PlaceChip } from '../ui/PlaceChip'
@@ -474,6 +475,10 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
     )
   }
 
+  const card = [...items].reverse().find((item) => isLiveCard(item) && parseMeta(item.meta)['helper'] === id)
+  const sourceId = parseMeta(row?.meta ?? '{}')['requestId']
+  const source = items.find((item) => item.kind === 'user' && item.id === sourceId)
+  const context = card !== undefined ? parseMeta(card.meta) : source === undefined ? {} : { request: { id: source.id, at: source.createdAt, text: source.text } }
   const s = stateLabel(helper)
   const current = [...helper.activity].reverse().find((step) => metaText(parseMeta(step.meta), 'status') === 'running')
   return (
@@ -518,7 +523,7 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
               <Icon name="chev" size={16} />
             </button>
           </section>
-          <ApprovalContext meta={parseMeta(row?.meta ?? '{}')} />
+          <ApprovalContext meta={context} />
           {current !== undefined ? (
             <div className="hp-now">
               <span className="eyebrow">NOW</span>

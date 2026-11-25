@@ -118,13 +118,17 @@ export function autoAnswerOf(row: CardLike): AutoAnswer | null {
 
 // ---- stamping ------------------------------------------------------------------------------------------------
 
+// Never silently drop authorization evidence: a bounded snapshot that omitted input
+// carries a protected marker, so reclassification cannot authorize only a subset.
 function clip(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') return value.length > 1500 ? `${value.slice(0, 1500)}...` : value
-  if (Array.isArray(value)) return depth > 3 ? [] : value.slice(0, 20).map((each) => clip(each, depth + 1))
+  const omitted = { secretAuthorizationEvidenceOmitted: true }
+  if (typeof value === 'string') return value.length > 1500 ? omitted : value
+  if (Array.isArray(value)) return depth > 8 || value.length > 20 ? omitted : value.map((each) => clip(each, depth + 1))
   if (typeof value === 'object' && value !== null) {
-    if (depth > 3) return {}
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (depth > 8 || entries.length > 30) return omitted
     const out: Record<string, unknown> = {}
-    for (const [key, each] of Object.entries(value as Record<string, unknown>).slice(0, 30)) out[key] = /password|secret|token|api.?key|authorization|cookie/i.test(key) ? '[redacted]' : clip(each, depth + 1)
+    for (const [key, each] of entries) out[key] = /password|secret|token|api.?key|authorization|cookie/i.test(key) ? '[redacted]' : clip(each, depth + 1)
     return out
   }
   return value

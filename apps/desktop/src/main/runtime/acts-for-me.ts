@@ -143,9 +143,9 @@ export class ActsForMe {
 
   /** The meta a card gets when it is raised. A card in the agent's lane is routed to the main agent when the setting is on. */
   stamp(args: StampArgs): Record<string, unknown> {
-    const key = args.asker === 'helper' ? args.askerKey.replace(/^helper:/, '') : args.askerKey
+    const key = this.askerIdentity(args.asker, args.askerKey)
     const hold = this.holding(key)
-    return { ...(args.request === undefined ? {} : { request: args.request }), ...stampCard({
+    return { askerKey: key, ...(args.request === undefined ? {} : { request: args.request }), ...stampCard({
       kind: args.kind,
       ...(args.request === undefined ? {} : { request: args.request }),
       asker: args.asker,
@@ -157,6 +157,13 @@ export class ActsForMe {
       holdForHim: hold,
       now: this.now(),
     }) }
+  }
+
+  private askerIdentity(asker: Asker, key: string): string {
+    if (asker === 'routine') return 'routine'
+    if (asker === 'helper') return `helper:${key.replace(/^helper:/, '')}`
+    if (asker === 'project') return `chat:${key.replace(/^chat:/, '')}`
+    return key
   }
 
   private holding(key: string): boolean {
@@ -386,7 +393,7 @@ export class ActsForMe {
       await this.deps.setSettings(record.revert)
     } else {
       const meta = metaOfCard(row)
-      const key = String(meta['helper'] ?? '') || chatOf(row)
+      const key = typeof meta['askerKey'] === 'string' ? meta['askerKey'] : this.askerIdentity(meta['asker'] as Asker, String(meta['helper'] ?? '') || chatOf(row))
       this.holds.set(key, this.now() + HOLD_MS)
       const text =
         record.undo === 'retry'

@@ -331,7 +331,7 @@ function requestedSend(facts: CardFacts): boolean {
   return !protectedInput && recipients.length > 0 && recipients.every((recipient) => {
     if (recipient.length < 3) return false
     const escaped = recipient.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    return new RegExp(`(^|[^a-z0-9@._+\\-])${escaped}($|[^a-z0-9@._+\\-])`, 'i').test(text)
+    return new RegExp(`(^|[^\\p{L}\\p{N}\\p{M}@._+\\-])${escaped}($|[^\\p{L}\\p{N}\\p{M}@._+\\-])`, 'iu').test(text)
   })
 }
 
