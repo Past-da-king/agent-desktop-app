@@ -43,3 +43,5 @@ An early disk sample can complete before the local socket connects. The supervis
 Windows relaunch is confirmed by the new main clearing its unavailable marker after starting its own supervisor. An early replacement exit is logged and retried under the same persisted three-restart budget; creating a process alone is not success. A real-child regression exercises an initial refused start followed by a healthy replacement.
 
 The status sentence retains the answering-device placement and reason when a low-disk warning is present, instead of replacing placement with the warning.
+
+Recovery also closes a leftover own job lease when its helper has a durable completion from that same run. The write atomically checks the lease identity and start time, preserves its payload, and never treats an older completion as a newer run finishing. This prevents a watchdog restart from reopening completed helper work. The live approvals-review leftover exposed this case; no live lease was edited by hand.
