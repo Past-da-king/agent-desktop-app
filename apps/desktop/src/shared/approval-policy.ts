@@ -310,18 +310,25 @@ function requestedSend(facts: CardFacts): boolean {
   // Eligibility requires an affirmative send directive, never a mention, prohibition, read, draft or conditional.
   if (!/^(?:(?:please\s+)|(?:(?:can|could|would|will)\s+you\s+)|(?:i\s+(?:want|need)\s+you\s+to\s+))*(send|email|message|reply|forward|share|post|publish)\b/i.test(request)) return false
   if (/\b(do not|don't|never|without|not yet|nothing|hold|draft|prepare|approve|approval|pending|if|unless|after|when|once|before|until|find|search|read|show)\b/i.test(request)) return false
-  const operation = operationWords(`${facts.origin.tool} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`)
+  const operation = operationWords(`${facts.origin.tool} ${str(facts.origin.input['slug'])} ${str(facts.origin.input['action'])} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`)
   if (MONEY_WORDS.test(operation) || HANDS_WORDS.test(operation) || SECRET_WORDS.test(operation)) return false
   const recipients: string[] = []
+  let protectedInput = false
   const visit = (value: unknown, recipient = false, depth = 0): void => {
-    if (depth > 8) return
+    if (depth > 8) { protectedInput = true; return }
+    if (recipient && value !== null && typeof value !== 'object' && typeof value !== 'string') protectedInput = true
+    if (typeof value === 'string' && /\{\{vault:/.test(value)) protectedInput = true
     if (typeof value === 'string' && recipient) { recipients.push(...value.split(/[,;]/).map((part) => part.trim()).filter(Boolean)); return }
     if (Array.isArray(value)) { for (const item of value) visit(item, recipient, depth + 1); return }
-    if (typeof value === 'object' && value !== null) for (const [key, child] of Object.entries(value)) visit(child, recipient || /^(to|cc|bcc|recipient|recipients|recipient_email|channel|emailAddress)$/i.test(key), depth + 1)
+    if (typeof value === 'object' && value !== null) for (const [key, child] of Object.entries(value)) {
+      const words = operationWords(key)
+      if (MONEY_WORDS.test(words) || HANDS_WORDS.test(words) || SECRET_WORDS.test(words) || /^(amount|currency|funds)$/i.test(key)) protectedInput = true
+      visit(child, recipient || /^(to|cc|bcc)$|recipient|receiver|destination|target|email|phone|address|channel|chat/i.test(key), depth + 1)
+    }
   }
   visit(facts.origin.input)
   const text = facts.request.text.toLowerCase()
-  return recipients.length > 0 && recipients.every((recipient) => {
+  return !protectedInput && recipients.length > 0 && recipients.every((recipient) => {
     if (recipient.length < 3) return false
     const escaped = recipient.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     return new RegExp(`(^|[^a-z0-9@._+\\-])${escaped}($|[^a-z0-9@._+\\-])`, 'i').test(text)

@@ -57,3 +57,11 @@ it('routine and unbound device contexts explicitly carry no unrelated latest use
 it.each(['Do not send to ben@example.org', 'Find the email sent to ben@example.org', 'Draft a message to ben@example.org for me to approve', 'Send it to ben@example.org after I approve', 'Ben said send to ben@example.org'])('does not turn an ambiguous or prohibited request into send authorization: %s', (text) => {
  expect(classifyCard({...facts,request:{...facts.request!,text}}).lane).toBe('him')
 })
+
+it.each([
+ {tool:'apps_run',input:{slug:'WISE_SEND_MONEY',arguments:{to:'ben@example.org',amount:100}}},
+ {tool:'webapp_run',input:{tool:'send_email',args:{to:'ben@example.org',apiKey:'private-proof'}}},
+ {tool:'webapp_run',input:{tool:'send_email',args:{to:'ben@example.org',recipientId:'other-recipient'}}},
+])('never relaxes connector payments, secrets or hidden recipients: %j', (origin) => {
+ expect(classifyCard({...facts,origin}).lane).toBe('him')
+})

@@ -177,3 +177,19 @@ it('Undo holds the next remote helper approval for the person', async () => {
  expect(metaOfCard(next)['laneRule']).toBe('undo-hold')
  x.controller.abort(); await second
 })
+
+it.each(['sendMoney','sendSecret','sendApiKey'])('real learned %s stays person-only under a report-send request', async (name) => {
+ const x = setup()
+ const user = await x.store.upsert('chat_item',{kind:'user',text:'Send the report to ben@example.org',meta:'{}'})
+ const ctx = x.runner.deviceToolContext(x.controller.signal,{chatId:'main',owner:'helper:child',request:{id:user.id,at:user.createdAt,text:user.text}})
+ const tool: LearnedTool = {name,description:'Perform operation',params:{},required:[],js:'return true',readOnly:false,asksFirst:true}
+ const app: LearnedApp = {id:'synthetic',name:'Synthetic test',startUrl:'https://example.org',about:'',tools:[tool],trusted:false,updatedAt:1}
+ let executions = 0
+ const pending = callLearned(app,tool,{to:'ben@example.org'},ctx,{ensure:async()=>undefined,evaluate:async()=>undefined,run:async()=>{executions++;return {ok:true,v:true}}})
+ await waitFor(async()=>(await x.store.list('chat_item')).some(r=>r.kind==='approval'))
+ const card = (await x.store.list('chat_item')).find(r=>r.kind==='approval')!
+ const answer = await x.acts.answer({id:card.id,action:'approve',reason:'The user requested a report send'})
+ expect(answer.ok).toBe(false)
+ x.controller.abort(); await pending
+ expect(executions).toBe(0)
+})
