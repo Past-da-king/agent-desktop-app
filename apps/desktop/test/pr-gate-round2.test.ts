@@ -425,36 +425,3 @@ it.each([
   'navigation and typed connector evidence: %s %j',
   (tool, args, expected) => expect(reviewableCall(tool, args)).toBe(expected),
 )
-
-it.each([
-  [
-    'browser_press_key',
-    { key: 'Escape', pageUrl: 'https://github.com/o/r/pull/3' },
-    false,
-  ],
-  [
-    'browser_act',
-    {
-      action: 'press',
-      key: 'Escape',
-      pageUrl: 'https://github.com/o/r/pull/3',
-    },
-    false,
-  ],
-  [
-    'apps_run',
-    { slug: 'GITHUB_UPDATE_A_PULL_REQUEST', arguments: { draft: 'false' } },
-    true,
-  ],
-  [
-    'apps_run',
-    {
-      slug: 'GITHUB_CREATE_AN_ISSUE_COMMENT',
-      arguments: { body: '{' + '{vault:comment-body}}' },
-    },
-    true,
-  ],
-] as Array<[string, JsonObject, boolean]>)(
-  'navigation and typed connector evidence: %s %j',
-  (tool, args, expected) => expect(reviewableCall(tool, args)).toBe(expected),
-)

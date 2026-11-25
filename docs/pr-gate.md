@@ -82,3 +82,10 @@ The main agent confirmed this proof remains accepted for the round-2 repairs; it
 not being repeated. The prior Windows screenshots/chat proof cover 8ce8be1a, not this
 new source candidate. No release, installation or live node deployment is part of this
 repair handoff. Independent reviews must pass again before release.
+
+Linked-device command delivery is coalesced by command id before any effect runs.
+Identical in-flight and completed retries return the existing result; a changed payload
+under the same id is refused. The in-memory replay window covers the 20-minute queue
+and execution window, with bounded reply storage. Very large or pruned replies return
+an already-ran notice rather than executing again. Revoked sharing is checked before
+returning a cached reply. This is not a permanent command ledger across restarts.

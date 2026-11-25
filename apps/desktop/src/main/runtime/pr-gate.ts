@@ -50,6 +50,13 @@ export const GENERIC_CHECKLIST = [
   'Re-read the PR description at the final head; state proof, effective configuration and remaining limits.',
 ].join('\n')
 
+function agentIdentity(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^(helper|chat|project|agent):/, '')
+}
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']'
   if (value !== null && typeof value === 'object')
@@ -329,8 +336,8 @@ export class PrGate {
     else if (
       [ctx.owner, ctx.agentLabel, actor]
         .filter(Boolean)
-        .map((id) => id!.toLowerCase())
-        .includes(String(fields['reviewerAgentId']).trim().toLowerCase())
+        .map((id) => agentIdentity(id!))
+        .includes(agentIdentity(String(fields['reviewerAgentId'])))
     )
       reason = 'reviewer must be a different agent'
     if (reason) {
