@@ -6,6 +6,10 @@ import type { Readable, Writable } from 'node:stream'
 
 const pipeFailure = Symbol.for('agent.childPipeFailure')
 const failures = new WeakMap<object, Error>()
+const ownerCleanup = new WeakMap<object, () => void>()
+
+/** Launchers register their existing tree cleanup before any pipe failure can settle their owner. */
+export function registerChildPipeCleanup(child: object, cleanup: () => void): void { ownerCleanup.set(child, cleanup) }
 let fault: (error: Error) => void = (error) => { queueMicrotask(() => { throw error }) }
 let warn: (message: string, fields: Record<string, unknown>) => void = () => undefined
 const codes = new Set(['EOF', 'EPIPE', 'ECONNRESET', 'ERR_STREAM_DESTROYED', 'ERR_STREAM_WRITE_AFTER_END'])
@@ -101,10 +105,13 @@ export function guardChild<T extends ChildProcess>(child: T): T {
     const reason = Object.assign(new Error(`engine process ended: ${error.message}`), { code: codeOf(error) })
     if (isChildPipeError(error)) Reflect.set(reason, pipeFailure, true)
     failures.set(child, reason)
-    try {
-      if (child.listenerCount('error') > 0) child.emit('error', reason)
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) terminatePipeChild(child)
+    const cleanup = ownerCleanup.get(child)
+    try { cleanup?.() } finally {
+      try {
+        if (child.listenerCount('error') > 0) child.emit('error', reason)
+      } finally {
+        if (cleanup === undefined && child.exitCode === null && child.signalCode === null) terminatePipeChild(child)
+      }
     }
   }
   for (const stream of new Set([child.stdin, child.stdout, child.stderr, ...child.stdio])) guardPipe(stream, ended)

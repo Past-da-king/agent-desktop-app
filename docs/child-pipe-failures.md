@@ -56,3 +56,11 @@ This supersedes the Windows taskkill implementation described in earlier review 
 A WeakSet deduplicates the same Error object delivered through write callback and error event; a different unexpected Error still reaches the owner and fault handler. Exit now cancels kill escalation but arms a separate 250 ms missing-close deadline preserving the actual exit code/signal; close alone cancels that deadline.
 
 Three controls fail at 5c90944 and pass after repair: synthetic Windows spawn interception observes no taskkill and one handle kill; real Writable callback/event delivery reports a TypeError once while another survives; exit without close completes close once after the grace period. Native Windows behavior and full suites remain pending.
+
+## Fourth independent review repairs
+
+The direct-child fallback is used only when no launcher cleanup is registered. shell_run, run_code, version probes and real worker launchers register their existing tree cleanup with the guard. On first pipe failure the owner callback runs before the error event can settle the owner and remove timeout/abort handlers. POSIX shell/code already used detached process groups on origin/devices; version probes and workers now also own detached groups before using group cleanup. The shared guard does not itself discover or kill descendants.
+
+Windows owner cleanup keeps origin/devices' existing taskkill /PID /T /F path, invoked before observed exit while Node still owns its child handle. This is baseline-equivalent PID risk, not a new Job Object guarantee; native Windows proof remains pending. The shared fallback still performs handle-based child.kill only and never launches taskkill.
+
+Real shell_run fixtures spawn a persistent grandchild and exercise EOF, timeout and cancellation separately. At b9e97e6 timeout/cancel pass but EOF leaves the grandchild running. After repair all three pass. On unchanged origin/devices 5c929be, timeout and cancellation pass with native spawn and no guard bridge; EOF is intentionally unselected because baseline has no guard. Tests distinguish exited zombies from running processes and clean only fixture-owned group/PIDs.

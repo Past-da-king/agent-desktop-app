@@ -1,3 +1,4 @@
+import { registerChildPipeCleanup } from '../runtime/safe-pipe'
 /**
  * `shell_run`: the agent may use this computer's shell, but only with the person's explicit yes,
  * every single time, with the exact command on the card. There is no "always allow" (PLAN.md 7).
@@ -392,6 +393,10 @@ async function runCommand(request: RunRequest): Promise<string> {
     record('failed', null, `Could not start: ${messageOf(error)}`)
     return `Could not start that command: ${messageOf(error)}`
   }
+
+  registerChildPipeCleanup(child, () => {
+    if (child.exitCode == null && child.signalCode == null) killProcessTree(child.pid, platform)
+  })
 
   child.stdout?.on('data', (chunk: Buffer) => {
     sink.push(chunk)

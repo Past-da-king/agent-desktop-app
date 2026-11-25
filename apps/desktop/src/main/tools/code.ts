@@ -1,3 +1,4 @@
+import { registerChildPipeCleanup } from '../runtime/safe-pipe'
 /**
  * `run_code`: a small scratch folder and a child process, so the agent can calculate, transform data
  * and build files. It runs JavaScript with Node or Python with python3, asks first every time, and
@@ -250,6 +251,10 @@ async function execute(request: ExecuteRequest): Promise<string> {
     record('failed', null, `Could not start: ${messageOf(error)}`)
     return `Could not run the program: ${messageOf(error)}`
   }
+  registerChildPipeCleanup(child, () => {
+    if (child.exitCode == null && child.signalCode == null) killProcessTree(child.pid, platform)
+  })
+
   child.stdout?.on('data', (chunk: Buffer) => {
     sink.push(chunk)
     out.push(chunk)

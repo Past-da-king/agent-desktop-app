@@ -1,3 +1,4 @@
+import { registerChildPipeCleanup } from './safe-pipe'
 /**
  * The real pieces behind `environment.ts`: node:fs, node:os and execFile. Kept apart so the scan
  * itself stays injectable and testable on any platform.
@@ -65,6 +66,7 @@ export const execVersion: ExecFn = (file, args, options) =>
     try {
       child = spawnResolved(file, args, {
         platform: process.platform,
+        detached: process.platform !== 'win32',
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -73,6 +75,9 @@ export const execVersion: ExecFn = (file, args, options) =>
       return
     }
 
+    registerChildPipeCleanup(child, () => {
+      if (child.exitCode == null && child.signalCode == null) killProcessTree(child.pid, process.platform)
+    })
     let stdout = ''
     let stderr = ''
     let settled = false
