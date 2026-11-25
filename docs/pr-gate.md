@@ -9,7 +9,7 @@ reset the gate, or edit a configured policy page. Automatic approval cannot answ
 
 Recognised review and merge actions return NOT RUN with the full current policy pages,
 or a generic checklist. Missing configured pages add the generic checklist.
-Draft and dry-run creation pass. Review approvals pass and are logged.
+Draft and dry-run creation pass. Review approvals require attestation.
 
 Call pr_gate_attest with gateId and attestation containing:
 reviewerAgentId, testProof, trialMergeAndSuite, featureFlagStates,
@@ -47,36 +47,15 @@ app runs retain their existing limits. Secret-looking environment variables cont
 to be removed by the app's existing policy; agents use Vault placeholders for secrets.
 This is deliberate and is not native-shell environment parity.
 
-Shell detection fails closed on raw text mentioning `gh`, `github.com`,
-`api.github.com`, or `git push` unless the command is positively understood.
-Read-only gh lookups, draft creation, explicit review approvals, undo-to-draft and
-plainly parsed non-PR commands pass. Here-strings, heredocs, block comments,
-substitutions, unknown switches and other opaque sensitive syntax are held. A
-comment or data string cannot erase the raw-text boundary. Commands with none of
-those references keep normal execution; readable local script files are inspected
-under the same rule. An unreadable file produces an audit note, and the execution
-shim remains active. The PowerShell option resolver uses ordered minimum prefixes;
-Windows PowerShell's positional argument means Command, while pwsh's means File.
-Detection, body signatures, snapshots and review-approval parsing share normalization.
+## Cooperative release scope
 
-Enabled app execution scopes inject a short-lived gh shim at the front of their shell PATH:
-app shell/code tools, Claude's shell and Codex's engine environment, desktop and
-headless. The shim asks the same gate using the actual argv and cwd before invoking
-real gh. This catches computed wrappers only while PATH still resolves gh through the shim. Login profiles can replace PATH; absolute gh paths and direct HTTP calls can bypass it.
-A scope whose exact outer command already consumed its attestation or verified
-remote grant carries that authorization through execution; an ungated outer call
-cannot create authorization. Engine-native execution uses the same gate's pending
-holds and attestations. An agent may need to attest the resolved execution hold as
-well as an opaque native wrapper; app shell_run keeps them in one scope.
-The private, random loopback channel lives only for that command or engine turn,
-is never replicated, and disappears on completion. Real gh is resolved outside the
-shim directory, preserving the existing headless account guard. Stdin/stdout/stderr
-are inherited and the real exit code is retained. Refusal or an unavailable channel
-returns 75. Windows uses gh.cmd and an app-owned Node runtime; the WSL launcher
-installs a scoped Linux PATH shim and forwards the chosen distribution, user, cwd
-and streams through Windows interop. Real Windows/WSL proof is a separate required
-verification step; source typechecking does not prove that platform behavior.
-No machine-wide PATH, live gh installation or live service is changed by this build.
+Chosen by the main agent for Ayanda on 25 November 2026. This guard prevents accidental review actions; agents keep their ordinary owner access. The broker document is a future option only.
+
+The early warning holds non-draft PR creation, ready, merge/auto-merge, approvals, review requests and Ready for review comments. Git pushes to the locally discovered origin default branch, main/master or branches configured with git config prGate.protectedBranches are held; feature pushes pass. Protected branches absent from that local configuration cannot be discovered without a provider read and remain a documented limitation. Normal gh reads, pipelines, clones, installs and multiline draft creates pass. Mere mentions of gh/github.com do not trigger a hold. Opaque syntax is inspected best effort for review actions, never denied solely because it names GitHub. Python and Node script files are inspected for literal GitHub writes and subprocess commands; computed targets and unsupported languages remain bypasses.
+
+Scoped Unix gh and PowerShell gh.ps1 launchers check actual argv and cwd through a temporary private loopback channel. PowerShell array splatting avoids batch argument re-parsing; cmd.exe relies on the app warning, without a batch shim. The launcher preserves real gh streams and exit status. A parsed outer grant can authorize only one matching command at the same cwd, never every inner gh operation. PATH changes, absolute executable paths, existing credentials and direct API calls can bypass it. No BASH_ENV is replaced and no WSL launcher is installed. WSL keeps its original semantics; it has no injected execution shim from the Windows scope. Windows and WSL runtime proof is pending.
+
+A reset/restored store recovers missing peer authority over its configured fingerprint-pinned connection before normal replication. The peer's latest row keeps its original stamps; join does not publish a locally restamped host snapshot. Missing authority is reported explicitly and the normal pull cursor is not advanced. Device fingerprints/addresses, roles and signing keys require an authority writer.
 
 A readable direct comment body file is snapshotted into inline argv before checking
 and execution only for bash/sh. Bodies larger than 100 KB are snapshotted into a private
@@ -137,8 +116,6 @@ Before execution, the destination writes a deterministic consumed-grant receipt 
 
 Each gated call receives its own context capsule, including when parallel calls share a Claude turn. Learned-app automatic routing carries the capsule through its actual routing wrapper. Resolver and policy checks always see the actual tool and arguments, so adding a device field cannot bypass policy-page protection.
 
-## Release scope and proof limits
+## Proof limits
 
-No credential broker, restricted OS principal or credential migration is included. The broker note is a future option only. The current shell warning is deliberately conservative and may hold opaque GitHub-related commands, including branch pushes; that is a known workflow limitation, not proof of security. Readable shell scripts have partial inspection; interpreter files and dynamic requests are not comprehensively inspected. BASH_ENV is scoped to execution but replaces an inherited value and does not reliably restore PATH in login shells. The current Windows batch and WSL launcher paths have argument/semantic limitations and remain unproven. Do not infer universal brain, login-shell or WSL coverage from PATH injection.
-
-Execution tests use disposable HOME and gh config directories, no inherited tokens, no owner profile scripts and fake gh executables. Runtime tests, test compilation and Windows/WSL proof remain pending after 08:30 SAST Thursday 26 November 2026. Source typechecking alone is not runtime proof.
+No credential broker, restricted OS principal or credential migration is included. Existing owner-equivalent shell/SSH access and the GitHub web UI are known bypasses. Execution tests use disposable HOME/config, empty inherited tokens, fake gh and no owner profiles. Test files compile separately from source. Runtime tests, red controls, full/combined trial suites and Windows proof wait until after 08:30 SAST Thursday 26 November 2026 through build-slot. Typechecking is not runtime proof.

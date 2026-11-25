@@ -1061,7 +1061,7 @@ export class Store implements SyncStore {
         const remoteFields = change.payload['_deviceFields'] as
           Record<string, string> | undefined
         const fields = { ...localFields }
-        const authority = new Set(['roles', 'prGatePublicKey', 'revoked'])
+        const authority = new Set(['fp', 'urls', 'roles', 'prGatePublicKey', 'revoked'])
         for (const [field, value] of Object.entries(change.payload)) {
           if (field === '_deviceFields') continue
           if (authority.has(field) && !trustedDeviceWriter) continue

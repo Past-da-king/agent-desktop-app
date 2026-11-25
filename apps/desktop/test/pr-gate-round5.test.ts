@@ -136,7 +136,7 @@ it('R5-M1 hands-only bundle carries public device rows without a signing secret 
   const origin = prGateFor(brain, settings, secret, () => 'brain')
   const privateValue = await origin.signingKey()
   const keeper = new BundleKeeper({
-    settings: { get: settings, save: () => {} },
+    settings: { get: settings, save: () => settings() },
     secrets: secret,
     local: brain,
   })
@@ -147,7 +147,7 @@ it('R5-M1 hands-only bundle carries public device rows without a signing secret 
   const privateBundle = await keeper.build(true)
   expect(JSON.stringify(privateBundle)).not.toContain(privateValue)
   const row = await brain.get('device', 'brain')
-  expect(row?.prGatePublicKey).toBe(publicKey(privateValue))
+  expect(row?.prGatePublicKey).toBe(publicKey(privateValue!))
   await hands.upsert('device', row!)
   const handsSecrets = secrets(),
     destination = prGateFor(hands, settings, handsSecrets, () => 'hands')
@@ -279,7 +279,7 @@ it('R5-m2 a receipt after database reopen returns already ran without a hold or 
   expect(run).not.toHaveBeenCalled()
   expect(remote.takeDestinationHold(replay.context)).toBe(false)
 })
-it('R5-n3 repeated review approvals produce one bounded audit note', async () => {
+it('R5-n3 review approvals require evidence', async () => {
   const database = store(),
     gate = new PrGate(database, settings),
     ctx = testContext()
@@ -290,9 +290,7 @@ it('R5-n3 repeated review approvals produce one bounded audit note', async () =>
         { command: 'gh pr review 1 --approve' },
         ctx,
       ),
-    ).toBeNull()
+    ).not.toBeNull()
   const rows = await database.list('chat_item')
-  expect(
-    rows.filter((row) => row.text === 'review approval (not gated)'),
-  ).toHaveLength(1)
+  expect(rows.some(row => row.text === 'review approval (not gated)')).toBe(false)
 })

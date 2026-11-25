@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { Store } from '../src/main/db'
+import { registerSyncRoutes } from '../src/main/devices/replicate'
 import { hashPass, newPass } from '../src/main/devices/passes'
 import { HandlerRegistry } from '../src/main/devices/registry'
 import { DevicesService } from '../src/main/devices/service'
@@ -41,6 +42,7 @@ async function node(knownPeer?: (id: string) => DeviceRole[] | null): Promise<{ 
     ...(knownPeer === undefined ? {} : { knownPeer }),
   })
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => store.close(), () => service.stop())
+  registerSyncRoutes(service.host(), store)
   await service.start()
   let status = service.status()
   for (let attempt = 0; attempt < 5 && !status.running; attempt += 1) {

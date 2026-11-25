@@ -104,8 +104,8 @@ describe('review findings: grant lifetime, redaction and bounded audit',()=>{
  },30_000)
 })
 
-it('logs review approvals without holding them',async()=>{
+it('holds review approvals for evidence',async()=>{
  const t=setup()
- expect(await gateForTools(t.tools)!.check('shell_run',{command:'gh pr review 3 --approve'},t.ctx)).toBeNull()
- expect((await t.store.list('chat_item')).some(row=>row.text==='review approval (not gated)')).toBe(true)
+ expect(await gateForTools(t.tools)!.check('shell_run',{command:'gh pr review 3 --approve'},t.ctx)).not.toBeNull()
+ expect((await t.store.list('chat_item')).some(row=>row.text==='review approval (not gated)')).toBe(false)
 })

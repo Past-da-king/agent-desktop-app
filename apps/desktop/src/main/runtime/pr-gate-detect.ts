@@ -1,4 +1,5 @@
 import { parse, quote } from 'shell-quote'
+import { execFileSync } from 'node:child_process'
 import {
   readFileSync,
   statSync,
@@ -35,6 +36,8 @@ export function readyComment(v: unknown): boolean {
 }
 function graph(query: unknown): boolean {
   if (typeof query !== 'string' || unreadable(query)) return true
+  if (/\baddPullRequestReview\s*\(/.test(query) && /\bAPPROVE\b/.test(query))
+    return true
   if (
     /\b(markPullRequestReadyForReview|requestReviews|mergePullRequest|enablePullRequestAutoMerge)\s*\(/.test(
       query,
@@ -99,7 +102,12 @@ export function githubWrite(
       opaque || [false, 'false'].includes(data['draft'] as boolean | string)
     )
   if (/\/pulls\/[^/?#]+\/reviews(?:\?|$)/i.test(path))
-    return opaque || unreadable(data['body']) || readyComment(data['body'])
+    return (
+      opaque ||
+      String(data['event']).toUpperCase() === 'APPROVE' ||
+      unreadable(data['body']) ||
+      readyComment(data['body'])
+    )
   return (
     /\/issues\/[^/?#]+\/comments(?:\?|$)/i.test(path) &&
     (opaque || unreadable(data['body']) || readyComment(data['body']))
@@ -181,6 +189,7 @@ function gh(args: string[]): boolean {
       return true
     if (action === 'edit')
       return args.some((w) => /^--add-reviewer(?:=|$)/.test(w))
+    if (action === 'review' && flags.includes('--approve')) return true
     if (action === 'comment' || action === 'review') return comment()
     return false
   }
@@ -511,8 +520,10 @@ function argv(words: string[], depth: number): boolean {
   }
   if (exe === 'git') {
     let at = 0
+    let gitCwd = inspectionCwd
     while (args[at]?.startsWith('-')) {
       const flag = args[at++]!
+      if (flag === '-C' && args[at]) gitCwd = resolve(gitCwd, args[at]!)
       if (
         [
           '-C',
@@ -525,7 +536,7 @@ function argv(words: string[], depth: number): boolean {
       )
         at++
     }
-    if (args[at] === 'push') return true
+    if (args[at] === 'push') return reviewablePush(args.slice(at + 1), gitCwd)
     return args.some(
       (word) =>
         word.includes('=!') &&
@@ -566,8 +577,12 @@ function argv(words: string[], depth: number): boolean {
         (args.some((word) => word === '-Body') && body === undefined),
     )
   }
-  if (['node', 'python', 'python3'].includes(exe))
-    return script(option(args, '-e', '--eval', '-c') ?? '')
+  if (['node', 'python', 'python3'].includes(exe)) {
+    const inline = option(args, '-e', '--eval', '-c')
+    if (inline !== undefined) return script(inline)
+    const file = args.find((word) => !word.startsWith('-'))
+    return file !== undefined && inspectFile(file, depth + 1)
+  }
   if (exe.startsWith('$') && args.some((w) => /^(pr|issue|api)$/.test(w)))
     return true
   const commandIndex = words.findIndex(
@@ -688,158 +703,78 @@ function stripShellComments(source: string): string {
   }
   return result
 }
-/** Raw text is the fail-closed boundary; comments and quoted data cannot erase it. */
+/** Cooperative early warning, not a raw GitHub-token denylist. */
 export function sensitiveShell(source: string): boolean {
-  return /(?:\bgh(?:\.exe)?\b|(?:api\.)?github\.com|\bgit\s+push\b)/i.test(
-    source,
+  const normalized = commandSource(source)
+  return (
+    /\bgh(?:\.exe)?\s+(?:pr\s+(?:ready(?!\s+--undo)|merge|review-request|request-review)|pr\s+review\b[^;\n]*--approve|pr\s+edit\b[^;\n]*--add-reviewer)/i.test(
+      normalized,
+    ) ||
+    /\b(?:markPullRequestReadyForReview|mergePullRequest|requestReviews|enablePullRequestAutoMerge)\s*\(/.test(
+      normalized,
+    ) ||
+    /\bgh(?:\.exe)?\s+(?:pr|issue)\s+comment\b[^;]*ready\s+for\s+review/i.test(
+      normalized,
+    )
   )
 }
-function confidentShell(source: string): boolean {
-  // These constructs require runtime resolution. Never infer safety from a partial parse.
-  let quoted = ''
-  for (const char of source) {
-    if (char === '\n' || char === '\r') return false
-    if (char === "'" || char === '"') {
-      if (!quoted) quoted = char
-      else if (quoted === char) quoted = ''
+function reviewablePush(args: string[], cwd = inspectionCwd): boolean {
+  if (args.some((word) => ['--all', '--mirror'].includes(word))) return true
+  const git = (...words: string[]): string => {
+    try {
+      return execFileSync('git', ['-C', cwd, ...words], {
+        encoding: 'utf8',
+        timeout: 1000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+    } catch {
+      return ''
+    }
+  }
+  const protectedBranches = new Set([
+    'main',
+    'master',
+    ...git('config', '--get-all', 'prGate.protectedBranches')
+      .split(/[,\s]+/)
+      .filter(Boolean),
+  ])
+  const defaultRef = git(
+    'symbolic-ref',
+    '--quiet',
+    'refs/remotes/origin/HEAD',
+  ).replace(/^refs\/remotes\/origin\//, '')
+  if (defaultRef) protectedBranches.add(defaultRef)
+  const positional: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const word = args[i]!
+    if (
+      ['--repo', '--receive-pack', '--exec', '--push-option', '-o'].includes(
+        word,
+      )
+    ) {
+      i++
       continue
     }
-    if (quoted === "'") continue
-    if (/[$`\\]/.test(char) || (!quoted && /[#<>()[\]{}]/.test(char)))
-      return false
+    if (!word.startsWith('-')) positional.push(word)
   }
-  if (quoted) return false
-  try {
-    const entries = parse(source),
-      parts: string[][] = [[]]
-    for (const entry of entries) {
-      if (typeof entry === 'string') parts[parts.length - 1]!.push(entry)
-      else if ('op' in entry && [';', '&&', '||'].includes(entry.op))
-        parts.push([])
-      else return false
-    }
-    return parts.every((words) => {
-      if (!words.length) return true
-      const exe = base(words[0]!),
-        args = words.slice(1)
-      if (exe === 'pwsh' || exe === 'powershell') {
-        for (let at = 0; at < args.length; at++) {
-          const word = args[at]!
-          if (!/^[-/]/.test(word))
-            return (
-              exe === 'powershell' && confidentShell(args.slice(at).join(' '))
-            )
-          const parameter = powerShellParameter(
-            word.replace(/^(?:--?|\/)/, '').toLowerCase(),
-          )
-          if (!parameter) return false
-          if (parameter === 'command' || parameter === 'commandwithargs')
-            return confidentShell(args.slice(at + 1).join(' '))
-          if (parameter === 'file' || parameter === 'encodedcommand')
-            return false
-          if (POWERSHELL_OPERANDS.has(parameter)) at++
-        }
-        return true
-      }
-      if (exe === 'gh') {
-        while (
-          args[0] === '-R' ||
-          args[0] === '--repo' ||
-          args[0] === '--hostname'
-        )
-          args.splice(0, 2)
-        while (/^--(?:repo|hostname)=/.test(args[0] ?? '')) args.shift()
-        if (args[0]?.startsWith('-')) return false
-        if (
-          args[0] === 'pr' &&
-          args[1] === 'review' &&
-          args.includes('--approve') &&
-          !gh([...args])
-        )
-          return true
-        if (args[0] === 'pr' && args[1] === 'ready' && args.includes('--undo'))
-          return true
-        if (!args.length) return true
-        if (
-          ['pr', 'issue'].includes(args[0] ?? '') &&
-          ['comment', 'review'].includes(args[1] ?? '') &&
-          !gh([...args])
-        )
-          return true
-        if (args[0] === 'pr' && args[1] === 'create' && !gh([...args]))
-          return true
-        if (
-          args[0] === 'issue' &&
-          ['create', 'edit', 'close', 'reopen'].includes(args[1] ?? '')
-        )
-          return true
-        if (['pr', 'issue'].includes(args[0] ?? ''))
-          return (
-            ['list', 'view', 'status', 'checks', 'diff'].includes(
-              args[1] ?? '',
-            ) ||
-            (args[0] === 'pr' &&
-              args[1] === 'create' &&
-              args.includes('--draft')) ||
-            gh([...args])
-          )
-        if (args[0] === 'api')
-          return (
-            gh([...args]) ||
-            args.some((word) => /^\/?(?:repos|repositories)\//.test(word)) ||
-            !args.some((w) =>
-              /^(-[fFX]|--(?:method|field|raw-field|input))(=|$)/.test(w),
-            ) ||
-            ['GET', 'HEAD'].includes(option(args, '--method', '-X') ?? '')
-          )
-        return ['auth', 'version', '--version', 'help', '--help'].includes(
-          args[0] ?? '',
-        )
-      }
-      if (['curl', 'wget', 'invoke-restmethod', 'irm'].includes(exe))
-        return !argv(words, 1)
-      if (
-        ['apt', 'apt-get'].includes(exe) ||
-        (exe === 'sudo' && ['apt', 'apt-get'].includes(args[0] ?? ''))
-      )
-        return true
-      if (exe === 'git')
-        return [
-          'status',
-          'diff',
-          'log',
-          'show',
-          'pull',
-          'fetch',
-          'commit',
-          'add',
-          'branch',
-          'rev-parse',
-          'clone',
-          'checkout',
-          'switch',
-          'config',
-          'remote',
-          'worktree',
-        ].includes(args[0] ?? '')
-      return (
-        INERT.has(exe) ||
-        ['cd', 'pwd', 'ls', 'dir', 'which', 'where', 'get-command'].includes(
-          exe,
-        ) ||
-        (exe === 'command' && ['-v', '-V'].includes(args[0] ?? ''))
-      )
-    })
-  } catch {
-    return false
-  }
+  const refs = positional.slice(1)
+  if (!refs.length) refs.push(git('symbolic-ref', '--quiet', '--short', 'HEAD'))
+  return refs.some((ref) => {
+    if (!ref || unreadable(ref) || ref.includes('*')) return true
+    let target = ref
+      .replace(/^\+/, '')
+      .split(':')
+      .pop()!
+      .replace(/^refs\/heads\//, '')
+    if (target === 'HEAD')
+      target = git('symbolic-ref', '--quiet', '--short', 'HEAD')
+    return protectedBranches.has(target)
+  })
 }
 /** shell-quote supplies operators, quoted words, comments and variable boundaries. */
 function shell(source: string, depth = 0): boolean {
   if (depth > 12) return sensitiveShell(source)
-  if (sensitiveShell(source) && !confidentShell(source)) return true
   source = commandSource(source)
-  if (sensitiveShell(source) && !confidentShell(source)) return true
   const hereString = source.match(
     /\b(?:bash|sh|zsh|dash)\s*<<<\s*(["'])([\s\S]*?)\1/,
   )
@@ -982,7 +917,7 @@ function shell(source: string, depth = 0): boolean {
       inspectionCwd = initialCwd
     }
   } catch {
-    return /\bgh\s+(?:pr|api|issue)\b/.test(source)
+    return sensitiveShell(source)
   }
 }
 function script(code: string, pageUrl = ''): boolean {
@@ -1038,7 +973,10 @@ function inspectFile(file: string, depth: number): boolean {
       missingScripts.push(path)
       return false
     }
-    return shell(readFileSync(path, 'utf8'), depth)
+    const text = readFileSync(path, 'utf8')
+    return /\.(?:py|mjs|cjs|js)$/i.test(path)
+      ? script(text)
+      : shell(text, depth)
   } catch {
     missingScripts.push(file)
     return false

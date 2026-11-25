@@ -21,6 +21,8 @@ import { OverlayNet, setOverlayNet } from './net'
 import { originFrom, setLocalOrigin } from './origin'
 import { formatShortCode, handlePair, pairUri, parsePairUri, PairingOffers } from './pairing'
 import { pinnedFetch } from './pinned-fetch'
+import { bootstrapPeerAuthority } from './replicate'
+import { SyncClient } from '@agent/core'
 import { devicesState, probeHealth } from './sync'
 import { AnswerOrder } from './answer-order'
 import { SecretPassTable, hashPass, newPass, type SecretsLike } from './passes'
@@ -41,6 +43,7 @@ const INTERFACES_TTL_MS = 5_000
 
 /** The bits of the Store this service uses (main/db.ts). */
 export interface DeviceStoreLike {
+  applyRemote?(changes: import('@agent/core').Change[], via?: string): Promise<void>
   list(entity: 'device'): Promise<DeviceRow[]>
   /** Deletes a row (a tombstone that replicates). Without it a taken-out device's row stays, marked revoked. */
   remove?(entity: 'device', id: string): Promise<void>
@@ -783,30 +786,8 @@ export class DevicesService {
       const known = peers.get(nodeId)
       peers.set(nodeId, { id: nodeId, name: nodeName, fp: parts.fp, urls: [base, ...(known?.urls ?? parts.urls).filter((u) => u.replace(/\/+$/, '') !== base)] })
       this.config.save({ peers: [...peers.values()] })
-      // The authenticated, fingerprint-pinned pairing answer establishes the first authority.
-      // Old hosts expose brain membership in `brains`; never guess brain from an arbitrary row.
-      const pairedRoles = Array.isArray(node['roles'])
-        ? node['roles'].filter((role): role is 'brain' | 'hands' | 'screen' =>
-            ['brain', 'hands', 'screen'].includes(String(role)),
-          )
-        : listed.some(
-              (raw) =>
-                typeof raw === 'object' &&
-                raw !== null &&
-                (raw as Record<string, unknown>)['id'] === nodeId,
-            )
-          ? ['brain' as const]
-          : ['hands' as const]
-      await this.deps.store.upsert('device', {
-        id: nodeId,
-        name: nodeName,
-        roles: pairedRoles,
-        fp: parts.fp,
-        urls: peers.get(nodeId)!.urls,
-        ...(typeof node['prGatePublicKey'] === 'string'
-          ? { prGatePublicKey: node['prGatePublicKey'] }
-          : {}),
-      })
+      // Fetch authenticated authority without stamping a stale host snapshot locally.
+      if (this.deps.store.applyRemote) await bootstrapPeerAuthority({list: () => this.deps.store.list('device'), applyRemote: changes => this.deps.store.applyRemote!(changes)}, new SyncClient(base, pass, pinnedFetch(parts.fp)), peers.get(nodeId)!)
       await this.writeSelf()
       this.uplink.refresh()
       this.changed()

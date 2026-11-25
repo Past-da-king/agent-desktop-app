@@ -31,7 +31,7 @@ describe('review findings: shell grammar and all review surfaces',()=>{
   'gh pr create --dry-run','gh pr create --draft=1',
   'gh pr comment 3 -b "Not ready for review yet"',
   'echo "gh pr ready 3"',
-  'gh pr review 3 --approve','gh pr review 3 --comment -b "Looks good"',
+  'gh pr review 3 --comment -b "Looks good"',
  ])('passes %s',command=>expect(reviewableCall('shell_run',{command})).toBe(false))
  it.each([
   ['browser_fetch',{from:'r12'}],

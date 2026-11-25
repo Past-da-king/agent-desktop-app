@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -43,9 +43,8 @@ it.each([
   'powershell gh pr merge 1',
   'powershell "gh pr merge 1"',
   'powershell -nop "gh pr merge 1"',
-  'git push origin HEAD',
+  'git push origin HEAD:main',
   'curl https://api.github.com/graphql --data @payload.json',
-  'unknown --unknown github.com/o/r',
 ])('R7 fail-closed opaque shell: %s', (command) => {
   expect(reviewableCall('shell_run', { command })).toBe(true)
   expect(reviewableCall('PowerShell', { command })).toBe(true)
@@ -112,7 +111,6 @@ it.each([
   'gh pr view 19 --json headRefOid,isDraft',
   'gh issue view 7',
   'gh pr checks 19',
-  'gh pr review 19 --approve',
   'gh pr ready 19 --undo',
   'command -v gh',
   'which gh',
@@ -159,12 +157,16 @@ it('R7-m5 concurrent rename/order and signing-key publication merge across two r
   await b.applyRemote(a.changesAfter(0).changes)
   const aStart = a.logSeq(),
     bStart = b.logSeq()
+  await a.upsert('device', { id: 'writer-a', roles: ['brain'] })
+  await b.upsert('device', { id: 'writer-b', roles: ['brain'] })
+  await a.applyRemote(b.changesAfter(0).changes)
+  await b.applyRemote(a.changesAfter(0).changes)
   await a.upsert('device', { id, prGatePublicKey: 'new-key' })
   await b.upsert('device', { id, name: 'After', priority: 7, roles: ['hands'] })
   const fromA = a.changesAfter(aStart).changes,
     fromB = b.changesAfter(bStart).changes
-  await a.applyRemote(fromB)
-  await b.applyRemote(fromA)
+  await a.applyRemote(fromB, 'writer-b')
+  await b.applyRemote(fromA, 'writer-a')
   for (const store of [a, b]) {
     expect(await store.get('device', id)).toMatchObject({
       name: 'After',

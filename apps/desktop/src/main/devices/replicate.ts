@@ -32,6 +32,28 @@ export interface ReplicaStore {
   list(entity: 'device'): Promise<DeviceRow[]>
 }
 
+/** The caller supplies the configured peer's fingerprint-pinned client. Preserve remote stamps. */
+export async function bootstrapPeerAuthority(store: Pick<ReplicaStore, 'list' | 'applyRemote'>, client: SyncClient, peer: PeerTarget): Promise<void> {
+  if ((await store.list('device')).some(row => row.id === peer.id)) return
+  let cursor = 0
+  let own: Change | undefined
+  for (let pages = 0; pages < 100; pages++) {
+    const page = await client.pull(cursor, { wait: 0, entities: ['device'] })
+    for (const change of page.changes) {
+      if (change.entity === 'device' && change.id === peer.id) own = change
+    }
+    if (page.cursor <= cursor || !page.changes.length) {
+      if (own && !own.deleted && own.payload['fp'] === peer.fp && Array.isArray(own.payload['roles'])) {
+        await store.applyRemote([own])
+        return
+      }
+      break
+    }
+    cursor = page.cursor
+  }
+  throw new Error('Device authority not bootstrapped for pinned peer ' + peer.id)
+}
+
 const MAX_WAIT_SECONDS = 55
 const PAGE = 500
 
@@ -442,6 +464,7 @@ class PeerLink {
       try {
         const client = this.client(url, pass)
         this.dirty = false
+        await bootstrapPeerAuthority(this.deps.store, client, this.peer)
         await this.pushLocked(client)
         if (this.stopped) return false
         await this.backfill(client)
@@ -485,7 +508,7 @@ class PeerLink {
       }
     }
     this.lastError = lastError
-    this.deps.log?.(`devices: could not reach ${this.peer.name}: ${lastError}`)
+    this.deps.log?.(lastError.includes('authority not bootstrapped') ? `devices: authority not bootstrapped for ${this.peer.name}: ${lastError}` : `devices: could not reach ${this.peer.name}: ${lastError}`)
     return false
   }
 

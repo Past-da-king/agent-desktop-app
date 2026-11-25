@@ -33,55 +33,13 @@ const fs = require('node:fs'), path = require('node:path'), http = require('node
 (async () => {
   let args = process.argv.slice(2);
   const channel = process.env.AGENT_PR_GATE_CHANNEL;
-  const wsl = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wsl.exe') : null;
-  const forward = (file, words, options = {}) => {
-    const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
-    const child = cp.spawn(file, words, { stdio: 'inherit', env, windowsHide: true, ...options });
-    for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
-    child.on('error', error => { console.error(error.message); process.exitCode = 127; });
-    child.on('exit', (code, signal) => { if (signal && process.platform !== 'win32') process.kill(process.pid, signal); else process.exitCode = code === null ? 1 : code; });
-  };
-  if (args[0] === '--agent-wsl-launch') {
-    args.shift();
-    if (!wsl) throw new Error('WSL launcher is Windows-only');
-    const prefix = []; let at = 0;
-    while (at < args.length && args[at].startsWith('-')) {
-      const flag = args[at++];
-      if (['-e', '--exec', '--'].includes(flag)) break;
-      if (['-d', '--distribution', '-u', '--user', '--cd'].includes(flag)) {
-        if (args[at] === undefined) throw new Error('Missing WSL option operand');
-        prefix.push(flag, args[at++]);
-      } else {
-        // Administrative WSL calls do not execute an agent shell.
-        if (['--status', '--list', '-l', '--help', '--version'].includes(flag)) { forward(wsl, args); return; }
-        throw new Error('Unrecognised WSL command option; use --exec with a named shell');
-      }
-    }
-    const command = args.slice(at);
-    if (!command.length) throw new Error('Name the WSL command explicitly');
-    const unix = file => cp.execFileSync(wsl, [...prefix, '--exec', 'wslpath', '-u', file], { encoding: 'utf8', windowsHide: true }).trim();
-    const node = unix(process.execPath), program = unix(__filename);
-    const prefixData = Buffer.from(JSON.stringify(prefix.filter((_, i) => prefix[i - 1] !== '--cd' && prefix[i] !== '--cd'))).toString('base64');
-    const sh = value => "'" + value.replace(/'/g, "'\\''") + "'";
-    const launcher = '#!/bin/sh\nreal=\nold_ifs=$IFS; IFS=:\nfor directory in $PATH; do\n [ "$directory" = "$AGENT_PR_GATE_UNIX_DIR" ] && continue\n if [ -x "$directory/gh" ]; then real="$directory/gh"; break; fi\ndone\nIFS=$old_ifs\n[ -n "$real" ] || exit 127\nexport ELECTRON_RUN_AS_NODE=1\nexport WSLENV="$WSLENV:ELECTRON_RUN_AS_NODE/w"\nexec ' + sh(node) + ' ' + sh(program) + ' --agent-wsl-gh ' + sh(prefixData) + ' "$real" "$PWD" "$@"\n';
-    const boot = 'set -eu; gate_dir=$(mktemp -d /tmp/agent-gh-gate-XXXXXX); trap \'rm -rf -- "$gate_dir"\' EXIT; printf %s ' + sh(launcher) + ' > "$gate_dir/gh"; chmod 700 "$gate_dir/gh"; export AGENT_PR_GATE_UNIX_DIR="$gate_dir"; export PATH="$gate_dir:$PATH"; printf \'export PATH="$AGENT_PR_GATE_UNIX_DIR:$PATH"\n\' > "$gate_dir/bash-env"; export BASH_ENV="$gate_dir/bash-env"; "$@"';
-    const env = { ...process.env, WSLENV: [process.env.WSLENV, 'AGENT_PR_GATE_CHANNEL', 'AGENT_PR_GATE_DIR'].filter(Boolean).join(':') };
-    forward(wsl, [...prefix, '--exec', 'sh', '-c', boot, 'agent-wsl', ...command], { env }); return;
-  }
-  let wslReal, wslCwd, wslPrefix;
-  if (args[0] === '--agent-wsl-gh') {
-    args.shift(); wslPrefix = JSON.parse(Buffer.from(args.shift(), 'base64').toString());
-    wslReal = args.shift(); wslCwd = args.shift();
-    if (!wsl || !wslReal || !wslCwd) throw new Error('Invalid WSL gh invocation');
-  }
   if (!channel) { console.error('PR gate execution channel is unavailable.'); process.exitCode = 75; return; }
   const reply = await new Promise((resolve, reject) => {
     const request = http.request(channel, { method: 'POST', headers: { 'content-type': 'application/json' } }, response => {
       let data = ''; response.on('data', chunk => data += chunk); response.on('end', () => resolve(JSON.parse(data)));
-    }); request.on('error', reject); request.end(JSON.stringify({ args, cwd: wslCwd || process.cwd() }));
+    }); request.on('error', reject); request.end(JSON.stringify({ args, cwd: process.cwd() }));
   });
   if (reply.held) { console.error(reply.held); process.exitCode = 75; return; }
-  if (wslReal) { forward(wsl, [...wslPrefix, '--cd', wslCwd, '--exec', wslReal, ...args]); return; }
   const own = fs.realpathSync(process.env.AGENT_PR_GATE_DIR);
   let real;
   const names = process.platform === 'win32' ? ['gh.exe'] : ['gh'];
@@ -113,6 +71,7 @@ export async function withGhExecution<T>(
   if (!gate?.enabled()) return work()
   const dir = mkdtempSync(join(tmpdir(), 'agent-gh-gate-'))
   const pass = randomBytes(32).toString('hex')
+  let outerConsumed = false
   const outerApproved =
     !!approved && reviewableCall(approved.tool, approved.input)
   const server = createServer(async (req, res) => {
@@ -137,7 +96,16 @@ export async function withGhExecution<T>(
       )
         throw new Error('Invalid gh execution request')
       const command = quote(['gh', ...data.args])
-      const held = outerApproved
+      const matchesOuter =
+        !outerConsumed &&
+        outerApproved &&
+        command ===
+          String(
+            approved?.input['command'] ?? approved?.input['cmd'] ?? '',
+          ).trim() &&
+        data.cwd === String(approved?.input['cwd'] ?? process.cwd())
+      if (matchesOuter) outerConsumed = true
+      const held = matchesOuter
         ? null
         : await gate.check('shell_run', { command, cwd: data.cwd }, { ...ctx })
       res.setHeader('content-type', 'application/json')
@@ -156,12 +124,6 @@ export async function withGhExecution<T>(
     const address = server.address()
     if (!address || typeof address === 'string')
       throw new Error('PR gate execution channel did not open')
-    const bashEnv = join(dir, 'bash-env.sh')
-    // Bash login startup can rebuild PATH. BASH_ENV runs after that for noninteractive
-    // commands, so nested bash -lc cannot accidentally lose the execution boundary.
-    writeFileSync(bashEnv, 'export PATH="$AGENT_PR_GATE_DIR:$PATH"\n', {
-      mode: 0o600,
-    })
     const script = join(dir, 'gh.cjs')
     writeFileSync(script, GH_EXEC_PROGRAM, { mode: 0o600 })
     const sh = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
@@ -174,32 +136,23 @@ export async function withGhExecution<T>(
         ' "$@"\n',
       { mode: 0o700 },
     )
+    // PowerShell array splatting preserves arguments; cmd uses the app warning only.
+    const ps = (value: string) => "'" + value.replace(/'/g, "''") + "'"
     writeFileSync(
-      join(dir, 'gh.cmd'),
-      '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"' +
-        process.execPath.replace(/%/g, '%%') +
-        '" "' +
-        script.replace(/%/g, '%%') +
-        '" %*\r\n',
+      join(dir, 'gh.ps1'),
+      "$env:ELECTRON_RUN_AS_NODE='1'; & " +
+        ps(process.execPath) +
+        ' ' +
+        ps(script) +
+        ' @args; exit $LASTEXITCODE\r\n',
       { mode: 0o700 },
     )
-    if (process.platform === 'win32')
-      writeFileSync(
-        join(dir, 'wsl.cmd'),
-        '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"' +
-          process.execPath.replace(/%/g, '%%') +
-          '" "' +
-          script.replace(/%/g, '%%') +
-          '" --agent-wsl-launch %*\r\n',
-        { mode: 0o700 },
-      )
     return await scopes.run(
       {
         env: {
           AGENT_PR_GATE_CHANNEL:
             'http://127.0.0.1:' + address.port + '/' + pass,
           AGENT_PR_GATE_DIR: dir,
-          BASH_ENV: bashEnv,
         },
       },
       work,
