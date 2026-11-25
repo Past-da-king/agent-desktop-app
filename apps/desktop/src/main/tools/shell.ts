@@ -271,7 +271,7 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       }
 
       const timeoutSec = clamp(
-        Math.trunc(number(input['timeoutSec'], ctx.commandFallback?.timeoutSec ?? DEFAULT_TIMEOUT_SEC)),
+        Math.trunc(number(input['timeoutSec'], DEFAULT_TIMEOUT_SEC)),
         1,
         ctx.commandFallback ? 6 * 60 * 60 : MAX_TIMEOUT_SEC,
       )

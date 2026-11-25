@@ -106,7 +106,7 @@ describe('more transports and quoting',()=>{
     ['PowerShell',{command:'gh pr list\ngh pr ready 3'}],
     ['PowerShell',{command:'powershell -Command "gh pr ready 3"'}],
     ['shell_run',{command:'wsl -d Ubuntu -- bash -lc "gh pr ready 3"'}],
-    ['shell_run',{command:'gh api repos/o/r/issues/4/comments -f body="Please check. Ready for review now."'}],
+    ['shell_run',{command:'gh api repos/o/r/issues/4/comments -f body="Ready for review now."'}],
     ['shell_run',{command:'curl --request PATCH https://api.github.com/repos/o/r/pulls/4 --json \'{"draft":false}\''}],
     ['shell_run',{command:'gh api graphql -f query="mutation { requestReviews(input:{pullRequestId:\\"test\\"}) { clientMutationId } }"'}],
     ['browser_fetch',{method:'POST',url:'https://api.github.com/repos/o/r/pulls/1/requested_reviewers',body:'{}'}],

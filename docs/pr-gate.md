@@ -22,7 +22,14 @@ another agent, expiry or replay is held. Pending grants disappear on restart.
 The evidence is an agent's claim; the gate does not verify its truth.
 
 Desktop and headless main/helper/project toolsets share the guard. Nested run_script
-calls use those guarded tools. A device_tool call is checked at the destination.
+calls use those guarded tools. Clear PR writes in device_tool are held at the origin.
+The origin attests once, and the app carries a short-lived, one-shot grant bound to the
+remote command and the real caller across the authenticated linked-device transport.
+The destination checks it once. A destination-only browser/script hit is returned as
+an origin challenge so the agent can attest there, rather than facing an unknown gate.
+Both devices need this feature and synced settings; older devices cannot validate
+the transport grant. Destination policy still applies without a valid origin grant.
+The switch is only as strong as every linked device's shell policy: this is not a sandbox.
 The Claude native permission hook has a private gate handle; it is neither listed
 nor callable as a model tool. Claude keeps its own shell rather than duplicate tools.
 Codex keeps the person's sandbox and network policy, including danger-full-access and
@@ -30,9 +37,10 @@ network access on Run without asking. With the gate enabled, only its native she
 features are disabled so commands use the app tools. A turn already running reads this
 at the next turn boundary.
 
-For this Codex fallback, app shell commands inherit the project cwd and have a one-hour
-default, up to six hours explicitly. run_code has a one-hour limit and preserves the
-project cwd and HOME. Shell, code and MCP output allow two million characters. Normal
+For this Codex fallback, app shell commands inherit the project cwd and still default
+to sixty seconds; timeoutSec can request up to six hours. run_code has a one-hour limit and preserves the
+project cwd and HOME. Only shell_run and run_code output allow two million characters on this path. Other
+MCP/tool results retain the 24,000-character model cap. Normal
 app runs retain their existing limits. Secret-looking environment variables continue
 to be removed by the app's existing policy; agents use Vault placeholders for secrets.
 This is deliberate and is not native-shell environment parity.
@@ -41,9 +49,15 @@ Shell tokenisation uses shell-quote, with grammar handling for executable substi
 shell-fed heredocs, wrappers and control statements. Documentation strings stay inert.
 Recognised paths include gh REST/GraphQL, curl/PowerShell, connector actions, browser
 replays resolved from the actual tab, GitHub web writes, named create/ready/request/merge
-buttons and index-only GitHub clicks. Unreadable request bodies and shell input are held.
+buttons and index-only GitHub clicks. Unreadable bodies on clear PR writes are held.
+Local script files are read (up to 1 MB) and held only for a detected PR write.
+Unreadable script files pass and produce an audit note; syntax-only shell checks pass.
+Read-only gh commands, executable lookups and unrelated build scripts pass.
 A readable direct comment body file is snapshotted into inline argv before checking
-and execution, so the checked bytes are the bytes sent. Wrapped, unreadable or Vault-
+and execution only for bash/sh. Bodies larger than 100 KB are snapshotted into a private
+temporary file, avoiding operating-system argv limits. Native shell body files are
+hashed into the attestation key, so changing their bytes invalidates the grant.
+Wrapped, unreadable or Vault-
 placeholder body files stay held; inspect them before attesting.
 
 This remains a workflow guard, not a sandbox. Other DOM interactions, coordinates,
@@ -59,3 +73,12 @@ active audit rows are kept; Settings shows the newest 100 as labelled, expandabl
 
 Dependency note: shell-quote and its TypeScript definitions provide the maintained
 shell word/operator parser rather than growing a whitespace/regex command splitter.
+
+## Proof continuity
+The real ChatGPT-plan Codex helper proof on candidate 8ce8be1a passed: 13 minutes
+22 seconds, exit 0, 50,076 output characters without truncation. It exercised the
+server job path and PC-to-server SSH. The 2,000,000-character ceiling was not reached.
+The main agent confirmed this proof remains accepted for the round-2 repairs; it is
+not being repeated. The prior Windows screenshots/chat proof cover 8ce8be1a, not this
+new source candidate. No release, installation or live node deployment is part of this
+repair handoff. Independent reviews must pass again before release.

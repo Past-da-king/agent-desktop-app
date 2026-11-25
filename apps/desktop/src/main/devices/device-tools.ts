@@ -10,6 +10,7 @@
  *  - an offline device's command waits in the row (delivered when it connects, expires after 10 minutes).
  * The agent waits up to the deadline (120 s, browser 600 s). A result that comes later is posted to the chat.
  */
+import { remoteArguments, receiveRemoteGrant, recordRemoteResult, takeDestinationHold } from '../runtime/pr-gate-remote'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -360,6 +361,7 @@ export class DeviceToolHub {
 
   /** Call one tool on one device and wait for its answer (up to the deadline). */
   async call(ref: string, tool: string, args: JsonObject, chat: string = MAIN_CHAT, ctx?: ToolContext): Promise<ToolOutcome> {
+    args=remoteArguments(ctx,tool,args)
     // What connected devices offer right now (a phone that just said hello).
     await this.refresh().catch(() => undefined)
     const found = await this.resolve(ref, tool, chat)
@@ -376,7 +378,9 @@ export class DeviceToolHub {
     if (row.id === this.deps.selfId()) {
       const local = (this.deps.localTools?.() ?? []).find((t) => t.spec.name === tool)
       if (local === undefined || ctx === undefined) return { ok: false, state: 'failed', device: row.name, text: `${tool} cannot run here.` }
-      const text = await local.run(args, ctx)
+      const received=receiveRemoteGrant(ctx,tool,args)
+      const text = await local.run(received.args, received.context)
+      if(takeDestinationHold(received.context))recordRemoteResult(ctx,{prGateHeld:true})
       return { ok: true, state: 'done', device: row.name, text }
     }
     const deadlineMs = spec.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
@@ -410,6 +414,7 @@ export class DeviceToolHub {
           : `${row.name} is offline, retrying; ${tool} (call ${command.id}) queued since ${hhmm(at)}. It stays queued and runs once when ${row.name} reconnects, within 10 minutes; its result then comes to you as a message. If it stays offline you get a final note that ${row.name} stayed offline and ${tool} was not run.`,
       }
     }
+    if(ctx)recordRemoteResult(ctx,decodeResult(done.result))
     return this.outcome(done, row.name)
   }
 

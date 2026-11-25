@@ -4,6 +4,7 @@
  * file_receive for moving a file in one step. A command { kind: "tool", id, tool, args, chatId, deadlineMs } runs
  * here and its answer goes back with device.result. Each group can be switched off; shell is off by default.
  */
+import { receiveRemoteGrant, takeDestinationHold } from '../runtime/pr-gate-remote'
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 
@@ -169,12 +170,14 @@ export class DeviceToolHost {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), deadline)
     try {
-      const run = found.tool.run(command.args as JsonObject, this.deps.context(controller.signal, command))
+      const received=receiveRemoteGrant(this.deps.context(controller.signal, command),command.tool,command.args as JsonObject)
+      const run = found.tool.run(received.args, received.context)
       const timeout = new Promise<never>((_resolve, reject) => {
         controller.signal.addEventListener('abort', () => reject(new Error(`${command.tool} took longer than ${Math.round(deadline / 1000)} s.`)), { once: true })
       })
       const text = await Promise.race([run, timeout])
-      return { ok: true, value: resultValue(text) }
+      const value=resultValue(text)
+      return { ok: true, value: takeDestinationHold(received.context)?{...(value as Record<string,unknown>),prGateHeld:true}:value }
     } catch (error) {
       this.deps.log?.('Device tool failed', { tool: command.tool })
       return { ok: false, error: error instanceof Error ? error.message.slice(0, 2000) : 'The tool failed.' }

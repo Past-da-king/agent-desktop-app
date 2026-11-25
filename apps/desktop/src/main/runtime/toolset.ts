@@ -1,4 +1,3 @@
-import { inlineCommentFile } from './pr-gate-detect'
 /**
  * The one tool registry. Every group is one line, so a later milestone adds its tools by appending a
  * single line here (routines in M7, files/shell in M8, browser in M9, helpers in M10).
@@ -7,6 +6,7 @@ import { inlineCommentFile } from './pr-gate-detect'
  * worker toolset (what a helper runs with) is the same groups without the helper tools and without
  * the budget.
  */
+import { inlineCommentFile } from './pr-gate-detect'
 import { DEFAULT_SETTINGS, type JsonObject, type PastChatHit, type Tool } from '@agent/core'
 
 import { unavailableBrowser, type BrowserDriver } from '../browser/types'
@@ -252,7 +252,7 @@ export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
         if (name === 'browser_fetch' && input['url']) return {...input,pageUrl,url:new URL(String(input['url']),pageUrl || undefined).href}
         return {...input,pageUrl}
       }
-      if (name === 'webapp_run') {
+      if (name === 'webapp_run' || name === 'webapp_test') {
         const app = deps.learned?.find(String(input['app'] ?? ''))
         return {...input,app:app?.startUrl?.includes('github.com') ? 'GitHub' : input['app'] ?? ''}
       }
