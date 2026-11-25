@@ -25,7 +25,7 @@ function setup(on = true) {
     decide: async (id, decision, by) => runner.decide(id, decision, by),
     answerQuestion: async (id, answer, by) => runner.answer(id, answer, by),
     postToMain: async () => undefined, hasWaiter: () => true, liveHelpers: () => new Set(), chatRunning: () => true,
-    needsYou: vi.fn(), changed: vi.fn(),
+    needsYou: vi.fn(), changed: vi.fn(), tellAsker: async () => undefined,
   })
   runner = new Runner({ store, settings, secrets: secretsView(null), tools: [], acts,
     emit: (event) => events.push(event), notify: () => undefined, isFocused: () => false, timeZone: 'UTC' })
@@ -146,4 +146,34 @@ it('resolves request provenance from the actual hub-produced command, not a hand
   expect(await pending).toBe(true)
   x.controller.abort(); await call
  } finally {hub.stop()}
+})
+
+it.each(['routine','chat:pc123','helper:remote'])('unbound remote %s questions and approvals never borrow a newer user request', async (owner) => {
+ const x = setup()
+ await x.store.upsert('chat_item', {kind:'user',text:'Send the report to ben@example.org',meta:'{}'})
+ const ctx = x.runner.deviceToolContext(x.controller.signal, {chatId:'main',owner})
+ const origin = {tool:'webapp_run',input:{tool:'send_email',args:{to:'ben@example.org'}}}
+ const approval = ctx.approve('Send report', '', undefined, origin)
+ const question = ctx.ask('Send report?', ['Yes','No'], undefined, origin)
+ await waitFor(async () => (await x.store.list('chat_item')).filter(r => r.kind==='approval'||r.kind==='question').length===2)
+ const cards = (await x.store.list('chat_item')).filter(r => r.kind==='approval'||r.kind==='question')
+ for (const card of cards) { expect(metaOfCard(card)['request']).toBeUndefined(); expect(needsHim(card)).toBe(true) }
+ x.controller.abort(); await Promise.all([approval,question])
+})
+it('Undo holds the next remote helper approval for the person', async () => {
+ const x = setup()
+ const ctx = x.runner.deviceToolContext(x.controller.signal, {chatId:'main',owner:'helper:remote'})
+ const origin = {tool:'shell_run',input:{command:'npm run deploy'}}
+ const first = ctx.approve('Deploy proof', '', undefined, origin)
+ await waitFor(async () => (await x.acts.waiting()).length===1)
+ const card = (await x.acts.waiting())[0]!
+ expect(await x.acts.answer({id:card.id,action:'decline',reason:'Dry run'})).toMatchObject({ok:true})
+ expect(await first).toBe(false)
+ expect(await x.acts.undo(card.id)).toMatchObject({ok:true})
+ const second = ctx.approve('Deploy proof again', '', undefined, origin)
+ await waitFor(async () => (await x.store.list('chat_item')).filter(r=>r.kind==='approval').length===2)
+ const next = (await x.store.list('chat_item')).find(r=>r.text==='Deploy proof again')!
+ expect(needsHim(next)).toBe(true)
+ expect(metaOfCard(next)['laneRule']).toBe('undo-hold')
+ x.controller.abort(); await second
 })

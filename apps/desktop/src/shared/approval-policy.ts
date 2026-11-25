@@ -163,13 +163,17 @@ function appsRun(input: Record<string, unknown>): Verdict {
   return HIM('unknown', 'An action the app does not recognise.')
 }
 
+function operationWords(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').replace(/[_-]+/g, ' ')
+}
+
 function webappRun(input: Record<string, unknown>): Verdict {
-  const words = `${str(input['tool']).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ')} ${str(input['description'])}`
-  if (input['sends'] === true) return HIM('outbound', 'The saved tool sends something out.')
-  if (SEND_WORDS.test(words)) return HIM('outbound', 'The saved tool sends or posts.')
+  const words = operationWords(`${str(input['tool'])} ${str(input['description'])}`)
   if (MONEY_WORDS.test(words)) return HIM('money', 'The saved tool concerns money.')
   if (HANDS_WORDS.test(words)) return HIM('hands', 'The saved tool needs his own hands.')
   if (SECRET_WORDS.test(words)) return HIM('secret', 'The saved tool handles a secret.')
+  if (input['sends'] === true) return HIM('outbound', 'The saved tool sends something out.')
+  if (SEND_WORDS.test(words)) return HIM('outbound', 'The saved tool sends or posts.')
   if (/\b(delete|remove|deploy|release|destroy|purge|trash|archive|restore|rename|move|update|create|add|sync|import|grant|revoke|access|get|read|list|inspect|fetch)\b/i.test(words)) return AGENT('app-change', 'A saved site tool that changes things inside a task he set.')
   return HIM('unknown', 'A saved tool the app cannot tell is safe.')
 }
@@ -306,7 +310,7 @@ function requestedSend(facts: CardFacts): boolean {
   // Eligibility requires an affirmative send directive, never a mention, prohibition, read, draft or conditional.
   if (!/^(?:(?:please\s+)|(?:(?:can|could|would|will)\s+you\s+)|(?:i\s+(?:want|need)\s+you\s+to\s+))*(send|email|message|reply|forward|share|post|publish)\b/i.test(request)) return false
   if (/\b(do not|don't|never|without|not yet|nothing|hold|draft|prepare|approve|approval|pending|if|unless|after|when|once|before|until|find|search|read|show)\b/i.test(request)) return false
-  const operation = `${facts.origin.tool} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`.replace(/[_-]/g, ' ')
+  const operation = operationWords(`${facts.origin.tool} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`)
   if (MONEY_WORDS.test(operation) || HANDS_WORDS.test(operation) || SECRET_WORDS.test(operation)) return false
   const recipients: string[] = []
   const visit = (value: unknown, recipient = false, depth = 0): void => {

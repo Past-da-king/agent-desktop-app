@@ -143,7 +143,8 @@ export class ActsForMe {
 
   /** The meta a card gets when it is raised. A card in the agent's lane is routed to the main agent when the setting is on. */
   stamp(args: StampArgs): Record<string, unknown> {
-    const hold = this.holding(args.askerKey)
+    const key = args.asker === 'helper' ? args.askerKey.replace(/^helper:/, '') : args.askerKey
+    const hold = this.holding(key)
     return { ...(args.request === undefined ? {} : { request: args.request }), ...stampCard({
       kind: args.kind,
       ...(args.request === undefined ? {} : { request: args.request }),

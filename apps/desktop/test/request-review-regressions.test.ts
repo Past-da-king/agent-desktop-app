@@ -15,7 +15,7 @@ it('uses the verified request to authorize the actual explicitly named send reci
  expect(classifyCard({ ...facts, origin: { tool: 'webapp_run', input: { tool: 'send_email', args: { to: 'ben@example.org', cc: 'someone-else@example.org' } } } }).lane).toBe('him')
 })
 it('retains hard money and secret boundaries even when a request names the recipient', () => {
- for (const tool of ['buy_credits', 'send_money', 'reveal_secret', 'use_passkey']) expect(classifyCard({ ...facts, origin: { tool: 'webapp_run', input: { tool, args: { to: 'ben@example.org' } } } }).lane).toBe('him')
+ for (const tool of ['buy_credits', 'send_money', 'reveal_secret', 'use_passkey', 'sendMoney', 'sendSecret', 'sendApiKey']) expect(classifyCard({ ...facts, origin: { tool: 'webapp_run', input: { tool, args: { to: 'ben@example.org' } } } }).lane).toBe('him')
 })
 it('puts unknown operations in main review first but never grants unknown authorization', () => {
  const meta = stampCard({ kind: 'approval', asker: 'helper', summary: 'Operation', origin: { tool: 'webapp_run', input: { tool: 'opaque_operation' } }, actsForMe: true, now: 100 })

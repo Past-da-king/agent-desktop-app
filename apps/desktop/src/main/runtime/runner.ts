@@ -2242,7 +2242,7 @@ export class Runner {
       kind: 'question',
       text: question,
       // `card`: how the window draws it, when it is more than a question (a project to confirm, tools/projects.ts).
-      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'question', asker: actor?.asker ?? (chat === MAIN_CHAT ? 'main' : 'project'), askerKey: actor?.key ?? chat, request: actor?.request ?? (actor === undefined && line.requestId !== undefined ? await requestById(this.store, line.requestId) : await requestFor(this.store, chat, actor?.key.startsWith('helper:') ? actor.key.slice(7) : '')) ?? undefined, origin, summary: question, options }), ...(actor?.asker === 'helper' ? { helper: actor.key.slice(7) } : {}), options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'question', asker: actor?.asker ?? (chat === MAIN_CHAT ? 'main' : 'project'), askerKey: actor?.key ?? chat, request: (actor === undefined ? (line.requestId !== undefined ? await requestById(this.store, line.requestId) : await requestFor(this.store, chat)) : actor.request) ?? undefined, origin, summary: question, options }), ...(actor?.asker === 'helper' ? { helper: actor.key.slice(7) } : {}), options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI: the person may answer the moment the card appears.
     const pending = new Promise<string | null>((resolve) => {
@@ -2303,7 +2303,7 @@ export class Runner {
     const row = await this.store.upsert('chat_item', {
       kind: 'approval',
       text: summary,
-      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'approval', asker: actor?.asker ?? (chat === MAIN_CHAT ? 'main' : 'project'), askerKey: actor?.key ?? chat, request: actor?.request ?? (actor === undefined && line.requestId !== undefined ? await requestById(this.store, line.requestId) : await requestFor(this.store, chat, actor?.key.startsWith('helper:') ? actor.key.slice(7) : '')) ?? undefined, origin, summary, details }), ...(actor?.asker === 'helper' ? { helper: actor.key.slice(7) } : {}), summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }), ...chatTag(chat) }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'approval', asker: actor?.asker ?? (chat === MAIN_CHAT ? 'main' : 'project'), askerKey: actor?.key ?? chat, request: (actor === undefined ? (line.requestId !== undefined ? await requestById(this.store, line.requestId) : await requestFor(this.store, chat)) : actor.request) ?? undefined, origin, summary, details }), ...(actor?.asker === 'helper' ? { helper: actor.key.slice(7) } : {}), summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI, so an instant decision finds it.
     const pending = new Promise<boolean>((resolve) => {
