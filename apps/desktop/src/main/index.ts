@@ -169,6 +169,8 @@ import { WAKEUP_RPC } from '../shared/wakeups-channels'
 import { getDevicesHost } from './devices/service'
 import { copyVerdict, defaultInstalledExe, isInstalledCopy } from './install-guard'
 import { startWatchdog, type Watchdog } from './watchdog'
+import { DiskHealth } from './disk-health'
+import { startFreezeRecovery, type FreezeRecovery } from './freeze-recovery'
 import { autoHelperCap, busyReason, DEFAULT_LIMITS, ResourceMonitor, shortOf, type ResourceLimits } from './runtime/resources'
 import { warmRecall } from './runtime/recall'
 import { existsSync as fileExists } from 'node:fs'
@@ -878,6 +880,8 @@ const dialogs: DialogLike = {
 }
 
 let watchdog: Watchdog | null = null
+let freezeRecovery: FreezeRecovery | null = null
+const diskHealth = new DiskHealth()
 let resourceMonitor: ResourceMonitor | null = null
 
 /** The helper queue's view of this computer: thresholds from Settings, read live. */
@@ -899,6 +903,19 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const dir = app.getPath('userData')
   mkdirSync(dir, { recursive: true })
 
+  if (app.isPackaged) freezeRecovery = startFreezeRecovery(dir, process.execPath, process.argv.slice(1), why => logger.warn('Freeze recovery problem', { why }), (free, total) => {
+    const state = diskHealth.sample(free, total)
+    if (!state.changed) return
+    const line = diskHealth.line()
+    logger.warn('App data disk state changed', { freeGb: free, totalGb: total, answering: !state.blocked })
+    if (line !== '') {
+      showNotification('Agent disk space', line)
+      void store?.upsert('chat_item', { kind: 'notice', text: line, meta: JSON.stringify({ diskHealth: true }) }).then(() => broadcast(EVENTS.chat, { type: 'chat_changed' })).catch(() => undefined)
+    }
+    if (state.blocked) devices?.handbackScreens()
+  })
+
+  await freezeRecovery?.ready
   store = new Store(join(dir, 'agent.db'))
   // Checkpoints off the main thread (db-checkpoint.ts): a checkpoint inside an ordinary write took up to 2 s.
   store.startCheckpointer({ log: (line, detail) => logger.info(line, detail) })
@@ -920,6 +937,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
     onError: (why) => logger.warn('Watchdog problem', { why }),
   })
+
   // What this computer has to spare, for starting helpers (runtime/resources.ts).
   resourceMonitor = new ResourceMonitor(dir)
   resourceMonitor.start()
@@ -1910,6 +1928,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   })
 
   disposeIpc = registerIpc({
+    answerBlocker: () => diskHealth.blocked() ? diskHealth.line() : '',
     acts,
     instant: {
       handOff: (chat) => (pendingTakes === null ? null : (dictation?.handOff(chat) ?? null)),
@@ -2119,8 +2138,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
       appVersion: app.getVersion(),
       nodeName: () => settings.get().deviceName,
       platform: process.platform,
+      availability: () => diskHealth.line() || (freezeRecovery?.unavailable() === true ? 'This device is not answering: main process recovery is pending.' : ''),
       // Ready = some account can answer now: a plan whose login works, an API account, or the old single choice.
       ready: () => {
+        if (freezeRecovery?.unavailable() === true || diskHealth.blocked()) return false
         const list = accountsOf(settings.get())
         if (list.length === 0) return settings.get().mode !== 'none'
         return list.some((account) => account.kind === 'api' || cliHost === null || cliHost.signedIn(account.kind, account.id))
@@ -2226,6 +2247,8 @@ if (refuseToStart) {
   })
 
   app.on('before-quit', () => {
+    freezeRecovery?.stop()
+    freezeRecovery = null
     disposeActs?.()
     disposeActs = null
     quitting = true

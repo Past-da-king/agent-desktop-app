@@ -77,6 +77,7 @@ export interface DeviceRecord {
 }
 
 export interface BrainRef {
+  pairedAt?: number
   id: string
   name: string
   urls: string[]
