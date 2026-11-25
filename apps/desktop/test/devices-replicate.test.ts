@@ -366,3 +366,51 @@ describe('replication between nodes', () => {
     expect(moved.pulled).toBe(1)
   })
 })
+
+function deviceRow(id: string, fp = '') {
+  return { id, name: id, kind: 'desktop' as const, platform: 'linux' as const, roles: ['brain' as const, 'hands' as const], priority: 0, urls: [], fp, facts: {} as never, pairedAt: 1, lastSeen: 1, revoked: false }
+}
+
+describe('a peer this node holds no row for (rolling upgrade)', () => {
+  it('bootstraps from the peer pinned self row, then replicates', async () => {
+    const a = await node('dev_a')
+    const b = await node('dev_b')
+    mesh([a, b])
+    await a.store.upsert('device', deviceRow('dev_a'))
+    await b.store.upsert('device', deviceRow('dev_a'))
+    await b.store.upsert('device', deviceRow('dev_b'))
+    expect((await a.store.list('device')).some((row) => row.id === 'dev_b')).toBe(false)
+    link(a, [b]).start()
+    await a.store.upsert('memory', { title: 'From the row-less side' })
+    await waitFor(async () => (await titles(b.store)).includes('From the row-less side'), 8000)
+    expect((await a.store.list('device')).some((row) => row.id === 'dev_b')).toBe(true)
+  })
+
+  it('refuses a peer whose self row does not carry the pinned fingerprint', async () => {
+    const a = await node('dev_a')
+    const b = await node('dev_b')
+    mesh([a, b])
+    await a.store.upsert('device', deviceRow('dev_a'))
+    await b.store.upsert('device', deviceRow('dev_a'))
+    await b.store.upsert('device', deviceRow('dev_b', 'a-different-fingerprint'))
+    const replicator = link(a, [b])
+    await a.store.upsert('memory', { title: 'Must not leave' })
+    await replicator.syncOnce()
+    expect((await a.store.list('device')).some((row) => row.id === 'dev_b')).toBe(false)
+    expect(await titles(b.store)).toEqual([])
+  })
+
+  it('lets a known peer push without its row (an older client), and still asks an unknown one for it', async () => {
+    const a = await node('dev_a')
+    const b = await node('dev_b')
+    mesh([a, b])
+    await a.store.upsert('memory', { title: 'Old client write' })
+    const changes = a.store.changesAfter(0).changes
+    const client = new SyncClient(b.host.url, 'pass-dev_a', fetch, true)
+    Object.assign(b.host, { pairedRoles: () => null })
+    await expect(client.push('dev_a', changes)).rejects.toMatchObject({ status: 409 })
+    Object.assign(b.host, { pairedRoles: () => ['brain', 'hands'] })
+    await client.push('dev_a', changes)
+    expect(await titles(b.store)).toEqual(['Old client write'])
+  })
+})

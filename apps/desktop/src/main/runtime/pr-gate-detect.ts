@@ -1042,7 +1042,7 @@ function inspectFile(file: string, depth: number): boolean {
     const text = readFileSync(path, 'utf8')
     return /\.(?:py|mjs|cjs|js|ts|mts|cts)$/i.test(path)
       ? script(text)
-      : shell(text, depth) || opaqueSending(text)
+      : shell(withoutDataHeredocs(text), depth) || opaqueSending(text)
   } catch {
     missingScripts.push(file)
     return false
@@ -1057,11 +1057,35 @@ export function scriptReadNotes(input: Args, name = 'shell_run'): string[] {
 const OPAQUE =
   /<<|<#|@['"]|\$\(|`|\$'|\beval\b|\b(?:iex|invoke-expression)\b|\b(?:ssh|wsl|python3?|node)\b/i
 /**
+ * Drops heredoc bodies that are only data: written to a file (cat <<EOF > notes.md, tee), or a git commit message.
+ * Text after the delimiter still counts, and a heredoc fed to anything else (stdout, an interpreter) is kept.
+ */
+function withoutDataHeredocs(source: string): string {
+  const lines = source.split('\n'),
+    kept: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const header = lines[i]!,
+      match = header.match(/(?<![<\w])<<-?(?!<)\s*['"]?([a-zA-Z_][\w-]*)['"]?/)
+    const closes = match
+      ? lines.slice(i + 1).findIndex((line) => line.trim() === match[1])
+      : -1
+    const data =
+      match !== null &&
+      closes >= 0 &&
+      (/\bcat\b[^|;]*>>?\s*[^\s&|;>]+|\|\s*tee\b/.test(header) ||
+        /\bgit\b[^\n]*\bcommit\b/.test(header))
+    kept.push(header)
+    if (data) i += closes + 1
+  }
+  return kept.join('\n')
+}
+/**
  * Backstop: when the parser did not hold a command but the command uses a construct it cannot follow, and its
  * text names an action that sends a PR out, hold it. Plain text with no such construct (echo, grep, docs) passes.
  */
 function opaqueSending(source: string): boolean {
   if (!OPAQUE.test(source)) return false
+  source = withoutDataHeredocs(source)
   // A PowerShell block comment ends at #> and what follows it still runs; a shell would read it as a comment.
   const withoutBlocks = source.replace(/<#[\s\S]*?#>/g, ' ')
   return [source, source.replace(/\x5c /g, ' '), withoutBlocks].some(
@@ -1081,7 +1105,7 @@ export function reviewableCall(name: string, input: Args): boolean {
         : /$^/g,
       '',
     )
-    return shell(text) || opaqueSending(text)
+    return shell(withoutDataHeredocs(text)) || opaqueSending(text)
   }
   if (name === 'device_tool')
     return reviewableCall(String(input['tool'] ?? ''), object(input['args']))

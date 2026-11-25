@@ -83,11 +83,17 @@ export function registerSyncRoutes(host: DevicesHost, store: ReplicaStore, bundl
       if (caller && !(await store.list('device')).some(row => row.id === caller)) {
         const own = changes.filter(change => change.entity === 'device' && change.id === caller && !change.deleted).at(-1)
         const roles = host.pairedRoles?.(caller)
-        if (!own) return {status: 409, json: {code: 'AUTHORITY_BOOTSTRAP_REQUIRED', error: 'Send the authenticated caller self row first.'}}
-        if (!roles?.length) return {status: 403, json: {error: 'Pairing authority metadata is unavailable; pair this device again.'}}
-        const payload: Record<string, unknown> = {...own.payload, roles}
-        if (!roles.includes('brain')) delete payload['prGatePublicKey']
-        await store.applyRemote([{...own, payload}])
+        if (!roles?.length) {
+          if (!own) return {status: 409, json: {code: 'AUTHORITY_BOOTSTRAP_REQUIRED', error: 'Send the authenticated caller self row first.'}}
+          return {status: 403, json: {error: 'Pairing authority metadata is unavailable; pair this device again.'}}
+        }
+        // A known peer that pushes without its row (an older client, mid-upgrade) is still let in: its pass roles are
+        // already known here and its row arrives with its own replication. Only a row it sends is kept.
+        if (own) {
+          const payload: Record<string, unknown> = {...own.payload, roles}
+          if (!roles.includes('brain')) delete payload['prGatePublicKey']
+          await store.applyRemote([{...own, payload}])
+        }
       }
       if (changes.length > 0) await store.applyRemote(changes, caller)
       return { status: 200, json: { cursor: store.logSeq() } }
@@ -474,6 +480,7 @@ class PeerLink {
         const client = this.client(url, pass)
         this.dirty = false
         await bootstrapPeerAuthority(this.deps.store, client, this.peer)
+        this.selfPushed = false
         await this.pushLocked(client)
         if (this.stopped) return false
         await this.backfill(client)
@@ -549,23 +556,38 @@ class PeerLink {
     if (recorded !== mine.join(',')) this.deps.store.setLocalValue(this.key('known'), mine.join(','))
   }
 
+  private selfPushed = false
+
+  private ownDeviceRow(): Change | undefined {
+    let own: Change | undefined, cursor = 0
+    for (;;) {
+      const rows = this.deps.store.changesAfter(cursor, PAGE, undefined, ['device'])
+      for (const change of rows.changes) if (change.id === this.deps.selfId()) own = change
+      if (rows.cursor <= cursor || !rows.changes.length) break
+      cursor = rows.cursor
+    }
+    return own
+  }
+
   private async pushAll(client: SyncClient): Promise<void> {
     for (let round = 0; round < 1000; round++) {
       const from = this.cursorOf('push')
       const page = this.deps.store.changesAfter(from, PAGE, this.peer.id)
       if (page.cursor === from) return
       if (page.changes.length > 0) {
+        // A host that lost our row (a reset) still knows our pairing and accepts a push without it, so send our own
+        // row first on every new connection: the host re-learns it before any of our changes arrive.
+        if (!this.selfPushed) {
+          this.selfPushed = true
+          const sendsOwnRow = page.changes.some((change) => change.entity === 'device' && change.id === this.deps.selfId())
+          const own = sendsOwnRow ? undefined : this.ownDeviceRow()
+          if (own) await client.push(this.deps.selfId(), [own])
+        }
         try { await client.push(this.deps.selfId(), page.changes) }
         catch (error) {
           if (!(error instanceof SyncException) || error.status !== 409) throw error
-          // A reset host lost our row, but retained our authenticated pairing roles.
-          let own: Change | undefined, cursor = 0
-          for (;;) {
-            const rows = this.deps.store.changesAfter(cursor, PAGE, undefined, ['device'])
-            for (const change of rows.changes) if (change.id === this.deps.selfId()) own = change
-            if (rows.cursor <= cursor || !rows.changes.length) break
-            cursor = rows.cursor
-          }
+          // A host that does not know our pairing roles asks for our row first.
+          const own = this.ownDeviceRow()
           if (!own) throw new Error('Local self authority row is unavailable for reset-host recovery')
           await client.push(this.deps.selfId(), [own])
           await client.push(this.deps.selfId(), page.changes)

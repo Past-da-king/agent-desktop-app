@@ -306,9 +306,10 @@ it('R10 reset host accepts only authenticated self authority with retained pairi
     query: new URLSearchParams(),
     signal: new AbortController().signal,
   }
-  // Missing self row yields a recoverable handshake instead of a permanent server error.
+  // A known peer without a row is accepted (an older client, mid-upgrade); only a row it sends is kept.
   const first = await route.handle({ ...req, body: { changes: [] } } as never)
-  expect(first.status).toBe(409)
+  expect(first.status).toBe(200)
+  expect(await host.get('device', joiner.deviceId)).toBeNull()
   const second = await route.handle(req as never)
   expect(second.status).toBe(200)
   expect(await host.get('device', joiner.deviceId)).toMatchObject({
