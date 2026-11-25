@@ -54,7 +54,7 @@ const AGENT = (rule: string, why: string): Verdict => ({ lane: 'agent', rule, wh
 /** Writing to people. */
 const SEND_WORDS = /\b(send|sends|sending|sent|post|posts|posting|publish|reply|replies|replying|comment|comments|message|messages|messaging|dm|dms|e-?mail|e-?mails|mail|whatsapp|sms|text message|texts|tweet|tweets|share|shares|sharing|invite|invites|forward|broadcast|announce|slack|telegram|discord|linkedin|instagram|facebook|tiktok)\b/i
 /** Costing money. */
-const MONEY_WORDS = /\b(pay|paid|payment|payments|purchase|purchases|buy|buying|bought|checkout|subscribe|subscription|billing|invoice|credits|top[- ]?up|refund|charge|charged|credit card|debit card|bank card|company card|cvv|iban|eft|bank transfer|wire transfer|upgrade (?:the |your )?(?:plan|subscription))\b|\bUS\$|\bR\s?\d|\$\s?\d/i
+const MONEY_WORDS = /\b(money|pay|paid|payment|payments|purchase|purchases|buy|buying|bought|checkout|subscribe|subscription|billing|invoice|credits|top[- ]?up|refund|charge|charged|credit card|debit card|bank card|company card|cvv|iban|eft|bank transfer|wire transfer|upgrade (?:the |your )?(?:plan|subscription))\b|\bUS\$|\bR\s?\d|\$\s?\d/i
 /** His own hands: only he can do these. */
 const HANDS_WORDS = /(passkey|2fa|two[- ]factor|one[- ]time|verification code|\botp\b|captcha|sign[- ]?in|log[- ]?in|\bpassword|on my phone|your phone|phone tap|step[- ]?up|biometric|fingerprint|card number|needs you in the browser|your turn|done, carry on)/i
 /** Secrets and keys: a person's call. */
