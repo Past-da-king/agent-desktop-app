@@ -1,6 +1,6 @@
 /** Separate process: recovery must not depend on the frozen Electron main thread or its logger. */
 import { spawn } from 'node:child_process'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface RecoveryOptions {
@@ -17,6 +17,7 @@ export interface RecoveryOptions {
   windowMs?: number
   restartDelayMs?: number
   dataPath?: string
+  diskIntervalMs?: number
 }
 
 /** Standalone source, also exercised against real disposable processes in tests. No Electron or app imports. */
@@ -26,16 +27,20 @@ const fs = require('node:fs'), cp = require('node:child_process')
 const o = ${JSON.stringify(options)}
 const interval = o.intervalMs ?? 1000, timeout = o.timeoutMs ?? 60000
 const started = Date.now()
-let last = started, tickAt = started, memory = {}, recovering = false
+let last = started, tickAt = started, memory = {}, recovering = false, heldForDisk = false
 const log = (event, detail = {}) => {
   fs.appendFileSync(o.log, JSON.stringify({ at: new Date().toISOString(), event, parentPid: o.parentPid, ...detail }) + '\\n')
 }
 process.on('message', message => {
   if (message?.type === 'stop') process.exit(0)
-  if (message?.type === 'beat') { last = Date.now(); memory = message.memory ?? {} }
+  if (message?.type === 'beat') { last = Date.now(); memory = message.memory ?? {}; clearRecoveredHold(); if (message.ack && process.connected) process.send({ type: 'beatAck', id: message.ack }) }
 })
 process.on('disconnect', () => { if (!recovering) process.exit(0) })
 let diskBlocked = false
+function clearRecoveredHold() {
+  if (!heldForDisk || diskBlocked || Date.now() - last >= timeout) return
+  try { fs.rmSync(o.marker, { force: true }); heldForDisk = false; log('Main process responsive again after disk recovery') } catch {}
+}
 async function disk() {
   if (!o.dataPath) return
   try {
@@ -43,10 +48,11 @@ async function disk() {
     const free = Number(s.bavail) * Number(s.bsize) / 1073741824
     const total = Number(s.blocks) * Number(s.bsize) / 1073741824
     diskBlocked = free < Math.max(2, Math.min(5, total * 0.01))
+    clearRecoveredHold()
     if (process.connected) process.send({ type: 'disk', free, total })
   } catch {}
 }
-disk(); if (o.dataPath) setInterval(disk, 15000)
+disk(); if (o.dataPath) setInterval(disk, o.diskIntervalMs ?? 15000)
 
 setInterval(() => {
   const now = Date.now(), scheduleGap = now - tickAt
@@ -60,10 +66,18 @@ setInterval(() => {
     try { history = JSON.parse(fs.readFileSync(o.state, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') { log('Recovery state unreadable; refusing restart'); process.exit(0) } }
     if (!Array.isArray(history) || history.some(t => typeof t !== 'number')) { log('Recovery state invalid; refusing restart'); process.exit(0) }
     history = history.filter(t => now - t < (o.windowMs ?? 1800000))
+    if (diskBlocked) {
+      if (!heldForDisk) {
+        log('Main process frozen; restart held for low disk', { heartbeatAgeMs: now - last, memory })
+        fs.writeFileSync(o.marker, JSON.stringify({ parentPid: o.parentPid, at: now, reason: 'frozen main held for low disk' }))
+        heldForDisk = true
+      }
+      recovering = false
+      return
+    }
     // Persist diagnostics and availability before touching the process. If either write fails, do not kill it.
     log('Main process frozen', { heartbeatAgeMs: now - last, memory, note: 'Main thread did not answer; stack unavailable while blocked. See main.log for previous sampled stacks.' })
     fs.writeFileSync(o.marker, JSON.stringify({ parentPid: o.parentPid, at: now, reason: 'main process frozen' }))
-    if (diskBlocked) { log('Restart held: app data drive is low on disk'); process.exit(0) }
     if (history.length >= (o.maxRestarts ?? 3)) { log('Restart cap reached', { attempts: history.length }); process.exit(0) }
     history.push(now)
     const temp = o.state + '.tmp'
@@ -83,6 +97,7 @@ setInterval(() => {
 
 export interface FreezeRecovery { stop(): void; unavailable(): boolean }
 export function startFreezeRecovery(userData: string, executable: string, args: string[], onError: (why: string) => void, onDisk?: (freeGb: number, totalGb: number) => void): FreezeRecovery {
+  mkdirSync(join(userData, 'logs'), { recursive: true })
   const marker = join(userData, 'logs', 'main-unavailable.json')
   // A new main process is healthy; the restart history deliberately survives it.
   rmSync(marker, { force: true })

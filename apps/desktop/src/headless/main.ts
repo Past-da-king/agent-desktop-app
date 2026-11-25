@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /**
  * agent-node: the agent runtime as a plain Node service, for servers and any computer without a screen.
  *
@@ -448,7 +449,7 @@ async function devices(args: Args): Promise<number> {
     return 0
   }
   console.log('Not running. The brains it paired with:')
-  for (const brain of [...config.brains].sort((a, b) => a.priority - b.priority)) {
+  for (const brain of [...config.brains].sort((a, b) => compareDeviceOrder(a, b))) {
     console.log(`${brain.priority}  ${brain.name || brain.id}  ${brain.urls.join(' ')}`)
   }
   return 0

@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /**
  * The linked devices in one line, for the places that say where the agent runs (the account under the rail, the
  * title bar, Home and Connections). Pure, so it is unit tested directly; state/useDevices.ts feeds it.
@@ -36,7 +37,7 @@ export function summarizeDevices(status: DevicesStatus | null, rows: DeviceRow[]
   const connected = new Set([...status.connected, ...(status.linked ?? [])])
   const live = rows
     .filter((row) => !row.revoked && row.id !== status.nodeId)
-    .sort((a, b) => a.priority - b.priority)
+    .sort((a, b) => compareDeviceOrder(a, b))
   const others: LinkedDevice[] = live.map((row) => ({
     id: row.id,
     name: row.name || row.facts?.name || 'A device',

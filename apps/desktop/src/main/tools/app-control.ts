@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /**
  * The app's own controls as agent tools: anything the person can do by clicking in Settings, the agent can do with a
  * tool (rule of 22 Oct 2026). Devices (Settings > Devices: switch on, add a device, join another node's link, take a
@@ -365,7 +366,7 @@ function orderTool(deps: AppControlDeps): Tool {
       } catch (error) {
         return `Could not: ${error instanceof Error ? error.message : String(error)}`
       }
-      const order = devices.list().filter((row) => row.roles.includes('brain') && !row.revoked).sort((a, b) => a.priority - b.priority)
+      const order = devices.list().filter((row) => row.roles.includes('brain') && !row.revoked).sort((a, b) => compareDeviceOrder(a, b))
       return `Answer order now: ${order.map((row, i) => `${i + 1}. ${row.name}`).join(', ')}.`
     },
   }

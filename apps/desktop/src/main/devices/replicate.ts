@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /**
  * Replication between nodes (docs/devices-protocol.md s7).
  *
@@ -166,7 +167,7 @@ export async function peersFromRows(store: ReplicaStore, selfId: string): Promis
   const rows = await store.list('device')
   return rows
     .filter((row) => !row.revoked && row.id !== selfId && row.urls.length > 0 && (row.roles.includes('brain') || row.roles.includes('hands')))
-    .sort((a, b) => a.priority - b.priority)
+    .sort((a, b) => compareDeviceOrder(a, b))
     .map((row) => ({ id: row.id, name: row.name, urls: [...row.urls], fp: row.fp }))
 }
 
@@ -181,7 +182,7 @@ export function mergePeers(rows: DeviceRow[], extra: PeerTarget[], selfId: strin
   const given = new Map<string, PeerTarget>()
   for (const peer of extra) if (peer.id !== selfId && peer.fp !== '' && peer.urls.length > 0 && !given.has(peer.id)) given.set(peer.id, peer)
   const out: PeerTarget[] = []
-  for (const row of [...rows].sort((a, b) => a.priority - b.priority)) {
+  for (const row of [...rows].sort((a, b) => compareDeviceOrder(a, b))) {
     if (row.revoked || row.id === selfId || !(row.roles.includes('brain') || row.roles.includes('hands'))) continue
     const known = given.get(row.id)
     const sameKey = known !== undefined && known.fp === row.fp

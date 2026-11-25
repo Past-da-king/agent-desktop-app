@@ -902,6 +902,18 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const dir = app.getPath('userData')
   mkdirSync(dir, { recursive: true })
 
+  if (app.isPackaged) freezeRecovery = startFreezeRecovery(dir, process.execPath, process.argv.slice(1), why => logger.warn('Freeze recovery problem', { why }), (free, total) => {
+    const state = diskHealth.sample(free, total)
+    if (!state.changed) return
+    const line = diskHealth.line()
+    logger.warn('App data disk state changed', { freeGb: free, totalGb: total, answering: !state.blocked })
+    if (line !== '') {
+      showNotification('Agent disk space', line)
+      void store?.upsert('chat_item', { kind: 'notice', text: line, meta: JSON.stringify({ diskHealth: true }) }).then(() => broadcast(EVENTS.chat, { type: 'chat_changed' })).catch(() => undefined)
+    }
+    if (state.blocked) devices?.handbackScreens()
+  })
+
   store = new Store(join(dir, 'agent.db'))
   // Checkpoints off the main thread (db-checkpoint.ts): a checkpoint inside an ordinary write took up to 2 s.
   store.startCheckpointer({ log: (line, detail) => logger.info(line, detail) })
@@ -923,17 +935,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     },
     onError: (why) => logger.warn('Watchdog problem', { why }),
   })
-  if (app.isPackaged) freezeRecovery = startFreezeRecovery(dir, process.execPath, process.argv.slice(1), why => logger.warn('Freeze recovery problem', { why }), (free, total) => {
-    const state = diskHealth.sample(free, total)
-    if (!state.changed) return
-    const line = diskHealth.line()
-    logger.warn('App data disk state changed', { freeGb: free, totalGb: total, answering: !state.blocked })
-    if (line !== '') {
-      showNotification('Agent disk space', line)
-      void store?.upsert('chat_item', { kind: 'notice', text: line, meta: JSON.stringify({ diskHealth: true }) }).then(() => broadcast(EVENTS.chat, { type: 'chat_changed' })).catch(() => undefined)
-    }
-    if (state.blocked) devices?.handbackScreens()
-  })
+
   // What this computer has to spare, for starting helpers (runtime/resources.ts).
   resourceMonitor = new ResourceMonitor(dir)
   resourceMonitor.start()
@@ -2241,6 +2243,8 @@ if (refuseToStart) {
   })
 
   app.on('before-quit', () => {
+    freezeRecovery?.stop()
+    freezeRecovery = null
     disposeActs?.()
     disposeActs = null
     quitting = true
@@ -2310,8 +2314,6 @@ if (refuseToStart) {
     store = null
     resourceMonitor?.stop()
     resourceMonitor = null
-    freezeRecovery?.stop()
-    freezeRecovery = null
     watchdog?.stop()
     watchdog = null
   })

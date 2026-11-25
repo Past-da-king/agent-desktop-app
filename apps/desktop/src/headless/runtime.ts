@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 import { ActsForMe } from '../main/runtime/acts-for-me'
 /**
  * The agent runtime without Electron: the same modules `main/index.ts` startServices composes (Store, settings,
@@ -289,9 +290,9 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     },
     targets: async () => {
       const rows = (await store.list('device')).filter((row) => !row.revoked && (row.roles.includes('brain') || row.roles.includes('hands')))
-      const found: Array<RelayTarget & { priority: number }> = rows.map((row) => ({ id: row.id, name: row.name, urls: row.urls, fp: row.fp, priority: row.priority }))
+      const found: Array<RelayTarget & { priority: number }> = rows.map((row) => ({ id: row.id, name: row.name, urls: row.urls, fp: row.fp, priority: row.priority, pairedAt: row.pairedAt }))
       for (const brain of readConfig(dir).brains) if (!found.some((t) => t.id === brain.id)) found.push(brain)
-      return found.sort((a, b) => a.priority - b.priority)
+      return found.sort((a, b) => compareDeviceOrder(a, b))
     },
   })
   const nodeTools = [relay, ...(options.extraTools ?? [])]
