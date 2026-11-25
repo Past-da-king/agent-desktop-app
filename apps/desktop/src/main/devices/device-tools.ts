@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /**
  * Shared device tools (docs/devices-protocol.md s11), the brain side.
  *
@@ -298,7 +299,7 @@ export class DeviceToolHub {
   /** What devices_list shows. */
   async list(): Promise<Array<{ id: string; name: string; kind: string; online: boolean; self: boolean; groups: DeviceToolGroup[]; tools: string[] }>> {
     await this.refresh().catch(() => undefined)
-    const rows = (await this.deps.store.list('device')).filter((row) => !row.revoked).sort((a, b) => a.priority - b.priority)
+    const rows = (await this.deps.store.list('device')).filter((row) => !row.revoked).sort((a, b) => compareDeviceOrder(a, b))
     return rows.map((row) => {
       const tools = toolsOfRow(row)
       return {
@@ -356,7 +357,7 @@ export class DeviceToolHub {
     if (preferred !== undefined) return preferred
     const phone = (row: DeviceRow): boolean => row.kind === 'phone' || row.kind === 'tablet'
     const heavy = HEAVY.has(group)
-    return [...able].sort((a, b) => (heavy ? Number(phone(a)) - Number(phone(b)) : 0) || a.priority - b.priority || a.name.localeCompare(b.name))[0] ?? null
+    return [...able].sort((a, b) => (heavy ? Number(phone(a)) - Number(phone(b)) : 0) || compareDeviceOrder(a, b))[0] ?? null
   }
 
   /** Call one tool on one device and wait for its answer (up to the deadline). */

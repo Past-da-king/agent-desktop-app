@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /**
  * Settings > Devices: this computer as a node other devices pair with (docs/devices-protocol.md). The switch, the
  * Add a device dialog (QR code, short code, 10-minute countdown), the paired devices with their roles and brain
@@ -377,7 +378,7 @@ export function DevicesSettings(): JSX.Element {
   const refresh = refreshDevicesSummary
 
   const live = devices.filter((device) => !device.revoked)
-  const brains = live.filter((device) => device.roles.includes('brain')).sort((a, b) => a.priority - b.priority)
+  const brains = live.filter((device) => device.roles.includes('brain')).sort((a, b) => compareDeviceOrder(a, b))
   // Connected to us, or reached by our own replication link (a server this computer dials).
   const connected = new Set([...(status?.connected ?? []), ...(status?.linked ?? [])])
   const enabled = status?.enabled ?? false
@@ -426,6 +427,7 @@ export function DevicesSettings(): JSX.Element {
   return (
     <section className="dv" id="settings-devices">
       <SectionHeader eyebrow="DEVICES" line="Your phone and other computers, one agent" />
+      {status?.answering ? <p role="status">{status.answering}</p> : null}
       <div className="card dv-card">
         {readOnly ? (
           <div className="rowc">
