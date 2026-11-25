@@ -274,6 +274,11 @@ export class DevicesService {
     return this.selfPass()
   }
 
+  /** The same pass replication uses: a joining node keeps the pass its pairing granted. */
+  peerPass(): string {
+    return this.deps.secrets.get(PAIRED_PASS) || this.selfPass()
+  }
+
   /** Where status() reads this node's replication links (devices/attach.ts). */
   setLinks(read: () => Array<{ peer: string; ok: boolean }>): void {
     this.linksOf = read

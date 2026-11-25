@@ -8,6 +8,7 @@ import { MAIN_CHAT, type Tool } from '@agent/core'
 import type { DataStore } from '../runtime/data'
 
 export interface VoiceNoteMaker {
+  noteDevice?(): string
   /** Speaks the script and saves the note. The file name is only meaningful on this computer. */
   note(script: string, style: string): Promise<{ ok: true; file: string; durationMs: number } | { ok: false; error: string }>
 }
@@ -48,7 +49,7 @@ export function voiceNoteTool(store: DataStore, maker: () => VoiceNoteMaker | nu
       await store.upsert('chat_item', {
         kind: 'voice_note',
         text: script,
-        meta: JSON.stringify({ file: made.file, durationMs: made.durationMs, style, chat: ctx.chat ?? MAIN_CHAT }),
+        meta: JSON.stringify({ file: made.file, durationMs: made.durationMs, style, chat: ctx.chat ?? MAIN_CHAT, audioDevice: voice.noteDevice?.() ?? '' }),
       })
       return 'The voice note is in the chat. Now write only your short text reply; do not repeat the note.'
     },

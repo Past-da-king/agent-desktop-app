@@ -27,7 +27,7 @@ function service(key: string | null) {
     secrets: { get: (name) => name === 'geminiKey' ? key : null, set: () => {}, delete: () => {} },
     settings: { get: () => DEFAULT_SETTINGS, save: () => {} }, store,
     runner: { send: async () => {}, state: () => ({ running: false, waiting: [] }) },
-    emit: () => {}, notesDir: temp(),
+    emit: () => {}, notesDir: temp(), noteDevice: () => 'source',
     fetchImpl: (async (url: string) => {
       requests++
       if (url.includes('/models')) return new Response(JSON.stringify({ models: [{ name: 'models/gemini-2.5-flash-preview-tts', supportedGenerationMethods: ['generateContent'] }] }))
@@ -55,6 +55,7 @@ for (const [name, build] of [['main', buildToolset], ['helper', buildWorkerTools
     expect(JSON.parse(row.meta as string).chat).toBe('project-test')
     const meta = JSON.parse(row.meta as string) as { file: string; durationMs: number }
     expect(meta.durationMs).toBe(100)
+    expect(JSON.parse(row.meta as string).audioDevice).toBe('source')
     expect(h.voice.noteAudio(meta.file)?.subarray(0, 4).toString()).toBe('RIFF')
     expect(h.requests()).toBeGreaterThan(0)
   })
