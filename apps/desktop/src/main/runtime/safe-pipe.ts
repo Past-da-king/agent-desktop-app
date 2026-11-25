@@ -74,7 +74,6 @@ export function createPipeGuard(report: (error: Error) => void): PipeGuard {
     })
     writable.end = new Proxy(writable.end, {
       apply(target, receiver, args: unknown[]) {
-        if (writable.destroyed || writable.writableEnded) return receiver
         try { return Reflect.apply(target, receiver, args) }
         catch (error) { if (!codes.has(codeOf(error))) throw error; fail(error); return receiver }
       },

@@ -95,6 +95,10 @@ describe('dead process pipes', () => {
     await new Promise((resolve) => setImmediate(resolve))
     expect(stream.write('late')).toBe(false)
     expect(ended).toHaveBeenCalledTimes(1)
+    const callback = vi.fn()
+    stream.end(callback)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(callback).toHaveBeenCalledTimes(1)
   })
 
   it('uses the socket close path on a synchronous write failure', () => {
