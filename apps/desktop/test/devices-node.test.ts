@@ -41,6 +41,7 @@ let base = ''
 let pastedBytes: Uint8Array | null = null
 let fp = ''
 let canAnswer = true
+let availability = ''
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'agent-node-'))
@@ -49,6 +50,7 @@ beforeEach(async () => {
   const secrets = new Secrets(join(dir, 'secrets'), storage)
   const account = new AccountService(store, settings, secrets, { autoStart: false })
   canAnswer = true
+  availability = ''
   sends = []
   windowEvents = []
   const chat: ChatRunner = {
@@ -78,6 +80,7 @@ beforeEach(async () => {
     nodeName: () => settings.get().deviceName,
     platform: 'linux',
     ready: () => canAnswer,
+    availability: () => availability,
     busy: () => false,
     rendererDir: renderer,
     emitWindow: (channel) => void windowEvents.push(channel),
@@ -129,6 +132,12 @@ async function pair(roles: string[] = ['screen']): Promise<{ deviceId: string; p
 }
 
 describe('the desktop node', () => {
+  it('keeps the answering device and reason visible alongside a low-disk warning', async () => {
+    availability = 'Low disk space: 6 GB free.'
+    await expect.poll(() => service.status().answering).toContain('test-node is answering: first in order.')
+    expect(service.status().answering).toContain(availability)
+  })
+
   it('does not restore a stale rank when self metadata finishes after an order edit', async () => {
     const brain = await pair(['brain', 'hands'])
     let entered!: () => void, release!: () => void

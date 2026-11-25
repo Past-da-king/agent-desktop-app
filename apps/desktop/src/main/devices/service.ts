@@ -534,7 +534,7 @@ export class DevicesService {
       shareGroups: this.shareGroups(),
       firewall: this.deps.firewall?.needed === true && config.enabled ? this.firewallState : 'not-needed',
       servingTo: this.uplink.target ?? '',
-      answering: config.enabled ? `${this.deps.availability?.() || this.answerOrder.line()}${hasTiedPriorities(this.list().filter(row => row.roles.includes('brain') && !row.revoked)) ? ' Order has tied positions; using pairing order, then device id.' : ''}` : 'Devices is off.',
+      answering: config.enabled ? `${[this.answerOrder.line(), this.deps.availability?.()].filter(Boolean).join(' ')}${hasTiedPriorities(this.list().filter(row => row.roles.includes('brain') && !row.revoked)) ? ' Order has tied positions; using pairing order, then device id.' : ''}` : 'Devices is off.',
     }
   }
 

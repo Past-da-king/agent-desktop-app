@@ -41,3 +41,5 @@ The exact packaged Windows test copy answered through its bundled win32 Codex en
 An early disk sample can complete before the local socket connects. The supervisor queues outbound samples until it has sent its identity first; a deterministic regression fails without that ordering.
 
 Windows relaunch is confirmed by the new main clearing its unavailable marker after starting its own supervisor. An early replacement exit is logged and retried under the same persisted three-restart budget; creating a process alone is not success. A real-child regression exercises an initial refused start followed by a healthy replacement.
+
+The status sentence retains the answering-device placement and reason when a low-disk warning is present, instead of replacing placement with the warning.
