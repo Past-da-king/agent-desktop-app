@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /** Settings > Devices in the browser preview: this computer and one made-up phone, all in memory. */
 import type { DeviceRole, DeviceRow, DevicesApi, DevicesNetwork, DevicesStatus, PairingOfferInfo } from '@agent/core'
 
@@ -139,7 +140,7 @@ export const mockDevices: DevicesApi = {
     changed()
   },
   async move(id, direction) {
-    const brains = rows.filter((row) => row.roles.includes('brain')).sort((a, b) => a.priority - b.priority)
+    const brains = rows.filter((row) => row.roles.includes('brain')).sort((a, b) => compareDeviceOrder(a, b))
     const at = brains.findIndex((row) => row.id === id)
     const to = direction === 'up' ? at - 1 : at + 1
     if (at < 0 || to < 0 || to >= brains.length) return

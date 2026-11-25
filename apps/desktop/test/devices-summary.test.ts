@@ -28,7 +28,7 @@ function device(id: string, extra: Partial<DeviceRow> = {}): DeviceRow {
 
 describe('the linked devices in one line', () => {
   it('counts the other devices, not this one and not a taken-out one', () => {
-    const rows = [device('self'), device('server', { kind: 'server' }), device('phone', { kind: 'phone', roles: ['screen'] }), device('old', { revoked: true }), device('pc2')]
+    const rows = [device('self'), device('server', { kind: 'server', priority: 0 }), device('phone', { kind: 'phone', roles: ['screen'] }), device('old', { revoked: true }), device('pc2')]
     const sum = summarizeDevices(status({ connected: ['server'] }), rows)
     expect(sum.count).toBe(3)
     expect(sum.line).toBe('3 devices linked')
@@ -36,6 +36,11 @@ describe('the linked devices in one line', () => {
     expect(sum.brains.map((d) => d.id)).toEqual(['server', 'pc2'])
     expect(sum.brains[0]?.online).toBe(true)
     expect(sum.brains[1]?.online).toBe(false)
+  })
+
+  it('uses pairing order then id for ties instead of input order or display names', () => {
+    const sum = summarizeDevices(status(), [device('a', {name:'Alpha',pairedAt:2}), device('z', {name:'Zulu',pairedAt:1})])
+    expect(sum.brains.map(row=>row.id)).toEqual(['z','a'])
   })
 
   it('counts a device this computer reaches by its own replication link as online (a server it dials)', () => {

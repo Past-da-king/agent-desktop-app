@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /**
  * Turn leases, crash resume and failover (docs/devices-protocol.md s8).
  *
@@ -218,6 +219,7 @@ export class TurnLeases implements LeaseHook {
     // Mark them all first: a second recover (or a crash during resume) never resumes the same run twice.
     const go: TurnLeaseRow[] = []
     for (const lease of leases) {
+      if (await this.settleCompletedJob(lease)) continue
       if (await this.giveUpIfSpent(lease)) continue
       await this.deps.store.upsert('turn_lease', { id: lease.id, status: 'interrupted', attempt: lease.attempt + 1, brainId: this.deps.selfId() })
       go.push(lease)
@@ -309,6 +311,25 @@ export class TurnLeases implements LeaseHook {
     return meta['pinned'] === true && runOn !== '' && !this.isOwn(runOn)
   }
 
+  /** A durable completion can land before the job's lease end. Never reopen that finished run after a crash. */
+  private async settleCompletedJob(lease: TurnLeaseRow): Promise<boolean> {
+    if (lease.kind !== 'job') return false
+    const helper = await this.deps.store.get('chat_item', lease.messageId)
+    if (helper?.kind !== 'helper') return false
+    let meta: Record<string, unknown>
+    try { meta = JSON.parse(helper.meta) } catch { return false }
+    if (meta === null || meta['state'] !== 'done' || typeof meta['endedAt'] !== 'number' || meta['endedAt'] < lease.startedAt) return false
+    const step = (row: Record<string, unknown>) => {
+      const same = row['kind'] === 'job' && row['messageId'] === lease.messageId && row['startedAt'] === lease.startedAt && typeof row['brainId'] === 'string' && this.isOwn(row['brainId']) && (row['status'] === 'running' || row['status'] === 'interrupted')
+      return { next: same ? { ...row, status: 'done', heartbeatAt: this.now() } : null, result: same }
+    }
+    if (this.deps.store.mutate !== undefined) return (await this.deps.store.mutate('turn_lease', lease.id, step)) === true
+    const fresh = await this.deps.store.get('turn_lease', lease.id)
+    if (fresh === null || !step(fresh as unknown as Record<string, unknown>).result) return false
+    await this.deps.store.upsert('turn_lease', { id: lease.id, status: 'done', heartbeatAt: this.now() })
+    return true
+  }
+
   private async giveUpIfSpent(lease: TurnLeaseRow): Promise<boolean> {
     if (lease.attempt < (this.deps.maxAttempts ?? MAX_ATTEMPTS)) return false
     await this.deps.store.upsert('turn_lease', { id: lease.id, status: 'failed', brainId: this.deps.selfId(), heartbeatAt: this.now() })
@@ -317,6 +338,7 @@ export class TurnLeases implements LeaseHook {
   }
 
   private async resume(lease: TurnLeaseRow): Promise<void> {
+    if (await this.settleCompletedJob(lease)) return
     this.resuming.add(lease.id)
     try {
       if (lease.kind === 'job') await this.deps.resumeJob(lease.messageId, RESUME_NOTE)
@@ -344,5 +366,5 @@ export class TurnLeases implements LeaseHook {
 
 /** The brains in rank order from the device rows. */
 export async function rankedBrains(store: DataStore): Promise<DeviceRow[]> {
-  return (await store.list('device')).filter((row) => !row.revoked && row.roles.includes('brain')).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))
+  return (await store.list('device')).filter((row) => !row.revoked && row.roles.includes('brain')).sort((a, b) => compareDeviceOrder(a, b))
 }

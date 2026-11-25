@@ -69,6 +69,29 @@ function messagesText(body: JsonObject): string {
 }
 
 describe('crash resume', () => {
+  it('closes a completed helper leftover without sending finished work back to the model', async () => {
+    const store = new Store(':memory:'); cleanups.push(() => store.close())
+    await store.upsert('chat_item', {id:'finished-helper',kind:'helper',text:'Finished review',meta:JSON.stringify({state:'done',startedAt:100,endedAt:200})})
+    await store.upsert('turn_lease', {id:'job-finished-helper',kind:'job',chatId:'main',messageId:'finished-helper',brainId:'self',status:'running',attempt:1,startedAt:100,heartbeatAt:150,prompt:'review'})
+    let resumed=0
+    const leases=new TurnLeases({store,selfId:()=> 'self',resumeTurn:()=>undefined,resumeJob:()=>{resumed++}})
+    cleanups.push(()=>leases.stop())
+    expect(await leases.recover()).toBe(0)
+    expect(resumed).toBe(0)
+    expect(await store.get('turn_lease','job-finished-helper')).toMatchObject({status:'done',attempt:1})
+  })
+
+  it('does not mistake an older helper completion for the newer interrupted run', async () => {
+    const store = new Store(':memory:'); cleanups.push(() => store.close())
+    await store.upsert('chat_item', {id:'helper-again',kind:'helper',text:'Review again',meta:JSON.stringify({state:'done',startedAt:100,endedAt:200})})
+    await store.upsert('turn_lease', {id:'job-helper-again',kind:'job',chatId:'main',messageId:'helper-again',brainId:'self',status:'running',attempt:1,startedAt:300,heartbeatAt:350,prompt:'new review'})
+    let resumed=0
+    const leases=new TurnLeases({store,selfId:()=> 'self',resumeTurn:()=>undefined,resumeJob:()=>{resumed++}})
+    cleanups.push(()=>leases.stop())
+    expect(await leases.recover()).toBe(1)
+    expect(resumed).toBe(1)
+  })
+
   it('a turn cut off mid-run is resumed once on the next start, and only once', async () => {
     const store = new Store(':memory:')
     cleanups.push(() => store.close())

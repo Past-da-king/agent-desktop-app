@@ -7,6 +7,7 @@ import { networkInterfaces } from 'node:os'
 import { dirname } from 'node:path'
 
 export interface DevicesConfig {
+  orderRepairVersion?: number
   /** "Let my other devices connect". */
   enabled: boolean
   port: number
@@ -79,7 +80,7 @@ export function cleanConfig(raw: unknown): DevicesConfig {
     peers.push({ id, name: typeof o['name'] === 'string' ? o['name'].slice(0, 80) : '', urls, fp })
     if (peers.length >= 12) break
   }
-  return { enabled: value['enabled'] === true, port, listen, extraUrls, shareGroups, peers }
+  return { ...(value['orderRepairVersion'] === 1 ? { orderRepairVersion: 1 } : {}), enabled: value['enabled'] === true, port, listen, extraUrls, shareGroups, peers }
 }
 
 export class DevicesConfigFile {

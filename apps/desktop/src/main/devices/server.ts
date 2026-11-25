@@ -240,6 +240,11 @@ export class DevicesServer implements DevicesHost {
     return [...ids]
   }
 
+  /** Ask only the screen link to choose its first healthy brain again; wake links and tool uplinks stay open. */
+  handbackScreen(deviceId: string): void {
+    for (const session of this.sessions) if (session.deviceId === deviceId && session.facts?.wakeOnly !== true) session.close(4010, 'preferred brain recovered')
+  }
+
   /** Closes every connection of one device (revoked). */
   closeDevice(deviceId: string): void {
     for (const session of [...this.sessions]) if (session.deviceId === deviceId) session.close(4003, 'revoked')
