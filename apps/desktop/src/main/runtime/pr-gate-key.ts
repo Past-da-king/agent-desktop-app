@@ -5,7 +5,7 @@ import {
   createHash,
 } from 'node:crypto'
 // This is a storage name, not signing material.
-export const PR_GATE_KEY = ['prGate', 'SigningKeyV2'].join('')
+export const PR_GATE_KEY = 'prGateSigningKeyV2' // gitleaks:allow -- storage identifier, not key material
 export interface PrGateSecrets {
   get(name: string): string | null
   set(name: string, value: string): void
@@ -48,4 +48,10 @@ export function publicKey(key: string): string {
 }
 export function keyId(key: string): string {
   return createHash('sha256').update(key).digest('hex')
+}
+
+export function newPrGateKey(secrets: PrGateSecrets): string {
+  const key = generate()
+  secrets.set(PR_GATE_KEY, key)
+  return key
 }

@@ -26,8 +26,7 @@ interface CallState {
   outgoing?: RemotePrGrant
   retry?: () => RemotePrGrant
   alreadyRan?: boolean
-  retry?: () => RemotePrGrant
-  alreadyRan?: boolean
+  notSignedIn?: boolean
   caller?: Caller
   localHold?: boolean
   remoteHold?: boolean
@@ -103,11 +102,6 @@ function digest(tool: string, args: JsonObject): string {
       ),
     )
     .digest('hex')
-}
-function body(grant: RemotePrGrant): Buffer {
-  const { signature: _signature, ...value } = grant
-  void _signature
-  return Buffer.from(JSON.stringify(ordered(value)))
 }
 function body(grant: RemotePrGrant): Buffer {
   const { signature: _signature, ...value } = grant
@@ -208,15 +202,34 @@ export function receiveRemoteGrant(
     typeof grant.agentLabel !== 'string' ||
     typeof grant.chat !== 'string' ||
     !Number.isFinite(grant.expires) ||
-    grant.expires < now - SKEW_MS ||
-    grant.expires > now + TRANSIT_MS + SKEW_MS ||
     grant.hash !== digest(tool, clean)
   )
     return { context: ctx, args: clean }
-  // Verify identity only when the gate can supply its private signing key.
+  // The destination verifies with the originating brain public key before trusting caller identity.
   state(ctx).incoming = grant
   state(ctx).freshUntil = now + 60_000
   return { context: ctx, args: clean }
+}
+export function verifiedRemoteGrant(
+  ctx: ToolContext,
+  tool: string,
+  args: JsonObject,
+  key: string,
+): boolean {
+  const grant = state(ctx).incoming
+  return !!grant && grant.hash === digest(tool, args) && signed(grant, key)
+}
+export function remoteGrantConsumed(ctx: ToolContext): boolean {
+  const id = state(ctx).incoming?.id
+  return !!id && consumed.has(id)
+}
+export function markNotSignedIn(ctx: ToolContext): void {
+  state(ctx).notSignedIn = true
+}
+export function takeNotSignedIn(ctx: ToolContext): boolean {
+  const value = !!state(ctx).notSignedIn
+  delete state(ctx).notSignedIn
+  return value
 }
 export function consumeRemoteGrant(
   ctx: ToolContext,
@@ -227,6 +240,8 @@ export function consumeRemoteGrant(
   const grant = state(ctx).incoming
   if (
     !grant ||
+    grant.expires < Date.now() - SKEW_MS ||
+    grant.expires > Date.now() + TRANSIT_MS + SKEW_MS ||
     grant.hash !== digest(tool, args) ||
     (state(ctx).freshUntil ?? 0) < Date.now() ||
     !signed(grant, key)

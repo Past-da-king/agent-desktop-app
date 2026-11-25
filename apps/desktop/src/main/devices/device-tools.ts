@@ -30,7 +30,7 @@ import {
   type ToolContext,
 } from '@agent/core'
 
-import { remoteArguments, receiveRemoteGrant, recordRemoteResult, takeDestinationHold } from '../runtime/pr-gate-remote'
+import { remoteArguments, receiveRemoteGrant, recordRemoteResult, takeDestinationHold, takeNotSignedIn } from '../runtime/pr-gate-remote'
 import { listWhere, type DataStore } from '../runtime/data'
 import { OPEN_STATUSES } from './commands'
 import { latestOrigin } from './origin'
@@ -147,6 +147,7 @@ export interface ToolOutcome {
   ok: boolean
   /** done: answered; waiting: still running or queued (the result will come to the chat). */
   state: 'done' | 'failed' | 'waiting'
+  failure?: 'not-signed-in'
   text: string
   device: string
 }
@@ -382,7 +383,7 @@ export class DeviceToolHub {
       const received = receiveRemoteGrant(ctx, tool, args)
       const text = await local.run(received.args, received.context)
       if (takeDestinationHold(received.context)) recordRemoteResult(ctx, { prGateHeld: true })
-      return { ok: true, state: 'done', device: row.name, text }
+      return { ok: true, state: 'done', device: row.name, text, ...(takeNotSignedIn(received.context)?{failure:'not-signed-in' as const}:{}) }
     }
     const deadlineMs = spec.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
     const at = this.now()
@@ -496,7 +497,9 @@ export class DeviceToolHub {
 
   private outcome(row: DeviceCommandRow, device: string): ToolOutcome {
     const ok = row.status === 'done'
-    return { ok, state: ok ? 'done' : 'failed', device, text: this.render(decodeResult(row.result), ok) }
+    const value=decodeResult(row.result)
+    const signedOut=value && typeof value==='object' && (value as Record<string,unknown>)['learnedNotSignedIn']===true
+    return { ok,state:ok?'done':'failed',device,text:signedOut?String((value as Record<string,unknown>)['text']??'Error: Not signed in.'):this.render(value,ok),...(signedOut?{failure:'not-signed-in' as const}:{}) }
   }
 
   /** A device's value as text for the model; pictures become files it can see. */
@@ -648,7 +651,7 @@ export class DeviceToolRunner {
         const text = await tool.run(received.args, received.context)
         await this.finish(row.id, true, takeDestinationHold(received.context)
           ? { type: 'text', text, prGateHeld: true }
-          : text)
+          : takeNotSignedIn(received.context) ? {type:'text',text,learnedNotSignedIn:true} : text)
       } catch (error) {
         await this.finish(row.id, false, error instanceof Error ? error.message : 'It failed.')
       } finally {

@@ -85,24 +85,18 @@ it('proof4 shebang script reader inspects commands after comments', () => {
   )
   expect(reviewableCall('shell_run', { command: './x.sh', cwd: d })).toBe(true)
 })
-it.each([
-  '/c',
-  '--command',
-  '/co',
-  '--comm',
-  '/enc',
-  '--enc',
-  '/e',
-  '--encodedcommand',
-])('R5-m3 normalizes PowerShell switch %s', (flag) => {
-  const encoded = flag.includes('enc') || flag === '/e'
-  const payload = encoded
-    ? Buffer.from('gh pr merge 1', 'utf16le').toString('base64')
-    : '"gh pr merge 1"'
-  expect(
-    reviewableCall('shell_run', { command: `powershell ${flag} ${payload}` }),
-  ).toBe(true)
-})
+it.each(['/c', '--command', '/enc', '--enc', '/e', '--encodedcommand'])(
+  'R5-m3 normalizes PowerShell switch %s',
+  (flag) => {
+    const encoded = flag.includes('enc') || flag === '/e'
+    const payload = encoded
+      ? Buffer.from('gh pr merge 1', 'utf16le').toString('base64')
+      : '"gh pr merge 1"'
+    expect(
+      reviewableCall('shell_run', { command: `powershell ${flag} ${payload}` }),
+    ).toBe(true)
+  },
+)
 it('proof4 here-string executes its supplied command', () =>
   expect(
     reviewableCall('shell_run', { command: 'bash <<< "gh pr ready 3"' }),

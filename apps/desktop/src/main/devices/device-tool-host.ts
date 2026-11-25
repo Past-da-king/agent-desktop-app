@@ -12,7 +12,7 @@ import type { JsonObject, Tool, ToolContext } from '@agent/core'
 
 import {
   receiveRemoteGrant,
-  takeDestinationHold,
+  takeDestinationHold, takeNotSignedIn,
 } from '../runtime/pr-gate-remote'
 
 import { contentTypeFor } from './server'
@@ -325,12 +325,12 @@ export class DeviceToolHost {
       })
       const text = await Promise.race([run, timeout])
       const value = resultValue(text)
-      if (value && typeof value === 'object') delete (value as Record<string, unknown>)['prGateHeld']
+      if (value && typeof value === 'object') { delete (value as Record<string, unknown>)['prGateHeld']; delete (value as Record<string, unknown>)['learnedNotSignedIn'] }
       return {
         ok: true,
         value: takeDestinationHold(received.context)
           ? { ...(value as Record<string, unknown>), prGateHeld: true }
-          : value,
+          : takeNotSignedIn(received.context) ? {type:'text',text,learnedNotSignedIn:true} : value,
       }
     } catch (error) {
       this.deps.log?.('Device tool failed', { tool: command.tool })

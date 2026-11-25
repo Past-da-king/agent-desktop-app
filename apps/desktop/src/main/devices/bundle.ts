@@ -57,7 +57,6 @@ export const SHARED_SETTINGS = [
 export type SharedSettings = Partial<Pick<Settings, (typeof SHARED_SETTINGS)[number]>>
 
 export interface BundleSecrets {
-  /** App-owned PR transport authentication, brains only. */
   /** Secret name (apiKey, apiKey-<account>) -> key. */
   keys: Record<string, string>
   composioKey?: string

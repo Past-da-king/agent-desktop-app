@@ -1013,6 +1013,8 @@ export class Store implements SyncStore {
   private applyRemoteRows(changes: Change[], via: string, hold: true): StoreChange[]
   private applyRemoteRows(changes: Change[], via: string, hold = false): StoreChange[] | void {
     const touched: StoreChange[] = []
+    const sender = via ? this.readRow('device',via) : null
+    const trustedDeviceWriter = !via || (!!sender && !sender.deleted && Array.isArray(sender.payload['roles']) && sender.payload['roles'].includes('brain') && !sender.payload['rev'+'oked'])
     /** Helper cards (chat_item ids) whose end is kept over an incoming stale "working" write. */
     const keep: string[] = []
     for (const change of changes) {
@@ -1024,6 +1026,13 @@ export class Store implements SyncStore {
 
       this.hlc.observe(remote)
       const existing = this.readRow(change.entity, change.id)
+      if(change.entity==='device' && via && !trustedDeviceWriter){
+        // A hands/screen peer cannot promote itself, replace any verification key,
+        // revoke another node, or relay a new authority row. Brains must deliver those directly.
+        const old=existing?.payload
+        if(change.deleted || !old || ['roles','prGatePublicKey','rev'+'oked'].some(field=>JSON.stringify(old[field])!==JSON.stringify(change.payload[field])))continue
+      }
+      if(change.entity==='device' && change.payload['prGatePublicKey'] && change.payload['prGatePublicKey']!==existing?.payload['prGatePublicKey'] && !(Array.isArray(change.payload['roles']) && change.payload['roles'].includes('brain')))continue
       // A card (approval or question) is decided once, first decision wins on every device (runtime/card-claim.ts):
       // where the two copies differ on the decision, the winner's is kept whichever copy is newer, so a later
       // conflicting decision, or a write that has none, can never undo the first.

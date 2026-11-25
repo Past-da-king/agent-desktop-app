@@ -258,28 +258,88 @@ function argv(words: string[], depth: number): boolean {
   if (['eval', 'iex', 'invoke-expression'].includes(exe))
     return shell(args.join(' '), depth + 1)
   if (SHELLS.has(exe)) {
-    if (
-      ['pwsh', 'powershell'].includes(exe) &&
-      args.some(
-        (word) =>
-          /^-(?:ec)$/i.test(word) ||
-          (word.length >= 2 &&
-            '-encodedcommand'.startsWith(word.toLowerCase())),
-      )
-    )
-      return true
+    if (['pwsh', 'powershell'].includes(exe)) {
+      const names = [
+        'command',
+        'commandwithargs',
+        'configurationname',
+        'custompipename',
+        'encodedcommand',
+        'executionpolicy',
+        'file',
+        'inputformat',
+        'interactive',
+        'login',
+        'mta',
+        'noexit',
+        'nologo',
+        'noninteractive',
+        'noprofile',
+        'outputformat',
+        'settingsfile',
+        'sshservermode',
+        'sta',
+        'version',
+        'windowstyle',
+        'workingdirectory',
+        'help',
+      ]
+      const aliases: Record<string, string> = {
+        c: 'command',
+        ec: 'encodedcommand',
+        e: 'encodedcommand',
+        ep: 'executionpolicy',
+        f: 'file',
+      }
+      const operands = new Set([
+        'configurationname',
+        'custompipename',
+        'executionpolicy',
+        'inputformat',
+        'outputformat',
+        'settingsfile',
+        'version',
+        'windowstyle',
+        'workingdirectory',
+      ])
+      for (let at = 0; at < args.length; at++) {
+        const word = args[at]!,
+          raw = word.replace(/^(?:--?|\/)/, '').toLowerCase()
+        if (!word.startsWith('-') && !word.startsWith('/'))
+          return inspectFile(word, depth + 1)
+        const matches = names.filter((name) => name.startsWith(raw))
+        // -Command has a documented alias -c even though CommandWithArgs also exists.
+        const parameter =
+          aliases[raw] ??
+          (names.includes(raw)
+            ? raw
+            : matches.length === 1
+              ? matches[0]
+              : undefined)
+        if (parameter === 'encodedcommand') return true
+        if (parameter === 'command' || parameter === 'commandwithargs')
+          return shell(
+            args
+              .slice(at + 1)
+              .join(' ')
+              .replace(/<#[\s\S]*?#>/g, ' ')
+              .replace(/\x60\r?\n/g, ''),
+            depth + 1,
+          )
+        if (parameter === 'file')
+          return args[at + 1] ? inspectFile(args[at + 1]!, depth + 1) : false
+        if (parameter && operands.has(parameter)) at++
+        else if (
+          !parameter &&
+          word.startsWith('/') &&
+          /[\/\\]/.test(word.slice(1))
+        )
+          return inspectFile(word, depth + 1)
+      }
+      return false
+    }
     const i = args.findIndex((w) => /^-(?:[a-z]*c[a-z]*|command)$/i.test(w))
-    if (i >= 0)
-      return shell(
-        args
-          .slice(i + 1)
-          .join(' ')
-          .replace(
-            ['pwsh', 'powershell'].includes(exe) ? /\x60\r?\n/g : /$^/g,
-            '',
-          ),
-        depth + 1,
-      )
+    if (i >= 0) return shell(args.slice(i + 1).join(' '), depth + 1)
     if (
       args.some((word) => /^-[a-z]*n[a-z]*$/i.test(word)) &&
       !['pwsh', 'powershell'].includes(exe)
@@ -542,19 +602,40 @@ function substitutions(source: string): string[] {
   }
   return out
 }
+function commandSource(source: string): string {
+  const lines = source.split('\n'),
+    kept: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!,
+      match = stripShellComments(line).match(
+        /(?<![<\w])<<-?(?!<)\s*['"]?([a-zA-Z_][\w-]*)['"]?/,
+      )
+    if (match && lines.slice(i + 1).some((v) => v.trim() === match[1])) {
+      kept.push(line.replace(match[0], ''))
+      while (++i < lines.length && lines[i]!.trim() !== match[1]) {}
+    } else kept.push(line)
+  }
+  return stripShellComments(kept.join('\n').replace(/<#[\s\S]*?#>/g, ' '))
+}
 // Preserve quoted hashes and hashes inside words; comments stop at their own newline.
 function stripShellComments(source: string): string {
   let result = '',
-    q = ''
+    q = '',
+    ansi = false
   for (let i = 0; i < source.length; i++) {
     const c = source[i]!
-    if (c === '\\' && q !== "'") {
+    if (c === '\\' && (q !== "'" || ansi)) {
       result += c + (source[++i] ?? '')
       continue
     }
     if (c === "'" || c === '"') {
-      if (!q) q = c
-      else if (q === c) q = ''
+      if (!q) {
+        q = c
+        ansi = c === "'" && source[i - 1] === '$'
+      } else if (q === c) {
+        q = ''
+        ansi = false
+      }
     }
     if (!q && c === '#' && (i === 0 || /[\s;|&()]/.test(source[i - 1]!))) {
       while (i < source.length && source[i] !== '\n') i++
@@ -569,7 +650,6 @@ function stripShellComments(source: string): string {
 /** shell-quote supplies operators, quoted words, comments and variable boundaries. */
 function shell(source: string, depth = 0): boolean {
   if (depth > 12) return false
-  source = stripShellComments(source)
   source = source.replace(/(^|[\s;&|])\.\\([^\s;&|]+)/g, '$1./$2')
   source = source.replace(/\\\r?\n/g, '')
   source = source.replace(/&\s*"([^"]*\\gh\.exe)"\s+/gi, 'gh ')
@@ -599,7 +679,9 @@ function shell(source: string, depth = 0): boolean {
     bodies: string[] = []
   for (let i = 0; i < lines.length; i++) {
     const header = lines[i]!,
-      match = header.match(/(?<![<\w])<<-?(?!<)\s*['"]?([a-zA-Z_][\w-]*)['"]?/)
+      match = stripShellComments(header).match(
+        /(?<![<\w])<<-?(?!<)\s*['"]?([a-zA-Z_][\w-]*)['"]?/,
+      )
     if (
       !match ||
       !lines.slice(i + 1).some((line) => line.trim() === match[1])
@@ -617,7 +699,7 @@ function shell(source: string, depth = 0): boolean {
       bodies.push(body.join('\n'))
   }
   if (bodies.some((b) => shell(b, depth + 1) || script(b))) return true
-  source = kept.join('\n')
+  source = stripShellComments(kept.join('\n').replace(/<#[\s\S]*?#>/g, ' '))
   if (substitutions(source).some((s) => shell(s, depth + 1))) return true
   let q = '',
     normal = ''
@@ -628,8 +710,11 @@ function shell(source: string, depth = 0): boolean {
       continue
     }
     if (c === "'" || c === '"') {
-      if (!q) q = c
-      else if (q === c) q = ''
+      if (!q) {
+        q = c
+      } else if (q === c) {
+        q = ''
+      }
     }
     normal += c === '\n' && !q ? ';' : c
   }
@@ -865,7 +950,10 @@ export function reviewApproval(name: string, input: Args): boolean {
     )
   if (['shell_run', 'Bash', 'PowerShell'].includes(name)) {
     try {
-      const words = parse(String(input['command'] ?? ''), (key) => '$' + key)
+      const words = parse(
+        commandSource(String(input['command'] ?? '')),
+        (key) => '$' + key,
+      )
       const ghAt = words.findIndex(
         (w) => typeof w === 'string' && base(w) === 'gh',
       )
@@ -900,7 +988,10 @@ export function inlineCommentFile(
     return input
   try {
     pruneCommentFiles()
-    const entries = parse(String(input['command'] ?? ''), (key) => '$' + key)
+    const entries = parse(
+      commandSource(String(input['command'] ?? '')),
+      (key) => '$' + key,
+    )
     if (!entries.every((e) => typeof e === 'string')) return input
     if (entries.some((word) => typeof word === 'string' && word.includes('$')))
       return input
@@ -947,7 +1038,7 @@ export function inlineCommentFile(
 export function bodyFileSignature(input: Args): string {
   try {
     const entries = parse(
-      String(input['command'] ?? input['cmd'] ?? ''),
+      commandSource(String(input['command'] ?? input['cmd'] ?? '')),
       (key) => '$' + key,
     )
     const words = entries.filter(
@@ -955,7 +1046,9 @@ export function bodyFileSignature(input: Args): string {
     )
     const file = option(words, '--body-file', '-F', '--input')
     if (!file || file === '-') return ''
-    const command = String(input['command'] ?? input['cmd'] ?? '')
+    const command = commandSource(
+      String(input['command'] ?? input['cmd'] ?? ''),
+    )
     const leading = command.match(/^\s*cd\s+(['"]?)([^'";&]+)\1\s*&&/)
     const folder = leading
       ? resolve(String(input['cwd'] ?? homedir()), leading[2]!.trim())
@@ -978,7 +1071,10 @@ function pruneCommentFiles(): void {
 }
 export function cleanupCommentFile(input: Args): void {
   try {
-    const entries = parse(String(input['command'] ?? ''), (key) => '$' + key)
+    const entries = parse(
+      commandSource(String(input['command'] ?? '')),
+      (key) => '$' + key,
+    )
     const file = option(
       entries.filter((entry): entry is string => typeof entry === 'string'),
       '--body-file',

@@ -15,9 +15,8 @@ import {
 import {
   consumeRemoteGrant,
   incomingGrantId,
-  incomingSigner,
-  markAlreadyRan,
-  takeAlreadyRan,
+  verifiedRemoteGrant,
+  remoteGrantConsumed,
   incomingSigner,
   markAlreadyRan,
   takeAlreadyRan,
@@ -117,10 +116,12 @@ export class PrGate {
     private store: DataStore,
     private settings: () => Settings,
     private now = Date.now,
-    private transportKey: () => string | Promise<string> = prGateKey,
+    private transportKey: () =>
+      string | undefined | Promise<string | undefined> = prGateKey,
     private verifier?: (signer: string) => Promise<string | undefined>,
+    public rotate?: () => Promise<string>,
   ) {}
-  async signingKey(): Promise<string> {
+  async signingKey(): Promise<string | undefined> {
     return this.transportKey()
   }
   enabled(): boolean {
@@ -293,11 +294,15 @@ export class PrGate {
         : undefined
       : await this.transportKey()
     if (!key) return false
-    if (!consumeRemoteGrant(ctx, tool, input, key)) return false
-    if (await this.store.get('chat_item', receipt)) {
+    if (!verifiedRemoteGrant(ctx, tool, input, key)) return false
+    if (
+      remoteGrantConsumed(ctx) ||
+      (await this.store.get('chat_item', receipt))
+    ) {
       markAlreadyRan(ctx)
       return false
     }
+    if (!consumeRemoteGrant(ctx, tool, input, key)) return false
     // Commit the tombstone BEFORE any effect can run. It survives process restart
     // and audit pruning, and contains no command, transport signature or key.
     await this.store.upsert('chat_item', {
@@ -471,6 +476,18 @@ export class PrGate {
     return [
       {
         spec: {
+          name: 'pr_gate_rotate_key',
+          description:
+            'Rotate this brain PR gate signing key and publish its new public verification key. In-flight old grants are refused.',
+          schema: schema([], {}),
+        },
+        run: async () =>
+          this.rotate
+            ? this.rotate()
+            : 'PR gate rotation is unavailable in this isolated toolset.',
+      },
+      {
+        spec: {
           name: 'pr_gate_attest',
           description:
             'Attest the completed independent PR vetting evidence for a held PR gate. Reissue the identical held call afterwards; it passes once within sixty minutes of attestation.',
@@ -503,40 +520,63 @@ export function prGateFor(
   selfId?: () => string,
 ): PrGate {
   let gate = gates.get(store)
-  if (!gate) {
-    gate = new PrGate(
-      store,
-      settings,
-      Date.now,
-      async () => {
-        const key = prGateKey(secrets)
-        if (secrets) {
-          const id = selfId?.()
-          const row = id ? await store.get('device', id) : null
-          if (!row || row['revoked'] || !row.roles.includes('brain'))
-            throw new Error('PR gate signing requires this brain device row')
-          const pub = publicKey(key)
-          if (row.prGatePublicKey !== pub)
-            await store.upsert('device', { ...row, prGatePublicKey: pub })
+  if (gate) return gate
+  const signing = async (): Promise<string | undefined> => {
+    const id = selfId?.(),
+      row = id ? await store.get('device', id) : null
+    if (secrets && (!row || row['revoked'] || !row.roles.includes('brain')))
+      return undefined
+    const key = prGateKey(secrets)
+    if (row) {
+      const pub = publicKey(key)
+      if (row.prGatePublicKey !== pub)
+        await store.upsert('device', { id: row.id, prGatePublicKey: pub })
+    }
+    return key
+  }
+  gate = new PrGate(
+    store,
+    settings,
+    Date.now,
+    signing,
+    secrets
+      ? async (signer) => {
+          for (const row of await store.list('device'))
+            if (
+              !row['revoked'] &&
+              row.roles.includes('brain') &&
+              row.prGatePublicKey &&
+              keyId(row.prGatePublicKey) === signer
+            )
+              return row.prGatePublicKey
+          return undefined
         }
-        return key
-      },
-      secrets
-        ? async (signer) => {
-            for (const row of await store.list('device'))
-              if (
-                !row['revoked'] &&
-                !row['revoked'] &&
-                row.roles.includes('brain') &&
-                row.prGatePublicKey &&
-                keyId(row.prGatePublicKey) === signer
-              )
-                return row.prGatePublicKey
-            return undefined
-          }
-        : undefined,
-    )
-    gates.set(store, gate)
+      : undefined,
+  )
+  const instance = gate
+  if (secrets)
+    instance.rotate = async () => {
+      const id = selfId?.(),
+        row = id ? await store.get('device', id) : null
+      if (row && (row['revoked'] || !row.roles.includes('brain')))
+        return 'Refused: only a brain may rotate and publish a PR gate signing key.'
+      const { newPrGateKey } = await import('./pr-gate-key')
+      newPrGateKey(secrets)
+      const key = await signing()
+      return key
+        ? 'PR gate key rotated and public key published: ' +
+            keyId(publicKey(key))
+        : 'PR gate local key rotated; publication waits for this brain Devices row.'
+    }
+  gates.set(store, gate)
+  const observed = store as DataStore & {
+    onChange?: (listener: (change?: { entity?: string }) => void) => () => void
+  }
+  if (secrets) {
+    void signing().catch(() => undefined)
+    observed.onChange?.((change) => {
+      if (change?.entity === 'device') void signing().catch(() => undefined)
+    })
   }
   return gate
 }
@@ -603,24 +643,20 @@ export function withPrGate(
           (reviewableCall(tool.spec.name, effective) ||
             gate.isRemoteWrite(effective, ctx))
         ) {
-          if (tool.spec.name === 'device_tool') {
+          const signingKey = await gate.signingKey()
+          if (signingKey && tool.spec.name === 'device_tool') {
             const args = input['args']
             if (args && typeof args === 'object' && !Array.isArray(args))
               prepareRemoteGrant(
                 ctx,
                 String(input['tool'] ?? ''),
                 args as JsonObject,
-                await gate.signingKey(),
+                signingKey,
               )
-          } else {
+          } else if (signingKey) {
             const { device: _device, ...args } = input
             void _device
-            prepareRemoteGrant(
-              ctx,
-              tool.spec.name,
-              args,
-              await gate.signingKey(),
-            )
+            prepareRemoteGrant(ctx, tool.spec.name, args, signingKey)
           }
         }
         let result: string
