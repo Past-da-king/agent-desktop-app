@@ -146,6 +146,7 @@ export class ActsForMe {
     const hold = this.holding(args.askerKey)
     return { ...(args.request === undefined ? {} : { request: args.request }), ...stampCard({
       kind: args.kind,
+      ...(args.request === undefined ? {} : { request: args.request }),
       asker: args.asker,
       ...(args.origin === undefined ? {} : { origin: args.origin }),
       summary: args.summary,

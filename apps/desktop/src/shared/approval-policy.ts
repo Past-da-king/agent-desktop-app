@@ -1,3 +1,4 @@
+import type { RequestSource } from './request-source'
 /**
  * Who may answer a card: the person, or the main agent on his behalf ("Agent acts for me on approvals", 23 Nov 2026).
  *
@@ -27,6 +28,7 @@ export interface CardFacts {
   kind: 'approval' | 'question'
   asker: Asker
   origin?: CardOrigin | undefined
+  request?: RequestSource | undefined
   /** What the agent wrote on the card. Only ever used to send a card to the person, never to hand one to the agent. */
   summary: string
   details?: string
@@ -215,7 +217,7 @@ const SAFE_TOOLS_AGENT: Record<string, string> = {
 // ---- the verdict ---------------------------------------------------------------------------------------------
 
 /** The one decision: whose card is this. Unknown is always the person's. */
-export function classifyCard(facts: CardFacts): Verdict {
+function classifyUnrequested(facts: CardFacts): Verdict {
   if (!TASK_ASKERS.includes(facts.asker)) {
     return HIM('own-card', facts.asker === 'main' ? "It is the main agent's own card, so he decides." : 'It did not come from a task he set.')
   }
@@ -295,4 +297,32 @@ export function classifyCard(facts: CardFacts): Verdict {
       return HIM('unknown', `The app does not know the tool ${tool}.`)
     }
   }
+}
+
+/** The app's verified request can authorize a send only to every concrete recipient named in that request. */
+function requestedSend(facts: CardFacts): boolean {
+  if (facts.request === undefined || facts.origin === undefined || !/\b(send|email|message|reply|forward|share|post|publish)\b/i.test(facts.request.text)) return false
+  const operation = `${facts.origin.tool} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`.replace(/[_-]/g, ' ')
+  if (MONEY_WORDS.test(operation) || HANDS_WORDS.test(operation) || SECRET_WORDS.test(operation)) return false
+  const recipients: string[] = []
+  const visit = (value: unknown, recipient = false, depth = 0): void => {
+    if (depth > 8) return
+    if (typeof value === 'string' && recipient) { recipients.push(...value.split(/[,;]/).map((part) => part.trim()).filter(Boolean)); return }
+    if (Array.isArray(value)) { for (const item of value) visit(item, recipient, depth + 1); return }
+    if (typeof value === 'object' && value !== null) for (const [key, child] of Object.entries(value)) visit(child, recipient || /^(to|cc|bcc|recipient|recipients|recipient_email|channel|emailAddress)$/i.test(key), depth + 1)
+  }
+  visit(facts.origin.input)
+  const text = facts.request.text.toLowerCase()
+  return recipients.length > 0 && recipients.every((recipient) => {
+    if (recipient.length < 3) return false
+    const escaped = recipient.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`(^|[^a-z0-9@._+\\-])${escaped}($|[^a-z0-9@._+\\-])`, 'i').test(text)
+  })
+}
+
+export function classifyCard(facts: CardFacts): Verdict {
+  const verdict = classifyUnrequested(facts)
+  return verdict.rule === 'outbound' && TASK_ASKERS.includes(facts.asker) && requestedSend(facts)
+    ? AGENT('requested-outbound', 'The originating user request explicitly names this send and every recipient.')
+    : verdict
 }

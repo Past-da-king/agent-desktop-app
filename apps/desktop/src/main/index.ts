@@ -2136,7 +2136,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
         tools: () => tools,
         context: (signal, command) => {
           if (runner === null) throw new Error('The agent is not running.')
-          return runner.deviceToolContext(signal, command)
+          return runner.recordedDeviceToolContext(signal, command)
         },
         shared: () => devices?.shareGroups() ?? DEFAULT_SHARE,
         inbox: join(dir, 'attachments', 'received'),

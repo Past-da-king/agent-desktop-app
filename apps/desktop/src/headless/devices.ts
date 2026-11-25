@@ -71,7 +71,7 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
   let service: DevicesService | null = null
   const lent = new DeviceToolHost({
     tools: () => runtime.mainTools,
-    context: (signal, command) => runtime.runner.deviceToolContext(signal, command),
+    context: (signal, command) => runtime.runner.recordedDeviceToolContext(signal, command),
     shared: () => (service === null ? { browser: true, files: true, notifications: false, approval: false, shell: false } : service.shareGroups()),
     inbox: join(runtime.dataDir, 'attachments', 'received'),
     log: (message, detail) => runtime.logger.info(message, detail),

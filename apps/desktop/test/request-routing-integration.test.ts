@@ -34,6 +34,7 @@ describe('real device context and existing approval queue', () => {
   it.each(['helper:child', 'routine', 'chat:pc123456'])('routes %s learned access through cards_waiting with its request', async (owner) => {
     const x = setup()
     const request = { id: 'user-1', at: Date.UTC(2026, 10, 25, 11, 21), text: 'Pull the colleague drive' }
+    await x.store.upsert('chat_item', { id: request.id, kind: 'user', text: request.text, meta: '{}' })
     const ctx = x.runner.deviceToolContext(x.controller.signal, { chatId: 'main', owner, request })
     const pending = ctx.approve('Get drive access', 'Exact inputs', undefined, { tool: 'webapp_run', input: { tool: 'get_onedrive_access', description: 'Get drive access' } })
     await waitFor(async () => (await x.acts.waiting()).length === 1)
@@ -79,8 +80,10 @@ it.each(['webapp_run', 'webapp_test'])('runs a real asks-first %s over the devic
  const app: LearnedApp = { id: 'example', name: 'Example', startUrl: 'https://example.org', about: '', tools: [learned], trusted: false, updatedAt: 1 }
  const host = new DeviceToolHost({ shared: () => DEFAULT_SHARE, inbox: '/tmp/unused-request-proof',
   tools: () => [{ spec: { name: toolName, description: 'Run learned tool', schema: {} }, run: (input, ctx) => callLearned(app, learned, input, ctx, { ensure: async () => undefined, evaluate: async () => undefined, run: async () => ({ ok: true, v: 'PROVED' }) }) }],
-  context: (signal, command) => x.runner.deviceToolContext(signal, command),
+  context: (signal, command) => x.runner.recordedDeviceToolContext(signal, command),
  })
+ await x.store.upsert('chat_item', { id: 'source', kind: 'user', text: 'Pull the drive', meta: '{}' })
+ await x.store.upsert('device_command', { id: 'proof', kind: 'tool', target: 'hands', brainId: 'brain', tool: toolName, chat: 'main', owner: 'helper:child', status: 'sent', expiresAt: Date.now()+600000, body: JSON.stringify({request:{id:'source'}}) })
  const pending = host.run({ kind: 'tool', id: 'proof', tool: toolName, args: {}, chatId: 'main', owner: 'helper:child', request: { id: 'source', at: 1, text: 'Pull the drive' } })
  await waitFor(async () => (await x.acts.waiting()).length === 1)
  const [card] = await x.acts.waiting()
@@ -93,6 +96,7 @@ it.each(['webapp_run', 'webapp_test'])('runs a real asks-first %s over the devic
 it('phone hands ask through the originating context with its stored request, ignoring a claimed source in the payload', async () => {
  const x = setup()
  const request = { id: 'original-user', at: 1, text: 'Pull the drive I requested' }
+ await x.store.upsert('chat_item', { id: request.id, kind: 'user', text: request.text, meta: '{}' })
  const row = await x.store.upsert('device_command', { kind: 'tool', target: 'phone', brainId: 'brain', tool: 'webapp_test', args: JSON.stringify({ app: 'Example', tool: 'get_access' }), status: 'sent', expiresAt: Date.now() + 600000, chat: 'main', owner: 'helper:child' })
  const bridge = new DeviceQuestions(x.store, () => 'brain', Date.now)
  bridge.remember(row.id, x.runner.deviceToolContext(x.controller.signal, { chatId: 'main', owner: 'helper:child', request }), row.expiresAt)
@@ -104,4 +108,18 @@ it('phone hands ask through the originating context with its stored request, ign
  expect(x.events.some((event) => event.type === 'needs_you')).toBe(false)
  await x.acts.answer({ id: card!.id, action: 'approve', reason: 'The user requested this operation' })
  expect(await pending).toEqual({ handled: true, answer: 'Approve' })
+})
+
+it('the main agent can approve a send carried by the actual request naming its recipient', async () => {
+ const x = setup()
+ const user = await x.store.upsert('chat_item', { kind: 'user', text: 'Send the update to ben@example.org', meta: '{}' })
+ const request = { id: user.id, at: user.createdAt, text: user.text }
+ const ctx = x.runner.deviceToolContext(x.controller.signal, { chatId: 'main', owner: 'helper:child', request })
+ const pending = ctx.approve('Send update', 'Exact update content', undefined, { tool: 'webapp_run', input: { tool: 'send_email', args: { to: 'ben@example.org', body: 'Exact update content' } } })
+ await waitFor(async () => (await x.acts.waiting()).length === 1)
+ const [card] = await x.acts.waiting()
+ expect(card!.rule).toBe('requested-outbound')
+ expect(await x.acts.answer({ id: card!.id, action: 'approve', reason: 'The originating request names this recipient and action' })).toMatchObject({ ok: true })
+ expect(await pending).toBe(true)
+ expect((await x.acts.list())[0]!.reason).toContain(user.text)
 })

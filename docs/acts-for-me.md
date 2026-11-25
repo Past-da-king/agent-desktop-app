@@ -22,3 +22,11 @@ Learned operation names are split at underscores, hyphens and camel case before 
 Protected cards still refuse main-agent approve/decline. The main agent may attach an escalation recommendation to a protected card without approving it. Setting off, Undo holds, the ten-minute fallback, stale closing, first-answer-wins and the existing outbound/payment/secret/authentication restrictions remain in force.
 
 Focused coverage includes real Runner/ActsForMe/device-host/`callLearned` integration for both learned entry points, helper/routine/project routing, request provenance and nested handoffs, setting off, protected-action refusal, recommendations, audit labels and model-input owner spoofing. Release proof and final counts are recorded separately after review.
+
+### Review follow-up: verified requests and fallback
+
+Requested sends can enter the main-agent lane only when the app-recorded originating request names the send action and every concrete recipient in the actual tool arguments. Other recipients, payments, secret handling and personal authentication remain person-only. Unknown operations first enter main-agent review, but card_answer cannot approve them; it can escalate with a recommendation.
+
+A turn pins the exact accepted user row, including an app-owned forwarding reference, rather than the latest message in the chat. DeviceToolHost discards envelope-provided owner/request claims. The runner resolves the active command and originating user row from its own replicated store before stamping a card. If that evidence has not arrived, it uses the conservative person context without the unverified quote.
+
+A paired phone's explicit canceled-run answer stays canceled. A still-active command whose originating in-memory context was lost instead returns an unhandled response, allowing a person fallback. Ambiguous transport failure never creates a duplicate native question.

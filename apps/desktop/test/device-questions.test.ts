@@ -52,3 +52,9 @@ it('the phone cannot substitute another learned operation or the original argume
  await x.questions.ask('phone', x.call)
  expect(x.approve).toHaveBeenCalledWith(expect.any(String), expect.any(String), undefined, expect.objectContaining({ tool: 'webapp_test', input: expect.objectContaining({ tool: 'send_email' }) }))
 })
+
+it('an active command whose brain lost its in-memory context requests a person fallback', async () => {
+ const x = await setup(); x.questions.forget(x.row.id)
+ expect(await x.questions.ask('phone', x.call)).toEqual({ handled: false, answer: null })
+ expect(x.approve).not.toHaveBeenCalled()
+})

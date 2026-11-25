@@ -27,3 +27,13 @@ export async function requestFor(store: DataStore, chat: string, helper = ''): P
   const id = typeof via === 'object' && via !== null ? (via as Record<string, unknown>)['requestId'] : undefined
   return typeof id === 'string' ? requestById(store, id) : null
 }
+
+/** Resolve the accepted row itself, including an app-owned forwarded request reference. */
+export async function requestFromMessage(store: DataStore, id: string): Promise<RequestSource | null> {
+  const row = await store.get('chat_item', id)
+  if (row === null || row.kind !== 'user') return null
+  const via = parseMeta(row.meta)['via']
+  if (via === undefined) return requestById(store, id)
+  const original = typeof via === 'object' && via !== null ? (via as Record<string, unknown>)['requestId'] : undefined
+  return typeof original === 'string' ? requestById(store, original) : null
+}

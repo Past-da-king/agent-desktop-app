@@ -15,14 +15,16 @@ export class DeviceQuestions {
   prune(): void {
     for (const [id, value] of this.contexts) if (value.expires <= this.now() || value.ctx.signal.aborted) this.forget(id)
   }
-  async ask(device: string, args: unknown[]): Promise<{ handled: true; answer: string | null }> {
+  async ask(device: string, args: unknown[]): Promise<{ handled: boolean; answer: string | null }> {
+    const prior = typeof args[0] === 'string' ? this.contexts.get(args[0]) : undefined
+    if (prior?.ctx.signal.aborted === true) return { handled: true, answer: null }
     this.prune()
     const [id, sequence, question, options, offeredOrigin] = args
     if (typeof id !== 'string' || typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1 || sequence > 128 || typeof question !== 'string' || question.length > 16000 || !Array.isArray(options) || options.length > 20 || !options.every((item) => typeof item === 'string' && item.length <= 1000)) throw new Error('Invalid device question.')
     const row = await this.store.get('device_command', id)
     if (row === null || row.kind !== 'tool' || row.brainId !== this.self() || row.target !== device || row.expiresAt <= this.now() || (row.status !== 'queued' && row.status !== 'sent')) throw new Error('That command is not active for this device.')
     const active = this.contexts.get(id)
-    if (active === undefined || active.ctx.signal.aborted) return { handled: true, answer: null }
+    if (active === undefined) return { handled: false, answer: null }
     let input: JsonObject = {}
     try { const parsed: unknown = JSON.parse(row.args ?? '{}'); if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) input = parsed as JsonObject } catch { /* No invented arguments. */ }
     let origin: ApprovalOrigin = { tool: row.tool ?? '', input }

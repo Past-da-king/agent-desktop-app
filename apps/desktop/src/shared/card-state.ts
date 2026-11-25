@@ -1,3 +1,4 @@
+import { parseRequestSource, type RequestSource } from './request-source'
 /**
  * What a card row says about whose it is and whether it still stands ("Agent acts for me on approvals", 23 Nov 2026).
  *
@@ -130,6 +131,7 @@ function clip(value: unknown, depth = 0): unknown {
 }
 
 export interface StampInput {
+  request?: RequestSource | undefined
   kind: 'approval' | 'question'
   asker: Asker
   origin?: CardOrigin | undefined
@@ -148,6 +150,7 @@ export function stampCard(input: StampInput): Record<string, unknown> {
   const facts: CardFacts = {
     kind: input.kind,
     asker: input.asker,
+    ...(input.request === undefined ? {} : { request: input.request }),
     summary: input.summary,
     ...(input.details === undefined ? {} : { details: input.details }),
     ...(input.options === undefined ? {} : { options: input.options }),
@@ -161,7 +164,7 @@ export function stampCard(input: StampInput): Record<string, unknown> {
     lane: verdict.lane,
     laneRule: verdict.rule,
     laneWhy: verdict.why,
-    ...(input.actsForMe && verdict.lane === 'agent' ? { routedAt: input.now } : {}),
+    ...(input.actsForMe && !held && (verdict.lane === 'agent' || (verdict.rule === 'unknown' && input.origin !== undefined && ['helper', 'project', 'routine'].includes(input.asker))) ? { routedAt: input.now } : {}),
   }
 }
 
@@ -184,6 +187,7 @@ export function factsOfRow(row: CardLike & { text?: unknown }): CardFacts | null
     details: textOf(meta['details']),
     options,
     ...(parsedOrigin === undefined ? {} : { origin: parsedOrigin }),
+    ...(parseRequestSource(meta['request']) === null ? {} : { request: parseRequestSource(meta['request'])! }),
   }
 }
 
