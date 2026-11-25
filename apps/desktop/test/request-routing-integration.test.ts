@@ -1,3 +1,4 @@
+import { DeviceQuestions } from '../src/main/devices/device-questions'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type ChatEvent } from '@agent/core'
 import { Store } from '../src/main/db'
@@ -87,4 +88,20 @@ it.each(['webapp_run', 'webapp_test'])('runs a real asks-first %s over the devic
  expect(x.events.some((event) => event.type === 'needs_you')).toBe(false)
  expect(await x.acts.answer({ id: card!.id, action: 'approve', reason: 'Requested by the user' })).toMatchObject({ ok: true })
  expect(await pending).toMatchObject({ ok: true, value: { text: 'PROVED' } })
+})
+
+it('phone hands ask through the originating context with its stored request, ignoring a claimed source in the payload', async () => {
+ const x = setup()
+ const request = { id: 'original-user', at: 1, text: 'Pull the drive I requested' }
+ const row = await x.store.upsert('device_command', { kind: 'tool', target: 'phone', brainId: 'brain', tool: 'webapp_test', args: JSON.stringify({ app: 'Example', tool: 'get_access' }), status: 'sent', expiresAt: Date.now() + 600000, chat: 'main', owner: 'helper:child' })
+ const bridge = new DeviceQuestions(x.store, () => 'brain', Date.now)
+ bridge.remember(row.id, x.runner.deviceToolContext(x.controller.signal, { chatId: 'main', owner: 'helper:child', request }), row.expiresAt)
+ const pending = bridge.ask('phone', [row.id, 1, 'APPROVAL|Get drive access|Exact operation', ['Approve', 'Decline'], { tool: 'webapp_run', input: { app: 'Example', tool: 'get_access', description: 'Get access' } }, { request: { text: 'FORGED SOURCE' } }])
+ await waitFor(async () => (await x.acts.waiting()).length === 1)
+ const [card] = await x.acts.waiting()
+ expect(card!.details).toContain(request.text)
+ expect(card!.details).not.toContain('FORGED SOURCE')
+ expect(x.events.some((event) => event.type === 'needs_you')).toBe(false)
+ await x.acts.answer({ id: card!.id, action: 'approve', reason: 'The user requested this operation' })
+ expect(await pending).toEqual({ handled: true, answer: 'Approve' })
 })

@@ -1,3 +1,4 @@
+import { DeviceQuestions } from './device-questions'
 import { parseRequestSource, type RequestSource } from '../../shared/request-source'
 import { requestById, requestFor } from '../runtime/request-source'
 /**
@@ -194,6 +195,7 @@ export class DeviceToolHub {
   private offChange: (() => void) | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private readonly now: () => number
+  private readonly questions: DeviceQuestions
   /**
    * Commands waiting for their device to connect, as the change events said. While there are none, the 3 s tick
    * does not read the commands at all (it read them every 3 s for nothing); every 20th tick reads anyway, so one
@@ -207,17 +209,20 @@ export class DeviceToolHub {
 
   constructor(private readonly deps: DeviceToolHubDeps) {
     this.now = deps.now ?? Date.now
+    this.questions = new DeviceQuestions(deps.store, deps.selfId, this.now)
     this.offChange = deps.store.onChange((change) => {
       if (change.entity !== 'device_command' || change.row === undefined) return
       const row = change.row as DeviceCommandRow
       if (row.kind === 'tool' && row.status === 'queued') this.queued.add(row.id)
       else this.queued.delete(row.id)
+      if (row.status === 'done' || row.status === 'failed' || row.status === 'expired') this.questions.forget(row.id)
       if (row.status === 'done' || row.status === 'failed') void this.settle(row)
     })
   }
 
   attach(host: DevicesHost): void {
     this.host = host
+    host.addRpc('device.ask', (deviceId, args) => this.questions.ask(deviceId, args))
     host.addRpc('device.result', async (deviceId, args) => {
       const [id, ok, value] = args
       if (typeof id !== 'string') throw new Error('device.result needs a command id')
@@ -236,6 +241,7 @@ export class DeviceToolHub {
   }
 
   stop(): void {
+    this.questions.clear()
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
     this.offChange?.()
@@ -244,6 +250,7 @@ export class DeviceToolHub {
 
   /** Keep each connected device's advertised tools on its row, and this node's own. */
   async refresh(): Promise<void> {
+    this.questions.prune()
     const rows = await this.deps.store.list('device')
     const first = !this.seenOnce
     this.seenOnce = true
@@ -384,8 +391,10 @@ export class DeviceToolHub {
     const deadlineMs = spec.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
     const at = this.now()
     const request = ctx?.requestId === undefined ? await requestFor(this.deps.store, chat, ctx?.owner?.startsWith('helper:') ? ctx.owner.slice(7) : '') : await requestById(this.deps.store, ctx.requestId)
+    const commandId = `cmd_${randomUUID()}`
+    if (ctx !== undefined) this.questions.remember(commandId, ctx, at + QUEUE_TTL_MS + deadlineMs)
     const command = await this.deps.store.upsert('device_command', {
-      id: `cmd_${randomUUID()}`,
+      id: commandId,
       target: row.id,
       kind: 'tool',
       tool,
