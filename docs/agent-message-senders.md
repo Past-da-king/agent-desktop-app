@@ -25,8 +25,13 @@ Old phones already understand via for helper/project/routine/system/main/call/wo
 
 ## Proof status
 
-Standalone shared-contract Node tests: 20/20 green; the same fixtures against the original sender implementation: 12 green, 8 red (legacy envelopes, ID and icon). These are not full Runner/browser tests.
+- Relevant desktop regression run: 110 tests passed across 9 files (helpers/end notices, projects, busy routing/recovery, late device results, sender rows, app actions, chat rows, new-message counts).
+- Final sender/action rerun after card-body polish: 32/32.
+- Shared-contract standalone checks: 20/20 green; the same checks against original sender code: 12 green, 8 red (legacy envelopes, ID, icon).
+- Final runtime-source typecheck: exit 0. Full suite was interrupted for priority server memory pressure: exit 143, no completed full-suite or baseline counts. No test result is claimed for that run.
+- Actual renderer preview at 1440 and 390 in light/dark: 4/4 structural checks, three left cards and one own right bubble, no overflow/page errors. All four final PNGs inspected by eye: readable headers, project glyph/colour, no clipping or duplicate legacy envelope. Server /tmp/agent-sender-desktop-shots; PC C:\Users\past9\Downloads\agent\agent-sender-proof.
+- Android unit and actual UserBubble Compose/Roborazzi sources added. Android execution has no completion result; no phone screenshot or APK claim. No sender Gradle daemon or queue remains.
+- Combined trial attempted: desktop #9 + #19 merge, but #20 conflicts in main/devices/device-tool-host.ts before this PR is reached. Phone trial stops at old PayPal #9 against current main in MainActivity.kt, AgentRuntime.kt, Connections.kt. No combined full-suite claim.
+- Staged and commit-range gitleaks clean; git diff whitespace check passed; no new environment variables, feature flags, file-mode changes or test artifacts.
 
-Source syntax transpilation: zero diagnostics on changed desktop TS/TSX. git diff whitespace check passes. New tests cover legacy envelopes, genuine user prose, sender identity, automatic delivery, explicit model headers, and agent chat.send context. Android adds unit coverage and actual UserBubble Compose/Roborazzi assertions at 390 in light/dark.
-
-Not yet proven: targeted/full suites, baseline comparison, red controls, typecheck, combined-open-PR trial, browser 1440/390 light/dark captures, Android screenshot execution. Server slots/memory were unavailable during the first bounded attempt; no test result is claimed. Both PRs must stay draft pending these checks and independent review. No release, installation or deployment.
+Both PRs remain draft for remaining red controls, full/baseline/combined proof, Android execution and independent review. Desktop #23, phone #96. No release, installation or deployment. Runtime code was proven at 486b6fb; the final follow-up changes documentation only.
