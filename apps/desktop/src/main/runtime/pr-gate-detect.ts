@@ -591,8 +591,8 @@ function inspectFile(file: string, depth: number): boolean {
     return false
   }
 }
-export function scriptReadNotes(input: Args): string[] {
-  reviewableCall('shell_run', input)
+export function scriptReadNotes(input: Args, name = 'shell_run'): string[] {
+  reviewableCall(name, input)
   return [...missingScripts]
 }
 export function reviewableCall(name: string, input: Args): boolean {

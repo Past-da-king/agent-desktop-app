@@ -243,7 +243,10 @@ export class PrGate {
       !reviewableCall(tool, input) &&
       !(tool === 'device_tool' && this.isRemoteWrite(input, ctx))
     ) {
-      if (tool === 'shell_run' && scriptReadNotes(input).length)
+      if (
+        ['shell_run', 'Bash', 'PowerShell'].includes(tool) &&
+        scriptReadNotes(input, tool).length
+      )
         await this.log(
           ctx,
           tool,

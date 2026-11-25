@@ -366,32 +366,35 @@ it('native permission checks resolve body files against the actual plan folder',
   }
 })
 
-it('logs unreadable scripts while allowing normal work', async () => {
-  const store = new Store(':memory:')
-  try {
-    const gate = new PrGate(store, () => ({
-        ...DEFAULT_SETTINGS,
-        prGateEnabled: true,
-      })),
-      ctx = testContext()
-    expect(
-      await gate.check(
-        'shell_run',
-        { command: 'bash /missing/local-build.sh' },
-        ctx,
-      ),
-    ).toBeNull()
-    const rows = await store.listWhere('chat_item', {
-      chat: 'pr-gate-audit',
-      kind: 'pr_gate',
-    })
-    expect(
-      rows.some((row) => row.text === 'unreadable local script (not gated)'),
-    ).toBe(true)
-  } finally {
-    store.close()
-  }
-})
+it.each(['shell_run', 'Bash', 'PowerShell'])(
+  'logs unreadable %s scripts while allowing normal work',
+  async (tool) => {
+    const store = new Store(':memory:')
+    try {
+      const gate = new PrGate(store, () => ({
+          ...DEFAULT_SETTINGS,
+          prGateEnabled: true,
+        })),
+        ctx = testContext()
+      expect(
+        await gate.check(
+          tool,
+          { command: 'bash /missing/local-build.sh' },
+          ctx,
+        ),
+      ).toBeNull()
+      const rows = await store.listWhere('chat_item', {
+        chat: 'pr-gate-audit',
+        kind: 'pr_gate',
+      })
+      expect(
+        rows.some((row) => row.text === 'unreadable local script (not gated)'),
+      ).toBe(true)
+    } finally {
+      store.close()
+    }
+  },
+)
 
 it.each([
   [
