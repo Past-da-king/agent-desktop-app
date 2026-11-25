@@ -182,12 +182,7 @@ function gh(args: string[]): boolean {
     const action = args[pr + 1]
     if (
       (action === 'create' || action === 'new') &&
-      args.some((word) => /^(?:--reviewer(?:=|$)|-r)/.test(word))
-    )
-      return true
-    if (
-      (action === 'create' || action === 'new') &&
-      args.some((word) => /^(?:--reviewer(?:=|$)|-r)/.test(word))
+      flags.some((word) => /^(?:--reviewer(?:=|$)|-r$)/.test(word))
     )
       return true
     if (action === 'create' || action === 'new')
@@ -201,9 +196,7 @@ function gh(args: string[]): boolean {
       return args.some((w) => /^--add-reviewer(?:=|$)/.test(w))
     if (
       action === 'review' &&
-      (flags.includes('--approve') ||
-        flags.includes('-a') ||
-        flags.includes('-a'))
+      (flags.includes('--approve') || flags.includes('-a'))
     )
       return true
     if (action === 'comment' || action === 'review') return comment()
@@ -615,8 +608,6 @@ function argv(words: string[], depth: number): boolean {
   }
   if (exe === 'npx' && ['tsx', 'ts-node'].includes(args[0] ?? ''))
     return argv(args, depth + 1)
-  if (exe === 'npx' && ['tsx', 'ts-node'].includes(args[0] ?? ''))
-    return argv(args, depth + 1)
   if (['node', 'python', 'python3', 'tsx', 'ts-node'].includes(exe)) {
     const inline = option(args, '-e', '--eval', '-c')
     if (inline !== undefined) return script(inline)
@@ -769,11 +760,6 @@ export function sensitiveShell(source: string): boolean {
   )
 }
 function reviewablePush(args: string[], cwd = inspectionCwd): boolean {
-  if (
-    args.includes('--tags') &&
-    args.filter((word) => !word.startsWith('-')).length <= 1
-  )
-    return false
   if (
     args.includes('--tags') &&
     args.filter((word) => !word.startsWith('-')).length <= 1
@@ -1097,7 +1083,7 @@ export function reviewableCall(name: string, input: Args): boolean {
     if (name === 'browser_click')
       return (
         input['_resolvedAction'] !== true ||
-        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge|\bapprove\b|submit\s+review|\bapprove\b|submit\s+review/i.test(
+        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge|\bapprove\b|submit\s+review/i.test(
           String(input['name'] ?? ''),
         )
       )
@@ -1109,7 +1095,7 @@ export function reviewableCall(name: string, input: Args): boolean {
     return (
       /click|press|select|check/.test(String(input['action'])) &&
       (!input['name'] ||
-        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge|\bapprove\b|submit\s+review|\bapprove\b|submit\s+review/i.test(
+        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge|\bapprove\b|submit\s+review/i.test(
           String(input['name'] ?? ''),
         ))
     )
@@ -1140,42 +1126,13 @@ export function reviewableCall(name: string, input: Args): boolean {
       return ![true, 'true'].includes(args['draft'] as boolean | string)
     if (/(?:UPDATE|EDIT).*PULL_REQUEST/.test(slug))
       return [false, 'false'].includes(args['draft'] as boolean | string)
-    if (/CREATE.*(?:COMMENT|REVIEW)/.test(slug))
+    if (/(?:CREATE.*(?:COMMENT|REVIEW)|SUBMIT.*REVIEW)/.test(slug))
       return (
         String(args['event']).toUpperCase() === 'APPROVE' ||
         unreadable(args['body']) ||
         readyComment(args['body'])
       )
     if (/GRAPHQL/.test(slug)) return graph(args['query'])
-  }
-  return false
-}
-
-/** Approvals are observed for audit, but do not require the reviewability grant. */
-export function reviewApproval(name: string, input: Args): boolean {
-  if (name === 'apps_run')
-    return (
-      /^GITHUB_.*CREATE.*REVIEW/.test(String(input['slug'])) &&
-      String(object(input['arguments'])['event']).toUpperCase() === 'APPROVE'
-    )
-  if (['shell_run', 'Bash', 'PowerShell'].includes(name)) {
-    try {
-      const words = parse(
-        commandSource(String(input['command'] ?? '')),
-        (key) => '$' + key,
-      )
-      const ghAt = words.findIndex(
-        (w) => typeof w === 'string' && base(w) === 'gh',
-      )
-      return (
-        ghAt >= 0 &&
-        words[ghAt + 1] === 'pr' &&
-        words[ghAt + 2] === 'review' &&
-        words.includes('--approve')
-      )
-    } catch {
-      return false
-    }
   }
   return false
 }

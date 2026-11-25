@@ -142,11 +142,25 @@ export class PrGate {
   ): void {
     this.reserveExecution(tool, input, ctx)
   }
+  /** End of the shell/turn consumes deferred reservations even if gh never ran. */
+  finishGhExecution(tokens: Set<string>, operations?: string[]): void {
+    for (const token of tokens) {
+      const permit = this.executionPermits.get(token)
+      if (
+        operations &&
+        !permit?.remaining.some((key) => operations.includes(key))
+      )
+        continue
+      if (permit?.pending) this.pending.delete(permit.pending.id)
+      this.executionPermits.delete(token)
+    }
+  }
   async checkGhExecution(
     tokens: Set<string>,
     args: string[],
     cwd: string,
     ctx: ToolContext,
+    scratchCode = false,
   ): Promise<string | null> {
     const key = ghExecutionKey(args, cwd)
     for (const token of tokens) {
@@ -186,7 +200,7 @@ export class PrGate {
     }
     return this.check(
       'shell_run',
-      { command: quote(['gh', ...args]), cwd },
+      { command: quote(['gh', ...args]), cwd: scratchCode ? '*' : cwd },
       ctx,
     )
   }
@@ -463,6 +477,13 @@ export class PrGate {
         }
       }
       return null
+    }
+    if (
+      tool === 'run_code' &&
+      /\bgh\b/.test(String(input['code'] ?? '')) &&
+      ghOperations(tool, input, '*').length === 0
+    ) {
+      return 'NOT RUN: Computed gh arguments in run_code cannot bind an exact execution grant. Use shell_run with the resolved gh command and working folder; do not retry this code for another attestation.'
     }
     const actor = this.actor(ctx),
       key = createHash('sha256')

@@ -29,15 +29,62 @@ export function ghOperations(
         parts: string[][] = [[]]
       for (const word of words) {
         if (typeof word === 'string') parts[parts.length - 1]!.push(word)
-        else if ('op' in word) parts.push([])
+        else if ('op' in word) {
+          if (/^(?:>|>>|<|>&|<&|&>)$/.test(word.op)) {
+            const part = parts[parts.length - 1]!
+            const fd = part[part.length - 1] ?? ''
+            if (
+              /^\d+$/.test(fd) &&
+              new RegExp('(?:^|\\s)' + fd + '(?=[<>])').test(text)
+            )
+              part.pop()
+          }
+          parts.push([])
+        }
       }
-      for (const part of parts) {
+      for (const original of parts) {
+        const part = [...original]
+        while (part.length) {
+          if (/^[A-Za-z_][A-Za-z_0-9]*=/.test(part[0]!)) {
+            part.shift()
+            continue
+          }
+          const wrapper = part[0]!.split(/[\\/]/).pop()!.toLowerCase()
+          if (wrapper === 'env') {
+            part.shift()
+            while (part[0]?.startsWith('-')) {
+              const flag = part.shift()
+              if (flag === '-u' || flag === '--unset') part.shift()
+            }
+            continue
+          }
+          if (wrapper === 'timeout') {
+            part.shift()
+            while (part[0]?.startsWith('-')) {
+              const flag = part.shift()
+              if (['-s', '--signal', '-k', '--kill-after'].includes(flag!))
+                part.shift()
+            }
+            part.shift()
+            continue
+          }
+          if (wrapper === 'sudo' || wrapper === 'nohup') {
+            part.shift()
+            while (part[0]?.startsWith('-')) {
+              const flag = part.shift()
+              if (['-u', '-g', '-h', '-p', '-C'].includes(flag!)) part.shift()
+            }
+            continue
+          }
+          break
+        }
         const exe = (part[0] ?? '')
           .split(/[\\/]/)
           .pop()!
           .replace(/\.exe$/i, '')
           .toLowerCase()
         if (exe === 'cd' && part[1]) {
+          if (cwd === '*') continue
           cwd = resolve(
             cwd,
             part[1] === '~'
@@ -49,8 +96,6 @@ export function ghOperations(
           continue
         }
         if (exe === 'gh') out.push(ghExecutionKey(part.slice(1), cwd))
-        else if (exe === 'npx' && ['tsx', 'ts-node'].includes(part[1] ?? ''))
-          inspect(part.slice(1).join(' '), cwd, depth + 1)
         else if (exe === 'npx' && ['tsx', 'ts-node'].includes(part[1] ?? ''))
           inspect(part.slice(1).join(' '), cwd, depth + 1)
         else if (
@@ -94,7 +139,10 @@ export function ghOperations(
       /* Unknown wrappers do not acquire a broad execution pass. */
     }
   }
-  const cwd = tool === 'run_code' ? '*' : String(input['cwd'] ?? fallback)
+  const cwd =
+    tool === 'run_code' || input['_engineCwdUntracked'] === true
+      ? '*'
+      : String(input['cwd'] ?? fallback)
   if (tool === 'run_code')
     out.push(...codeOperations(String(input['code'] ?? ''), cwd))
   else inspect(String(input['command'] ?? input['cmd'] ?? ''), cwd)
@@ -106,6 +154,9 @@ function codeOperations(code: string, cwd: string): string[] {
   for (const match of code.matchAll(
     /(?:execFileSync|execFile|spawnSync|spawn|subprocess\.(?:run|call|Popen))\s*\(\s*(?:(['"])([^'"]+)\1\s*,\s*)?\[([^\]]*)\]/g,
   )) {
+    // A partial argv is never an execution identity.
+    if (match[3]!.replace(/(['"])([^'"]*)\1/g, '').replace(/[\s,]/g, '') !== '')
+      continue
     const words = [...match[3]!.matchAll(/(['"])([^'"]*)\1/g)].map(
       (value) => value[2]!,
     )
@@ -120,7 +171,10 @@ function codeOperations(code: string, cwd: string): string[] {
   }
   for (const match of code.matchAll(
     /(?:os\.system|execSync|exec)\s*\(\s*(['"])([^'"\n]*)\1/g,
-  ))
+  )) {
+    const tail = code.slice((match.index ?? 0) + match[0].length).trimStart()
+    if (tail.startsWith('+')) continue
     out.push(...ghOperations('shell_run', { command: match[2]!, cwd }, cwd))
+  }
   return out
 }

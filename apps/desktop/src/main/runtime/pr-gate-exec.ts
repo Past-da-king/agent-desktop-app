@@ -6,14 +6,27 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { JsonObject, ToolContext } from '@agent/core'
+import { ghOperations } from './pr-gate-execution-key'
 import type { PrGate } from './pr-gate'
 
-type Scope = { env: NodeJS.ProcessEnv; permits: Set<string> }
+type Scope = { env: NodeJS.ProcessEnv; permits: Set<string>; gate: PrGate }
 const scopes = new AsyncLocalStorage<Scope>()
 const permitsByContext = new WeakMap<ToolContext, string>()
 export function rememberGhPermit(ctx: ToolContext, token: string): void {
-  permitsByContext.set(ctx, token)
-  scopes.getStore()?.permits.add(token)
+  const scope = scopes.getStore()
+  if (scope) scope.permits.add(token)
+  else permitsByContext.set(ctx, token)
+}
+export function finishGhExecution(tool?: string, input?: JsonObject): void {
+  const scope = scopes.getStore()
+  if (!scope) return
+  scope.gate.finishGhExecution(
+    scope.permits,
+    tool && input
+      ? ghOperations(tool, { ...input, _engineCwdUntracked: true }, '*')
+      : undefined,
+  )
+  if (!tool) scope.permits.clear()
 }
 export function ghExecutionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const scope = scopes.getStore()
@@ -69,7 +82,7 @@ export async function withGhExecution<T>(
   gate: PrGate | undefined,
   ctx: ToolContext,
   work: () => Promise<T>,
-  _approved?: { tool: string; input: JsonObject },
+  approved?: { tool: string; input: JsonObject },
 ): Promise<T> {
   if (!gate?.enabled()) return work()
   const dir = mkdtempSync(join(tmpdir(), 'agent-gh-gate-'))
@@ -104,6 +117,7 @@ export async function withGhExecution<T>(
         data.args as string[],
         data.cwd,
         ctx,
+        approved?.tool === 'run_code',
       )
       res.setHeader('content-type', 'application/json')
       res.end(JSON.stringify({ held }))
@@ -146,6 +160,7 @@ export async function withGhExecution<T>(
     )
     return await scopes.run(
       {
+        gate,
         permits,
         env: {
           AGENT_PR_GATE_CHANNEL:
@@ -156,6 +171,7 @@ export async function withGhExecution<T>(
       work,
     )
   } finally {
+    gate.finishGhExecution(permits)
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
     rmSync(dir, { recursive: true, force: true })

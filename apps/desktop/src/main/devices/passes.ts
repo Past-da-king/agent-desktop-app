@@ -41,12 +41,14 @@ export class SecretPassTable implements PassTable {
 
   set(deviceId: string, hash: string): void {
     this.write({ ...this.all(), [deviceId]: hash })
+    if (this.isRevoked(deviceId)) this.forgetRoles(deviceId)
   }
 
   remove(deviceId: string): void {
     const next = this.all()
     delete next[deviceId]
     this.write(next)
+    this.rememberRoles(deviceId, null)
   }
 
   replaceAll(table: Record<string, string>): void {
@@ -59,12 +61,24 @@ export class SecretPassTable implements PassTable {
 
   /** Pairing authority metadata survives a database restore along with pass hashes. */
   rolesFor(deviceId: string): import('./types').DeviceRole[] | null {
+    if (!this.all()[deviceId] || this.isRevoked(deviceId)) return null
     try {
       const value = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}')[deviceId]
       return Array.isArray(value) ? value.filter((role): role is import('./types').DeviceRole => ['brain','hands','screen'].includes(role)) : null
     } catch { return null }
   }
-  rememberRoles(deviceId: string, roles: import('./types').DeviceRole[]): void {
+  isRevoked(deviceId: string): boolean {
+    try { return JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}')[deviceId] === null }
+    catch { return false }
+  }
+  forgetRoles(deviceId: string): void {
+    let all: Record<string, unknown> = {}
+    try { all = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}') } catch { return }
+    delete all[deviceId]
+    this.secrets.set('devicePairingRoles', JSON.stringify(all))
+  }
+  rememberRoles(deviceId: string, roles: import('./types').DeviceRole[] | null): void {
+    if (roles !== null && this.isRevoked(deviceId)) return
     let all: Record<string, unknown> = {}
     try { all = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}') } catch { /* first record */ }
     if (JSON.stringify(all[deviceId]) === JSON.stringify(roles)) return

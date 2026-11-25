@@ -116,7 +116,6 @@ it
     'gh  pr comment 19 --body "Ready for review"',
     'cd repo && gh pr merge 19',
     'gh pr ready 19 && gh pr merge 19',
-    'gh pr ready 19 && gh pr merge 19',
   ])(
   'R10 B1 end-to-end hold, attest, shim execution once: %s',
   async (command) => {

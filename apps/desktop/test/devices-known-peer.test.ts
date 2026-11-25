@@ -116,3 +116,34 @@ it('R7-m5 refreshing a demoted desktop does not restore its brain role', async (
   await self.service.configure({ port: self.service.status().port })
   expect((await self.store.get('device', id))?.roles).toEqual(['hands'])
 })
+
+
+it('R11-N2 revoke then forget on another brain invalidates the host pass permanently', async () => {
+  const host = await node(), brain = await node()
+  const phone = 'dev_r11_phone', pass = newPass()
+  await brain.store.upsert('device', { id: phone, name: 'Phone', kind: 'phone', platform:'android', roles:['hands','screen'], priority:0, urls:[], fp:'phone-pin', pairedAt:1, lastSeen:1, revoked:false })
+  await host.store.applyRemote(brain.store.changesAfter(0).changes, '')
+  await new Promise(resolve => setTimeout(resolve,100))
+  host.service.passTable().set(phone, hashPass(pass))
+  await brain.store.upsert('device', {id:phone,lastSeen:2})
+  await host.store.applyRemote(brain.store.changesAfter(0).changes, '')
+  await new Promise(resolve => setTimeout(resolve,100))
+  const devices = () => pinnedRequest(host.base+'/v1/devices',host.fp,{headers:{Authorization:'Bearer '+pass}})
+  expect((await devices()).status).toBe(200)
+  await new Promise(resolve => setTimeout(resolve,100))
+  await brain.service.revoke(phone)
+  await host.store.applyRemote(brain.store.changesAfter(0).changes, '')
+  await new Promise(resolve => setTimeout(resolve,100))
+  expect((await devices()).status).toBe(401)
+  await brain.service.forget(phone)
+  await host.store.applyRemote(brain.store.changesAfter(0).changes, '')
+  await new Promise(resolve => setTimeout(resolve,100))
+  expect(host.service.passTable().deviceFor(pass)).toBeNull()
+  expect((await devices()).status).toBe(401)
+  const push = await pinnedRequest(host.base+'/v1/sync/push',host.fp,{
+    method:'POST',headers:{Authorization:'Bearer '+pass,'content-type':'application/json'},
+    body:{changes:[{entity:'device',id:phone,payload:{id:phone,roles:['hands'],revoked:false}}]}
+  })
+  expect(push.status).toBe(401)
+  expect(await host.store.get('device',phone)).toBeNull()
+})

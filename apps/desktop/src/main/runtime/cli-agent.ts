@@ -1,4 +1,4 @@
-import { ghExecutionEnv } from './pr-gate-exec'
+import { ghExecutionEnv, finishGhExecution } from './pr-gate-exec'
 /**
  * Runs one turn of the agent on the person's own AI plan, through the official SDKs, the same way the
  * phone app does (assets/runtime/bridge-claude.mjs, bridge-codex.mjs):
@@ -25,6 +25,12 @@ import type { TurnMessage, TurnMessages } from './note-tools'
 import { SDK_TOOLS } from './sdk-permissions'
 import { markReleased } from '../tools/run-capture'
 import { claudeLaunch, codexLaunch, type EngineAccess } from './engine-policy'
+
+function nativeShellFinished(raw: unknown): Record<string, never> {
+  const data = raw as { tool_name?: string; tool_input?: JsonObject }
+  finishGhExecution(data.tool_name, data.tool_input)
+  return {}
+}
 
 export type CliId = 'claude' | 'codex'
 
@@ -330,6 +336,8 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         // fires for every call, including the "safe-looking" commands Claude Code would otherwise auto-approve
         // without asking (canUseTool alone is skipped for those).
         hooks: {
+          PostToolUse: [{ matcher: 'Bash|PowerShell', hooks: [async (data) => nativeShellFinished(data)] }],
+          PostToolUseFailure: [{ matcher: 'Bash|PowerShell', hooks: [async (data) => nativeShellFinished(data)] }],
           PreToolUse: [
             {
               hooks: [

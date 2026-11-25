@@ -25,7 +25,7 @@ import {
   identityOf,
   type HomeEntry,
 } from './account-home'
-import { isLimitFailure, planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
+import { engineFolders, isLimitFailure, planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
 import { engineAccess } from './engine-policy'
 import { startToolServer, type ToolServer } from './mcp-server'
 import { HELD_STEP, type TurnMessages } from './note-tools'
@@ -135,7 +135,7 @@ export function planToolContext(
   }
 }
 export function planPermission(
-  request: Pick<CliTurnRequest, 'tools' | 'context' | 'folder'>,
+  request: Pick<CliTurnRequest, 'tools' | 'context' | 'folder'> & { workDir?: string },
   settings: () => Settings,
   base: (name: string, input: Record<string, unknown>) => Promise<Permission>,
 ): (name: string, input: Record<string, unknown>) => Promise<Permission> {
@@ -148,12 +148,15 @@ export function planPermission(
         name,
         {
           ...(input as JsonObject),
+          // Native shells retain cd between calls. The actor-bound turn scope matches
+          // exact argv when the hook cannot observe that current directory.
+          _engineCwdUntracked: typeof input['cwd'] !== 'string',
           cwd:
             typeof input['cwd'] === 'string'
               ? input['cwd']
-              : (usableFolder(request.folder) ?? process.cwd()),
+              : engineFolders({ workDir: request.workDir ?? process.cwd(), folder: usableFolder(request.folder) }).cwd,
         },
-        { ...request.context },
+        request.context,
         { deferExecution: true },
       )
       if (held) return { allow: false, message: held }
@@ -587,7 +590,7 @@ export class CliHost {
           permission: async (name, input) => {
             // A message is on its way: this step waits for the model to read it. The message itself never travels here.
             if (messages?.hold() === true) return { allow: false as const, message: HELD_STEP }
-            return planPermission(request,settings,permission)(name,input)
+            return planPermission({ ...request, workDir: dir },settings,permission)(name,input)
           },
         })
       mkdirSync(dir, { recursive: true })

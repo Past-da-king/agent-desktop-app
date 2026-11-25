@@ -128,10 +128,6 @@ An existing peer without retained pairing-role metadata cannot restore a lost ho
 
 Unresolvable implicit push targets, including SSH/WSL commands, pass with a soft inspection note rather than using the wrong machine's branch. Explicit protected targets still hold. Tag-only pushes pass.
 
-## Cooperative platform limits
+### Execution reservation lifetime
 
-Windows PowerShell gh.ps1 requires script execution permission. App Windows PowerShell uses ExecutionPolicy Bypass, but pwsh and nested Restricted-policy shells may refuse the script. Windows Python/Node subprocesses resolve gh.exe and skip gh.ps1; cmd relies on the app warning. Start-Process and literal script patterns are best effort, not universal interception. Unix login profiles and Claude login snapshots can re-prepend real gh and lose the shim even for honest calls. These paths need Windows/login runtime proof and are not claimed universally covered.
-
-An existing peer without retained pairing-role metadata cannot restore a lost host-side authority row safely and needs re-pairing. Pinned pull bootstrap currently accepts the configured peer's own claimed roles after a local reset; a hostile peer promotion is outside this cooperative release, so it is not a hostile-device security guarantee. Join records the successful pairing even when authority fetch must be retried later, and reports deferred bootstrap rather than failing a completed pairing.
-
-Unresolvable implicit push targets, including SSH/WSL commands, pass with a soft inspection note rather than using the wrong machine's branch. Explicit protected targets still hold. Tag-only pushes pass.
+Deferred grants end with their shell call, including native Bash success/failure hooks, with turn cleanup as a fallback, even if no shim call consumed them. Computed run_code inner holds use a stable scratch-independent key. When the outer code is held but no complete literal gh argv can be extracted, it directs the agent to shell_run with resolved arguments instead of issuing an unusable attestation. When the outer code is held but no complete literal gh argv can be extracted, it directs the agent to shell_run with resolved arguments instead of issuing an unusable attestation. Native shell hooks record the engine work folder and use actor-bound exact argv within that turn when an earlier cd makes the current folder unobservable. Pairing-role recovery requires a retained pass; observed revocations and deletions invalidate it and retain a deny until explicit pairing.
