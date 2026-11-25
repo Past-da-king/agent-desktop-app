@@ -1,3 +1,4 @@
+import { Worker } from 'node:worker_threads'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -17,14 +18,20 @@ function pipeError(code: string): Error {
 
 describe('dead process pipes', () => {
   it('uses the same self-contained pipe guard in a separate worker isolate', async () => {
-    const factory = new Function(`return (${createPipeGuard.toString()})`)() as typeof createPipeGuard
-    const ended = vi.fn()
-    const stream = new PassThrough()
-    factory(vi.fn())(stream, ended)
-    stream.destroy(pipeError('EOF'))
-    await new Promise((resolve) => setImmediate(resolve))
-    expect(ended).toHaveBeenCalledTimes(1)
-    expect(stream.write('late')).toBe(false)
+    const worker = new Worker(`
+      const { parentPort, workerData } = require('node:worker_threads')
+      const { PassThrough } = require('node:stream')
+      const factory = eval('(' + workerData + ')')
+      const stream = new PassThrough()
+      let ended = 0
+      factory(() => undefined)(stream, () => { ended += 1 })
+      stream.destroy(Object.assign(new Error('write EOF'), { code: 'EOF' }))
+      setImmediate(() => parentPort.postMessage({ ended, late: stream.write('late') }))
+    `, { eval: true, workerData: createPipeGuard.toString() })
+    try {
+      const [result] = await once(worker, 'message')
+      expect(result).toEqual({ ended: 1, late: false })
+    } finally { await worker.terminate() }
   })
 
   it('keeps real programming mistakes visible', () => {
