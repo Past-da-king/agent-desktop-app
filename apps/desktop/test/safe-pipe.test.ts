@@ -8,7 +8,7 @@ import { Supervisor } from '../src/main/workers/supervisor'
 import { waitFor } from '../../../packages/core/test/helpers'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
-import { guardChild, guardPipe, childPipeFailure, isChildPipeError, safeSocketWrite, installChildPipeGuards } from '../src/main/runtime/safe-pipe'
+import { guardChild, guardPipe, childPipeFailure, isChildPipeError, safeSocketWrite, installChildPipeGuards, createPipeGuard } from '../src/main/runtime/safe-pipe'
 import { uncaughtHandler, uncaughtPolicy } from '../src/main/alive'
 
 function pipeError(code: string): Error {
@@ -16,6 +16,17 @@ function pipeError(code: string): Error {
 }
 
 describe('dead process pipes', () => {
+  it('uses the same self-contained pipe guard in a separate worker isolate', async () => {
+    const factory = new Function(`return (${createPipeGuard.toString()})`)() as typeof createPipeGuard
+    const ended = vi.fn()
+    const stream = new PassThrough()
+    factory(vi.fn())(stream, ended)
+    stream.destroy(pipeError('EOF'))
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(ended).toHaveBeenCalledTimes(1)
+    expect(stream.write('late')).toBe(false)
+  })
+
   it('keeps real programming mistakes visible', () => {
     const stream = new PassThrough()
     stream.write = (() => { throw new TypeError('bad input') }) as typeof stream.write
@@ -23,13 +34,14 @@ describe('dead process pipes', () => {
     expect(() => stream.write('text')).toThrow('bad input')
   })
 
-  it('a real supervised worker leaves running state and retains its pipe failure', async () => {
+  it.each(['stay', 'every'] as const)('a real supervised %s worker leaves running state and retains its pipe failure even on exit 0', async (mode) => {
     const root = mkdtempSync(join(tmpdir(), 'pipe-owner-'))
     const store = new WorkerStore(root)
-    const child = guardChild(spawn(process.execPath, ['-e', "process.stdin.resume();setInterval(() => {},1000)"], { stdio: 'pipe' }))
-    store.write({ id: 'w_pipe01', name: 'Pipe test', about: '', entry: 'main.mjs', runtime: 'node', args: [], mode: 'stay', everyMinutes: null, secrets: [], enabled: true, createdAt: 1, updatedAt: 1 }, { 'main.mjs': '' })
+    const child = guardChild(spawn(process.execPath, ['-e', "process.on('SIGTERM', () => process.exit(0)); process.stdout.write('ready'); process.stdin.resume();setInterval(() => {},1000)"], { stdio: 'pipe' }))
+    store.write({ id: 'w_pipe01', name: 'Pipe test', about: '', entry: 'main.mjs', runtime: 'node', args: [], mode, everyMinutes: mode === 'every' ? 5 : null, secrets: [], enabled: true, createdAt: 1, updatedAt: 1 }, { 'main.mjs': '' })
     const supervisor = new Supervisor({ store, spawn: () => child, failLimit: 1, secrets: { get: () => null, set: () => undefined } })
     try {
+      await once(child.stdout!, 'data')
       supervisor.start()
       child.stdin!.emit('error', pipeError('EOF'))
       await waitFor(() => supervisor.info()[0]?.state === 'failing', 3000)
@@ -102,11 +114,15 @@ describe('dead process pipes', () => {
     const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
     try {
       await once(child.stdout!, 'data')
-      child.stdin!.write('first chunk')
+      const writeErrors: Error[] = []
+      // More than a pipe buffer: a real OS write remains pending when the child is killed.
+      child.stdin!.write(Buffer.alloc(4 * 1024 * 1024), (error) => { if (error) writeErrors.push(error) })
       child.kill('SIGKILL')
+      for (let i = 0; i < 10; i++) child.stdin!.write('mid-stream chunk', (error) => { if (error) writeErrors.push(error) })
       await closed
       for (let i = 0; i < 10; i++) child.stdin!.write('late chunk')
       await new Promise((resolve) => setImmediate(resolve))
+      expect(writeErrors.length).toBeGreaterThan(0)
       expect(state).toBe('failed')
       expect(reason).toContain('engine process ended:')
       expect(childPipeFailure(child)?.message).toBe(reason)

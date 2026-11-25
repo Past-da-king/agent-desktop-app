@@ -1,3 +1,4 @@
+import { createPipeGuard, reportPipeFailure } from './runtime/safe-pipe'
 /**
  * A long-lived child process started from a worker thread. Node's spawn is synchronous: on a computer short of memory,
  * starting PowerShell held the main thread for 1.8 to 4.3 s (seen by the watchdog, 30 Oct 2026). The worker starts it
@@ -19,10 +20,11 @@ let pipeEnded = false
 const pipeFailed = (error) => {
   if (pipeEnded) return
   pipeEnded = true
-  parentPort.postMessage({ failed: 'engine process ended: ' + String(error.message || error) })
+  parentPort.postMessage({ failed: 'engine process ended: ' + String(error.message || error), pipe: true, code: error.code })
   child.kill()
 }
-for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe.on('error', pipeFailed)
+const guardPipe = (${createPipeGuard.toString()})(() => undefined)
+for (const pipe of [child.stdin, child.stdout, child.stderr]) guardPipe(pipe, pipeFailed)
 child.on('error', (error) => { parentPort.postMessage({ failed: String(error && error.message || error) }); process.exit(0) })
 child.on('exit', (code) => { parentPort.postMessage({ exit: code === null ? -1 : code }); process.exit(0) })
 parentPort.on('message', (m) => {
@@ -63,20 +65,22 @@ export function spawnOffThread(file: string, args: string[]): ChildProcessWithou
     child.emit('exit', code, null)
     void worker.terminate().catch(() => undefined)
   }
-  worker.on('message', (m: { out?: string; err?: string; failed?: string; exit?: number; started?: number }) => {
+  worker.on('message', (m: { out?: string; err?: string; failed?: string; pipe?: boolean; code?: string; exit?: number; started?: number }) => {
     if (typeof m.started === 'number') child['pid'] = m.started
     if (typeof m.out === 'string') stdout.emit('data', m.out)
     if (typeof m.err === 'string') stderr.emit('data', m.err)
     if (typeof m.failed === 'string' && !ended) {
-      child.emit('error', new Error(m.failed))
-      end(-1)
+      const error = Object.assign(new Error(m.failed), { code: m.code })
+      if (m.pipe) reportPipeFailure(error)
+      try {
+        if (!m.pipe || child.listenerCount('error') > 0) child.emit('error', error)
+      } finally { end(-1) }
     }
     if (typeof m.exit === 'number') end(m.exit)
   })
   worker.on('error', (error) => {
     if (ended) return
-    child.emit('error', error)
-    end(-1)
+    try { child.emit('error', error) } finally { end(-1) }
   })
   worker.on('exit', () => end(-1))
   Object.assign(child, {

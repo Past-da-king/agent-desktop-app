@@ -5,7 +5,6 @@ import type { ChildProcess } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
 
 const pipeFailure = Symbol.for('agent.childPipeFailure')
-const guarded = new WeakSet<object>()
 const failures = new WeakMap<object, Error>()
 let warn: (message: string, fields: Record<string, unknown>) => void = () => undefined
 const codes = new Set(['EOF', 'EPIPE', 'ECONNRESET', 'ERR_STREAM_DESTROYED', 'ERR_STREAM_WRITE_AFTER_END'])
@@ -26,50 +25,65 @@ export function isChildPipeError(error: unknown): boolean {
 
 export function onPipeWarning(log: typeof warn): void { warn = log }
 
+/** Shared warning/tag boundary for errors relayed from the off-thread process host. */
+export function reportPipeFailure(error: Error): void {
+  if (codes.has(codeOf(error))) Reflect.set(error, pipeFailure, true)
+  warn('Process pipe ended', { message: error.message, code: codeOf(error) })
+}
+
 export function childPipeFailure(child: object): Error | undefined { return failures.get(child) }
 
-/** Keep the listener for the stream's lifetime: late callback errors can follow close. */
-export function guardPipe(stream: Readable | Writable | null | undefined, ended: (error: Error) => void): void {
-  if (stream == null || guarded.has(stream)) return
-  guarded.add(stream)
-  let reported = false
-  const fail = (reason: unknown): void => {
-    if (reported) return
-    reported = true
-    const error = reason instanceof Error ? reason : new Error(String(reason))
-    if (codes.has(codeOf(error))) Reflect.set(error, pipeFailure, true)
-    warn('Process pipe ended', { message: error.message, code: codeOf(error) })
-    ended(error)
+type PipeGuard = (stream: Readable | Writable | null | undefined, ended: (error: Error) => void) => void
+
+/** Self-contained so the off-thread host can install this exact guard in its own Node isolate. */
+export function createPipeGuard(report: (error: Error) => void): PipeGuard {
+  const guarded = new WeakSet<object>()
+  const codes = new Set(['EOF', 'EPIPE', 'ECONNRESET', 'ERR_STREAM_DESTROYED', 'ERR_STREAM_WRITE_AFTER_END'])
+  const codeOf = (error: unknown): string => typeof error === 'object' && error !== null ? String((error as NodeJS.ErrnoException).code ?? '') : ''
+  return (stream, ended): void => {
+    if (stream == null || guarded.has(stream)) return
+    guarded.add(stream)
+    let reported = false
+    const fail = (reason: unknown): void => {
+      if (reported) return
+      reported = true
+      const error = reason instanceof Error ? reason : new Error(String(reason))
+      report(error)
+      ended(error)
+    }
+    stream.on('error', fail)
+    if (!('write' in stream)) return
+    const writable = stream as Writable
+    writable.write = new Proxy(writable.write, {
+      apply(target, receiver, args: unknown[]) {
+        if (writable.destroyed || writable.writableEnded || writable.writable === false) {
+          const error = Object.assign(new Error('write ERR_STREAM_DESTROYED: process pipe ended'), { code: 'ERR_STREAM_DESTROYED' })
+          fail(error)
+          const callback = args.at(-1)
+          if (typeof callback === 'function') queueMicrotask(() => callback(error))
+          return false
+        }
+        const callback = typeof args.at(-1) === 'function' ? args.pop() as (error?: Error | null) => void : undefined
+        args.push((error?: Error | null) => { if (error) fail(error); callback?.(error) })
+        try { return Reflect.apply(target, receiver, args) }
+        catch (error) {
+          if (!codes.has(codeOf(error))) throw error
+          fail(error); callback?.(error instanceof Error ? error : new Error(String(error))); return false
+        }
+      },
+    })
+    writable.end = new Proxy(writable.end, {
+      apply(target, receiver, args: unknown[]) {
+        if (writable.destroyed || writable.writableEnded) return receiver
+        try { return Reflect.apply(target, receiver, args) }
+        catch (error) { if (!codes.has(codeOf(error))) throw error; fail(error); return receiver }
+      },
+    })
   }
-  stream.on('error', fail)
-  if (!('write' in stream)) return
-  const writable = stream as Writable
-  writable.write = new Proxy(writable.write, {
-    apply(target, receiver, args: unknown[]) {
-      if (writable.destroyed || writable.writableEnded || writable.writable === false) {
-        const error = Object.assign(new Error('write ERR_STREAM_DESTROYED: process pipe ended'), { code: 'ERR_STREAM_DESTROYED' })
-        fail(error)
-        const callback = args.at(-1)
-        if (typeof callback === 'function') queueMicrotask(() => callback(error))
-        return false
-      }
-      const callback = typeof args.at(-1) === 'function' ? args.pop() as (error?: Error | null) => void : undefined
-      args.push((error?: Error | null) => { if (error) fail(error); callback?.(error) })
-      try { return Reflect.apply(target, receiver, args) }
-      catch (error) {
-        if (!codes.has(codeOf(error))) throw error
-        fail(error); callback?.(error instanceof Error ? error : new Error(String(error))); return false
-      }
-    },
-  })
-  writable.end = new Proxy(writable.end, {
-    apply(target, receiver, args: unknown[]) {
-      if (writable.destroyed || writable.writableEnded) return receiver
-      try { return Reflect.apply(target, receiver, args) }
-      catch (error) { if (!codes.has(codeOf(error))) throw error; fail(error); return receiver }
-    },
-  })
 }
+
+/** Keep listeners for each stream's lifetime, including errors delivered after close. */
+export const guardPipe: PipeGuard = createPipeGuard(reportPipeFailure)
 
 /** Notify existing error/exit owners, then stop the child so their normal lifecycle completes. */
 export function guardChild<T extends ChildProcess>(child: T): T {
@@ -78,8 +92,11 @@ export function guardChild<T extends ChildProcess>(child: T): T {
     const reason = Object.assign(new Error(`engine process ended: ${error.message}`), { code: codeOf(error) })
     if (isChildPipeError(error)) Reflect.set(reason, pipeFailure, true)
     failures.set(child, reason)
-    if (child.listenerCount('error') > 0) child.emit('error', reason)
-    if (child.exitCode === null && child.signalCode === null) child.kill()
+    try {
+      if (child.listenerCount('error') > 0) child.emit('error', reason)
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill()
+    }
   }
   for (const stream of new Set([child.stdin, child.stdout, child.stderr, ...child.stdio])) guardPipe(stream, ended)
   return child
