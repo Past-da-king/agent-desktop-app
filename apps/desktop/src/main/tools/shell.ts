@@ -1,3 +1,4 @@
+import { ownRunTree } from '../runtime/run-tree'
 import { childPipeFailure, registerChildPipeCleanup } from '../runtime/safe-pipe'
 /**
  * `shell_run`: the agent may use this computer's shell, but only with the person's explicit yes,
@@ -394,9 +395,8 @@ async function runCommand(request: RunRequest): Promise<string> {
     return `Could not start that command: ${messageOf(error)}`
   }
 
-  registerChildPipeCleanup(child, () => {
-    if (platform !== 'win32' || (child.exitCode == null && child.signalCode == null)) killProcessTree(child.pid, platform)
-  })
+  const tree = ownRunTree(child, platform, () => killProcessTree(child.pid, platform))
+  registerChildPipeCleanup(child, tree.kill)
 
   child.stdout?.on('data', (chunk: Buffer) => {
     sink.push(chunk)
@@ -416,12 +416,13 @@ async function runCommand(request: RunRequest): Promise<string> {
     const finish = (): void => {
       if (settled) return
       settled = true
+      tree.release()
       clearTimeout(timer)
       request.ctx.signal.removeEventListener('abort', onAbort)
       done()
     }
 
-    const kill = (): void => killProcessTree(child.pid, platform)
+    const kill = tree.kill
     const onAbort = (): void => {
       stopped = true
       kill()
@@ -436,7 +437,12 @@ async function runCommand(request: RunRequest): Promise<string> {
       // A pipe error must not disarm tree protection before descendants close their inherited pipes.
       if (childPipeFailure(child) === undefined) finish()
     })
-    child.once('close', finish)
+    tree.onSettled(() => {
+      clearTimeout(timer)
+      request.ctx.signal.removeEventListener('abort', onAbort)
+      if (tree.closed) finish()
+    })
+    child.once('close', () => { if (tree.settled) finish() })
     if (request.ctx.signal.aborted) onAbort()
     else request.ctx.signal.addEventListener('abort', onAbort, { once: true })
   })

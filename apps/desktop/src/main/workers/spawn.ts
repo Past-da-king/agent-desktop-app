@@ -1,3 +1,4 @@
+import { ownRunTree } from '../runtime/run-tree'
 import { registerChildPipeCleanup } from '../runtime/safe-pipe'
 /**
  * Starting a worker process for real. Node workers run on the app's own binary (ELECTRON_RUN_AS_NODE), so no
@@ -16,9 +17,8 @@ import type { ChildLike, WorkerSpawn } from './supervisor'
 export const spawnWorker: WorkerSpawn = ({ manifest, dir, env }) => {
   const entry = join(dir, manifest.entry)
   const owned = (child: ChildProcess): ChildLike => {
-    registerChildPipeCleanup(child, () => {
-      if (process.platform !== 'win32' || (child.exitCode == null && child.signalCode == null)) killTree(child.pid)
-    })
+    const tree = ownRunTree(child, process.platform, () => killTree(child.pid))
+    registerChildPipeCleanup(child, tree.kill)
     return child as unknown as ChildLike
   }
   const options = { detached: process.platform !== 'win32', cwd: dir, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] as Array<'pipe'> }

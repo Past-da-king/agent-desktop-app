@@ -72,7 +72,7 @@ describe.skipIf(process.platform !== 'linux')('leader exited before pipe failure
         const kill = process.kill
         let firstGroupAttempt = true
         const spy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
-          if (pid === -child!.pid! && firstGroupAttempt) { firstGroupAttempt = false; return true }
+          if (pid === -child!.pid! && signal === 'SIGKILL' && firstGroupAttempt) { firstGroupAttempt = false; throw Object.assign(new Error('fixture cleanup not yet permitted'), { code: 'EPERM' }) }
           return kill.call(process, pid, signal)
         })
         restoreKill = () => spy.mockRestore()
@@ -88,6 +88,34 @@ describe.skipIf(process.platform !== 'linux')('leader exited before pipe failure
       controller.abort()
       if (child?.pid !== undefined) { try { process.kill(-child.pid, 'SIGKILL') } catch { /* fixture group gone */ } }
       if (descendant > 0 && alive(descendant)) { try { process.kill(descendant, 'SIGKILL') } catch { /* gone */ } }
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+})
+
+
+describe.skipIf(process.platform !== 'linux')('settled run tree ownership', () => {
+  it.each(['shell', 'code'] as const)('%s ignores EOF, abort and deadline after normal close', async (kind) => {
+    const folder = mkdtempSync(join(tmpdir(), 'settled-pipe-tree-'))
+    let child: ChildProcess | undefined
+    const controller = new AbortController()
+    const spawnImpl = ((file: string, args: string[], options: object) => { child = guardChild(spawn(file, args, options)); return child }) as typeof spawn
+    const tool = kind === 'shell'
+      ? toolNamed(shellTools({ settings: settingsView({ shell: 'ask' }), platform: 'linux', spawnImpl }), 'shell_run')
+      : toolNamed(codeTools({ tempRoot: folder, timeoutMs: 1000, spawnImpl, platform: 'linux' }), 'run_code')
+    let spy: ReturnType<typeof vi.spyOn> | undefined
+    try {
+      const input = kind === 'shell' ? { command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`, timeoutSec: 1 } : { language: 'javascript', code: 'process.exit(0)' }
+      await tool.run(input, testContext({ approve: async () => true, signal: controller.signal }))
+      expect(child?.exitCode).toBe(0)
+      // A stale numeric group could now belong to another run. No probe or signal is allowed.
+      spy = vi.spyOn(process, 'kill').mockReturnValue(true)
+      child!.stdout!.emit('error', Object.assign(new Error('write EOF'), { code: 'EOF' }))
+      controller.abort()
+      await new Promise(resolve => setTimeout(resolve, 1100))
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy?.mockRestore()
       rmSync(folder, { recursive: true, force: true })
     }
   })

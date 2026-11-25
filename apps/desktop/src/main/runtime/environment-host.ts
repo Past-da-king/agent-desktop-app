@@ -1,3 +1,4 @@
+import { ownRunTree } from './run-tree'
 import { childPipeFailure, registerChildPipeCleanup } from './safe-pipe'
 /**
  * The real pieces behind `environment.ts`: node:fs, node:os and execFile. Kept apart so the scan
@@ -75,22 +76,22 @@ export const execVersion: ExecFn = (file, args, options) =>
       return
     }
 
-    registerChildPipeCleanup(child, () => {
-      if (process.platform !== 'win32' || (child.exitCode == null && child.signalCode == null)) killProcessTree(child.pid, process.platform)
-    })
+    const tree = ownRunTree(child, process.platform, () => killProcessTree(child.pid, process.platform))
+    registerChildPipeCleanup(child, tree.kill)
     let stdout = ''
     let stderr = ''
     let settled = false
     const finish = (error: Error | null): void => {
       if (settled) return
       settled = true
+      tree.release()
       clearTimeout(timer)
       if (error !== null && stdout.trim() === '' && stderr.trim() === '') reject(error)
       else resolve({ stdout, stderr })
     }
     const timer = setTimeout(() => {
-      killProcessTree(child.pid, process.platform)
-      finish(new Error('version check timed out'))
+      tree.kill()
+      if (tree.settled) finish(new Error('version check timed out'))
     }, options.timeoutMs)
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -104,7 +105,8 @@ export const execVersion: ExecFn = (file, args, options) =>
       if (childPipeFailure(child) === undefined) finish(error)
       else pipeError = error
     })
-    child.once('close', () => finish(pipeError))
+    tree.onSettled(() => { clearTimeout(timer); if (tree.closed) finish(pipeError) })
+    child.once('close', () => { if (tree.settled) finish(pipeError) })
   })
 
 export function hostEnvironment(): EnvironmentService {

@@ -1,3 +1,4 @@
+import { ownRunTree } from '../runtime/run-tree'
 import { childPipeFailure, registerChildPipeCleanup } from '../runtime/safe-pipe'
 /**
  * `run_code`: a small scratch folder and a child process, so the agent can calculate, transform data
@@ -252,9 +253,8 @@ async function execute(request: ExecuteRequest): Promise<string> {
     record('failed', null, `Could not start: ${messageOf(error)}`)
     return `Could not run the program: ${messageOf(error)}`
   }
-  registerChildPipeCleanup(child, () => {
-    if (platform !== 'win32' || (child.exitCode == null && child.signalCode == null)) killProcessTree(child.pid, platform)
-  })
+  const tree = ownRunTree(child, platform, () => killProcessTree(child.pid, platform))
+  registerChildPipeCleanup(child, tree.kill)
 
   child.stdout?.on('data', (chunk: Buffer) => {
     sink.push(chunk)
@@ -275,24 +275,30 @@ async function execute(request: ExecuteRequest): Promise<string> {
     const finish = (): void => {
       if (settled) return
       settled = true
+      tree.release()
       clearTimeout(timer)
       request.signal.removeEventListener('abort', onAbort)
       done()
     }
     const onAbort = (): void => {
       stopped = true
-      killProcessTree(child.pid, platform)
+      tree.kill()
     }
     const timer = setTimeout(() => {
       timedOut = true
-      killProcessTree(child.pid, platform)
+      tree.kill()
     }, timeoutMs)
     child.once('error', (error) => {
       spawnError = messageOf(error)
       // A pipe error must not disarm tree protection before descendants close their inherited pipes.
       if (childPipeFailure(child) === undefined) finish()
     })
-    child.once('close', finish)
+    tree.onSettled(() => {
+      clearTimeout(timer)
+      request.signal.removeEventListener('abort', onAbort)
+      if (tree.closed) finish()
+    })
+    child.once('close', () => { if (tree.settled) finish() })
     if (request.signal.aborted) onAbort()
     else request.signal.addEventListener('abort', onAbort, { once: true })
   })
