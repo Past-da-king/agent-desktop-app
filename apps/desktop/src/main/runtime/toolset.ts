@@ -86,7 +86,7 @@ export interface ToolsetDeps extends CoreToolDeps {
   apps?: AppsService
   /** Sites the agent learned. Omitted in tests that do not need them. */
   learned?: LearnedStore
-  /** Makes voice notes (the voice module). Main agent only. */
+  /** Makes voice notes with the shared voice service on desktop or node. */
   voiceNotes?: () => VoiceNoteMaker | null
   /** Past-chat search (memory/service.ts). Without it there are no chats_search and chat_read tools. */
   searchChats?: (query: string, limit: number) => Promise<PastChatHit[]>
@@ -266,6 +266,7 @@ function workerTools(deps: ToolsetDeps): Tool[] {
   // Every tool name in this set, so a mini-app's permission for a tool that does not exist is caught (tools/miniapps.ts).
   let names: ReadonlySet<string> = new Set()
   const list: Tool[] = [
+    ...(deps.voiceNotes === undefined ? [] : [voiceNoteTool(deps.store, deps.voiceNotes)]),
     ...coreTools(deps), // now, ask_user, request_approval, notify_user, web_fetch, report
     ...memoryTools(deps.store), // memory_search, memory_get, memory_save, memory_update
     ...(deps.searchChats === undefined ? [] : chatTools({ store: deps.store, search: deps.searchChats })), // chats_search, chat_read
@@ -330,8 +331,6 @@ export function buildToolset(deps: ToolsetDeps): Tool[] {
   }
   // Installing an update ends the app, so only the main agent may (helpers resume after the restart).
   if (deps.appControl !== undefined) tools.push(...asOwner(appUpdateTools(deps.appControl))) // app_update
-  // Voice notes are for the person only, so helpers never get this.
-  if (deps.voiceNotes !== undefined) tools.push(asOwner([voiceNoteTool(deps.store, deps.voiceNotes)])[0]!)
   // He tells the agent he talks to that a meeting is over; helpers never hear that from him.
   if (deps.presence !== undefined) tools.push(...asOwner(presenceTools(deps.presence))) // meeting_ended
   // No step counter any more (21 Oct 2026): the prompt says to hand big work to helpers, nothing cuts a turn short.

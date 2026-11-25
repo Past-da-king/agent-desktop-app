@@ -13,6 +13,8 @@ import { hostname as osHostname } from 'node:os'
 import { join } from 'node:path'
 
 import { DEFAULT_SETTINGS, EARLIER_CHATS_PROJECT, MAIN_CHAT, MEMORY_DAILY_ROUTINE, providerFor, type Tool } from '@agent/core'
+import { ShownMedia } from '../main/media/shown'
+import { latestOrigin } from '../main/devices/origin'
 import { Recordings } from '../main/recordings/store'
 import { recoveredNoticeText, startRecordingsUpkeep } from '../main/recordings/upkeep'
 import { chatTag } from '../main/runtime/chat-lines'
@@ -178,6 +180,8 @@ export interface HeadlessRuntime {
   supervisor: Supervisor
   /** The main agent's toolset: what this node lends to the agents on other devices (shared device tools, s11). */
   mainTools: Tool[]
+  /** Token allow-list shared by show_media and the device byte-fetch route. */
+  shownMedia: ShownMedia
   /** The node's own headless browser, or null when this machine has no Chromium. */
   browser: HeadlessBrowser | null
   /** The app contract by channel, for tests and local calls. */
@@ -361,12 +365,28 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   // The node's own controls as tools (tools/app-control.ts): Devices (once started) and Settings. No self update here.
   const appControl: AppControlDeps = { devices: () => getDevicesService(), links: () => devicesState.sync?.replicator.status() ?? [], settings, invoker: () => registryInvoker(registry) }
   // Recordings a linked device's mic makes here are written to disk as they happen (recordings/store.ts).
+  const shownMedia = new ShownMedia(join(dir, 'shown-media.json'))
+  const media = { show: (path: string) => shownMedia.show(path), selfId: () => devicesState.sync?.selfId() ?? '', origin: (chat: string) => latestOrigin(store, chat) }
+  let voice: VoiceService | null = null
+  const voiceNotes = () => voice
   const recordings = new Recordings({ root: join(dir, 'voice-notes', 'recordings'), log: (message, fields) => logger.info(message, fields) })
   // calendar_events reads the presence calendar cache, started below.
   let presenceCalendar: CalendarReader | null = null
-  const workerToolList = guardTools([...browserTools(buildWorkerToolset({ appControl, store, settings, ...browserDep, deviceHub, agentName: () => settings.get().agentName, environment, apps, learned, workers: workerDeps, vault, browserVault, recordings, calendar: () => presenceCalendar, decisions: () => decisions.service })), ...nodeTools], vault)
-  // Settings > Git: a run's work in a git repo on this machine is committed and pushed when it ends. Off by default.
   const gitKv = { get: (key: string) => store.localValue(key), set: (key: string, value: string) => store.setLocalValue(key, value) }
+  const workerToolList = guardTools([
+    ...browserTools(buildWorkerToolset({
+      media,
+      git: { kv: gitKv, hook: () => gitHook },
+        voiceNotes,
+      appControl, store, settings, ...browserDep, deviceHub,
+      agentName: () => settings.get().agentName,
+      environment, apps, learned, workers: workerDeps, vault, browserVault, recordings,
+      calendar: () => presenceCalendar,
+      decisions: () => decisions.service,
+    })),
+    ...nodeTools,
+  ], vault)
+  // Settings > Git: a run's work in a git repo on this machine is committed and pushed when it ends. Off by default.
   let gitVault: { at: number; hashes: VaultHashes } | null = null
   const gitHook = new RunGitHook({
     settings: () => settings.get(),
@@ -461,6 +481,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   wakeups.start()
   const tools = guardTools(browserTools([
     ...buildToolset({
+      media,
+      voiceNotes,
       cards: { waiting: () => acts.waiting(), answer: (args) => acts.answer(args) },
       git: { kv: gitKv, hook: () => gitHook },
       appControl,
@@ -666,7 +688,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
 
   // Voice: a paired phone with no Google key of its own gets a one-use Live token from the key the bundle brought
   // here, and its call lands in this chat. Live calls held on this node itself need a screen, so none start here.
-  const voice = new VoiceService({
+  voice = new VoiceService({
     secrets,
     settings,
     store,
@@ -786,6 +808,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     learned,
     browser,
     mainTools: tools,
+    shownMedia,
     supervisor,
     leases,
     devicesHooks: {

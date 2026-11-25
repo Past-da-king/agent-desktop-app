@@ -1266,6 +1266,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const recordings = new Recordings({ root: join(dir, 'voice-notes', 'recordings'), log: (message, fields) => logger.info(message, fields) })
   recordingsStore = recordings
   const helperToolset = buildWorkerToolset({
+    media: { show: (path) => shownMedia.show(path), selfId: () => devicesState.sync?.selfId() ?? '', origin: (chat) => latestOrigin(store!, chat) },
+    voiceNotes: () => voice,
     appControl,
     deviceHub: () => devicesState.sync?.tools ?? null,
     store,
