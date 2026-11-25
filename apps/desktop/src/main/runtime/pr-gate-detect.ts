@@ -622,7 +622,9 @@ export function reviewableCall(name: string, input: Args): boolean {
   if (['browser_act', 'browser_click', 'browser_press_key'].includes(name)) {
     if (!/^https:\/\/github\.com(?:\/|$)/i.test(String(input['pageUrl'] ?? '')))
       return false
-    if (name === 'browser_click' || name === 'browser_press_key') return true
+    if (name === 'browser_click') return true
+    if (name === 'browser_press_key') return input['key'] === 'Enter'
+    if (input['action'] === 'press' && input['key'] !== 'Enter') return false
     if (input['action'] === 'type' && input['submit'] === true)
       return readyComment(input['text'])
     return (
@@ -658,9 +660,9 @@ export function reviewableCall(name: string, input: Args): boolean {
     if (/^GITHUB_CREATE_(?:A_)?PULL_REQUEST$/.test(slug))
       return ![true, 'true'].includes(args['draft'] as boolean | string)
     if (/(?:UPDATE|EDIT).*PULL_REQUEST/.test(slug))
-      return args['draft'] === false
+      return [false, 'false'].includes(args['draft'] as boolean | string)
     if (/CREATE.*(?:COMMENT|REVIEW)/.test(slug))
-      return readyComment(args['body'])
+      return unreadable(args['body']) || readyComment(args['body'])
     if (/GRAPHQL/.test(slug)) return graph(args['query'])
   }
   return false
