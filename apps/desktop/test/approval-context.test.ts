@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createElement } from 'react'
 import { ApprovalContext } from '../src/renderer/ui/ApprovalContext'
