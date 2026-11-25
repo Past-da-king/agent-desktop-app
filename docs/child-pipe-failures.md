@@ -48,3 +48,11 @@ Five additional regression cases fail on unchanged bcdea3a with only the tests c
 Windows shutdown uses one terminal latch for exit, close and successful taskkill completion. Both escalation timers are cancelled on termination. The asynchronous child_process import checks that latch immediately before spawning taskkill; a taskkill result received after child termination is ignored. This prevents a delayed PID-based kill from being launched after the owned child ended.
 
 Expected pipe failures alone are deduplicated. A later unexpected error still reaches both the child owner and the fault handler; the off-thread relay preserves that distinction too. Four regression cases fail at dea8d69 and pass after repair: deferred Windows launch after exit, after close, and racing escalation, plus TypeError after EOF. Windows tests intercept spawn under a synthetic win32 platform and do not execute taskkill. Native Windows proof and full suites remain pending.
+
+## Third independent review repairs
+
+This supersedes the Windows taskkill implementation described in earlier review history. The shared helper never launches taskkill or performs PID lookup. Windows uses one child.kill(SIGKILL) on the process handle owned by Node; POSIX retains SIGTERM then SIGKILL escalation. No direct-child kill runs after exit. This shared guard does not promise grandchild/process-tree termination; launcher-specific process-group or Job Object cleanup remains the launcher owner's responsibility.
+
+A WeakSet deduplicates the same Error object delivered through write callback and error event; a different unexpected Error still reaches the owner and fault handler. Exit now cancels kill escalation but arms a separate 250 ms missing-close deadline preserving the actual exit code/signal; close alone cancels that deadline.
+
+Three controls fail at 5c90944 and pass after repair: synthetic Windows spawn interception observes no taskkill and one handle kill; real Writable callback/event delivery reports a TypeError once while another survives; exit without close completes close once after the grace period. Native Windows behavior and full suites remain pending.

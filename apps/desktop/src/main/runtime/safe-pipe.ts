@@ -42,6 +42,7 @@ type PipeGuard = (stream: Readable | Writable | null | undefined, ended: (error:
 /** Self-contained so the off-thread host can install this exact guard in its own Node isolate. */
 export function createPipeGuard(report: (error: Error) => void): PipeGuard {
   const guarded = new WeakSet<object>()
+  const delivered = new WeakSet<Error>()
   const codes = new Set(['EOF', 'EPIPE', 'ECONNRESET', 'ERR_STREAM_DESTROYED', 'ERR_STREAM_WRITE_AFTER_END'])
   const codeOf = (error: unknown): string => typeof error === 'object' && error !== null ? String((error as NodeJS.ErrnoException).code ?? '') : ''
   return (stream, ended): void => {
@@ -50,6 +51,8 @@ export function createPipeGuard(report: (error: Error) => void): PipeGuard {
     let reported = false
     const fail = (reason: unknown): void => {
       const error = reason instanceof Error ? reason : new Error(String(reason))
+      if (delivered.has(error)) return
+      delivered.add(error)
       const expected = codes.has(codeOf(error))
       if (expected && reported) return
       if (expected) reported = true
@@ -113,40 +116,41 @@ export function guardChild<T extends ChildProcess>(child: T): T {
 export function terminatePipeChild(child: ChildProcess): void {
   let exited = child.exitCode != null || child.signalCode != null
   if (exited) return
-  let exitDelivered = false, closeDelivered = false
+  let exitDelivered = false, closed = false
+  let exitCode: number | null = -1, exitSignal: NodeJS.Signals | null = 'SIGKILL'
   let force: NodeJS.Timeout | undefined, finish: NodeJS.Timeout | undefined
-  const cancel = (): void => { clearTimeout(force); clearTimeout(finish) }
   const originalEmit = child.emit
   child.emit = function (this: ChildProcess, event: string | symbol, ...args: unknown[]): boolean {
-    if (event === 'exit') { if (exitDelivered) return false; exitDelivered = true; exited = true; cancel() }
-    if (event === 'close') { if (closeDelivered) return false; closeDelivered = true; exited = true; cancel() }
+    if (event === 'exit') {
+      if (exitDelivered || closed) return false
+      exitDelivered = true; exited = true
+      exitCode = args[0] as number | null; exitSignal = args[1] as NodeJS.Signals | null
+      clearTimeout(force); clearTimeout(finish)
+      // Exit does not guarantee drained stdio/close. Keep a separate, bounded close deadline.
+      finish = setTimeout(() => { if (!closed) child.emit('close', exitCode, exitSignal) }, 250)
+      finish.unref()
+    }
+    if (event === 'close') {
+      if (closed) return false
+      closed = true; exited = true
+      clearTimeout(force); clearTimeout(finish)
+    }
     return Reflect.apply(originalEmit, this, [event, ...args])
   } as typeof child.emit
-  const complete = (): void => {
-    if (!exitDelivered) child.emit('exit', -1, 'SIGKILL')
-    if (!closeDelivered) child.emit('close', -1, 'SIGKILL')
-  }
-  force = setTimeout(() => {
-    if (exited) return
-    try { child.kill('SIGKILL') } catch { /* OS may already have reaped it. */ }
-    if (exited) return
-    finish = setTimeout(() => { if (!exited) complete() }, 250)
-    finish.unref()
-  }, 500)
-  force.unref()
-  // The async import may resolve after exit/close. Never start a PID-based kill after that latch.
-  if (process.platform === 'win32' && child.pid !== undefined) {
-    const pid = child.pid
-    void import('node:child_process').then(({ spawn }) => {
-      if (exited) return
-      const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
-      killer.once('error', () => undefined)
-      killer.once('close', (code) => {
-        if (exited) return
-        if (code === 0) complete()
-      })
-    }).catch(() => undefined)
+  finish = setTimeout(() => {
+    if (!exited) child.emit('exit', -1, 'SIGKILL')
+    if (!closed) child.emit('close', exitCode, exitSignal)
+  }, 750)
+  finish.unref()
+  if (process.platform === 'win32') {
+    // Node terminates the process HANDLE it owns. Never look up a potentially recycled PID.
+    try { child.kill('SIGKILL') } catch { /* The bounded owner deadline still runs. */ }
   } else {
+    force = setTimeout(() => {
+      if (exited) return
+      try { child.kill('SIGKILL') } catch { /* OS may already have reaped it. */ }
+    }, 500)
+    force.unref()
     try { child.kill('SIGTERM') } catch { /* Escalation and owner deadline still run. */ }
   }
 }

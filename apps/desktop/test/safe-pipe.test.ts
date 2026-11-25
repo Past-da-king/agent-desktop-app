@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { WorkerStore } from '../src/main/workers/store'
 import { Supervisor } from '../src/main/workers/supervisor'
 import { waitFor } from '../../../packages/core/test/helpers'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { guardChild, guardPipe, childPipeFailure, isChildPipeError, safeSocketWrite, createPipeGuard } from '../src/main/runtime/safe-pipe'
 import { uncaughtHandler, uncaughtPolicy } from '../src/main/alive'
@@ -258,5 +258,58 @@ describe('review round two regressions', () => {
       expect(owner.mock.calls[1]?.[0].message).toContain('distinct fault after EOF')
       expect(fault).toHaveBeenCalledWith(error)
     } finally { api.onPipeFault(() => undefined) }
+  })
+})
+
+
+describe('review round three regressions', () => {
+  it('Windows shutdown never launches PID-based kills and uses one owned-handle kill', async () => {
+    const { terminatePipeChild } = await import('../src/main/runtime/safe-pipe')
+    const timers: Array<() => void> = [], spawn = vi.fn(() => new EventEmitter())
+    const run = new Function('process', 'loadChildProcesses', 'setTimeout', 'clearTimeout', 'return (' + terminatePipeChild.toString().replace(/(?:import|__vite_ssr_dynamic_import__)\(['"]node:child_process['"]\)/, 'loadChildProcesses()') + ')')(
+      { platform: 'win32' }, () => Promise.resolve({ spawn }),
+      (callback: () => void) => { timers.push(callback); return { unref: () => undefined } }, () => undefined,
+    ) as typeof terminatePipeChild
+    const child = Object.assign(new EventEmitter(), { pid: 123456, exitCode: null, signalCode: null, kill: vi.fn(() => true) })
+    run(child as never)
+    await new Promise(resolve => setImmediate(resolve))
+    for (const timer of [...timers]) timer()
+    expect(spawn).not.toHaveBeenCalled()
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL')
+    child.emit('exit', 0, null)
+    for (const timer of [...timers]) timer()
+    expect(child.kill).toHaveBeenCalledTimes(1)
+  })
+
+  it('one unexpected Writable callback/event error reports once but a distinct error survives', async () => {
+    const api = await import('../src/main/runtime/safe-pipe')
+    const first = new TypeError('one fault delivered twice'), second = new TypeError('a distinct fault')
+    const owner = vi.fn(), fault = vi.fn()
+    const stream = new Writable({ write(_chunk, _encoding, callback) { callback(first) } })
+    api.onPipeFault(fault)
+    api.guardPipe(stream, owner)
+    try {
+      stream.write('payload')
+      await new Promise(resolve => setImmediate(resolve))
+      expect(owner).toHaveBeenCalledTimes(1)
+      expect(fault).toHaveBeenCalledExactlyOnceWith(first)
+      stream.emit('error', second)
+      expect(owner).toHaveBeenCalledTimes(2)
+      expect(fault).toHaveBeenNthCalledWith(2, second)
+    } finally { api.onPipeFault(() => undefined) }
+  })
+
+  it('completes missing close after real exit without delivering exit twice', async () => {
+    const { terminatePipeChild } = await import('../src/main/runtime/safe-pipe')
+    const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null, kill: vi.fn(() => true) })
+    const exit = vi.fn(), close = vi.fn()
+    child.on('exit', exit); child.on('close', close)
+    terminatePipeChild(child as never)
+    child.emit('exit', 7, null)
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    expect(exit).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledExactlyOnceWith(7, null)
+    child.emit('close', 7, null)
+    expect(close).toHaveBeenCalledTimes(1)
   })
 })
