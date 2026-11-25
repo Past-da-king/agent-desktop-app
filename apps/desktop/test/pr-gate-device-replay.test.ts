@@ -114,7 +114,7 @@ it('coalesces remote retries of a real run_code file mutation', async () => {
     id: 'run-code-mutation',
     tool: 'run_code',
     deadlineMs: 10_000,
-    args: { language: 'javascript', code: `require('node:fs').appendFileSync(${JSON.stringify(file)}, 'effect\\n');console.log('done')` },
+    args: { language: 'javascript', code: `const { appendFileSync } = await import('node:fs');appendFileSync(${JSON.stringify(file)}, 'effect\\n');console.log('done')` },
   }
   try {
     const replies = await Promise.all(Array.from({ length: 10 }, () => host.run(request)))
