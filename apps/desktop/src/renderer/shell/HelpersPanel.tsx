@@ -203,6 +203,7 @@ export function HelperCardList({
         </span>
         <span className={`pill ${shown.waiting ? 'warn' : 'pri'}`}>{shown.waiting ? 'Needs you' : 'Working'}</span>
       </button>
+      {waiting.filter((item) => chatOf(item) === MAIN_CHAT && metaText(parseMeta(item.meta), 'helper') === '').map((item) => <ApprovalContext key={item.id} meta={parseMeta(item.meta)} />)}
       {shown.waiting ? null : (
         <button type="button" className="hp-close hp-stop" aria-label={`Stop ${shown.label}`} title="Stop the main chat's run now" onClick={() => void agent.chat.stop(MAIN_CHAT).catch(stopFailed)}>
           <Icon name="x" size={16} />
