@@ -1,4 +1,4 @@
-import { registerChildPipeCleanup } from '../runtime/safe-pipe'
+import { childPipeFailure, registerChildPipeCleanup } from '../runtime/safe-pipe'
 /**
  * `run_code`: a small scratch folder and a child process, so the agent can calculate, transform data
  * and build files. It runs JavaScript with Node or Python with python3, asks first every time, and
@@ -137,7 +137,7 @@ function runCodeTool(deps: CodeToolDeps): Tool {
         if ('error' in filled) return filled.error
         runnable = filled.code
       }
-      return execute({ language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input, outputLimit: resultLimitOf(ctx, MAX_CODE_OUTPUT_CHARS) })
+      return execute({ signal: ctx.signal, language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input, outputLimit: resultLimitOf(ctx, MAX_CODE_OUTPUT_CHARS) })
     },
   }
 }
@@ -182,6 +182,7 @@ function pythonProgram(deps: CodeToolDeps): ProgramRef | null {
 }
 
 interface ExecuteRequest {
+  signal: AbortSignal
   language: CodeLanguage
   code: string
   /** The code as the agent wrote it (placeholders, not values): what the chat row keeps. */
@@ -219,7 +220,7 @@ async function execute(request: ExecuteRequest): Promise<string> {
   const out = new StreamCapture()
   const err = new StreamCapture()
   const started = Date.now()
-  const record = (state: 'ok' | 'failed' | 'timeout', exitCode: number | null, note?: string): void => {
+  const record = (state: 'ok' | 'failed' | 'timeout' | 'stopped', exitCode: number | null, note?: string): void => {
     if (request.input === undefined) return
     recordRun(request.input, {
       kind: 'code',
@@ -252,7 +253,7 @@ async function execute(request: ExecuteRequest): Promise<string> {
     return `Could not run the program: ${messageOf(error)}`
   }
   registerChildPipeCleanup(child, () => {
-    if (child.exitCode == null && child.signalCode == null) killProcessTree(child.pid, platform)
+    if (platform !== 'win32' || (child.exitCode == null && child.signalCode == null)) killProcessTree(child.pid, platform)
   })
 
   child.stdout?.on('data', (chunk: Buffer) => {
@@ -266,6 +267,7 @@ async function execute(request: ExecuteRequest): Promise<string> {
 
   const timeoutMs = request.deps.timeoutMs ?? CODE_TIMEOUT_MS
   let timedOut = false
+  let stopped = false
   let spawnError: string | null = null
 
   await new Promise<void>((done) => {
@@ -274,7 +276,12 @@ async function execute(request: ExecuteRequest): Promise<string> {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      request.signal.removeEventListener('abort', onAbort)
       done()
+    }
+    const onAbort = (): void => {
+      stopped = true
+      killProcessTree(child.pid, platform)
     }
     const timer = setTimeout(() => {
       timedOut = true
@@ -282,9 +289,12 @@ async function execute(request: ExecuteRequest): Promise<string> {
     }, timeoutMs)
     child.once('error', (error) => {
       spawnError = messageOf(error)
-      finish()
+      // A pipe error must not disarm tree protection before descendants close their inherited pipes.
+      if (childPipeFailure(child) === undefined) finish()
     })
     child.once('close', finish)
+    if (request.signal.aborted) onAbort()
+    else request.signal.addEventListener('abort', onAbort, { once: true })
   })
 
   // A program that held a vault value does not stay on disk.
@@ -298,6 +308,10 @@ async function execute(request: ExecuteRequest): Promise<string> {
     return `Could not run the program: ${spawnError}`
   }
   const exit = child.exitCode ?? 0
+  if (stopped) {
+    record('stopped', child.exitCode, 'Stopped by you.')
+    return `Stopped by the user.${output === '' ? '' : `\n${output}${tail}`}`
+  }
   if (timedOut) record('timeout', child.exitCode, `Timed out after ${Math.round(timeoutMs / 1000)} seconds.`)
   else record(exit === 0 ? 'ok' : 'failed', exit, written.length === 0 ? undefined : `Files written: ${written.join(', ')}`)
   const head = timedOut

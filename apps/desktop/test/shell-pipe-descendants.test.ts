@@ -2,7 +2,8 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { codeTools } from '../src/main/tools/code'
 import { shellTools } from '../src/main/tools/shell'
 import { guardChild } from '../src/main/runtime/safe-pipe'
 import { settingsView, testContext, toolNamed } from './support'
@@ -41,6 +42,52 @@ describe.skipIf(process.platform !== 'linux')('real shell descendant cleanup', (
       // Only the process group and child recorded by this isolated fixture are eligible for cleanup.
       if (child?.pid !== undefined) { try { process.kill(-child.pid, 'SIGKILL') } catch { /* already gone */ } }
       if (descendant > 0 && alive(descendant)) { try { process.kill(descendant, 'SIGKILL') } catch { /* already gone */ } }
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+})
+
+
+describe.skipIf(process.platform !== 'linux')('leader exited before pipe failure', () => {
+  it.each([['shell', 'cancel'], ['shell', 'deadline'], ['code', 'cancel'], ['code', 'deadline']] as const)('%s keeps tree protection through late EOF and %s', async (kind, after) => {
+    const folder = mkdtempSync(join(tmpdir(), 'late-pipe-tree-'))
+    const parentFile = join(folder, 'parent.cjs'), pidFile = join(folder, 'descendant.pid')
+    const source = `const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore',1,2]});fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));child.unref();process.exit(0);`
+    writeFileSync(parentFile, source)
+    let child: ChildProcess | undefined, descendant = 0, completions = 0
+    let restoreKill: (() => void) | undefined
+    const controller = new AbortController()
+    const spawnImpl = ((file: string, args: string[], options: object) => { child = guardChild(spawn(file, args, options)); return child }) as typeof spawn
+    const tool = kind === 'shell'
+      ? toolNamed(shellTools({ settings: settingsView({ shell: 'ask' }), platform: 'linux', spawnImpl }), 'shell_run')
+      : toolNamed(codeTools({ tempRoot: folder, timeoutMs: 1000, spawnImpl, platform: 'linux' }), 'run_code')
+    try {
+      const input = kind === 'shell' ? { command: `${JSON.stringify(process.execPath)} ${JSON.stringify(parentFile)}`, timeoutSec: 1 } : { language: 'javascript', code: `import {createRequire} from 'node:module';const require=createRequire(import.meta.url);${source}` }
+      const running = tool.run(input, testContext({ approve: async () => true, signal: controller.signal })).then(result => { completions++; return result })
+      await waitUntil(() => { try { descendant = Number(readFileSync(pidFile, 'utf8')); return descendant > 0 && child?.exitCode === 0 } catch { return false } })
+      expect(child?.exitCode).toBe(0)
+      expect(alive(descendant)).toBe(true)
+      if (process.env['PIPE_BASELINE_NO_EOF'] !== '1') {
+        // A cleanup attempt need not have finished the tree. Prove abort/deadline protection stays armed.
+        const kill = process.kill
+        let firstGroupAttempt = true
+        const spy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+          if (pid === -child!.pid! && firstGroupAttempt) { firstGroupAttempt = false; return true }
+          return kill.call(process, pid, signal)
+        })
+        restoreKill = () => spy.mockRestore()
+        child!.stdout!.emit('error', Object.assign(new Error('write EOF'), { code: 'EOF' }))
+      }
+      if (after === 'cancel') controller.abort()
+      await running
+      await waitUntil(() => !alive(descendant), 1400)
+      expect(alive(descendant)).toBe(false)
+      expect(completions).toBe(1)
+    } finally {
+      restoreKill?.()
+      controller.abort()
+      if (child?.pid !== undefined) { try { process.kill(-child.pid, 'SIGKILL') } catch { /* fixture group gone */ } }
+      if (descendant > 0 && alive(descendant)) { try { process.kill(descendant, 'SIGKILL') } catch { /* gone */ } }
       rmSync(folder, { recursive: true, force: true })
     }
   })

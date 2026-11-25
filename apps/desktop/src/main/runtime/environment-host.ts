@@ -1,4 +1,4 @@
-import { registerChildPipeCleanup } from './safe-pipe'
+import { childPipeFailure, registerChildPipeCleanup } from './safe-pipe'
 /**
  * The real pieces behind `environment.ts`: node:fs, node:os and execFile. Kept apart so the scan
  * itself stays injectable and testable on any platform.
@@ -76,7 +76,7 @@ export const execVersion: ExecFn = (file, args, options) =>
     }
 
     registerChildPipeCleanup(child, () => {
-      if (child.exitCode == null && child.signalCode == null) killProcessTree(child.pid, process.platform)
+      if (process.platform !== 'win32' || (child.exitCode == null && child.signalCode == null)) killProcessTree(child.pid, process.platform)
     })
     let stdout = ''
     let stderr = ''
@@ -99,8 +99,12 @@ export const execVersion: ExecFn = (file, args, options) =>
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8')
     })
-    child.once('error', (error) => finish(error))
-    child.once('close', () => finish(null))
+    let pipeError: Error | null = null
+    child.once('error', (error) => {
+      if (childPipeFailure(child) === undefined) finish(error)
+      else pipeError = error
+    })
+    child.once('close', () => finish(pipeError))
   })
 
 export function hostEnvironment(): EnvironmentService {

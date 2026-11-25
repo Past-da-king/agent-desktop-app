@@ -17,7 +17,7 @@ export const spawnWorker: WorkerSpawn = ({ manifest, dir, env }) => {
   const entry = join(dir, manifest.entry)
   const owned = (child: ChildProcess): ChildLike => {
     registerChildPipeCleanup(child, () => {
-      if (child.exitCode == null && child.signalCode == null) killTree(child.pid)
+      if (process.platform !== 'win32' || (child.exitCode == null && child.signalCode == null)) killTree(child.pid)
     })
     return child as unknown as ChildLike
   }

@@ -1,4 +1,4 @@
-import { registerChildPipeCleanup } from '../runtime/safe-pipe'
+import { childPipeFailure, registerChildPipeCleanup } from '../runtime/safe-pipe'
 /**
  * `shell_run`: the agent may use this computer's shell, but only with the person's explicit yes,
  * every single time, with the exact command on the card. There is no "always allow" (PLAN.md 7).
@@ -395,7 +395,7 @@ async function runCommand(request: RunRequest): Promise<string> {
   }
 
   registerChildPipeCleanup(child, () => {
-    if (child.exitCode == null && child.signalCode == null) killProcessTree(child.pid, platform)
+    if (platform !== 'win32' || (child.exitCode == null && child.signalCode == null)) killProcessTree(child.pid, platform)
   })
 
   child.stdout?.on('data', (chunk: Buffer) => {
@@ -433,7 +433,8 @@ async function runCommand(request: RunRequest): Promise<string> {
 
     child.once('error', (error) => {
       spawnError = messageOf(error)
-      finish()
+      // A pipe error must not disarm tree protection before descendants close their inherited pipes.
+      if (childPipeFailure(child) === undefined) finish()
     })
     child.once('close', finish)
     if (request.ctx.signal.aborted) onAbort()
