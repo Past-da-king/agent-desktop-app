@@ -7,7 +7,7 @@
  * the app in the profile, that one is picked for it. The main agent has no profile: with no account
  * named, the action is held to the strictest of that app's accounts, because Composio picks its default.
  */
-import type { AccountRules, AgentProfileInfo, AppRule, ToolContext } from '@agent/core'
+import type { AccountRules, AgentProfileInfo, AppRule, JsonObject, ToolContext } from '@agent/core'
 
 import { needsYes } from '../ask-rule'
 import { appName } from './catalog'
@@ -62,7 +62,7 @@ const ORDER: Record<AppRule, number> = { allow: 0, ask: 1, never: 2 }
 export class AppGuard {
   constructor(private readonly deps: GuardDeps) {}
 
-  async check(ctx: ToolContext, actions: string[], account: string | null, detail: string, arguments_: Record<string, unknown> = {}): Promise<Verdict> {
+  async check(ctx: ToolContext, actions: string[], account: string | null, detail: string, arguments_: JsonObject = {}): Promise<Verdict> {
     if (actions.length === 0) return { account }
     const profile = this.deps.profileOf?.(ctx) ?? null
     const asks: string[] = []
