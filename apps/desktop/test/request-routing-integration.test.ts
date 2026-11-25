@@ -1,3 +1,6 @@
+import { DeviceToolHub, toolPayload } from '../src/main/devices/device-tools'
+import { toolCommand } from '../src/main/devices/device-tool-host'
+import { testContext } from './support'
 import { DeviceQuestions } from '../src/main/devices/device-questions'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type ChatEvent } from '@agent/core'
@@ -83,7 +86,7 @@ it.each(['webapp_run', 'webapp_test'])('runs a real asks-first %s over the devic
   context: (signal, command) => x.runner.recordedDeviceToolContext(signal, command),
  })
  await x.store.upsert('chat_item', { id: 'source', kind: 'user', text: 'Pull the drive', meta: '{}' })
- await x.store.upsert('device_command', { id: 'proof', kind: 'tool', target: 'hands', brainId: 'brain', tool: toolName, chat: 'main', owner: 'helper:child', status: 'sent', expiresAt: Date.now()+600000, body: JSON.stringify({request:{id:'source'}}) })
+ await x.store.upsert('device_command', { id: 'proof', kind: 'tool', target: 'hands', brainId: 'brain', tool: toolName, chat: 'main', owner: 'helper:child', status: 'sent', expiresAt: Date.now()+600000, body: JSON.stringify({id:'source', at:1, text:'Pull the drive'}) })
  const pending = host.run({ kind: 'tool', id: 'proof', tool: toolName, args: {}, chatId: 'main', owner: 'helper:child', request: { id: 'source', at: 1, text: 'Pull the drive' } })
  await waitFor(async () => (await x.acts.waiting()).length === 1)
  const [card] = await x.acts.waiting()
@@ -122,4 +125,25 @@ it('the main agent can approve a send carried by the actual request naming its r
  expect(await x.acts.answer({ id: card!.id, action: 'approve', reason: 'The originating request names this recipient and action' })).toMatchObject({ ok: true })
  expect(await pending).toBe(true)
  expect((await x.acts.list())[0]!.reason).toContain(user.text)
+})
+
+it('resolves request provenance from the actual hub-produced command, not a hand-built envelope', async () => {
+ const x = setup()
+ const user = await x.store.upsert('chat_item', { kind:'user', text:'Pull my requested drive', meta:'{}' })
+ await x.store.upsert('device', { id:'hands',name:'Hands',kind:'desktop',platform:'linux',roles:['hands'],priority:1,revoked:false,tools:[{name:'webapp_run',description:'Run a learned tool',params:{},group:'browser',readOnly:false}] })
+ const hub = new DeviceToolHub({store:x.store,selfId:()=> 'brain',reachable:()=>true,noteBack:()=>undefined,waitMs:10000})
+ try {
+  const call = hub.call('hands','webapp_run',{app:'Example',tool:'get_access'},'main',testContext({owner:'helper:child',requestId:user.id,signal:x.controller.signal}))
+  await waitFor(async () => (await x.store.list('device_command')).length === 1)
+  const row = (await x.store.list('device_command'))[0]!
+  const command = toolCommand(toolPayload(row))!
+  const context = await x.runner.recordedDeviceToolContext(x.controller.signal,command)
+  const pending = context.approve('Get access','Exact action',undefined,{tool:'webapp_run',input:{tool:'get_access'}})
+  await waitFor(async () => (await x.acts.waiting()).length === 1)
+  const [card] = await x.acts.waiting()
+  expect(card!.details).toContain(user.text)
+  await x.acts.answer({id:card!.id,action:'approve',reason:'The source user requested this access'})
+  expect(await pending).toBe(true)
+  x.controller.abort(); await call
+ } finally {hub.stop()}
 })

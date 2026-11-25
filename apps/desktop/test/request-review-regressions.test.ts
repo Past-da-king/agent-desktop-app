@@ -53,3 +53,7 @@ it('routine and unbound device contexts explicitly carry no unrelated latest use
   expect(runner.deviceToolContext(new AbortController().signal).requestId).toBe('')
  } finally {runner.dispose()}
 })
+
+it.each(['Do not send to ben@example.org', 'Find the email sent to ben@example.org', 'Draft a message to ben@example.org for me to approve', 'Send it to ben@example.org after I approve', 'Ben said send to ben@example.org'])('does not turn an ambiguous or prohibited request into send authorization: %s', (text) => {
+ expect(classifyCard({...facts,request:{...facts.request!,text}}).lane).toBe('him')
+})

@@ -3,26 +3,34 @@ import type { DataStore } from '../runtime/data'
 
 /** Paired hands ask through the context that dispatched the command, never as a fresh user request. */
 export class DeviceQuestions {
+  private readonly cancelled = new Map<string, number>()
   private readonly contexts = new Map<string, { ctx: ToolContext; expires: number }>()
   private readonly questions = new Map<string, { command: string; signature: string; answer: Promise<{ handled: true; answer: string | null }> }>()
   constructor(private readonly store: DataStore, private readonly self: () => string, private readonly now: () => number) {}
   remember(id: string, ctx: ToolContext, expires: number): void { this.contexts.set(id, { ctx, expires }) }
   forget(id: string): void {
     this.contexts.delete(id)
+    this.cancelled.delete(id)
     for (const [key, value] of this.questions) if (value.command === id) this.questions.delete(key)
   }
-  clear(): void { this.contexts.clear(); this.questions.clear() }
+  clear(): void { this.contexts.clear(); this.questions.clear(); this.cancelled.clear() }
   prune(): void {
-    for (const [id, value] of this.contexts) if (value.expires <= this.now() || value.ctx.signal.aborted) this.forget(id)
+    for (const [id, expiry] of this.cancelled) if (expiry <= this.now()) this.forget(id)
+    for (const [id, value] of this.contexts) {
+      if (value.expires <= this.now()) this.forget(id)
+      else if (value.ctx.signal.aborted) {
+        this.contexts.delete(id)
+        this.cancelled.set(id, value.expires)
+      }
+    }
   }
   async ask(device: string, args: unknown[]): Promise<{ handled: boolean; answer: string | null }> {
-    const prior = typeof args[0] === 'string' ? this.contexts.get(args[0]) : undefined
-    if (prior?.ctx.signal.aborted === true) return { handled: true, answer: null }
     this.prune()
     const [id, sequence, question, options, offeredOrigin] = args
     if (typeof id !== 'string' || typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1 || sequence > 128 || typeof question !== 'string' || question.length > 16000 || !Array.isArray(options) || options.length > 20 || !options.every((item) => typeof item === 'string' && item.length <= 1000)) throw new Error('Invalid device question.')
     const row = await this.store.get('device_command', id)
     if (row === null || row.kind !== 'tool' || row.brainId !== this.self() || row.target !== device || row.expiresAt <= this.now() || (row.status !== 'queued' && row.status !== 'sent')) throw new Error('That command is not active for this device.')
+    if (this.cancelled.has(id)) return { handled: true, answer: null }
     const active = this.contexts.get(id)
     if (active === undefined) return { handled: false, answer: null }
     let input: JsonObject = {}

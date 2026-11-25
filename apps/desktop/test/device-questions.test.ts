@@ -58,3 +58,10 @@ it('an active command whose brain lost its in-memory context requests a person f
  expect(await x.questions.ask('phone', x.call)).toEqual({ handled: false, answer: null })
  expect(x.approve).not.toHaveBeenCalled()
 })
+
+it('keeps cancellation tombstones after periodic pruning and still authenticates the device', async () => {
+ const x = await setup(); x.controller.abort(); x.questions.prune()
+ await expect(x.questions.ask('other-phone',x.call)).rejects.toThrow('not active')
+ expect(await x.questions.ask('phone',x.call)).toEqual({handled:true,answer:null})
+ expect(x.approve).not.toHaveBeenCalled()
+})

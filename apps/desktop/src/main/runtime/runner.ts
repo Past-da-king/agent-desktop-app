@@ -1,4 +1,4 @@
-import type { RequestSource } from '../../shared/request-source'
+import { parseRequestSource, type RequestSource } from '../../shared/request-source'
 import type { Asker } from '../../shared/approval-policy'
 import { requestById, requestFor, requestFromMessage } from './request-source'
 import type { ApprovalOrigin } from '@agent/core'
@@ -2175,9 +2175,8 @@ export class Runner {
     if (row === null || row.kind !== 'tool' || row.tool !== command.tool || row.chat !== command.chatId || (row.status !== 'queued' && row.status !== 'sent')) return this.deviceToolContext(signal)
     let request: RequestSource | undefined
     try {
-      const body: unknown = JSON.parse(row.body ?? '{}')
-      const id = typeof body === 'object' && body !== null ? (body as { request?: { id?: unknown } }).request?.id : undefined
-      if (typeof id === 'string') request = await requestById(this.store, id) ?? undefined
+      const source = parseRequestSource(JSON.parse(row.body ?? '{}'))
+      if (source !== null) request = await requestById(this.store, source.id) ?? undefined
     } catch { /* Missing evidence never becomes user authorization. */ }
     return this.deviceToolContext(signal, { chatId: row.chat ?? MAIN_CHAT, owner: row.owner ?? '', ...(request === undefined ? {} : { request }) })
   }

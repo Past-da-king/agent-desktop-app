@@ -301,7 +301,11 @@ function classifyUnrequested(facts: CardFacts): Verdict {
 
 /** The app's verified request can authorize a send only to every concrete recipient named in that request. */
 function requestedSend(facts: CardFacts): boolean {
-  if (facts.request === undefined || facts.origin === undefined || !/\b(send|email|message|reply|forward|share|post|publish)\b/i.test(facts.request.text)) return false
+  if (facts.request === undefined || facts.origin === undefined) return false
+  const request = facts.request.text.trim()
+  // Eligibility requires an affirmative send directive, never a mention, prohibition, read, draft or conditional.
+  if (!/^(?:(?:please\s+)|(?:(?:can|could|would|will)\s+you\s+)|(?:i\s+(?:want|need)\s+you\s+to\s+))*(send|email|message|reply|forward|share|post|publish)\b/i.test(request)) return false
+  if (/\b(do not|don't|never|without|not yet|nothing|hold|draft|prepare|approve|approval|pending|if|unless|after|when|once|before|until|find|search|read|show)\b/i.test(request)) return false
   const operation = `${facts.origin.tool} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`.replace(/[_-]/g, ' ')
   if (MONEY_WORDS.test(operation) || HANDS_WORDS.test(operation) || SECRET_WORDS.test(operation)) return false
   const recipients: string[] = []
