@@ -1,9 +1,9 @@
 /**
  * `voice_note`: the main agent sends the person a voice note. The note is its own
- * SPOKEN script, written to be heard, never the chat text read out; `style` says how to say it. Only the main
- * agent has it: voice notes are for the person, never for briefing a helper.
+ * SPOKEN script, written to be heard, never the chat text read out; `style` says how to say it. Main and helper
+ * agents can send notes to the person in their calling chat.
  */
-import type { Tool } from '@agent/core'
+import { MAIN_CHAT, type Tool } from '@agent/core'
 
 import type { DataStore } from '../runtime/data'
 
@@ -37,7 +37,7 @@ export function voiceNoteTool(store: DataStore, maker: () => VoiceNoteMaker | nu
         required: ['script'],
       },
     },
-    run: async (input) => {
+    run: async (input, ctx) => {
       const script = typeof input['script'] === 'string' ? input['script'].trim() : ''
       const style = typeof input['style'] === 'string' ? input['style'].trim() : ''
       if (script === '') return 'Write the script first: what you would say out loud.'
@@ -48,7 +48,7 @@ export function voiceNoteTool(store: DataStore, maker: () => VoiceNoteMaker | nu
       await store.upsert('chat_item', {
         kind: 'voice_note',
         text: script,
-        meta: JSON.stringify({ file: made.file, durationMs: made.durationMs, style }),
+        meta: JSON.stringify({ file: made.file, durationMs: made.durationMs, style, chat: ctx.chat ?? MAIN_CHAT }),
       })
       return 'The voice note is in the chat. Now write only your short text reply; do not repeat the note.'
     },

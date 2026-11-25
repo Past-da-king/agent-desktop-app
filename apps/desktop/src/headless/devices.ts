@@ -9,6 +9,7 @@ import { accountLabels } from '@agent/core'
 
 import { platformOf } from '../main/devices/facts'
 import { findSidecar } from '../main/devices/net'
+import { registerMediaFetch } from '../main/media/fetch'
 import { attachDevicesSync } from '../main/devices/attach'
 import { registerRelay, rolesFromStore } from '../main/devices/relay'
 import { registerWakeupRpc, WakeDeviceReports } from '../main/wakeups/bridge'
@@ -104,6 +105,7 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     notify: (title, body) => runtime.actions.notify(title, body),
   })
   const node = service
+  registerMediaFetch(node.host(), { get: (token) => runtime.shownMedia.get(token) })
   node.registerIpc(runtime.ipcMain)
   // The agent's Devices tools (tools/app-control.ts) find the node here, as on the desktop.
   setDevicesService(node)
