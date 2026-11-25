@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { codeTools } from '../src/main/tools/code'
 import { expect, it, vi } from 'vitest'
 import { DeviceToolHost } from '../src/main/devices/device-tool-host'
 import { testContext } from './support'
@@ -93,3 +97,31 @@ it('bounds the aggregate cached reply payload without repeating pruned actions',
   expect(JSON.stringify(old).length).toBeLessThan(2000)
   expect(run).toHaveBeenCalledTimes(50)
 })
+
+
+it('coalesces remote retries of a real run_code file mutation', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'remote-code-replay-'))
+  const file = join(scratch, 'effects.txt')
+  const tools = codeTools({ tempRoot: scratch, settings: { get: () => ({ shell: 'always' }) } })
+  const host = new DeviceToolHost({
+    tools: () => tools,
+    context: (signal) => testContext({ signal, shell: 'always' }),
+    shared: () => ({ browser: true, files: true, notifications: true, approval: true, shell: true }),
+    inbox: scratch,
+  })
+  const request = {
+    ...command,
+    id: 'run-code-mutation',
+    tool: 'run_code',
+    deadlineMs: 10_000,
+    args: { language: 'javascript', code: `require('node:fs').appendFileSync(${JSON.stringify(file)}, 'effect\\n');console.log('done')` },
+  }
+  try {
+    const replies = await Promise.all(Array.from({ length: 10 }, () => host.run(request)))
+    expect(replies.every((reply) => reply.ok)).toBe(true)
+    expect((await host.run(request)).ok).toBe(true)
+    expect(await readFile(file, 'utf8')).toBe('effect\n')
+    expect((await host.run({ ...request, args: { ...request.args, code: request.args.code + ';console.log(2)' } })).ok).toBe(false)
+    expect(await readFile(file, 'utf8')).toBe('effect\n')
+  } finally { await rm(scratch, { recursive: true, force: true }) }
+}, 30_000)
