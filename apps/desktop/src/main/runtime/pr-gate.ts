@@ -159,7 +159,7 @@ export class PrGate {
       const permit = this.executionPermits.get(token)
       if (
         operations &&
-        permit?.source !== source &&
+        (!source || permit?.source !== source) &&
         !permit?.remaining.some((key) => operations.includes(key))
       )
         continue

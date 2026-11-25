@@ -42,10 +42,12 @@ export class SecretPassTable implements PassTable {
   set(deviceId: string, hash: string, pairedAt = Date.now()): void {
     const authority = this.authority()
     const old = authority[deviceId]
-    if (old && (pairedAt <= old.deniedAt || pairedAt < old.pairedAt)) return
+    // A pass older than the known pairing would never validate: move it just past instead of dropping it without a word.
+    if (old && pairedAt <= old.deniedAt) return
+    if (old && pairedAt < old.pairedAt) pairedAt = old.pairedAt + 1
     authority[deviceId] = {
       pairedAt,
-      deniedAt: old?.deniedAt ?? 0,
+      deniedAt: old?.deniedAt ?? -1,
       roles: old?.roles ?? [],
     }
     this.writeAuthority(authority)
@@ -63,7 +65,9 @@ export class SecretPassTable implements PassTable {
       !this.all()[deviceId]
     )
       return
-    const at = deniedAt ?? Date.now()
+    // A local forget or revoke always wins, even when another brain's clock ran ahead of ours.
+    // A replicated deny older than a later pairing belongs to the earlier pairing and is ignored.
+    const at = deniedAt ?? Math.max(Date.now(), old?.pairedAt ?? 0)
     if (old && at < old.pairedAt) return
     authority[deviceId] = {
       pairedAt: old?.pairedAt ?? 0,
@@ -98,8 +102,8 @@ export class SecretPassTable implements PassTable {
       const newest =
         valid && (!local || remote.pairedAt > local.pairedAt) ? remote : local
       const deniedAt = Math.max(
-        local?.deniedAt ?? 0,
-        valid ? remote.deniedAt : 0,
+        local?.deniedAt ?? -1,
+        valid ? remote.deniedAt : -1,
       )
       if (newest)
         authority[id] = {
@@ -126,10 +130,30 @@ export class SecretPassTable implements PassTable {
 
   /** Authority versions survive database reset and travel with the pass bundle. */
   authority(): Record<string, PairingAuthority> {
+    const rawAuthority = this.secrets.get('devicePairingAuthority') ?? '{}',
+      rawLegacy = this.secrets.get('devicePairingRoles') ?? '{}'
+    // Parsed again only when a stored value changed: this runs on every request.
+    if (
+      this.authorityCache &&
+      this.authorityCache.rawAuthority === rawAuthority &&
+      this.authorityCache.rawLegacy === rawLegacy
+    )
+      return { ...this.authorityCache.value }
+    const value = this.parseAuthority(rawAuthority, rawLegacy)
+    this.authorityCache = { rawAuthority, rawLegacy, value }
+    return { ...value }
+  }
+  private authorityCache: {
+    rawAuthority: string
+    rawLegacy: string
+    value: Record<string, PairingAuthority>
+  } | null = null
+  private parseAuthority(
+    rawAuthority: string,
+    rawLegacy: string,
+  ): Record<string, PairingAuthority> {
     try {
-      const parsed = JSON.parse(
-        this.secrets.get('devicePairingAuthority') ?? '{}',
-      )
+      const parsed = JSON.parse(rawAuthority)
       const clean: Record<string, PairingAuthority> = {}
       for (const [id, value] of Object.entries(parsed)) {
         const v = value as PairingAuthority
@@ -142,7 +166,7 @@ export class SecretPassTable implements PassTable {
           clean[id] = v
       }
       // Migrate the earlier unversioned deny conservatively once.
-      const legacy = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}')
+      const legacy = JSON.parse(rawLegacy)
       for (const [id, roles] of Object.entries(legacy))
         if (!clean[id])
           clean[id] = {
@@ -161,7 +185,9 @@ export class SecretPassTable implements PassTable {
   }
   rolesFor(deviceId: string): DeviceRole[] | null {
     if (!this.all()[deviceId] || this.isRevoked(deviceId)) return null
-    return this.authority()[deviceId]?.roles ?? null
+    // A pass whose roles were never learned (no row yet) knows nothing: the caller then falls back to knownPeer or refuses.
+    const roles = this.authority()[deviceId]?.roles
+    return roles && roles.length > 0 ? roles : null
   }
   isRevoked(deviceId: string): boolean {
     const state = this.authority()[deviceId]

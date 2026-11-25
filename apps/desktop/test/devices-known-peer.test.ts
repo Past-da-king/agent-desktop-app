@@ -151,41 +151,64 @@ it('R11-N2 revoke then forget on another brain invalidates the host pass permane
 
 
 it('R12 M1 two brains accept a later same-id pairing and reject old hashes',async()=>{
- const a=await node(),b=await node(),id='dev_repair_computer',old=newPass()
- const first=Date.now()-10000
- await a.store.upsert('device',{id,name:'Computer',kind:'desktop',platform:'linux',roles:['brain'],pairedAt:first,lastSeen:first,revoked:false})
- a.service.passTable().set(id,hashPass(old),first)
- await new Promise(resolve=>setTimeout(resolve,100))
- await a.service.revoke(id)
- await b.store.applyRemote(a.store.changesAfter(0).changes,'')
- await new Promise(resolve=>setTimeout(resolve,100))
- const now=Date.now()+1000,offers=new PairingOffers(()=>now),offer=offers.create()
- const result=await handlePair({code:offer.secret,nodeId:id,wantRoles:['brain'],device:{kind:'desktop',platform:'linux',fingerprint:'f'.repeat(43)}},{
-  offers,passes:b.service.passTable(),meshId:'mesh_fixture',node:{id:b.service.identity.nodeId,name:'B'},now:()=>now,nextPriority:async()=>1,brains:async()=>[],
-  saveDevice:async row=>{await b.store.upsert('device',row)}
- })
- expect(result.status).toBe(200)
- if(result.status!==200)throw new Error('pair failed')
- await a.store.applyRemote(b.store.changesAfter(0).changes,'')
- await new Promise(resolve=>setTimeout(resolve,100))
- const bp=b.service.passTable()
- a.service.passTable().replaceAll(bp.all(),(bp as unknown as {authority?:()=>never}).authority?.())
- const read=(pass:string)=>pinnedRequest(a.base+'/v1/devices',a.fp,{headers:{Authorization:'Bearer '+pass}})
- expect((await read(result.json.pass)).status).toBe(200)
- expect((await read(old)).status).toBe(401)
+  const a=await node(),b=await node(),id='dev_repair_computer',old=newPass()
+  const first=Date.now()-10000
+  await a.store.upsert('device',{id,name:'Computer',kind:'desktop',platform:'linux',roles:['brain'],pairedAt:first,lastSeen:first,revoked:false})
+  a.service.passTable().set(id,hashPass(old),first)
+  await new Promise(resolve=>setTimeout(resolve,100))
+  await a.service.revoke(id)
+  await b.store.applyRemote(a.store.changesAfter(0).changes,'')
+  await new Promise(resolve=>setTimeout(resolve,100))
+  const now=Date.now()+1000,offers=new PairingOffers(()=>now),offer=offers.create()
+  const result=await handlePair({code:offer.secret,nodeId:id,wantRoles:['brain'],device:{kind:'desktop',platform:'linux',fingerprint:'f'.repeat(43)}},{
+    offers,passes:b.service.passTable(),meshId:'mesh_fixture',node:{id:b.service.identity.nodeId,name:'B'},now:()=>now,nextPriority:async()=>1,brains:async()=>[],
+    saveDevice:async row=>{await b.store.upsert('device',row)}
+  })
+  expect(result.status).toBe(200)
+  if(result.status!==200)throw new Error('pair failed')
+  await a.store.applyRemote(b.store.changesAfter(0).changes,'')
+  await new Promise(resolve=>setTimeout(resolve,100))
+  const bp=b.service.passTable()
+  a.service.passTable().replaceAll(bp.all(),(bp as unknown as {authority?:()=>never}).authority?.())
+  const read=(pass:string)=>pinnedRequest(a.base+'/v1/devices',a.fp,{headers:{Authorization:'Bearer '+pass}})
+  expect((await read(result.json.pass)).status).toBe(200)
+  expect((await read(old)).status).toBe(401)
 })
 
 
 it('R12 M1 joining a host again clears the local older deny',async()=>{
- const host=await node(),joined=await node()
- const link=()=>host.service.offer().uri.replace(/([?&])u=[^&]*/,'$1u='+encodeURIComponent(host.base))
- await joined.service.join(link())
- const id=host.service.identity.nodeId
- await joined.service.revoke(id)
- expect(joined.service.passTable().rolesFor(id)).toBeNull()
- await joined.service.join(link())
- const row=await joined.store.get('device',id)
- expect(row?.revoked).toBe(false)
- // The local deny must not override the explicitly renewed host row.
- expect(joined.service.passTable().isRevoked(id)).toBe(false)
+  const host=await node(),joined=await node()
+  const link=()=>host.service.offer().uri.replace(/([?&])u=[^&]*/,'$1u='+encodeURIComponent(host.base))
+  await joined.service.join(link())
+  const id=host.service.identity.nodeId
+  await joined.service.revoke(id)
+  expect(joined.service.passTable().rolesFor(id)).toBeNull()
+  await joined.service.join(link())
+  const row=await joined.store.get('device',id)
+  expect(row?.revoked).toBe(false)
+  // The local deny must not override the explicitly renewed host row.
+  expect(joined.service.passTable().isRevoked(id)).toBe(false)
+})
+
+it('R13 m1 a delete that arrives late denies only the pairing this brain knew', async () => {
+  const a = await node(), b = await node(), id = 'dev_late_forget', old = newPass()
+  const first = Date.now() - 10000
+  await a.store.upsert('device', { id, name: 'Computer', kind: 'desktop', platform: 'linux', roles: ['brain'], pairedAt: first, lastSeen: first, revoked: false })
+  a.service.passTable().set(id, hashPass(old), first)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  await b.store.applyRemote(a.store.changesAfter(0).changes, '')
+  await new Promise(resolve => setTimeout(resolve, 100))
+  await b.service.forget(id)
+  // Brain A hears of the delete late. Its deny must stay with the pairing it held, not take this brain's clock.
+  await new Promise(resolve => setTimeout(resolve, 250))
+  await a.store.applyRemote(b.store.changesAfter(0).changes, '')
+  await new Promise(resolve => setTimeout(resolve, 100))
+  const state = a.service.passTable().authority()[id]
+  expect(state?.deniedAt).toBe(first)
+  expect(a.service.passTable().isRevoked(id)).toBe(true)
+  // A pairing issued after the forget is therefore let in.
+  a.service.passTable().replaceAll({ [id]: hashPass('new') }, { [id]: { pairedAt: first + 1, deniedAt: -1, roles: ['brain'] } })
+  expect(a.service.passTable().isRevoked(id)).toBe(false)
+  expect(a.service.passTable().all()[id]).toBe(hashPass('new'))
+  expect(a.service.passTable().all()[id]).not.toBe(hashPass(old))
 })

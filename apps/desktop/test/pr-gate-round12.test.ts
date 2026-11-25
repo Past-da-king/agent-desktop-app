@@ -27,80 +27,8 @@ import { SecretPassTable, hashPass } from '../src/main/devices/passes'
 import { PairingOffers, handlePair } from '../src/main/devices/pairing'
 import { BundleKeeper, parseBundle } from '../src/main/devices/bundle'
 import { testContext } from './support'
-const cleanup: Array<() => void> = []
-afterEach(() =>
-  cleanup
-    .splice(0)
-    .reverse()
-    .forEach((fn) => fn()),
-)
-function fixture() {
-  const cwd = mkdtempSync(join(tmpdir(), 'pr-r12-')),
-    marker = join(cwd, 'calls')
-  cleanup.push(() => rmSync(cwd, { recursive: true, force: true }))
-  mkdirSync(join(cwd, 'repo'))
-  writeFileSync(
-    join(cwd, 'gh'),
-    '#!/bin/sh\npwd >> "' +
-      marker +
-      '"\nprintf "%s\\n" "$@" >> "' +
-      marker +
-      '"\n',
-    { mode: 0o700 },
-  )
-  const store = new Store(':memory:')
-  cleanup.push(() => store.close())
-  const gate = new PrGate(store, () => ({
-    ...DEFAULT_SETTINGS,
-    prGateEnabled: true,
-  }))
-  const ctx = testContext({ shell: 'always' })
-  const env = {
-    HOME: cwd,
-    USERPROFILE: cwd,
-    GH_CONFIG_DIR: cwd,
-    GH_TOKEN: '',
-    GITHUB_TOKEN: '',
-    PATH: cwd + ':/usr/bin:/bin',
-  }
-  return { cwd, marker, store, gate, ctx, env }
-}
-async function attest(f: ReturnType<typeof fixture>, held: string) {
-  const id = held.match(/Gate id: ([a-f0-9-]+)/)?.[1]
-  expect(id, held).toBeTruthy()
-  const evidence = Object.fromEntries(
-    ATTESTATION_FIELDS.map((field) => [
-      field,
-      field === 'reviewerAgentId'
-        ? 'independent-r12-reviewer'
-        : field === 'testProof'
-          ? '/tmp/isolated/r12.txt'
-          : 'Isolated round eleven evidence for ' + field,
-    ]),
-  )
-  expect(await f.gate.attest(id!, evidence, f.ctx)).toContain(
-    'Attestation recorded',
-  )
-}
-function child(
-  command: string,
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('/bin/bash', ['--noprofile', '--norc', '-c', command], {
-      cwd,
-      env: ghExecutionEnv(env),
-      stdio: 'pipe',
-    })
-    let output = ''
-    proc.stdout.on('data', (value) => (output += value))
-    proc.stderr.on('data', (value) => (output += value))
-    proc.once('error', reject)
-    proc.once('close', (code) => resolve('exit:' + code + ' ' + output))
-    proc.stdin.end()
-  })
-}
+import { prGateHelpers } from './support-pr-gate'
+const { cleanup, fixture, attest, child } = prGateHelpers('r12')
 
 it.skipIf(process.platform === 'win32').each([
   [

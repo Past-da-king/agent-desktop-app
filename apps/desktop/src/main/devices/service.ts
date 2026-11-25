@@ -935,7 +935,8 @@ export class DevicesService {
     // a local deny and invalidate the host's bearer hash before forgetting rows.
     const incoming = new Set(rows.map(row => row.id))
     for (const id of this.rows.keys()) if (!incoming.has(id) && id !== this.identity.nodeId) {
-      this.passes.remove(id)
+      // The deny belongs to the pairing this brain knew, so a re-pair that follows the forget is never refused because this brain heard of the delete late.
+      this.passes.remove(id, this.knownPairedAt(id))
       this.dropPeer(id)
       this.srv?.closeDevice(id)
     }
@@ -947,6 +948,10 @@ export class DevicesService {
         this.srv?.closeDevice(row.id)
       } else if (Array.isArray(row.roles)) this.passes.rememberRoles(row.id, row.roles, row.pairedAt)
     }
+  }
+
+  private knownPairedAt(id: string): number | undefined {
+    return this.passes.authority()[id]?.pairedAt ?? this.rows.get(id)?.pairedAt
   }
 
   private async saveRow(record: Partial<DeviceRecord | DeviceRow> & { id: string }): Promise<void> {
