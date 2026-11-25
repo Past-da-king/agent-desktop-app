@@ -1,4 +1,3 @@
-import { compareDeviceOrder } from '@agent/core'
 /**
  * Shared device tools (docs/devices-protocol.md s11), the brain side.
  *
@@ -11,7 +10,6 @@ import { compareDeviceOrder } from '@agent/core'
  *  - an offline device's command waits in the row (delivered when it connects, expires after 10 minutes).
  * The agent waits up to the deadline (120 s, browser 600 s). A result that comes later is posted to the chat.
  */
-import { remoteArguments, receiveRemoteGrant, recordRemoteResult, takeDestinationHold } from '../runtime/pr-gate-remote'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -19,6 +17,7 @@ import { join } from 'node:path'
 
 import {
   MAIN_CHAT,
+  compareDeviceOrder,
   findMatches,
   pickMatch,
   schema,
@@ -30,6 +29,8 @@ import {
   type Tool,
   type ToolContext,
 } from '@agent/core'
+
+import { remoteArguments, receiveRemoteGrant, recordRemoteResult, takeDestinationHold } from '../runtime/pr-gate-remote'
 
 import { listWhere, type DataStore } from '../runtime/data'
 import { OPEN_STATUSES } from './commands'
@@ -258,12 +259,15 @@ export class DeviceToolHub {
         const local = this.deps.localTools?.() ?? []
         tools = catalogueOf(local, shareOf(this.deps.shareGroups?.()))
       } else if (this.host?.isConnected(row.id) === true) {
-        const facts = this.host.factsOf(row.id) as (ReturnType<DevicesHost['factsOf']> & { tools?: unknown }) | null
+        const facts = this.host.factsOf(row.id) as
+          (ReturnType<DevicesHost['factsOf']> & { tools?: unknown }) | null
         if (facts !== null && facts.tools !== undefined) tools = cleanTools(facts.tools)
       }
       if (tools === null) continue
       if (JSON.stringify(tools) === JSON.stringify(toolsOfRow(row))) continue
-      await this.deps.store.upsert('device', { id: row.id, tools } as Partial<DeviceRow> & { id: string })
+      await this.deps.store.upsert('device', { id: row.id, tools } as Partial<DeviceRow> & {
+        id: string
+      })
     }
   }
 
@@ -297,9 +301,21 @@ export class DeviceToolHub {
   }
 
   /** What devices_list shows. */
-  async list(): Promise<Array<{ id: string; name: string; kind: string; online: boolean; self: boolean; groups: DeviceToolGroup[]; tools: string[] }>> {
+  async list(): Promise<
+    Array<{
+      id: string
+      name: string
+      kind: string
+      online: boolean
+      self: boolean
+      groups: DeviceToolGroup[]
+      tools: string[]
+    }>
+  > {
     await this.refresh().catch(() => undefined)
-    const rows = (await this.deps.store.list('device')).filter((row) => !row.revoked).sort((a, b) => compareDeviceOrder(a, b))
+    const rows = (await this.deps.store.list('device'))
+      .filter((row) => !row.revoked)
+      .sort((a, b) => compareDeviceOrder(a, b))
     return rows.map((row) => {
       const tools = toolsOfRow(row)
       return {
@@ -315,24 +331,48 @@ export class DeviceToolHub {
   }
 
   /** The device meant by `ref` (id, name said loosely, or "best" for this tool), or why none. */
-  async resolve(ref: string, tool: string, chat: string): Promise<{ row: DeviceRow } | { error: string }> {
+  async resolve(
+    ref: string,
+    tool: string,
+    chat: string,
+  ): Promise<{ row: DeviceRow } | { error: string }> {
     const rows = (await this.deps.store.list('device')).filter((row) => !row.revoked)
     const wanted = ref.trim()
     if (wanted === '' || wanted.toLowerCase() === 'best') {
       const row = await this.best(rows, tool, chat)
       if (row === null) {
         const holders = rows.filter((r) => toolsOfRow(r).some((t) => t.name === tool))
-        return { error: holders.length === 0 ? `No linked device offers ${tool}.` : `The devices with ${tool} are offline: ${holders.map((r) => r.name).join(', ')}.` }
+        return {
+          error:
+            holders.length === 0
+              ? `No linked device offers ${tool}.`
+              : `The devices with ${tool} are offline: ${holders.map((r) => r.name).join(', ')}.`,
+        }
       }
       return { row }
     }
     const byId = rows.find((row) => row.id === wanted)
     if (byId !== undefined) return { row: byId }
-    const hits = findMatches(wanted, rows.map((row, index) => ({ item: row, order: index, fields: [{ text: row.name, weight: 1 }, { text: `${row.kind} ${row.platform}`, weight: 0.7, fuzzy: false }] })))
+    const hits = findMatches(
+      wanted,
+      rows.map((row, index) => ({
+        item: row,
+        order: index,
+        fields: [
+          { text: row.name, weight: 1 },
+          { text: `${row.kind} ${row.platform}`, weight: 0.7, fuzzy: false },
+        ],
+      })),
+    )
     const { winner, close } = pickMatch(hits)
     if (winner !== null) return { row: winner.item }
-    if (close.length > 0) return { error: `"${wanted}" could be ${close.map((hit) => hit.item.name).join(' or ')}. Say which.` }
-    return { error: `No linked device called "${wanted}". Linked: ${rows.map((row) => row.name).join(', ') || 'none'}.` }
+    if (close.length > 0)
+      return {
+        error: `"${wanted}" could be ${close.map((hit) => hit.item.name).join(' or ')}. Say which.`,
+      }
+    return {
+      error: `No linked device called "${wanted}". Linked: ${rows.map((row) => row.name).join(', ') || 'none'}.`,
+    }
   }
 
   /** The device the newest message in the chat came from, when it is another device that offers this tool. */
@@ -346,23 +386,37 @@ export class DeviceToolHub {
 
   /** The router (s11): the device the message came from, then the preferred one for the group, then by priority. */
   private async best(rows: DeviceRow[], tool: string, chat: string): Promise<DeviceRow | null> {
-    const able = rows.filter((row) => this.isOnline(row) && toolsOfRow(row).some((t) => offers(t.name, tool)))
+    const able = rows.filter(
+      (row) => this.isOnline(row) && toolsOfRow(row).some((t) => offers(t.name, tool)),
+    )
     if (able.length === 0) return null
     const origin = await latestOrigin(this.deps.store, chat)
     const fromOrigin = origin === null ? undefined : able.find((row) => row.id === origin.deviceId)
     if (fromOrigin !== undefined) return fromOrigin
-    const group = toolsOfRow(able[0] as DeviceRow).find((t) => offers(t.name, tool))?.group ?? groupOf(tool)
+    const group =
+      toolsOfRow(able[0] as DeviceRow).find((t) => offers(t.name, tool))?.group ?? groupOf(tool)
     const preferredId = this.deps.preferred?.()[group]
-    const preferred = preferredId === undefined ? undefined : able.find((row) => row.id === preferredId)
+    const preferred =
+      preferredId === undefined ? undefined : able.find((row) => row.id === preferredId)
     if (preferred !== undefined) return preferred
     const phone = (row: DeviceRow): boolean => row.kind === 'phone' || row.kind === 'tablet'
     const heavy = HEAVY.has(group)
-    return [...able].sort((a, b) => (heavy ? Number(phone(a)) - Number(phone(b)) : 0) || compareDeviceOrder(a, b))[0] ?? null
+    return (
+      [...able].sort(
+        (a, b) => (heavy ? Number(phone(a)) - Number(phone(b)) : 0) || compareDeviceOrder(a, b),
+      )[0] ?? null
+    )
   }
 
   /** Call one tool on one device and wait for its answer (up to the deadline). */
-  async call(ref: string, tool: string, args: JsonObject, chat: string = MAIN_CHAT, ctx?: ToolContext): Promise<ToolOutcome> {
-    args=remoteArguments(ctx,tool,args)
+  async call(
+    ref: string,
+    tool: string,
+    args: JsonObject,
+    chat: string = MAIN_CHAT,
+    ctx?: ToolContext,
+  ): Promise<ToolOutcome> {
+    args = remoteArguments(ctx, tool, args)
     // What connected devices offer right now (a phone that just said hello).
     await this.refresh().catch(() => undefined)
     const found = await this.resolve(ref, tool, chat)
@@ -373,15 +427,24 @@ export class DeviceToolHub {
     if (spec !== undefined) tool = spec.name
     if (spec === undefined) {
       const names = offered.map((t) => t.name)
-      return { ok: false, state: 'failed', device: row.name, text: names.length === 0 ? `${row.name} offers no tools to other devices.` : `${row.name} has no ${tool}. It offers: ${names.join(', ')}.` }
+      return {
+        ok: false,
+        state: 'failed',
+        device: row.name,
+        text:
+          names.length === 0
+            ? `${row.name} offers no tools to other devices.`
+            : `${row.name} has no ${tool}. It offers: ${names.join(', ')}.`,
+      }
     }
     // This node itself: run it here.
     if (row.id === this.deps.selfId()) {
       const local = (this.deps.localTools?.() ?? []).find((t) => t.spec.name === tool)
-      if (local === undefined || ctx === undefined) return { ok: false, state: 'failed', device: row.name, text: `${tool} cannot run here.` }
-      const received=receiveRemoteGrant(ctx,tool,args)
+      if (local === undefined || ctx === undefined)
+        return { ok: false, state: 'failed', device: row.name, text: `${tool} cannot run here.` }
+      const received = receiveRemoteGrant(ctx, tool, args)
       const text = await local.run(received.args, received.context)
-      if(takeDestinationHold(received.context))recordRemoteResult(ctx,{prGateHeld:true})
+      if (takeDestinationHold(received.context)) recordRemoteResult(ctx, { prGateHeld: true })
       return { ok: true, state: 'done', device: row.name, text }
     }
     const deadlineMs = spec.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
@@ -401,7 +464,13 @@ export class DeviceToolHub {
       expiresAt: at + QUEUE_TTL_MS + deadlineMs,
       updatedAt: at,
     } as Partial<DeviceCommandRow> & { target: string })
-    const answer = this.wait(command.id, this.deps.waitMs ?? deadlineMs, ctx?.signal, this.deps.offlineStatusMs ?? OFFLINE_STATUS_MS, () => !this.isOnline(row))
+    const answer = this.wait(
+      command.id,
+      this.deps.waitMs ?? deadlineMs,
+      ctx?.signal,
+      this.deps.offlineStatusMs ?? OFFLINE_STATUS_MS,
+      () => !this.isOnline(row),
+    )
     if (this.host?.isConnected(row.id) === true) await this.deliver(command)
     const done = await answer
     if (done === null) {
@@ -415,7 +484,7 @@ export class DeviceToolHub {
           : `${row.name} is offline, retrying; ${tool} (call ${command.id}) queued since ${hhmm(at)}. It stays queued and runs once when ${row.name} reconnects, within 10 minutes; its result then comes to you as a message. If it stays offline you get a final note that ${row.name} stayed offline and ${tool} was not run.`,
       }
     }
-    if(ctx)recordRemoteResult(ctx,decodeResult(done.result))
+    if (ctx) recordRemoteResult(ctx, decodeResult(done.result))
     return this.outcome(done, row.name)
   }
 
@@ -424,7 +493,12 @@ export class DeviceToolHub {
     const row = await this.deps.store.get('device_command', id)
     if (row === null || row.target !== deviceId) return false
     if (row.status === 'done' || row.status === 'failed' || row.status === 'expired') return true
-    await this.deps.store.upsert('device_command', { id, status: ok ? 'done' : 'failed', result: encodeResult(value), updatedAt: this.now() } as Partial<DeviceCommandRow> & { id: string })
+    await this.deps.store.upsert('device_command', {
+      id,
+      status: ok ? 'done' : 'failed',
+      result: encodeResult(value),
+      updatedAt: this.now(),
+    } as Partial<DeviceCommandRow> & { id: string })
     return true
   }
 
@@ -444,11 +518,21 @@ export class DeviceToolHub {
 
   private async deliver(row: DeviceCommandRow): Promise<void> {
     this.host?.emit(row.target, 'device.command', toolPayload(row))
-    await this.deps.store.upsert('device_command', { id: row.id, status: 'sent', updatedAt: this.now() })
+    await this.deps.store.upsert('device_command', {
+      id: row.id,
+      status: 'sent',
+      updatedAt: this.now(),
+    })
   }
 
   /** Waits for the answer; every `probeMs` it asks `offline()` and gives up early (null) while the device is away. */
-  private wait(id: string, ms: number, signal?: AbortSignal, probeMs?: number, offline?: () => boolean): Promise<DeviceCommandRow | null> {
+  private wait(
+    id: string,
+    ms: number,
+    signal?: AbortSignal,
+    probeMs?: number,
+    offline?: () => boolean,
+  ): Promise<DeviceCommandRow | null> {
     return new Promise((resolve) => {
       const finish = (row: DeviceCommandRow | null): void => {
         clearTimeout(timer)
@@ -491,12 +575,21 @@ export class DeviceToolHub {
     await this.deps.store.upsert('device_command', { id: row.id, note: 'told' })
     const device = (await this.deps.store.get('device', row.target))?.name ?? 'the device'
     const outcome = this.outcome(row, device)
-    await this.deps.noteBack(row.chat, `[Device result: ${row.tool ?? 'tool'} on ${device} ${outcome.ok ? 'finished' : 'failed'}: ${outcome.text}]`, row.owner ?? '')
+    await this.deps.noteBack(
+      row.chat,
+      `[Device result: ${row.tool ?? 'tool'} on ${device} ${outcome.ok ? 'finished' : 'failed'}: ${outcome.text}]`,
+      row.owner ?? '',
+    )
   }
 
   private outcome(row: DeviceCommandRow, device: string): ToolOutcome {
     const ok = row.status === 'done'
-    return { ok, state: ok ? 'done' : 'failed', device, text: this.render(decodeResult(row.result), ok) }
+    return {
+      ok,
+      state: ok ? 'done' : 'failed',
+      device,
+      text: this.render(decodeResult(row.result), ok),
+    }
   }
 
   /** A device's value as text for the model; pictures become files it can see. */
@@ -509,7 +602,10 @@ export class DeviceToolHub {
       if (typeof v === 'object' && v !== null) {
         const o = v as Record<string, unknown>
         if (o['type'] === 'image' && typeof o['data'] === 'string') {
-          const path = this.saveImage(o['data'], typeof o['mime'] === 'string' ? o['mime'] : 'image/png')
+          const path = this.saveImage(
+            o['data'],
+            typeof o['mime'] === 'string' ? o['mime'] : 'image/png',
+          )
           if (path !== null) images.push(path)
           return '[picture]'
         }
@@ -526,7 +622,12 @@ export class DeviceToolHub {
     try {
       const dir = this.deps.imageDir ?? join(tmpdir(), 'agent-device-images')
       mkdirSync(dir, { recursive: true })
-      const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : mime.includes('webp') ? 'webp' : 'png'
+      const ext =
+        mime.includes('jpeg') || mime.includes('jpg')
+          ? 'jpg'
+          : mime.includes('webp')
+            ? 'webp'
+            : 'png'
       const path = join(dir, `${randomUUID()}.${ext}`)
       writeFileSync(path, Buffer.from(base64, 'base64'))
       return path
@@ -640,8 +741,15 @@ export class DeviceToolRunner {
           ...extra,
         }
         const args = decodeResult(row.args)
-        const text = await tool.run(typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as JsonObject) : {}, ctx)
-        await this.finish(row.id, true, text)
+        const received = receiveRemoteGrant(
+          ctx,
+          tool.spec.name,
+          typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as JsonObject) : {},
+        )
+        const text = await tool.run(received.args, received.context)
+        await this.finish(row.id, true, takeDestinationHold(received.context)
+          ? { type: 'text', text, prGateHeld: true }
+          : text)
       } catch (error) {
         await this.finish(row.id, false, error instanceof Error ? error.message : 'It failed.')
       } finally {

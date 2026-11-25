@@ -1,32 +1,53 @@
 /**
- * PR grants travel only in the app's linked-device transport, never in a model tool argument.
- * Linked devices already authenticate that transport. The destination binds and consumes the
- * envelope against its command bytes and restores the real originating agent for audit.
+ * App-only linked-device gate state. Enumerable symbols survive the production
+ * origin/vault context copies without changing destination ownership.
  */
 import { createHash, randomUUID } from 'node:crypto'
 import type { JsonObject, ToolContext } from '@agent/core'
 
-export interface RemotePrGrant {
-  id: string
-  hash: string
-  expires: number
+interface Caller {
   owner: string
   agentLabel: string
   chat: string
 }
-const outgoing = new WeakMap<ToolContext, RemotePrGrant>()
-const incoming = new WeakMap<ToolContext, RemotePrGrant>()
+export interface RemotePrGrant extends Caller {
+  id: string
+  hash: string
+  expires: number
+}
+interface CallState {
+  incoming?: RemotePrGrant
+  outgoing?: RemotePrGrant
+  caller?: Caller
+  localHold?: boolean
+  remoteHold?: boolean
+}
+const STATE = Symbol('pr-gate-call')
+type GateContext = ToolContext & { [STATE]?: CallState }
+function state(ctx: ToolContext): CallState {
+  const target = ctx as GateContext
+  return target[STATE] ?? (target[STATE] = {})
+}
+export function remoteCaller(ctx: ToolContext): Caller {
+  return (
+    state(ctx).caller ?? {
+      owner: ctx.owner ?? ctx.agentLabel,
+      agentLabel: ctx.agentLabel,
+      chat: ctx.chat ?? 'main',
+    }
+  )
+}
 const consumed = new Map<string, number>()
 const TRANSPORT_KEY = '_agentPrGateGrant'
 const CALLER_KEY = '_agentPrGateCaller'
-const localHolds = new WeakSet<ToolContext>()
-const remoteHolds = new WeakSet<ToolContext>()
+const TRANSIT_MS = 20 * 60_000
+const SKEW_MS = 120_000
 export function markDestinationHold(ctx: ToolContext): void {
-  localHolds.add(ctx)
+  state(ctx).localHold = true
 }
 export function takeDestinationHold(ctx: ToolContext): boolean {
-  const held = localHolds.has(ctx)
-  localHolds.delete(ctx)
+  const held = state(ctx).localHold === true
+  delete state(ctx).localHold
   return held
 }
 export function recordRemoteResult(ctx: ToolContext, value: unknown): void {
@@ -35,11 +56,11 @@ export function recordRemoteResult(ctx: ToolContext, value: unknown): void {
     typeof value === 'object' &&
     (value as Record<string, unknown>)['prGateHeld'] === true
   )
-    remoteHolds.add(ctx)
+    state(ctx).remoteHold = true
 }
 export function takeRemoteChallenge(ctx: ToolContext): boolean {
-  const held = remoteHolds.has(ctx)
-  remoteHolds.delete(ctx)
+  const held = state(ctx).remoteHold === true
+  delete state(ctx).remoteHold
   return held
 }
 function cleanArguments(args: JsonObject): JsonObject {
@@ -48,7 +69,6 @@ function cleanArguments(args: JsonObject): JsonObject {
   delete clean[CALLER_KEY]
   return clean
 }
-
 function ordered(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(ordered)
   if (value && typeof value === 'object')
@@ -69,93 +89,75 @@ export function prepareRemoteGrant(
   tool: string,
   args: JsonObject,
 ): void {
-  outgoing.set(ctx, {
+  state(ctx).outgoing = {
     id: randomUUID(),
     hash: digest(tool, args),
-    expires: Date.now() + 60_000,
-    owner: ctx.owner ?? ctx.agentLabel,
-    agentLabel: ctx.agentLabel,
-    chat: ctx.chat ?? 'main',
-  })
+    expires: Date.now() + TRANSIT_MS,
+    ...remoteCaller(ctx),
+  }
 }
-/** Called by DeviceToolHub, which always discards model-supplied transport fields. */
 export function remoteArguments(
   ctx: ToolContext | undefined,
   tool: string,
   args: JsonObject,
 ): JsonObject {
-  const clean = cleanArguments(args)
-  const grant = ctx ? outgoing.get(ctx) : undefined
-  if (ctx) outgoing.delete(ctx)
-  const caller = ctx
-    ? {
-        owner: ctx.owner ?? ctx.agentLabel,
-        agentLabel: ctx.agentLabel,
-        chat: ctx.chat ?? 'main',
-      }
-    : undefined
+  const clean = cleanArguments(args),
+    grant = ctx ? state(ctx).outgoing : undefined
+  if (ctx) delete state(ctx).outgoing
+  // No caller envelope for ordinary remote calls, including gate-off browser calls.
   return {
     ...clean,
-    ...(caller ? { [CALLER_KEY]: caller } : {}),
     ...(grant && grant.hash === digest(tool, clean)
       ? { [TRANSPORT_KEY]: grant as unknown as JsonObject }
       : {}),
   }
 }
-/** Only DeviceToolHost invokes this, after the linked transport has authenticated its peer. */
 export function receiveRemoteGrant(
   ctx: ToolContext,
   tool: string,
   args: JsonObject,
 ): { context: ToolContext; args: JsonObject } {
+  // Establish the capsule BEFORE withOrigin and the vault guard copy the context.
+  state(ctx)
   const clean = cleanArguments(args),
-    raw = args[TRANSPORT_KEY],
-    caller = args[CALLER_KEY]
-  let context = ctx
-  if (caller && typeof caller === 'object' && !Array.isArray(caller)) {
-    const who = caller as Record<string, unknown>
-    if (
-      typeof who['owner'] === 'string' &&
-      typeof who['agentLabel'] === 'string' &&
-      typeof who['chat'] === 'string'
-    )
-      context = {
-        ...ctx,
-        owner: who['owner'],
-        agentLabel: who['agentLabel'],
-        chat: who['chat'],
-      }
-  }
+    raw = args[TRANSPORT_KEY]
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
-    return { context, args: clean }
-  const grant = raw as unknown as RemotePrGrant
+    return { context: ctx, args: clean }
+  const grant = raw as unknown as RemotePrGrant,
+    now = Date.now()
   if (
     typeof grant.id !== 'string' ||
-    grant.owner !== context.owner ||
-    grant.agentLabel !== context.agentLabel ||
-    grant.chat !== context.chat ||
+    !grant.id ||
+    typeof grant.owner !== 'string' ||
+    typeof grant.agentLabel !== 'string' ||
+    typeof grant.chat !== 'string' ||
     !Number.isFinite(grant.expires) ||
-    grant.expires < Date.now() ||
-    grant.expires > Date.now() + 60_000 ||
+    grant.expires < now - SKEW_MS ||
+    grant.expires > now + TRANSIT_MS + SKEW_MS ||
     grant.hash !== digest(tool, clean)
   )
-    return { context, args: clean }
-  incoming.set(context, grant)
-  return { context, args: clean }
+    return { context: ctx, args: clean }
+  state(ctx).caller = {
+    owner: grant.owner,
+    agentLabel: grant.agentLabel,
+    chat: grant.chat,
+  }
+  // Execution freshness uses the destination clock, independent of origin skew.
+  state(ctx).incoming = { ...grant, expires: now + 60_000 }
+  return { context: ctx, args: clean }
 }
-
 export function consumeRemoteGrant(
   ctx: ToolContext,
   tool: string,
   args: JsonObject,
 ): boolean {
-  const grant = incoming.get(ctx)
+  const grant = state(ctx).incoming
   if (!grant || grant.hash !== digest(tool, args) || grant.expires < Date.now())
     return false
-  incoming.delete(ctx)
+  delete state(ctx).incoming
   for (const [id, expiry] of consumed)
     if (expiry < Date.now()) consumed.delete(id)
   if (consumed.has(grant.id)) return false
-  consumed.set(grant.id, grant.expires)
+  consumed.set(grant.id, Date.now() + TRANSIT_MS + SKEW_MS)
   return true
 }

@@ -148,7 +148,9 @@ export async function startToolServer(): Promise<ToolServer> {
           isError = true
         }
         const limit = (['shell_run','run_code'].includes(name) ? run.context.commandFallback?.outputChars : undefined) ?? resultLimitOf(run.context,24_000)
-        if (text.length > limit) text = `${text.slice(0, limit)}\n...(cut, ${text.length} chars total)`
+        if (text.length > limit) text = ['shell_run', 'run_code'].includes(name)
+          ? text.slice(0, Math.floor(limit / 2)) + '\n...(cut, ' + text.length + ' chars total)\n' + text.slice(-Math.floor(limit / 2))
+          : text.slice(0, limit) + '\n...(cut, ' + text.length + ' chars total)'
         await run.onResult?.(call, text, isError)
         return { content: [{ type: 'text', text }], isError }
       }

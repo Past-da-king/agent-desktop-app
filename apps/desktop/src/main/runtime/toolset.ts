@@ -6,9 +6,11 @@
  * worker toolset (what a helper runs with) is the same groups without the helper tools and without
  * the budget.
  */
-import { inlineCommentFile } from './pr-gate-detect'
+import { homedir } from 'node:os'
 import { DEFAULT_SETTINGS, type JsonObject, type PastChatHit, type Tool } from '@agent/core'
 
+import { MEMORY_CHANNELS } from '../../shared/memory-channels'
+import { inlineCommentFile } from './pr-gate-detect'
 import { unavailableBrowser, type BrowserDriver } from '../browser/types'
 import type { AppsService } from '../apps/service'
 import type { LearnedStore } from '../apps/store'
@@ -230,8 +232,10 @@ export function withOrigin(tools: Tool[]): Tool[] {
     run: (input, ctx) =>
       tool.run(input, {
         ...ctx,
-        approve: (summary, details, scope, origin) => ctx.approve(summary, details, scope, origin ?? { tool: tool.spec.name, input }),
-        ask: (question, options, card, origin) => ctx.ask(question, options, card, origin ?? { tool: tool.spec.name, input }),
+        approve: (summary, details, scope, origin) =>
+          ctx.approve(summary, details, scope, origin ?? { tool: tool.spec.name, input }),
+        ask: (question, options, card, origin) =>
+          ctx.ask(question, options, card, origin ?? { tool: tool.spec.name, input }),
       }),
   }))
 }
@@ -239,26 +243,110 @@ export function withOrigin(tools: Tool[]): Tool[] {
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
   // The vault guard sits outermost of all: what any tool returns, on any path, has vault values taken out.
   const gate = prGateFor(deps.store, () => deps.settings?.get() ?? DEFAULT_SETTINGS)
-  return guardTools(withOrigin(withPrGate([...workerToolsets(deps), ...gate.tools()], gate, async (name,input,ctx) =>
-    browserOwner.run({owner:ctx.owner ?? ctx.agentLabel}, async () => {
-      if (name.startsWith('browser_')) {
-        const tab = await devtoolsOf(deps.browser)
-        const pageUrl = tab?.url() ?? ''
-        if (name === 'browser_fetch' && input['from']) {
-          const replay = tab?.network.get(String(input['from']))
-          if (!replay) return {...input,_resolvedReplay:false}
-          return {...input,_resolvedReplay:true,_unknownBody:replay.hasPostData && replay.postData === null,pageUrl,url:new URL(String(input['url'] ?? replay.url),pageUrl || undefined).href,method:input['method'] ?? replay.method,body:input['body'] ?? replay.postData ?? ''}
-        }
-        if (name === 'browser_fetch' && input['url']) return {...input,pageUrl,url:new URL(String(input['url']),pageUrl || undefined).href}
-        return {...input,pageUrl}
-      }
-      if (name === 'webapp_run' || name === 'webapp_test') {
-        const app = deps.learned?.find(String(input['app'] ?? ''))
-        return {...input,app:app?.startUrl?.includes('github.com') ? 'GitHub' : input['app'] ?? ''}
-      }
-      return inlineCommentFile(name,input,ctx.commandFallback?.cwd) as JsonObject
-    })
-  )), deps.vault)
+  return guardTools(
+    withOrigin(
+      withPrGate([...workerToolsets(deps), ...gate.tools()], gate, async (name, input, ctx) =>
+        browserOwner.run({ owner: ctx.owner ?? ctx.agentLabel }, async () => {
+          input = { ...input }
+          for (const key of [
+            '_resolvedAction',
+            '_safeEnter',
+            '_policyUndoKnown',
+            '_policyMemoryId',
+          ])
+            delete input[key]
+          if (
+            name === 'app_action' &&
+            String(input['method']).replace(/^agent\./, '') === 'memory.undoChange'
+          ) {
+            try {
+              const invoker = deps.appControl?.invoker?.()
+              if (!invoker) return { ...input, _policyUndoKnown: false }
+              const upkeep = (await invoker.invoke(MEMORY_CHANNELS.upkeep, [])) as {
+                report?: { changes?: Array<{ id: string; memoryId: string }> }
+              }
+              const change = upkeep.report?.changes?.find(
+                (row) => row.id === (input['args'] as unknown[])?.[0],
+              )
+              return {
+                ...input,
+                _policyUndoKnown: !!change,
+                _policyMemoryId: change?.memoryId ?? '',
+              }
+            } catch {
+              return { ...input, _policyUndoKnown: false }
+            }
+          }
+          if (name.startsWith('browser_')) {
+            const tab = await devtoolsOf(deps.browser)
+            const pageUrl = tab?.url() ?? ''
+            if (
+              (name === 'browser_click' || name === 'browser_act') &&
+              input['index'] !== undefined &&
+              deps.browser
+            ) {
+              const outline = await deps.browser.snapshot().catch(() => '')
+              const line = outline
+                .split('\n')
+                .find((line) => line.trim().startsWith('[' + String(input['index']) + ']'))
+              return { ...input, pageUrl, name: line ?? '', _resolvedAction: !!line }
+            }
+            if (
+              name === 'browser_press_key' ||
+              (name === 'browser_act' && input['action'] === 'press')
+            ) {
+              const focused = await tab?.evaluate(
+                "(() => { const e = document.activeElement; return !!e && (e.matches('input[type=search],input[name=q]') || e.getAttribute('role') === 'searchbox'); })()",
+              )
+              return {
+                ...input,
+                pageUrl,
+                _safeEnter: focused?.ok === true && focused.value === true,
+              }
+            }
+            if (name === 'browser_fetch' && input['from']) {
+              const replay = tab?.network.get(String(input['from']))
+              if (!replay) return { ...input, _resolvedReplay: false }
+              return {
+                ...input,
+                _resolvedReplay: true,
+                _unknownBody: replay.hasPostData && replay.postData === null,
+                pageUrl,
+                url: new URL(String(input['url'] ?? replay.url), pageUrl || undefined).href,
+                method: input['method'] ?? replay.method,
+                body: input['body'] ?? replay.postData ?? '',
+              }
+            }
+            if (name === 'browser_fetch' && input['url'])
+              return {
+                ...input,
+                pageUrl,
+                url: new URL(String(input['url']), pageUrl || undefined).href,
+              }
+            return { ...input, pageUrl }
+          }
+          if (name === 'webapp_run' || name === 'webapp_test') {
+            const app = deps.learned?.find(String(input['app'] ?? ''))
+            return {
+              ...input,
+              app: app?.startUrl?.includes('github.com') ? 'GitHub' : (input['app'] ?? ''),
+            }
+          }
+          return inlineCommentFile(
+            name,
+            {
+              ...input,
+              ...(['shell_run', 'Bash', 'PowerShell'].includes(name)
+                ? { cwd: input['cwd'] ?? ctx.commandFallback?.cwd ?? homedir() }
+                : {}),
+            },
+            ctx.commandFallback?.cwd,
+          ) as JsonObject
+        }),
+      ),
+    ),
+    deps.vault,
+  )
 }
 
 function workerToolsets(deps: ToolsetDeps): Tool[] {

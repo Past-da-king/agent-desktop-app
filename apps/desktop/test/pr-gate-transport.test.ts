@@ -1,7 +1,14 @@
+import { guardTools } from '../src/main/vault/guard'
+import { VaultStore } from '../src/main/vault/store'
+import { Secrets } from '../src/main/secrets'
+import { FileKeyCipher } from '../src/headless/file-cipher'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { afterEach, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type JsonObject } from '@agent/core'
 import { Store } from '../src/main/db'
-import { buildWorkerToolset } from '../src/main/runtime/toolset'
+import { withOrigin, buildWorkerToolset } from '../src/main/runtime/toolset'
 import {
   PrGate,
   ATTESTATION_FIELDS,
@@ -44,8 +51,12 @@ function transportResult(
   return JSON.stringify(result)
 }
 const stores: Store[] = []
+const wrapperDirs: string[] = []
 afterEach(() => {
   stores.splice(0).forEach((store) => store.close())
+  wrapperDirs
+    .splice(0)
+    .forEach((folder) => rmSync(folder, { recursive: true, force: true }))
   tab.url = 'https://github.com/o/r/pull/3'
 })
 const proof = () =>
@@ -125,14 +136,16 @@ it('attests a device call at origin, carries real identity and consumes exactly 
   const sourceGate = new PrGate(origin.store, () => origin.settings),
     targetGate = new PrGate(destination.store, () => destination.settings)
   const executed = vi.fn(async () => 'fake gh ran')
-  const destinationTools = withPrGate(
-    [
-      {
-        spec: { name: 'shell_run', description: 'fixture', schema: {} },
-        run: executed,
-      },
-    ],
-    targetGate,
+  const destinationTools = productionWrapped(
+    withPrGate(
+      [
+        {
+          spec: { name: 'shell_run', description: 'fixture', schema: {} },
+          run: executed,
+        },
+      ],
+      targetGate,
+    ),
   )
   const host = new DeviceToolHost({
     tools: () => destinationTools,
@@ -208,70 +221,94 @@ it('attests a device call at origin, carries real identity and consumes exactly 
   expect(await tools[0]!.run(input, origin.ctx)).toContain('NOT RUN')
 })
 
-it('propagates destination-only browser hits to an origin challenge without bypassing the remote guard', async () => {
-  const origin = setup(),
-    destination = setup()
-  const gate = new PrGate(origin.store, () => origin.settings),
-    target = new PrGate(destination.store, () => destination.settings)
-  const tools = withPrGate(
-    [
-      {
-        spec: { name: 'device_tool', description: 'fixture', schema: {} },
-        run: async (input, ctx) => {
-          const args = remoteArguments(
-            ctx,
-            String(input['tool']),
-            input['args'] as JsonObject,
-          )
-          const host = new DeviceToolHost({
-            tools: () =>
-              withPrGate(
-                [
-                  {
-                    spec: {
-                      name: 'browser_click',
-                      description: 'fixture',
-                      schema: {},
-                    },
-                    run: async () => 'clicked',
-                  },
-                ],
-                target,
-                async (_name, value) => ({
-                  ...value,
-                  pageUrl: 'https://github.com/o/r/pull/3',
-                }),
-              ),
-            context: (signal) => testContext({ signal, owner: 'device' }),
-            shared: () => ({
-              browser: true,
-              files: true,
-              notifications: true,
-              approval: true,
-              shell: true,
-            }),
-            inbox: '/tmp',
-          })
-          return transportResult(
-            ctx,
-            await host.run({
-              kind: 'tool',
-              id: 'browser',
-              tool: 'browser_click',
-              args,
-              chatId: ctx.chat,
-              deadlineMs: 1000,
-            }),
-          )
+it.each(['device_tool', 'browser_click'])(
+  'propagates destination-only hits through %s with production wrappers',
+  async (route) => {
+    const origin = setup(),
+      destination = setup()
+    const gate = new PrGate(origin.store, () => origin.settings),
+      target = new PrGate(destination.store, () => destination.settings)
+    const tools = withPrGate(
+      [
+        {
+          spec: { name: route, description: 'fixture', schema: {} },
+          run: async (input, ctx) => {
+            const args = remoteArguments(
+              ctx,
+              'browser_click',
+              route === 'device_tool'
+                ? (input['args'] as JsonObject)
+                : { index: input['index'] },
+            )
+            const host = new DeviceToolHost({
+              tools: () =>
+                productionWrapped(
+                  withPrGate(
+                    [
+                      {
+                        spec: {
+                          name: 'browser_click',
+                          description: 'fixture',
+                          schema: {},
+                        },
+                        run: async () => 'clicked',
+                      },
+                    ],
+                    target,
+                    async (_name, value) => ({
+                      ...value,
+                      pageUrl: 'https://github.com/o/r/pull/3',
+                    }),
+                  ),
+                ),
+              context: (signal) => testContext({ signal, owner: 'device' }),
+              shared: () => ({
+                browser: true,
+                files: true,
+                notifications: true,
+                approval: true,
+                shell: true,
+              }),
+              inbox: '/tmp',
+            })
+            return transportResult(
+              ctx,
+              await host.run({
+                kind: 'tool',
+                id: 'browser',
+                tool: 'browser_click',
+                args,
+                chatId: ctx.chat,
+                deadlineMs: 1000,
+              }),
+            )
+          },
         },
-      },
-    ],
-    gate,
+      ],
+      gate,
+    )
+    const input =
+      route === 'device_tool'
+        ? { device: 'target', tool: 'browser_click', args: { index: 3 } }
+        : { device: 'target', index: 3 }
+    const held = await tools[0]!.run(input, origin.ctx)
+    const id = held.match(/Gate id: ([a-f0-9-]+)/)![1]!
+    expect(await gate.attest(id, proof(), origin.ctx)).toContain('recorded')
+    expect(await tools[0]!.run(input, origin.ctx)).toContain('clicked')
+    expect(await tools[0]!.run(input, origin.ctx)).toContain('NOT RUN')
+  },
+)
+
+function productionWrapped(
+  tools: import('@agent/core').Tool[],
+): import('@agent/core').Tool[] {
+  const folder = mkdtempSync(join(tmpdir(), 'gate-wrapper-'))
+  const vault = new VaultStore(
+    new Secrets(
+      join(folder, 'secrets'),
+      new FileKeyCipher(join(folder, 'key')),
+    ),
   )
-  const input = { device: 'target', tool: 'browser_click', args: { index: 3 } }
-  const held = await tools[0]!.run(input, origin.ctx)
-  const id = held.match(/Gate id: ([a-f0-9-]+)/)![1]!
-  expect(await gate.attest(id, proof(), origin.ctx)).toContain('recorded')
-  expect(await tools[0]!.run(input, origin.ctx)).toContain('clicked')
-  expect(await tools[0]!.run(input, origin.ctx)).toContain('NOT RUN')
-})
+  wrapperDirs.push(folder)
+  return guardTools(withOrigin(tools), vault)
+}

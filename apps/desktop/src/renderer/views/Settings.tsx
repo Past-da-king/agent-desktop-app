@@ -1,4 +1,3 @@
-import { PrGateSettings } from './PrGateSettings'
 import { AnsweredForYouLink } from './AnsweredForYou'
 /**
  * Settings (redesigned 4 Nov 2026, the approved mock-ups): a section rail with the ten sections and their counts, one
@@ -11,6 +10,7 @@ import { AnsweredForYouLink } from './AnsweredForYou'
  * changed. A row says its default and offers Reset only while its value is not the default, and a group of rows (the
  * AI accounts, the folders, the devices) is never emptied by one button.
  */
+import { PrGateSettings } from './PrGateSettings'
 import type { AiAccount, AiAccountStatus, AiPicks, GitLogEntry, Settings as SettingsValues } from '@agent/core'
 import { DICTATION_MODELS, VOICES } from '@agent/core'
 import { useCallback, useEffect, useRef, useState } from 'react'

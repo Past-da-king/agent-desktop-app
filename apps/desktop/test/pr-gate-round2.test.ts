@@ -149,6 +149,8 @@ it('protects namespaced resets, removals, restores and bulk policy rewrites even
       ['memory.undoChange', [page.id]],
       ['memory.runImport', []],
       ['memory.startTidy', []],
+      ['memory.undoTidy', []],
+      ['memory.runDaily', []],
     ] as Array<[string, JsonObject[] | unknown[]]>) {
       expect(
         await gate.check('app_action', { method, args } as JsonObject, ctx),
@@ -217,7 +219,7 @@ it('requires a private native handle and keeps generic tool limits small', async
     { ...DEFAULT_SETTINGS, prGateEnabled: true },
   )
   expect(context.resultLimit).toBeUndefined()
-  expect(context.commandFallback?.outputChars).toBe(2_000_000)
+  expect(context.commandFallback?.outputChars).toBe(150_000)
 })
 it('executes the exact captured comment body, not a file changed after inspection', async () => {
   const store = new Store(':memory:')

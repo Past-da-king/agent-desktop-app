@@ -10,10 +10,10 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 
-import { gateForTools } from './pr-gate'
 import { accountsOf } from '@agent/core'
 import type { AgentEvent, AiAccount, AiAccountStatus, AiUsageWindow, JsonObject, Settings, Tool, ToolContext } from '@agent/core'
 
+import { gateForTools } from './pr-gate'
 import {
   AccountHomes,
   UsageStore,
@@ -119,25 +119,44 @@ export function threadDelegates(thread: string): boolean {
   return !thread.startsWith('helper:') && thread !== 'routine'
 }
 
-export function planToolContext(request: Pick<CliTurnRequest,'cli'|'context'|'folder'>, settings: Settings): ToolContext {
+export function planToolContext(
+  request: Pick<CliTurnRequest, 'cli' | 'context' | 'folder'>,
+  settings: Settings,
+): ToolContext {
   if (request.cli !== 'codex' || !settings.prGateEnabled) return request.context
-  return {...request.context,commandFallback:{
-    cwd: usableFolder(request.folder) ?? process.cwd(),timeoutSec:3600,outputChars:2_000_000,
-  }}
+  return {
+    ...request.context,
+    commandFallback: {
+      cwd: usableFolder(request.folder) ?? process.cwd(),
+      timeoutSec: 3600,
+      outputChars: 150_000,
+    },
+  }
 }
 export function planPermission(
-  request: Pick<CliTurnRequest,'tools'|'context'|'folder'>,
+  request: Pick<CliTurnRequest, 'tools' | 'context' | 'folder'>,
   settings: () => Settings,
-  base: (name:string,input:Record<string,unknown>)=>Promise<Permission>,
-): (name:string,input:Record<string,unknown>)=>Promise<Permission> {
-  return async (name,input) => {
+  base: (name: string, input: Record<string, unknown>) => Promise<Permission>,
+): (name: string, input: Record<string, unknown>) => Promise<Permission> {
+  return async (name, input) => {
     if (settings().prGateEnabled && (name === 'Bash' || name === 'PowerShell')) {
-      const gate=gateForTools(request.tools)
-      if(!gate) return {allow:false,message:'PR gate unavailable. Use the app shell_run tool.'}
-      const held=await gate.check(name,{...(input as JsonObject),cwd:typeof input['cwd']==='string'?input['cwd']:usableFolder(request.folder)??process.cwd()},request.context)
-      if(held) return {allow:false,message:held}
+      const gate = gateForTools(request.tools)
+      if (!gate)
+        return { allow: false, message: 'PR gate unavailable. Use the app shell_run tool.' }
+      const held = await gate.check(
+        name,
+        {
+          ...(input as JsonObject),
+          cwd:
+            typeof input['cwd'] === 'string'
+              ? input['cwd']
+              : (usableFolder(request.folder) ?? process.cwd()),
+        },
+        request.context,
+      )
+      if (held) return { allow: false, message: held }
     }
-    return base(name,input)
+    return base(name, input)
   }
 }
 

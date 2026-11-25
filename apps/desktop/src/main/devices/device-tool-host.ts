@@ -4,15 +4,16 @@
  * file_receive for moving a file in one step. A command { kind: "tool", id, tool, args, chatId, deadlineMs } runs
  * here and its answer goes back with device.result. Each group can be switched off; shell is off by default.
  */
-import {
-  receiveRemoteGrant,
-  takeDestinationHold,
-} from '../runtime/pr-gate-remote'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 
 import type { JsonObject, Tool, ToolContext } from '@agent/core'
+
+import {
+  receiveRemoteGrant,
+  takeDestinationHold,
+} from '../runtime/pr-gate-remote'
 
 import { contentTypeFor } from './server'
 import type {
@@ -93,77 +94,37 @@ function fileTools(inbox: string): Tool[] {
     {
       spec: {
         name: 'file_send',
-        description:
-          'Send a file from this computer to the agent that asks: its bytes come back in the answer (up to 16 MB).',
-        schema: {
-          type: 'object',
-          properties: {
-            path: {
-              type: 'string',
-              description: 'Absolute path of the file on this computer',
-            },
-          },
-          required: ['path'],
-        },
+        description: 'Send a file from this computer to the agent that asks: its bytes come back in the answer (up to 16 MB).',
+        schema: { type: 'object', properties: { path: { type: 'string', description: 'Absolute path of the file on this computer' } }, required: ['path'] },
       },
       run: async (input) => {
         const path = typeof input['path'] === 'string' ? input['path'] : ''
-        const info =
-          path === '' ? undefined : statSync(path, { throwIfNoEntry: false })
-        if (info === undefined || !info.isFile())
-          throw new Error('That file is not on this computer.')
-        if (info.size > MAX_INLINE_FILE)
-          throw new Error('That file is bigger than 16 MB.')
-        return JSON.stringify({
-          type: 'file',
-          name: basename(path),
-          mime: contentTypeFor(path),
-          size: info.size,
-          data: readFileSync(path).toString('base64'),
-        })
+        const info = path === '' ? undefined : statSync(path, { throwIfNoEntry: false })
+        if (info === undefined || !info.isFile()) throw new Error('That file is not on this computer.')
+        if (info.size > MAX_INLINE_FILE) throw new Error('That file is bigger than 16 MB.')
+        return JSON.stringify({ type: 'file', name: basename(path), mime: contentTypeFor(path), size: info.size, data: readFileSync(path).toString('base64') })
       },
     },
     {
       spec: {
         name: 'file_receive',
-        description:
-          "Put a file on this computer, in the app's received files folder. Returns where it was saved.",
+        description: 'Put a file on this computer, in the app\'s received files folder. Returns where it was saved.',
         schema: {
           type: 'object',
-          properties: {
-            name: { type: 'string', description: 'File name' },
-            data: { type: 'string', description: 'The bytes, base64' },
-          },
+          properties: { name: { type: 'string', description: 'File name' }, data: { type: 'string', description: 'The bytes, base64' } },
           required: ['name', 'data'],
         },
       },
       run: async (input) => {
-        const raw =
-          typeof input['name'] === 'string'
-            ? basename(input['name'])
-                .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-                .trim()
-            : ''
-        const name =
-          raw === '' || raw === '.' || raw === '..' ? 'file' : raw.slice(0, 120)
-        const data =
-          typeof input['data'] === 'string'
-            ? Buffer.from(input['data'], 'base64')
-            : Buffer.alloc(0)
-        if (data.length > MAX_INLINE_FILE)
-          throw new Error('That file is bigger than 16 MB.')
+        const raw = typeof input['name'] === 'string' ? basename(input['name']).replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim() : ''
+        const name = raw === '' || raw === '.' || raw === '..' ? 'file' : raw.slice(0, 120)
+        const data = typeof input['data'] === 'string' ? Buffer.from(input['data'], 'base64') : Buffer.alloc(0)
+        if (data.length > MAX_INLINE_FILE) throw new Error('That file is bigger than 16 MB.')
         mkdirSync(inbox, { recursive: true })
         let target = join(inbox, name)
-        for (
-          let n = 2;
-          statSync(target, { throwIfNoEntry: false }) !== undefined;
-          n += 1
-        ) {
+        for (let n = 2; statSync(target, { throwIfNoEntry: false }) !== undefined; n += 1) {
           const ext = extname(name)
-          target = join(
-            inbox,
-            `${name.slice(0, name.length - ext.length)} (${n})${ext}`,
-          )
+          target = join(inbox, `${name.slice(0, name.length - ext.length)} (${n})${ext}`)
         }
         writeFileSync(target, data)
         return JSON.stringify({ type: 'file', path: target, size: data.length })
@@ -173,10 +134,7 @@ function fileTools(inbox: string): Tool[] {
 }
 
 /** A tool's text answer as the device.result value: its text, its images inline, a file as itself. */
-export function resultValue(
-  text: string,
-  readImage: (path: string) => Buffer | null = safeRead,
-): unknown {
+export function resultValue(text: string, readImage: (path: string) => Buffer | null = safeRead): unknown {
   if (text.startsWith('{"type":"file"')) {
     try {
       return JSON.parse(text) as unknown
@@ -188,12 +146,7 @@ export function resultValue(
   for (const match of text.matchAll(new RegExp(IMAGE_MARKER.source, 'g'))) {
     const path = match[1] ?? ''
     const bytes = readImage(path)
-    if (bytes !== null)
-      images.push({
-        type: 'image',
-        mime: contentTypeFor(path),
-        data: bytes.toString('base64'),
-      })
+    if (bytes !== null) images.push({ type: 'image', mime: contentTypeFor(path), data: bytes.toString('base64') })
   }
   const clean = text.replace(new RegExp(IMAGE_MARKER.source, 'g'), '').trim()
   return images.length === 0 ? { text: clean } : { text: clean, images }
@@ -202,9 +155,7 @@ export function resultValue(
 function safeRead(path: string): Buffer | null {
   try {
     const info = statSync(path)
-    return info.isFile() && info.size <= MAX_INLINE_FILE
-      ? readFileSync(path)
-      : null
+    return info.isFile() && info.size <= MAX_INLINE_FILE ? readFileSync(path) : null
   } catch {
     return null
   }
@@ -268,7 +219,7 @@ export class DeviceToolHost {
     const command = toolCommand(raw)
     if (command === null)
       return { ok: false, error: 'That is not a tool command.' }
-    // A [vault:ls-alerts-test-webhook] sharing group also revokes access to cached replies.
+    // A revoked sharing group also revokes access to cached replies.
     if (!this.available().has(command.tool))
       return {
         ok: false,
@@ -296,6 +247,12 @@ export class DeviceToolHost {
             'This device command id was already used for a different payload.',
         }
       return old.pending ?? old.result!
+    }
+    for (const [id, finished] of this.recent) {
+      if (this.recent.size < 4096) break
+      if (finished.pending) continue
+      this.replayBytes -= finished.bytes
+      this.recent.delete(id)
     }
     if (this.recent.size >= 4096)
       return {
@@ -389,6 +346,7 @@ export class DeviceToolHost {
       })
       const text = await Promise.race([run, timeout])
       const value = resultValue(text)
+      if (value && typeof value === 'object') delete (value as Record<string, unknown>)['prGateHeld']
       return {
         ok: true,
         value: takeDestinationHold(received.context)

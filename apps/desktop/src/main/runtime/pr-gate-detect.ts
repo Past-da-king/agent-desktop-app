@@ -1,5 +1,11 @@
 import { parse, quote } from 'shell-quote'
-import { readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs'
+import {
+  readFileSync,
+  statSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+} from 'node:fs'
 import { resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -20,7 +26,8 @@ function object(value: unknown): Args {
 }
 function unreadable(v: unknown): boolean {
   return (
-    typeof v === 'string' && /(^@|\$\(|\x60|<\(|\$\{?[\w]|\{\{vault:)/.test(v)
+    typeof v === 'string' &&
+    /(^@|\$\(|\x60|<\(|\$\{?[a-zA-Z_]|\{\{vault:)/.test(v)
   )
 }
 export function readyComment(v: unknown): boolean {
@@ -69,30 +76,32 @@ export function githubWrite(
   if (/(^|\/)graphql(?:\?|$)/i.test(path)) return opaque || graph(data['query'])
   if (web) {
     if (
-      /\/pull\/\d+\/(?:ready_for_review|review-requests|merge|auto_merge)(?:\/|$)/i.test(
+      /\/pull\/[^/?#]+\/(?:ready_for_review|review-requests|merge|auto_merge)(?:\/|$)/i.test(
         path,
       )
     )
       return true
     if (/\/(?:pulls|pull\/(?:new|create)|compare)(?:\/|$)/i.test(path))
       return opaque || data['draft'] !== true
-    if (/\/(?:issues|pull)\/\d+\/comments?(?:\/|$)/i.test(path))
+    if (/\/(?:issues|pull)\/[^/?#]+\/comments?(?:\/|$)/i.test(path))
       return opaque || readyComment(data['body'] ?? data['comment[body]'])
   }
   if (
-    /\/pulls\/\d+\/(?:requested_reviewers|merge|auto_merge)(?:\?|$)/i.test(path)
+    /\/pulls\/[^/?#]+\/(?:requested_reviewers|merge|auto_merge)(?:\?|$)/i.test(
+      path,
+    )
   )
     return true
   if (/\/pulls(?:\?|$)/i.test(path) && /^POST$/i.test(method))
     return opaque || ![true, 'true'].includes(data['draft'] as boolean | string)
-  if (/\/pulls\/\d+(?:\?|$)/i.test(path))
+  if (/\/pulls\/[^/?#]+(?:\?|$)/i.test(path))
     return (
       opaque || [false, 'false'].includes(data['draft'] as boolean | string)
     )
-  if (/\/pulls\/\d+\/reviews(?:\?|$)/i.test(path))
+  if (/\/pulls\/[^/?#]+\/reviews(?:\?|$)/i.test(path))
     return opaque || unreadable(data['body']) || readyComment(data['body'])
   return (
-    /\/issues\/\d+\/comments(?:\?|$)/i.test(path) &&
+    /\/issues\/[^/?#]+\/comments(?:\?|$)/i.test(path) &&
     (opaque || unreadable(data['body']) || readyComment(data['body']))
   )
 }
@@ -149,10 +158,17 @@ function gh(args: string[]): boolean {
     flags.push(word)
   }
   if (flags.includes('--dry-run')) return false
-  const comment = (): boolean =>
-    readyComment(option(args, '--body', '-b')) ||
-    option(args, '--body-file', '-F') !== undefined ||
-    unreadable(option(args, '--body', '-b'))
+  const comment = (): boolean => {
+    const file = option(args, '--body-file', '-F')
+    if (file !== undefined) {
+      const body = readCommentBody(file)
+      return body === null || readyComment(body)
+    }
+    return (
+      readyComment(option(args, '--body', '-b')) ||
+      unreadable(option(args, '--body', '-b'))
+    )
+  }
   if (issue >= 0 && args[issue + 1] === 'comment') return comment()
   if (pr >= 0) {
     const action = args[pr + 1]
@@ -236,7 +252,12 @@ function argv(words: string[], depth: number): boolean {
   if (['eval', 'iex', 'invoke-expression'].includes(exe))
     return shell(args.join(' '), depth + 1)
   if (SHELLS.has(exe)) {
-    const i = args.findIndex((w) => /^-(?:[a-z]*c|command)$/i.test(w))
+    if (
+      ['pwsh', 'powershell'].includes(exe) &&
+      args.some((word) => /^-(?:encodedcommand|ec|e)$/i.test(word))
+    )
+      return true
+    const i = args.findIndex((w) => /^-(?:[a-z]*c[a-z]*|command)$/i.test(w))
     if (i >= 0)
       return shell(
         args
@@ -249,17 +270,50 @@ function argv(words: string[], depth: number): boolean {
         depth + 1,
       )
     if (
-      args.some((word) => /^-n$|^-.*n.*$/.test(word)) &&
+      args.some((word) => /^-[a-z]*n[a-z]*$/i.test(word)) &&
       !['pwsh', 'powershell'].includes(exe)
     )
       return false
-    const fileIndex = args.findIndex((word) => /^-file$/i.test(word))
-    const file =
-      fileIndex >= 0
-        ? args[fileIndex + 1]
-        : args.find((word) => !word.startsWith('-'))
+    let file: string | undefined
+    for (let at = 0; at < args.length; at++) {
+      const word = args[at]!
+      if (/^-file$/i.test(word)) {
+        file = args[at + 1]
+        break
+      }
+      if (['-o', '-O', '--rcfile', '--init-file'].includes(word)) {
+        at++
+        continue
+      }
+      if (word === '--') {
+        file = args[at + 1]
+        break
+      }
+      if (!word.startsWith('-')) {
+        file = word
+        break
+      }
+    }
     if (!file || file === '-') return false
     return inspectFile(file, depth + 1)
+  }
+  if (['source', '.'].includes(exe) && args[0])
+    return inspectFile(args[0], depth + 1)
+  if (
+    /\.(?:sh|bash|zsh|ps1)$/i.test(words[0] ?? '') ||
+    (words[0] ?? '').startsWith('./')
+  )
+    return inspectFile(words[0]!, depth + 1)
+  if (exe === 'start-process') {
+    const command = option(args, '-FilePath') ?? args[0] ?? ''
+    const argumentsAt = args.findIndex((word) => /^-argumentlist$/i.test(word))
+    return argv(
+      [
+        command,
+        ...args.slice(argumentsAt + 1).flatMap((word) => word.split(',')),
+      ],
+      depth + 1,
+    )
   }
   if (exe === 'wsl') {
     let i = 0
@@ -350,7 +404,9 @@ function argv(words: string[], depth: number): boolean {
       depth + 1,
     )
   if (['su', 'script'].includes(exe)) {
-    const at = args.findIndex((word) => /^-(?:[a-z]*c|command)$/i.test(word))
+    const at = args.findIndex((word) =>
+      /^-(?:[a-z]*c[a-z]*|command)$/i.test(word),
+    )
     return at >= 0
       ? shell(args.slice(at + 1, at + 2).join(' '), depth + 1)
       : false
@@ -365,6 +421,7 @@ function argv(words: string[], depth: number): boolean {
   if (
     [
       'curl',
+      'wget',
       'invoke-restmethod',
       'irm',
       'invoke-webrequest',
@@ -387,7 +444,7 @@ function argv(words: string[], depth: number): boolean {
     )
     return githubWrite(
       url,
-      option(args, '-X', '--request', '-Method') ??
+      option(args, '-X', '--request', '-Method', '--method') ??
         (body === undefined ? 'GET' : 'POST'),
       body,
       unreadable(body) ||
@@ -466,12 +523,30 @@ function substitutions(source: string): string[] {
 function shell(source: string, depth = 0): boolean {
   if (depth > 12) return false
   source = source.replace(/\\\r?\n/g, '')
+  source = source.replace(/&\s*"([^"]*\\gh\.exe)"\s+/gi, 'gh ')
+  const redirected = source.match(
+    /\b(?:bash|sh|zsh|dash)\s*<\s*['"]?([^\s'";&|]+)/,
+  )
+  if (redirected && inspectFile(redirected[1]!, depth + 1)) return true
+  if (/\bStart-Process\b/i.test(source)) {
+    const processCall = source.match(
+      /Start-Process\s+(?:-FilePath\s+)?['"]?([^\s'"]+)['"]?\s+-ArgumentList\s+([^;\n]+)/i,
+    )
+    if (
+      processCall &&
+      shell(
+        processCall[1] + ' ' + processCall[2]!.replace(/,/g, ' '),
+        depth + 1,
+      )
+    )
+      return true
+  }
   const lines = source.split('\n'),
     kept: string[] = [],
     bodies: string[] = []
   for (let i = 0; i < lines.length; i++) {
     const header = lines[i]!,
-      match = header.match(/(?<![<\w])<<-?(?!<)\s*['"]?([a-zA-Z_]\w*)['"]?/)
+      match = header.match(/(?<![<\w])<<-?(?!<)\s*['"]?([a-zA-Z_][\w-]*)['"]?/)
     if (
       !match ||
       !lines.slice(i + 1).some((line) => line.trim() === match[1])
@@ -483,10 +558,12 @@ function shell(source: string, depth = 0): boolean {
     const body: string[] = []
     while (++i < lines.length && lines[i]!.trim() !== match[1])
       body.push(lines[i]!)
-    if (/\b(?:bash|sh|zsh|pwsh|powershell|ssh|wsl)\b/.test(header))
+    if (
+      /\b(?:bash|sh|zsh|pwsh|powershell|ssh|wsl|python3?|node)\b/.test(header)
+    )
       bodies.push(body.join('\n'))
   }
-  if (bodies.some((b) => shell(b, depth + 1))) return true
+  if (bodies.some((b) => shell(b, depth + 1) || script(b))) return true
   source = kept.join('\n')
   if (substitutions(source).some((s) => shell(s, depth + 1))) return true
   let q = '',
@@ -547,12 +624,41 @@ function shell(source: string, depth = 0): boolean {
         }
       }
     }
-    return parts.some((part) => argv(part, depth))
+    const initialCwd = inspectionCwd
+    try {
+      for (const part of parts) {
+        if (part[0] === 'cd' && part[1] && !unreadable(part[1])) {
+          inspectionCwd = resolve(inspectionCwd, part[1])
+          continue
+        }
+        if (argv(part, depth)) return true
+      }
+      return false
+    } finally {
+      inspectionCwd = initialCwd
+    }
   } catch {
     return /\bgh\s+(?:pr|api|issue)\b/.test(source)
   }
 }
 function script(code: string, pageUrl = ''): boolean {
+  if (
+    /\b(?:os\.system|subprocess\.(?:run|call|Popen)|execSync|spawnSync|exec|spawn)\s*\(/.test(
+      code,
+    )
+  ) {
+    const quoted = [...code.matchAll(/(['"])([^'"]*)\1/g)].map(
+      (match) => match[2]!,
+    )
+    if (
+      quoted.some(
+        (value) => /\bgh\s+(?:pr|api|issue)\b/.test(value) && shell(value, 1),
+      )
+    )
+      return true
+    const ghAt = quoted.findIndex((value) => base(value) === 'gh')
+    if (ghAt >= 0 && argv(quoted.slice(ghAt), 1)) return true
+  }
   if (/^https:\/\/github\.com(?:\/|$)/i.test(pageUrl)) {
     if (/\.(?:click|submit)\s*\(/.test(code)) return true
     code = code.replace(
@@ -596,7 +702,7 @@ export function scriptReadNotes(input: Args, name = 'shell_run'): string[] {
   return [...missingScripts]
 }
 export function reviewableCall(name: string, input: Args): boolean {
-  inspectionCwd = String(input['cwd'] ?? process.cwd())
+  inspectionCwd = String(input['cwd'] ?? homedir())
   missingScripts = []
   name = name.replace(/^mcp__agent__/, '')
   if (['shell_run', 'Bash', 'PowerShell', 'exec_command'].includes(name))
@@ -622,8 +728,15 @@ export function reviewableCall(name: string, input: Args): boolean {
   if (['browser_act', 'browser_click', 'browser_press_key'].includes(name)) {
     if (!/^https:\/\/github\.com(?:\/|$)/i.test(String(input['pageUrl'] ?? '')))
       return false
-    if (name === 'browser_click') return true
-    if (name === 'browser_press_key') return input['key'] === 'Enter'
+    if (name === 'browser_click')
+      return (
+        input['_resolvedAction'] !== true ||
+        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge/i.test(
+          String(input['name'] ?? ''),
+        )
+      )
+    if (name === 'browser_press_key')
+      return input['key'] === 'Enter' && input['_safeEnter'] !== true
     if (input['action'] === 'press' && input['key'] !== 'Enter') return false
     if (input['action'] === 'type' && input['submit'] === true)
       return readyComment(input['text'])
@@ -711,8 +824,11 @@ export function inlineCommentFile(
   )
     return input
   try {
+    pruneCommentFiles()
     const entries = parse(String(input['command'] ?? ''), (key) => '$' + key)
     if (!entries.every((e) => typeof e === 'string')) return input
+    if (entries.some((word) => typeof word === 'string' && word.includes('$')))
+      return input
     const words = entries as string[],
       ghAt = words.findIndex((w) => base(w) === 'gh')
     if (
@@ -738,6 +854,7 @@ export function inlineCommentFile(
       )
       writeFileSync(target, body, { mode: 0o600 })
       words.splice(at, count, '--body-file', target)
+      tempBodies.set(target, Date.now())
       return {
         ...input,
         command: quote(words),
@@ -763,10 +880,49 @@ export function bodyFileSignature(input: Args): string {
     )
     const file = option(words, '--body-file', '-F', '--input')
     if (!file || file === '-') return ''
-    const path = resolve(String(input['cwd'] ?? process.cwd()), file)
+    const command = String(input['command'] ?? input['cmd'] ?? '')
+    const leading = command.match(/^\s*cd\s+(['"]?)([^'";&]+)\1\s*&&/)
+    const folder = leading
+      ? resolve(String(input['cwd'] ?? homedir()), leading[2]!.trim())
+      : String(input['cwd'] ?? homedir())
+    const path = resolve(folder, file)
     if (statSync(path).size > 1_000_000) return 'oversize'
     return createHash('sha256').update(readFileSync(path)).digest('hex')
   } catch {
     return 'unreadable'
+  }
+}
+
+const tempBodies = new Map<string, number>()
+function pruneCommentFiles(): void {
+  for (const [path, at] of tempBodies)
+    if (Date.now() - at > 60 * 60_000) {
+      rmSync(path, { force: true })
+      tempBodies.delete(path)
+    }
+}
+export function cleanupCommentFile(input: Args): void {
+  try {
+    const entries = parse(String(input['command'] ?? ''), (key) => '$' + key)
+    const file = option(
+      entries.filter((entry): entry is string => typeof entry === 'string'),
+      '--body-file',
+      '-F',
+    )
+    if (file && tempBodies.has(file)) {
+      rmSync(file, { force: true })
+      tempBodies.delete(file)
+    }
+  } catch {
+    /* No app-owned snapshot in this command. */
+  }
+}
+function readCommentBody(file: string): string | null {
+  try {
+    if (file === '-' || unreadable(file)) return null
+    const path = resolve(inspectionCwd, file)
+    return statSync(path).size <= 1_000_000 ? readFileSync(path, 'utf8') : null
+  } catch {
+    return null
   }
 }

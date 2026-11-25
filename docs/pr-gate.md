@@ -39,7 +39,7 @@ at the next turn boundary.
 
 For this Codex fallback, app shell commands inherit the project cwd and still default
 to sixty seconds; timeoutSec can request up to six hours. run_code has a one-hour limit and preserves the
-project cwd and HOME. Only shell_run and run_code output allow two million characters on this path. Other
+project cwd and HOME. Only shell_run and run_code output allow 150,000 characters on this path, retaining the head and tail. Other
 MCP/tool results retain the 24,000-character model cap. Normal
 app runs retain their existing limits. Secret-looking environment variables continue
 to be removed by the app's existing policy; agents use Vault placeholders for secrets.
@@ -77,7 +77,7 @@ shell word/operator parser rather than growing a whitespace/regex command splitt
 ## Proof continuity
 The real ChatGPT-plan Codex helper proof on candidate 8ce8be1a passed: 13 minutes
 22 seconds, exit 0, 50,076 output characters without truncation. It exercised the
-server job path and PC-to-server SSH. The 2,000,000-character ceiling was not reached.
+server job path and PC-to-server SSH. The 150,000-character ceiling was not reached.
 The main agent confirmed this proof remains accepted for the round-2 repairs; it is
 not being repeated. The prior Windows screenshots/chat proof cover 8ce8be1a, not this
 new source candidate. No release, installation or live node deployment is part of this
@@ -89,3 +89,9 @@ under the same id is refused. The in-memory replay window covers the 20-minute q
 and execution window, with bounded reply storage. Very large or pruned replies return
 an already-ran notice rather than executing again. Revoked sharing is checked before
 returning a cached reply. This is not a permanent command ledger across restarts.
+
+Remote caller identity is gate/audit metadata only: destination tools retain owner device and their own browser/card rules. The context capsule survives origin and vault wrappers. Grants allow twenty minutes of transport/queue age plus two minutes of clock skew, then use a sixty-second destination-clock consumption window. Replay retention is process-local: a host restart, expiry or oldest-finished eviction under the 4096-command bound may permit a redelivered command to execute again. Inspect state after a restart before retrying mutations.
+
+Codex command output is capped at about 150,000 characters with both head and tail retained. Other tools remain at 24,000 characters. Comment snapshots are cleaned after execution and stale snapshots after an hour; held calls must be retried to trigger stale cleanup. Indexed GitHub read controls and focused search Enter pass when the live resolver confirms their purpose. Opaque index targets remain held.
+
+App-owned large comment snapshots are removed immediately after a held check or completed execution. Stale in-process snapshots are pruned on the next inline call. Unreadable body files remain held when their execution folder cannot be resolved locally.

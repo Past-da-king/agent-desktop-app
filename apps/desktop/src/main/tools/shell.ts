@@ -457,33 +457,11 @@ async function runCommand(request: RunRequest): Promise<string> {
 
 class OutputSink {
   total = 0
-  private readonly parts: string[] = []
-  private length = 0
-  private cut = false
-
-  constructor(private readonly limit: number) {}
-
-  push(chunk: Buffer): void {
-    const text = chunk.toString('utf8')
-    this.total += text.length
-    if (this.length >= this.limit) {
-      this.cut = true
-      return
-    }
-    const room = this.limit - this.length
-    const piece = text.slice(0, room)
-    this.parts.push(piece)
-    this.length += piece.length
-    if (piece.length < text.length) this.cut = true
-  }
-
-  text(): string {
-    return this.parts.join('')
-  }
-
-  truncated(): boolean {
-    return this.cut || this.total > this.limit
-  }
+  private readonly capture: StreamCapture
+  constructor(private readonly limit: number) { this.capture = new StreamCapture(limit) }
+  push(chunk: Buffer): void { this.total += chunk.toString('utf8').length; this.capture.push(chunk) }
+  text(): string { return this.capture.text() }
+  truncated(): boolean { return this.total > this.limit }
 }
 
 function messageOf(error: unknown): string {

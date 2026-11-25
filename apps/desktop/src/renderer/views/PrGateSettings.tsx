@@ -86,7 +86,6 @@ export function PrGateSettings(): JSX.Element {
       .then(() => toast('PR gate skill pages saved.'))
       .catch(() => toast('Could not save skill pages. Try again.'))
   }
-  const log = rows
   return (
     <div className="prgate">
       <SettingRow
@@ -117,6 +116,7 @@ export function PrGateSettings(): JSX.Element {
             rows={3}
             value={titles}
             onChange={(e) => setTitles(e.target.value)}
+            onBlur={commit}
           />
           <Button size="sm" onClick={commit}>
             Save skill pages
@@ -124,24 +124,16 @@ export function PrGateSettings(): JSX.Element {
         </div>
       </SettingRow>
       <div className="prgate-help small muted">
-        Drafts pass freely. Review and merge actions need independent evidence.
-        A grant passes the same call once for sixty minutes after attestation.
-        The checklist is read live from memory. Missing pages add the generic
-        checklist. GitHub API writes, named ready/create/merge buttons and
-        index-only GitHub clicks are checked. Other DOM interactions and dynamic
-        external programs cannot be fully inspected. Unreadable bodies on PR
-        writes and replay targets are held. Unreadable local scripts pass and
-        are logged. Approving a review is logged without holding it. Linked
-        devices need this version and synced policy; their shell access can
-        change local files. Agents need your approval to change this switch,
-        policy list or configured policy pages.
+        <p>Drafts pass freely. Review and merge actions need independent evidence. Grants pass the same call once within sixty minutes. Policy pages are read live; missing pages add the generic checklist.</p>
+        <p>Explicit GitHub writes and review/merge controls are checked. Other DOM actions and opaque programs cannot be fully inspected. Unreadable PR payloads are held; unreadable local scripts pass with a deduplicated note. Review approvals are logged.</p>
+        <p>Linked devices need this version and synced policy. Agents need your approval to change the policy. Codex command output keeps its head and tail within about 150,000 characters. Remote replay protection is bounded and resets when the host restarts.</p>
       </div>
       <div className="prgate-log" aria-label="PR gate log">
         <p className="eyebrow muted">PR GATE LOG</p>
-        {log.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="small muted">No gate events yet.</p>
         ) : (
-          log.map((row) => {
+          rows.map((row) => {
             const data = metadata(row.meta),
               fields = data['attestation']
             return (
@@ -170,7 +162,7 @@ export function PrGateSettings(): JSX.Element {
             )
           })
         )}
-        {log.length > 0 ? (
+        {rows.length > 0 ? (
           <p className="small muted">
             Newest 100 events. Up to 500 are kept in synced data. Evidence is
             redacted; raw commands and credentials are omitted.

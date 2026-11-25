@@ -3,7 +3,7 @@
  * This recognises explicit GitHub operations; it is not a sandbox for arbitrary programs.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { hostname } from 'node:os'
+import { hostname, homedir } from 'node:os'
 import {
   schema,
   str,
@@ -14,6 +14,7 @@ import {
 } from '@agent/core'
 import {
   consumeRemoteGrant,
+  remoteCaller,
   prepareRemoteGrant,
   markDestinationHold,
   takeRemoteChallenge,
@@ -25,6 +26,7 @@ import {
   reviewableCall,
   scriptReadNotes,
   bodyFileSignature,
+  cleanupCommentFile,
 } from './pr-gate-detect'
 export { reviewableCall } from './pr-gate-detect'
 
@@ -80,6 +82,7 @@ interface Pending {
 export class PrGate {
   private pending = new Map<string, Pending>()
   private remoteWrites = new Map<string, number>()
+  private scriptNotes = new Map<string, number>()
   private remoteKey(input: JsonObject, ctx: ToolContext): string {
     return canonical({ input, actor: this.actor(ctx) })
   }
@@ -107,7 +110,8 @@ export class PrGate {
     return this.settings().prGateEnabled
   }
   private actor(ctx: ToolContext): string {
-    return (ctx.owner ?? ctx.agentLabel) + ':' + (ctx.chat ?? 'main')
+    const caller = remoteCaller(ctx)
+    return caller.owner + ':' + caller.chat
   }
   private async log(
     ctx: ToolContext,
@@ -180,22 +184,40 @@ export class PrGate {
     } else if (tool === 'app_action') {
       const args = Array.isArray(input['args']) ? input['args'] : []
       if (
-        ['memory.runImport', 'memory.startTidy', 'memory.undoChange'].includes(
-          method,
-        )
+        [
+          'memory.runImport',
+          'memory.startTidy',
+          'memory.undoTidy',
+          'memory.runDaily',
+        ].includes(method)
       ) {
         return (await ctx.approve(
           'Rewrite PR gate policy pages',
           pages.join(', '),
           undefined,
-          { tool: 'pr_gate_policy', input: { action: method } },
+          {
+            tool: 'pr_gate_policy',
+            input: { action: method },
+          },
         ))
           ? null
           : 'Refused: only the person may rewrite PR gate policy pages.'
       }
       if (method === 'data.remove' && args[0] === 'memory')
         candidate = { id: String(args[1] ?? '') }
-      else if (['memory.restoreVersion', 'memory.undoChange'].includes(method))
+      else if (method === 'memory.undoChange') {
+        if (input['_policyUndoKnown'] !== true) {
+          return (await ctx.approve(
+            'Undo an unverified memory change',
+            'The app could not resolve which policy page this affects.',
+            undefined,
+            { tool: 'pr_gate_policy', input: { action: method } },
+          ))
+            ? null
+            : 'Refused: cannot verify the memory change.'
+        }
+        candidate = { id: String(input['_policyMemoryId'] ?? '') }
+      } else if (method === 'memory.restoreVersion')
         candidate = { id: String(args[0] ?? '') }
       else return null
     } else if (!['memory_save', 'memory_update'].includes(tool)) return null
@@ -216,7 +238,10 @@ export class PrGate {
       'Change PR gate policy page',
       title,
       undefined,
-      { tool: 'pr_gate_policy', input: { title } },
+      {
+        tool: 'pr_gate_policy',
+        input: { title },
+      },
     )
     return yes
       ? null
@@ -236,6 +261,11 @@ export class PrGate {
     input: JsonObject,
     ctx: ToolContext,
   ): Promise<string | null> {
+    if (['shell_run', 'Bash', 'PowerShell'].includes(tool))
+      input = {
+        ...input,
+        cwd: input['cwd'] ?? ctx.commandFallback?.cwd ?? homedir(),
+      }
     const policy = await this.policyChange(tool, input, ctx)
     if (policy) return policy
     if (!this.settings().prGateEnabled) return null
@@ -246,13 +276,25 @@ export class PrGate {
       if (
         ['shell_run', 'Bash', 'PowerShell'].includes(tool) &&
         scriptReadNotes(input, tool).length
-      )
-        await this.log(
-          ctx,
+      ) {
+        const noteKey = canonical({
           tool,
-          'unreadable local script (not gated)',
-          randomUUID(),
-        )
+          input: stableInput(tool, input),
+          actor: this.actor(ctx),
+        })
+        const now = this.now()
+        for (const [key, expiry] of this.scriptNotes)
+          if (expiry < now) this.scriptNotes.delete(key)
+        if (!this.scriptNotes.has(noteKey)) {
+          this.scriptNotes.set(noteKey, now + 60 * 60_000)
+          await this.log(
+            ctx,
+            tool,
+            'unreadable local script (not gated)',
+            randomUUID(),
+          )
+        }
+      }
       if (reviewApproval(tool, input))
         await this.log(ctx, tool, 'review approval (not gated)', randomUUID())
       return null
@@ -291,7 +333,9 @@ export class PrGate {
     const wanted = this.settings().prGateSkillPages
     const found = wanted.flatMap((title) =>
       pages
-        .filter((p) => p.title === title)
+        .filter(
+          (p) => p.title.trim().toLowerCase() === title.trim().toLowerCase(),
+        )
         .map((p) => '# ' + p.title + '\n' + p.body),
     )
     const checklist = found.length
@@ -337,7 +381,7 @@ export class PrGate {
     else if (!/https?:\/\/|[\\/]/.test(String(fields['testProof'])))
       reason = 'testProof must contain a proof link or path'
     else if (
-      [ctx.owner, ctx.agentLabel, actor]
+      [remoteCaller(ctx).owner, remoteCaller(ctx).agentLabel, actor]
         .filter(Boolean)
         .map((id) => agentIdentity(id!))
         .includes(agentIdentity(String(fields['reviewerAgentId'])))
@@ -431,41 +475,71 @@ export function withPrGate(
         const remote =
           gate.enabled() &&
           (await gate.acceptRemote(tool.spec.name, input, ctx))
+        const device =
+          typeof input['device'] === 'string' ? input['device'].trim() : ''
+        const remoteInput =
+          device && tool.spec.name !== 'device_tool'
+            ? ({
+                device,
+                tool: tool.spec.name,
+                args: Object.fromEntries(
+                  Object.entries(input).filter(([key]) => key !== 'device'),
+                ),
+              } as JsonObject)
+            : null
         const effective =
-          gate.enabled() && resolve
+          (gate.enabled() || tool.spec.name === 'app_action') &&
+          resolve &&
+          !remoteInput
             ? await resolve(tool.spec.name, input, ctx)
             : input
         const held = remote
           ? null
-          : await gate.check(tool.spec.name, effective, ctx)
+          : await gate.check(
+              remoteInput ? 'device_tool' : tool.spec.name,
+              remoteInput ?? effective,
+              ctx,
+            )
         if (held) {
+          cleanupCommentFile(effective)
           markDestinationHold(ctx)
           return held
         }
         if (
-          tool.spec.name === 'device_tool' &&
+          (tool.spec.name === 'device_tool' || remoteInput !== null) &&
           gate.enabled() &&
-          (reviewableCall(tool.spec.name, effective) ||
-            gate.isRemoteWrite(effective, ctx))
+          (reviewableCall(
+            remoteInput ? 'device_tool' : tool.spec.name,
+            remoteInput ?? effective,
+          ) ||
+            gate.isRemoteWrite(remoteInput ?? effective, ctx))
         ) {
-          const args = effective['args']
+          const envelope = remoteInput ?? effective
+          const args = envelope['args']
           if (args && typeof args === 'object' && !Array.isArray(args))
             prepareRemoteGrant(
               ctx,
-              String(effective['tool'] ?? ''),
+              String(envelope['tool'] ?? ''),
               args as JsonObject,
             )
         }
-        const result = await tool.run(
-          tool.spec.name === 'shell_run' ? effective : input,
-          ctx,
-        )
+        let result: string
+        try {
+          result = await tool.run(
+            tool.spec.name === 'shell_run' ? effective : input,
+            ctx,
+          )
+        } finally {
+          cleanupCommentFile(effective)
+        }
         if (
-          tool.spec.name === 'device_tool' &&
+          (tool.spec.name === 'device_tool' || remoteInput !== null) &&
           gate.enabled() &&
           takeRemoteChallenge(ctx)
         )
-          return (await gate.holdRemote(effective, ctx)) ?? result
+          return (
+            (await gate.holdRemote(remoteInput ?? effective, ctx)) ?? result
+          )
         return result
       },
     }
