@@ -78,6 +78,9 @@ export interface VoiceDeps {
   timeZone?: string
   /** Where voice notes are saved on this computer. */
   notesDir?: string
+  /** Device that owns a saved note, and read-only fallback for replicated notes. */
+  noteDevice?: () => string
+  remoteNoteAudio?: (file: string) => Promise<Buffer | null>
   /** His recordings, written to disk as they happen (recordings/store.ts): calls and a linked device's mic. */
   recordings?: Pick<Recordings, 'begin' | 'open'>
 }
@@ -212,6 +215,15 @@ export class VoiceService {
     } catch {
       return null
     }
+  }
+
+  noteDevice(): string { return this.deps.noteDevice?.() ?? '' }
+
+  async noteAudioForDevice(file: string, localOnly = false): Promise<Buffer | null> {
+    if (!/^[\w-]+\.wav$/.test(file) || file.length > 120) return null
+    const local = this.noteAudio(file)
+    if (local !== null || localOnly || this.deps.remoteNoteAudio === undefined) return local
+    return this.deps.remoteNoteAudio(file)
   }
 
   async speak(text: string): Promise<VoiceResult<{ data: string }>> {
