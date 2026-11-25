@@ -1,4 +1,4 @@
-import { installChildPipeGuards, onPipeWarning } from './runtime/safe-pipe'
+import { installChildPipeGuards, onPipeWarning, onPipeFault } from './runtime/safe-pipe'
 import { peerNoteAudio } from './voice/peer-audio'
 import { ActsForMe } from './runtime/acts-for-me'
 import { createWorkersChanged } from './workers/changed'
@@ -272,6 +272,7 @@ const handleUnexpected = uncaughtHandler({
   log: (message, fields) => logger.error(message, fields),
   dialog: () => showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true),
 })
+onPipeFault(handleUnexpected)
 process.on('uncaughtException', handleUnexpected)
 process.on('unhandledRejection', (reason) => handleUnexpected(reason instanceof Error ? reason : new Error(String(reason))))
 

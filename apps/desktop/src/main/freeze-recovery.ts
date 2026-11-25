@@ -1,4 +1,4 @@
-import { safeSocketWrite } from './runtime/safe-pipe'
+import { safeSocketEnd, safeSocketWrite } from './runtime/safe-pipe'
 /** Separate process: recovery must not depend on the frozen Electron main thread or its logger. */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -200,5 +200,5 @@ export function startFreezeRecovery(userData: string, executable: string, args: 
     })
   })
   server.unref()
-  return { ready, unavailable: () => existsSync(marker), stop: () => { stopping = true; if (timer) clearInterval(timer); socket?.end(JSON.stringify({ type: 'stop' }) + '\n'); server.close(); settled() } }
+  return { ready, unavailable: () => existsSync(marker), stop: () => { stopping = true; if (timer) clearInterval(timer); socket && safeSocketEnd(socket, JSON.stringify({ type: 'stop' }) + '\n'); server.close(); settled() } }
 }

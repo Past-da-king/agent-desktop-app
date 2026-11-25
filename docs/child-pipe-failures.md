@@ -32,3 +32,13 @@ Tagged pipe failures and low-level EOF/EPIPE/ECONNRESET/ERR_STREAM_DESTROYED/ERR
 `apps/desktop/test/safe-pipe.test.ts` uses real Node children and the real worker Supervisor/store. It covers dead-child writes, ESM/SDK-style spawn guarding, owner failure reasons, callback/event deduplication, socket failure, strict classification and burst limiting. Red controls restore origin/devices alive.ts and remove guardPipe while retaining the test bridge: 12 regression tests fail, the programming-fault test remains green. Red report: /tmp/child-pipe-red.json on the build host. Final suite and baseline results are recorded in the draft PR.
 
 No environment variables, migrations or release version changes. No installer, installation or node deployment is part of this change. Independent review and combined-open-PR verification are release prerequisites, not claimed here.
+
+## Independent review repairs (25 November 2026)
+
+Rejection responses in devices/ws.ts and devices/server.ts, local headless control replies, and freeze-supervisor stop messages use safeSocketEnd. Inventory of end(data) and destroy(error) found no other raw-socket payload writes; HTTP request/response methods retain their existing error ownership.
+
+Pipe failures now stop children with SIGTERM, escalate after 500 ms to SIGKILL, and deliver one existing exit/close completion after a further 250 ms if OS events never arrive. Late duplicate terminal events are suppressed. Windows uses taskkill /T /F before killing the parent; this Windows-specific branch still needs native Windows proof. Off-thread hosts wait for this bounded child shutdown before asking the parent to terminate the worker isolate.
+
+Only the five expected pipe codes are warnings. Unexpected asynchronous event and callback errors notify the owner and the registered real-fault path; desktop uses the same error logger and rate-limited dialog handler, headless logs at error severity. Without a registered fault handler unexpected failures are rethrown on a microtask.
+
+Five additional regression cases fail on unchanged bcdea3a with only the tests copied in: rejection end payload guarding; missing OS exit completion; unexpected event fault; unexpected callback fault; real SIGTERM-resistant child. Reports /tmp/pipe-review-red-v2.json and /tmp/pipe-review-green-v2.json. Full baseline/candidate suites and combined trial merge remain deferred until after 08:00 SAST Thursday 26 November 2026.

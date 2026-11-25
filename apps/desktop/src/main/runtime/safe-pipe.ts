@@ -6,6 +6,7 @@ import type { Readable, Writable } from 'node:stream'
 
 const pipeFailure = Symbol.for('agent.childPipeFailure')
 const failures = new WeakMap<object, Error>()
+let fault: (error: Error) => void = (error) => { queueMicrotask(() => { throw error }) }
 let warn: (message: string, fields: Record<string, unknown>) => void = () => undefined
 const codes = new Set(['EOF', 'EPIPE', 'ECONNRESET', 'ERR_STREAM_DESTROYED', 'ERR_STREAM_WRITE_AFTER_END'])
 
@@ -23,11 +24,14 @@ export function isChildPipeError(error: unknown): boolean {
   return codes.has(code) && /stream_base_commons|WriteWrap|node:internal\/streams/.test(e.stack ?? '')
 }
 
+export function onPipeFault(handler: (error: Error) => void): void { fault = handler }
+
 export function onPipeWarning(log: typeof warn): void { warn = log }
 
 /** Shared warning/tag boundary for errors relayed from the off-thread process host. */
 export function reportPipeFailure(error: Error): void {
-  if (codes.has(codeOf(error))) Reflect.set(error, pipeFailure, true)
+  if (!codes.has(codeOf(error))) { fault(error); return }
+  Reflect.set(error, pipeFailure, true)
   warn('Process pipe ended', { message: error.message, code: codeOf(error) })
 }
 
@@ -48,8 +52,7 @@ export function createPipeGuard(report: (error: Error) => void): PipeGuard {
       if (reported) return
       reported = true
       const error = reason instanceof Error ? reason : new Error(String(reason))
-      report(error)
-      ended(error)
+      try { ended(error) } finally { report(error) }
     }
     stream.on('error', fail)
     if (!('write' in stream)) return
@@ -94,11 +97,43 @@ export function guardChild<T extends ChildProcess>(child: T): T {
     try {
       if (child.listenerCount('error') > 0) child.emit('error', reason)
     } finally {
-      if (child.exitCode === null && child.signalCode === null) child.kill()
+      if (child.exitCode === null && child.signalCode === null) terminatePipeChild(child)
     }
   }
   for (const stream of new Set([child.stdin, child.stdout, child.stderr, ...child.stdio])) guardPipe(stream, ended)
   return child
+}
+
+/** Bounded shutdown preserves the existing exit/close owner path, including lost OS events.
+ * Self-contained so the off-thread host uses the same lifecycle in its isolate. */
+export function terminatePipeChild(child: ChildProcess): void {
+  let exited = false, closed = false
+  const originalEmit = child.emit
+  child.emit = function (event: string | symbol, ...args: unknown[]): boolean {
+    if (event === 'exit') { if (exited) return false; exited = true }
+    if (event === 'close') { if (closed) return false; closed = true }
+    return Reflect.apply(originalEmit, this, [event, ...args])
+  } as typeof child.emit
+  const force = setTimeout(() => {
+    if (exited) return
+    try { child.kill('SIGKILL') } catch { /* OS may already have reaped it. */ }
+    const finish = setTimeout(() => {
+      if (!exited) child.emit('exit', -1, 'SIGKILL')
+      if (!closed) child.emit('close', -1, 'SIGKILL')
+    }, 250)
+    finish.unref()
+    child.once('close', () => clearTimeout(finish))
+  }, 500)
+  force.unref()
+  child.once('exit', () => clearTimeout(force))
+  // Windows kill() is process-only; taskkill also tears down descendants such as WSL hosts.
+  if (process.platform === 'win32' && child.pid !== undefined) {
+      void import('node:child_process').then(({ spawn }) => {
+        const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+        killer.on('error', () => undefined)
+      }).catch(() => undefined)
+  }
+  else { try { child.kill('SIGTERM') } catch { /* Escalation and owner deadline still run. */ } }
 }
 
 let installed = false
@@ -121,4 +156,10 @@ export function installChildPipeGuards(): void {
 export function safeSocketWrite(socket: Writable, data: string | Uint8Array): boolean {
   guardPipe(socket, (error) => socket.destroy(error))
   return socket.write(data)
+}
+
+/** Rejection/control responses also write bytes through end(data), before normal socket owners exist. */
+export function safeSocketEnd(socket: Writable, data: string | Uint8Array): void {
+  guardPipe(socket, (error) => socket.destroy(error))
+  socket.end(data)
 }

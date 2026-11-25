@@ -1,3 +1,4 @@
+import { safeSocketEnd } from '../main/runtime/safe-pipe'
 /**
  * The running node's local control line: a Unix socket in the data folder (0600, so only this user), one JSON
  * request and one JSON answer per connection. The CLI uses it for what Settings > Devices does on a desktop:
@@ -52,7 +53,7 @@ export async function startControl(dataDir: string, ipc: HandlerTable): Promise<
         } catch (error) {
           answer = { ok: false, error: error instanceof Error ? error.message : String(error) }
         }
-        socket.end(`${JSON.stringify(answer)}\n`)
+        safeSocketEnd(socket, `${JSON.stringify(answer)}\n`)
       })()
     })
     socket.on('error', () => undefined)

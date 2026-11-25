@@ -1,4 +1,4 @@
-import { installChildPipeGuards, onPipeWarning, isChildPipeError } from '../main/runtime/safe-pipe'
+import { installChildPipeGuards, onPipeWarning, onPipeFault, isChildPipeError } from '../main/runtime/safe-pipe'
 import { compareDeviceOrder } from '@agent/core'
 /**
  * agent-node: the agent runtime as a plain Node service, for servers and any computer without a screen.
@@ -251,6 +251,7 @@ async function start(args: Args): Promise<number> {
   process.on('SIGTERM', () => stop('SIGTERM'))
   process.on('SIGINT', () => stop('SIGINT'))
   onPipeWarning((message, fields) => runtime.logger.warn(message, fields))
+  onPipeFault((error) => runtime.logger.error('Unexpected process pipe failure', { message: error.message, stack: error.stack }))
   process.on('uncaughtException', (error) => {
     if (isChildPipeError(error)) runtime.logger.warn('Process pipe ended (carried on)', { message: error.message })
     else runtime.logger.error('Uncaught exception', { message: error.message, stack: error.stack })

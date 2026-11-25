@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads'
 import { spawn } from 'node:child_process'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -153,4 +153,67 @@ describe('dead process pipes', () => {
       child.kill('SIGKILL')
     }
   })
+})
+
+
+describe('review regressions', () => {
+  it('guards rejection response end payloads before an asynchronous EOF', async () => {
+    const { acceptUpgrade } = await import('../src/main/devices/ws')
+    const socket = new PassThrough()
+    const observed = vi.fn()
+    socket.on('error', observed)
+    acceptUpgrade({ headers: {} } as never, socket as never)
+    expect(socket.listenerCount('error')).toBeGreaterThan(1)
+    socket.emit('error', pipeError('EOF'))
+    expect(socket.destroyed).toBe(true)
+  })
+
+  it('bounded child termination completes exit owners once even without OS exit events', async () => {
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), stdio: [], exitCode: null, signalCode: null, kill: vi.fn(() => true) })
+    guardChild(child as never)
+    const exit = vi.fn(), error = vi.fn()
+    child.on('exit', exit); child.on('error', error)
+    child.stdin.emit('error', pipeError('EOF'))
+    await new Promise(resolve => setTimeout(resolve, 1300))
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(exit).toHaveBeenCalledTimes(1)
+    child.emit('exit', 0, null)
+    expect(exit).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['event', 'callback'])('unexpected asynchronous %s errors reach the owner and fault path', async (delivery) => {
+    const api = await import('../src/main/runtime/safe-pipe')
+    const fault = vi.fn(), ended = vi.fn()
+    // Optional lookup lets the old implementation fail on behavior rather than module resolution.
+    const register = Reflect.get(api, 'onPipeFault') as ((handler: (error: Error) => void) => void) | undefined
+    register?.(fault)
+    const stream = new PassThrough()
+    const failure = new TypeError('unexpected stream defect')
+    if (delivery === 'callback') stream.write = ((_data: unknown, callback: (error: Error) => void) => { queueMicrotask(() => callback(failure)); return true }) as typeof stream.write
+    api.guardPipe(stream, ended)
+    if (delivery === 'event') stream.emit('error', failure)
+    else stream.write('payload')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(ended).toHaveBeenCalledWith(failure)
+    expect(fault).toHaveBeenCalledWith(failure)
+    expect(api.isChildPipeError(failure)).toBe(false)
+    register?.(() => undefined)
+  })
+})
+
+
+it('kills a real child which ignores SIGTERM and ends its existing owner', async () => {
+  const child = guardChild(spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000)"], { stdio: 'pipe' }))
+  const exit = vi.fn()
+  child.on('exit', exit); child.on('error', () => undefined)
+  try {
+    await once(child.stdout!, 'data')
+    const closed = new Promise(resolve => child.once('close', resolve))
+    child.stdin!.emit('error', pipeError('EOF'))
+    await Promise.race([closed, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('child never exited')), 1800); timer.unref() })])
+    expect(child.signalCode).toBe('SIGKILL')
+    expect(exit).toHaveBeenCalledTimes(1)
+    expect(childPipeFailure(child)?.message).toContain('write EOF')
+  } finally { child.kill('SIGKILL') }
 })

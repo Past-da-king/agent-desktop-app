@@ -1,4 +1,4 @@
-import { createPipeGuard, reportPipeFailure } from './runtime/safe-pipe'
+import { createPipeGuard, reportPipeFailure, terminatePipeChild } from './runtime/safe-pipe'
 /**
  * A long-lived child process started from a worker thread. Node's spawn is synchronous: on a computer short of memory,
  * starting PowerShell held the main thread for 1.8 to 4.3 s (seen by the watchdog, 30 Oct 2026). The worker starts it
@@ -16,17 +16,19 @@ child.stdout.setEncoding('utf8')
 child.stderr.setEncoding('utf8')
 child.stdout.on('data', (data) => parentPort.postMessage({ out: data }))
 child.stderr.on('data', (data) => parentPort.postMessage({ err: data }))
+const terminatePipeChild = ${terminatePipeChild.toString()}
 let pipeEnded = false
+let pipeFailureMessage = null
 const pipeFailed = (error) => {
   if (pipeEnded) return
   pipeEnded = true
-  parentPort.postMessage({ failed: 'engine process ended: ' + String(error.message || error), pipe: true, code: error.code })
-  child.kill()
+  pipeFailureMessage = { failed: 'engine process ended: ' + String(error.message || error), pipe: true, code: error.code }
+  terminatePipeChild(child)
 }
 const guardPipe = (${createPipeGuard.toString()})(() => undefined)
 for (const pipe of [child.stdin, child.stdout, child.stderr]) guardPipe(pipe, pipeFailed)
 child.on('error', (error) => { parentPort.postMessage({ failed: String(error && error.message || error) }); process.exit(0) })
-child.on('exit', (code) => { parentPort.postMessage({ exit: code === null ? -1 : code }); process.exit(0) })
+child.on('exit', (code) => { if (pipeFailureMessage) parentPort.postMessage(pipeFailureMessage); parentPort.postMessage({ exit: code === null ? -1 : code }); process.exit(0) })
 parentPort.on('message', (m) => {
   try {
     if (typeof m.write === 'string') child.stdin.write(m.write)
