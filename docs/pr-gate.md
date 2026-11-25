@@ -68,16 +68,16 @@ GitHub learned-app actions are recognised from their stored site and action name
 Audit rows are synced chat_item data with kind pr_gate in a dedicated audit chat.
 They record time, actor/chat, hostname, tool, gate id, outcome and redacted evidence.
 Commands, headers and request bodies are omitted. Evidence is capped to 1000 characters
-per field. Repeated holds for the same pending call are not logged again. At most 500
-active audit rows are kept; Settings shows the newest 100 as labelled, expandable text.
+per field. Repeated holds for the same pending call are not logged again. At most 500 decision rows and 100 unreadable-script notes are kept; Settings shows the newest 100 as labelled, expandable text.
 
 Dependency note: shell-quote and its TypeScript definitions provide the maintained
 shell word/operator parser rather than growing a whitespace/regex command splitter.
 
 ## Proof continuity
+
 The real ChatGPT-plan Codex helper proof on candidate 8ce8be1a passed: 13 minutes
 22 seconds, exit 0, 50,076 output characters without truncation. It exercised the
-server job path and PC-to-server SSH. The 150,000-character ceiling was not reached.
+server job path and PC-to-server SSH. That historical run used the former 2,000,000-character cap; it did not test the current 150,000-character cap.
 The main agent confirmed this proof remains accepted for the round-2 repairs; it is
 not being repeated. The prior Windows screenshots/chat proof cover 8ce8be1a, not this
 new source candidate. No release, installation or live node deployment is part of this
@@ -92,6 +92,10 @@ returning a cached reply. This is not a permanent command ledger across restarts
 
 Remote caller identity is gate/audit metadata only: destination tools retain owner device and their own browser/card rules. The context capsule survives origin and vault wrappers. Grants allow twenty minutes of transport/queue age plus two minutes of clock skew, then use a sixty-second destination-clock consumption window. Replay retention is process-local: a host restart, expiry or oldest-finished eviction under the 4096-command bound may permit a redelivered command to execute again. Inspect state after a restart before retrying mutations.
 
-Codex command output is capped at about 150,000 characters with both head and tail retained. Other tools remain at 24,000 characters. Comment snapshots are cleaned after execution and stale snapshots after an hour; held calls must be retried to trigger stale cleanup. Indexed GitHub read controls and focused search Enter pass when the live resolver confirms their purpose. Opaque index targets remain held.
+Codex command output is capped at about 150,000 characters with both head and tail retained. Other MCP tools remain at 24,000 characters. The shared shell and code output sinks also retain head and tail, so large direct tool results can include their own truncation notice before the MCP limit applies. Comment snapshots are cleaned after execution and stale snapshots after an hour; held calls must be retried to trigger stale cleanup. Indexed GitHub read controls and focused search Enter pass when the live resolver confirms their purpose. Opaque index targets remain held.
 
 App-owned large comment snapshots are removed immediately after a held check or completed execution. Stale in-process snapshots are pruned on the next inline call. Unreadable body files remain held when their execution folder cannot be resolved locally.
+
+Mixed-version linked devices are not a security boundary: grants trust paired peers. An older origin can forward model-supplied transport fields. Keep all linked peers on the same release. If the origin gate is off while the destination gate is on, attestations cannot be completed at the origin until its gate is enabled and settings have synced. A destination-only hold is translated to the origin when its gate is enabled, including automatically routed learned apps.
+
+Mixed-version linked devices are not a security boundary: grants trust paired peers. An older origin can forward model-supplied transport fields. Keep all linked peers on the same release. If the origin gate is off while the destination gate is on, attestations cannot be completed at the origin until its gate is enabled and settings have synced. A destination-only hold is translated to the origin when its gate is enabled, including automatically routed learned apps.

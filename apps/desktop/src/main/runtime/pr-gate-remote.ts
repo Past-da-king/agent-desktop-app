@@ -4,6 +4,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import type { JsonObject, ToolContext } from '@agent/core'
+import { canonTool } from '../devices/device-tools'
 
 interface Caller {
   owner: string
@@ -16,6 +17,7 @@ export interface RemotePrGrant extends Caller {
   expires: number
 }
 interface CallState {
+  fromHost?: boolean
   incoming?: RemotePrGrant
   outgoing?: RemotePrGrant
   caller?: Caller
@@ -28,9 +30,15 @@ function state(ctx: ToolContext): CallState {
   const target = ctx as GateContext
   return target[STATE] ?? (target[STATE] = {})
 }
+export function beginPrGateCall(ctx: ToolContext): ToolContext {
+  const copy = { ...ctx } as GateContext
+  if (!copy[STATE]?.fromHost) copy[STATE] = {}
+  else delete copy[STATE]!.fromHost
+  return copy
+}
 export function remoteCaller(ctx: ToolContext): Caller {
   return (
-    state(ctx).caller ?? {
+    (ctx as GateContext)[STATE]?.caller ?? {
       owner: ctx.owner ?? ctx.agentLabel,
       agentLabel: ctx.agentLabel,
       chat: ctx.chat ?? 'main',
@@ -81,7 +89,11 @@ function ordered(value: unknown): unknown {
 }
 function digest(tool: string, args: JsonObject): string {
   return createHash('sha256')
-    .update(JSON.stringify(ordered({ tool, args: cleanArguments(args) })))
+    .update(
+      JSON.stringify(
+        ordered({ tool: canonTool(tool), args: cleanArguments(args) }),
+      ),
+    )
     .digest('hex')
 }
 export function prepareRemoteGrant(
@@ -118,7 +130,7 @@ export function receiveRemoteGrant(
   args: JsonObject,
 ): { context: ToolContext; args: JsonObject } {
   // Establish the capsule BEFORE withOrigin and the vault guard copy the context.
-  state(ctx)
+  ;(ctx as GateContext)[STATE] = { fromHost: true }
   const clean = cleanArguments(args),
     raw = args[TRANSPORT_KEY]
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))

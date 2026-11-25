@@ -152,7 +152,7 @@ export function planPermission(
               ? input['cwd']
               : (usableFolder(request.folder) ?? process.cwd()),
         },
-        request.context,
+        { ...request.context },
       )
       if (held) return { allow: false, message: held }
     }

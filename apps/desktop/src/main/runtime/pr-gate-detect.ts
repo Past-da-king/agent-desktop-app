@@ -254,7 +254,12 @@ function argv(words: string[], depth: number): boolean {
   if (SHELLS.has(exe)) {
     if (
       ['pwsh', 'powershell'].includes(exe) &&
-      args.some((word) => /^-(?:encodedcommand|ec|e)$/i.test(word))
+      args.some(
+        (word) =>
+          /^-(?:ec)$/i.test(word) ||
+          (word.length >= 2 &&
+            '-encodedcommand'.startsWith(word.toLowerCase())),
+      )
     )
       return true
     const i = args.findIndex((w) => /^-(?:[a-z]*c[a-z]*|command)$/i.test(w))
@@ -627,8 +632,18 @@ function shell(source: string, depth = 0): boolean {
     const initialCwd = inspectionCwd
     try {
       for (const part of parts) {
-        if (part[0] === 'cd' && part[1] && !unreadable(part[1])) {
-          inspectionCwd = resolve(inspectionCwd, part[1])
+        if (
+          ['cd', 'pushd'].includes(part[0] ?? '') &&
+          part[1] &&
+          !unreadable(part[1])
+        ) {
+          const target =
+            part[1] === '~'
+              ? homedir()
+              : part[1].startsWith('~/')
+                ? join(homedir(), part[1].slice(2))
+                : part[1]
+          inspectionCwd = resolve(inspectionCwd, target)
           continue
         }
         if (argv(part, depth)) return true

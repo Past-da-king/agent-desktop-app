@@ -14,12 +14,15 @@ import {
 } from '@agent/core'
 import {
   consumeRemoteGrant,
+  beginPrGateCall,
   remoteCaller,
   prepareRemoteGrant,
   markDestinationHold,
   takeRemoteChallenge,
 } from './pr-gate-remote'
 import { redactSecrets } from '../logger'
+import { DEVICE_ARG_TOOLS } from '../devices/device-tools'
+import { LEARNED_RUN_TOOLS } from '../devices/learned-route'
 import { listWhere, type DataStore } from './data'
 import {
   reviewApproval,
@@ -94,12 +97,13 @@ export class PrGate {
   async holdRemote(
     input: JsonObject,
     ctx: ToolContext,
+    tool = 'device_tool',
   ): Promise<string | null> {
     this.remoteWrites.set(
       this.remoteKey(input, ctx),
       this.now() + 24 * 60 * 60_000,
     )
-    return this.check('device_tool', input, ctx)
+    return this.check(tool, input, ctx)
   }
   constructor(
     private store: DataStore,
@@ -147,7 +151,13 @@ export class PrGate {
       kind: 'pr_gate',
       newestFirst: true,
     })
-    for (const row of rows.slice(500))
+    const notes = rows.filter(
+      (row) => row.text === 'unreadable local script (not gated)',
+    )
+    const decisions = rows.filter(
+      (row) => row.text !== 'unreadable local script (not gated)',
+    )
+    for (const row of [...notes.slice(100), ...decisions.slice(500)])
       await this.store.remove('chat_item', row.id)
   }
   private async policyChange(
@@ -269,17 +279,14 @@ export class PrGate {
     const policy = await this.policyChange(tool, input, ctx)
     if (policy) return policy
     if (!this.settings().prGateEnabled) return null
-    if (
-      !reviewableCall(tool, input) &&
-      !(tool === 'device_tool' && this.isRemoteWrite(input, ctx))
-    ) {
+    if (!reviewableCall(tool, input) && !this.isRemoteWrite(input, ctx)) {
       if (
         ['shell_run', 'Bash', 'PowerShell'].includes(tool) &&
         scriptReadNotes(input, tool).length
       ) {
         const noteKey = canonical({
           tool,
-          input: stableInput(tool, input),
+          notes: scriptReadNotes(input, tool),
           actor: this.actor(ctx),
         })
         const now = this.now()
@@ -472,56 +479,46 @@ export function withPrGate(
     return {
       spec: tool.spec,
       run: async (input, ctx) => {
+        ctx = beginPrGateCall(ctx)
         const remote =
           gate.enabled() &&
           (await gate.acceptRemote(tool.spec.name, input, ctx))
-        const device =
-          typeof input['device'] === 'string' ? input['device'].trim() : ''
-        const remoteInput =
-          device && tool.spec.name !== 'device_tool'
-            ? ({
-                device,
-                tool: tool.spec.name,
-                args: Object.fromEntries(
-                  Object.entries(input).filter(([key]) => key !== 'device'),
-                ),
-              } as JsonObject)
-            : null
         const effective =
-          (gate.enabled() || tool.spec.name === 'app_action') &&
-          resolve &&
-          !remoteInput
+          (gate.enabled() || tool.spec.name === 'app_action') && resolve
             ? await resolve(tool.spec.name, input, ctx)
             : input
         const held = remote
           ? null
-          : await gate.check(
-              remoteInput ? 'device_tool' : tool.spec.name,
-              remoteInput ?? effective,
-              ctx,
-            )
+          : await gate.check(tool.spec.name, effective, ctx)
         if (held) {
           cleanupCommentFile(effective)
           markDestinationHold(ctx)
           return held
         }
+        const routable =
+          tool.spec.name === 'device_tool' ||
+          LEARNED_RUN_TOOLS.has(tool.spec.name) ||
+          tool.spec.name.startsWith('browser_') ||
+          DEVICE_ARG_TOOLS.has(tool.spec.name)
         if (
-          (tool.spec.name === 'device_tool' || remoteInput !== null) &&
+          routable &&
           gate.enabled() &&
-          (reviewableCall(
-            remoteInput ? 'device_tool' : tool.spec.name,
-            remoteInput ?? effective,
-          ) ||
-            gate.isRemoteWrite(remoteInput ?? effective, ctx))
+          (reviewableCall(tool.spec.name, effective) ||
+            gate.isRemoteWrite(effective, ctx))
         ) {
-          const envelope = remoteInput ?? effective
-          const args = envelope['args']
-          if (args && typeof args === 'object' && !Array.isArray(args))
-            prepareRemoteGrant(
-              ctx,
-              String(envelope['tool'] ?? ''),
-              args as JsonObject,
-            )
+          if (tool.spec.name === 'device_tool') {
+            const args = input['args']
+            if (args && typeof args === 'object' && !Array.isArray(args))
+              prepareRemoteGrant(
+                ctx,
+                String(input['tool'] ?? ''),
+                args as JsonObject,
+              )
+          } else {
+            const { device: _device, ...args } = input
+            void _device
+            prepareRemoteGrant(ctx, tool.spec.name, args)
+          }
         }
         let result: string
         try {
@@ -532,13 +529,9 @@ export function withPrGate(
         } finally {
           cleanupCommentFile(effective)
         }
-        if (
-          (tool.spec.name === 'device_tool' || remoteInput !== null) &&
-          gate.enabled() &&
-          takeRemoteChallenge(ctx)
-        )
+        if (routable && gate.enabled() && takeRemoteChallenge(ctx))
           return (
-            (await gate.holdRemote(remoteInput ?? effective, ctx)) ?? result
+            (await gate.holdRemote(effective, ctx, tool.spec.name)) ?? result
           )
         return result
       },
