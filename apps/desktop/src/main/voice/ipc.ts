@@ -57,9 +57,9 @@ export function registerVoiceIpc(
     if (typeof text !== 'string' || text.length > MAX_SPEAK) throw new Error('text must be text')
     return voice.speak(text)
   })
-  ipcMain.handle(CHANNELS.voice.noteAudio, async (_event, file) => {
+  ipcMain.handle(CHANNELS.voice.noteAudio, async (_event, file, localOnly) => {
     if (typeof file !== 'string' || file.length > 120) throw new Error('file must be a note name')
-    const audio = voice.noteAudio(file)
+    const audio = await voice.noteAudioForDevice(file, localOnly === true)
     return audio === null ? null : new Uint8Array(audio.buffer, audio.byteOffset, audio.byteLength)
   })
   ipcMain.handle(CHANNELS.voice.liveToken, async () => voice.liveToken())

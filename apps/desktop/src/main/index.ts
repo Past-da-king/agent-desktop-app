@@ -1,3 +1,4 @@
+import { peerNoteAudio } from './voice/peer-audio'
 import { ActsForMe } from './runtime/acts-for-me'
 import { createWorkersChanged } from './workers/changed'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -1988,6 +1989,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
   // Voice: the Gemini key and the live call stay here; the window only streams microphone audio.
   allowMicrophone(win.webContents.session, (id) => id === win.webContents.id || dictation?.pill.isPill(id) === true)
   voice = new VoiceService({
+    noteDevice: () => devicesState.sync?.selfId() ?? '',
+    remoteNoteAudio: (file) => peerNoteAudio(store!, file),
     secrets,
     settings,
     store,

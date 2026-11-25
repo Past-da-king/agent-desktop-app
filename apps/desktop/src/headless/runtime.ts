@@ -1,4 +1,5 @@
 import { compareDeviceOrder } from '@agent/core'
+import { peerNoteAudio } from '../main/voice/peer-audio'
 import { ActsForMe } from '../main/runtime/acts-for-me'
 /**
  * The agent runtime without Electron: the same modules `main/index.ts` startServices composes (Store, settings,
@@ -690,6 +691,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   // Voice: a paired phone with no Google key of its own gets a one-use Live token from the key the bundle brought
   // here, and its call lands in this chat. Live calls held on this node itself need a screen, so none start here.
   voice = new VoiceService({
+    noteDevice: () => getDevicesHost()?.self().id ?? '',
+    remoteNoteAudio: (file) => peerNoteAudio(store!, file),
     secrets,
     settings,
     store,

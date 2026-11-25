@@ -1,6 +1,6 @@
 # Answer order and frozen-main recovery
 
-25 November 2026. Desktop/node 0.2.145, phone companion 0.15.77. No live installation is part of this change.
+25 November 2026. Desktop/node 0.2.146, phone companion 0.15.77. No live installation is part of this change.
 
 ## Reproduced faults
 
@@ -32,6 +32,6 @@ The main agent found and removed repeated 2.6 GB WSL Node crash dumps, restoring
 
 Regression tests cover the delayed metadata overwrite, whole-list order edits and boundary arrows, shared tie ordering, status, safe refusal before acceptance, stable handback without moving active turns, a disposable process that stops heartbeating, diagnostic-before-kill, persisted restart caps, clean stops, and disk hysteresis. The original metadata and lease-order regressions were observed failing before their fixes. Phone tie ordering likewise fails before its comparator correction. Full-suite and artifact evidence is recorded in the release handoff.
 
-Merged source includes the headless voice-note/media fix from devices d3ae2e4. Typecheck passed. Full Vitest on that combined tree: 3,069 passed, 33 skipped, 3 failed; two unhandled asynchronous cleanup errors. The known socket and git-hook failures remain. The recording-manifest timing assertion was separately reproduced on untouched f6dd4ec. PendingTakes' cleanup rename rejection also occurs before this change in the voice branch full run; the MiniAppStore.opened callback writing after Store.close was reproduced deterministically against untouched f6dd4ec. These existing failures are not described as a green full suite.
+Merged source includes the headless voice-note/media fix from devices d3ae2e4 and 9199ec6. Typecheck passed. Full Vitest on that combined tree: 3,069 passed, 33 skipped, 3 failed; two unhandled asynchronous cleanup errors. The known socket and git-hook failures remain. The recording-manifest timing assertion was separately reproduced on untouched f6dd4ec. PendingTakes' cleanup rename rejection also occurs before this change in the voice branch full run; the MiniAppStore.opened callback writing after Store.close was reproduced deterministically against untouched f6dd4ec. These existing failures are not described as a green full suite.
 
 Two isolated headless nodes initially proved idle handback in 28.141 seconds, no reconnect loop when the scripted phone returns to its stand-in, distinct priorities 0/1, and one question/one answer despite resending the same send id. A second proof additionally suspends and resumes only the disposable preferred node; its final evidence is in the release handoff.
