@@ -141,7 +141,7 @@ it('R9 reset store recovers latest pinned authority without local stamps, then a
   }
   const client = new SyncClient(
     'https://peer',
-    'test-only-[vault:vercel-recovery-past952.token]',
+    'test-only-pass',
   )
   vi.spyOn(client, 'pull').mockImplementation(async (since) => ({
     changes: since === 0 ? changes : [],
@@ -166,7 +166,7 @@ it('R9 mismatched pinned authority remains held without moving a normal pull cur
   cleanup.push(() => store.close())
   const client = new SyncClient(
     'https://peer',
-    'test-only-[vault:vercel-recovery-past952.token]',
+    'test-only-pass',
   )
   vi.spyOn(client, 'pull').mockResolvedValue({ changes: [], cursor: 0 })
   await expect(

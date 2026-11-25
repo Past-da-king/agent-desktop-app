@@ -5,13 +5,16 @@ import { createServer } from 'node:http'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { quote } from 'shell-quote'
 import type { JsonObject, ToolContext } from '@agent/core'
 import type { PrGate } from './pr-gate'
-import { reviewableCall } from './pr-gate-detect'
 
-type Scope = { env: NodeJS.ProcessEnv }
+type Scope = { env: NodeJS.ProcessEnv; permits: Set<string> }
 const scopes = new AsyncLocalStorage<Scope>()
+const permitsByContext = new WeakMap<ToolContext, string>()
+export function rememberGhPermit(ctx: ToolContext, token: string): void {
+  permitsByContext.set(ctx, token)
+  scopes.getStore()?.permits.add(token)
+}
 export function ghExecutionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const scope = scopes.getStore()
   if (!scope) return env
@@ -66,14 +69,15 @@ export async function withGhExecution<T>(
   gate: PrGate | undefined,
   ctx: ToolContext,
   work: () => Promise<T>,
-  approved?: { tool: string; input: JsonObject },
+  _approved?: { tool: string; input: JsonObject },
 ): Promise<T> {
   if (!gate?.enabled()) return work()
   const dir = mkdtempSync(join(tmpdir(), 'agent-gh-gate-'))
   const pass = randomBytes(32).toString('hex')
-  let outerConsumed = false
-  const outerApproved =
-    !!approved && reviewableCall(approved.tool, approved.input)
+  const permits = new Set<string>()
+  const permit = permitsByContext.get(ctx)
+  permitsByContext.delete(ctx)
+  if (permit) permits.add(permit)
   const server = createServer(async (req, res) => {
     if (req.method !== 'POST' || req.url !== '/' + pass) {
       res.writeHead(403).end()
@@ -95,19 +99,12 @@ export async function withGhExecution<T>(
         typeof data.cwd !== 'string'
       )
         throw new Error('Invalid gh execution request')
-      const command = quote(['gh', ...data.args])
-      const matchesOuter =
-        !outerConsumed &&
-        outerApproved &&
-        command ===
-          String(
-            approved?.input['command'] ?? approved?.input['cmd'] ?? '',
-          ).trim() &&
-        data.cwd === String(approved?.input['cwd'] ?? process.cwd())
-      if (matchesOuter) outerConsumed = true
-      const held = matchesOuter
-        ? null
-        : await gate.check('shell_run', { command, cwd: data.cwd }, { ...ctx })
+      const held = await gate.checkGhExecution(
+        permits,
+        data.args as string[],
+        data.cwd,
+        ctx,
+      )
       res.setHeader('content-type', 'application/json')
       res.end(JSON.stringify({ held }))
     } catch {
@@ -149,6 +146,7 @@ export async function withGhExecution<T>(
     )
     return await scopes.run(
       {
+        permits,
         env: {
           AGENT_PR_GATE_CHANNEL:
             'http://127.0.0.1:' + address.port + '/' + pass,

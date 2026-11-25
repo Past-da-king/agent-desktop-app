@@ -57,6 +57,21 @@ export class SecretPassTable implements PassTable {
     this.write(clean)
   }
 
+  /** Pairing authority metadata survives a database restore along with pass hashes. */
+  rolesFor(deviceId: string): import('./types').DeviceRole[] | null {
+    try {
+      const value = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}')[deviceId]
+      return Array.isArray(value) ? value.filter((role): role is import('./types').DeviceRole => ['brain','hands','screen'].includes(role)) : null
+    } catch { return null }
+  }
+  rememberRoles(deviceId: string, roles: import('./types').DeviceRole[]): void {
+    let all: Record<string, unknown> = {}
+    try { all = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}') } catch { /* first record */ }
+    if (JSON.stringify(all[deviceId]) === JSON.stringify(roles)) return
+    all[deviceId] = roles
+    this.secrets.set('devicePairingRoles', JSON.stringify(all))
+  }
+
   /** The device a pass belongs to, or null. */
   deviceFor(pass: string): string | null {
     if (pass === '' || pass.length > 200) return null

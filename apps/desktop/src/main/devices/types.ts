@@ -133,6 +133,7 @@ export type RpcMethod = (deviceId: string, args: unknown[]) => Promise<unknown>
 
 /** What the node server gives the parts that plug into it. */
 export interface DevicesHost {
+  pairedRoles?(deviceId: string): DeviceRole[] | null
   addRoute(route: DevicesRoute): void
   addRpc(name: string, method: RpcMethod): void
   /** Send an event to every connection of one device (device commands) or, with null, to all. */

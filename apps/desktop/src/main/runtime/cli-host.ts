@@ -154,6 +154,7 @@ export function planPermission(
               : (usableFolder(request.folder) ?? process.cwd()),
         },
         { ...request.context },
+        { deferExecution: true },
       )
       if (held) return { allow: false, message: held }
     }

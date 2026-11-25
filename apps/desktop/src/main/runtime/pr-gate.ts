@@ -1,4 +1,6 @@
-import { withGhExecution } from './pr-gate-exec'
+import { withGhExecution, rememberGhPermit } from './pr-gate-exec'
+import { ghOperations, ghExecutionKey } from './pr-gate-execution-key'
+import { quote } from 'shell-quote'
 /**
  * A review workflow guard, shared by the desktop and headless toolsets.
  * This recognises explicit GitHub operations; it is not a sandbox for arbitrary programs.
@@ -39,7 +41,6 @@ import { DEVICE_ARG_TOOLS } from '../devices/device-tools'
 import { LEARNED_RUN_TOOLS } from '../devices/learned-route'
 import { listWhere, type DataStore } from './data'
 import {
-  reviewApproval,
   reviewableCall,
   scriptReadNotes,
   bodyFileSignature,
@@ -95,9 +96,101 @@ interface Pending {
   actor: string
   expires: number
   attestation?: Record<string, string>
+  executionRemaining?: string[]
 }
 export class PrGate {
   private pending = new Map<string, Pending>()
+  private executionPermits = new Map<
+    string,
+    { actor: string; expires: number; remaining: string[]; pending?: Pending }
+  >()
+  private reserveExecution(
+    tool: string,
+    input: JsonObject,
+    ctx: ToolContext,
+    pending?: Pending,
+  ): boolean {
+    const extracted = ghOperations(
+      tool,
+      input,
+      String(ctx.commandFallback?.cwd ?? homedir()),
+    )
+    const remaining = pending?.executionRemaining ?? extracted
+    if (pending) pending.executionRemaining = remaining
+    if (!remaining.length) return false
+    for (const [token, permit] of this.executionPermits) {
+      if (permit.expires < this.now()) this.executionPermits.delete(token)
+      else if (pending && permit.pending === pending) {
+        rememberGhPermit(ctx, token)
+        return true
+      }
+    }
+    const token = randomUUID()
+    this.executionPermits.set(token, {
+      actor: this.actor(ctx),
+      expires: this.now() + 60_000,
+      remaining,
+      ...(pending ? { pending } : {}),
+    })
+    rememberGhPermit(ctx, token)
+    return true
+  }
+  permitRemoteExecution(
+    tool: string,
+    input: JsonObject,
+    ctx: ToolContext,
+  ): void {
+    this.reserveExecution(tool, input, ctx)
+  }
+  async checkGhExecution(
+    tokens: Set<string>,
+    args: string[],
+    cwd: string,
+    ctx: ToolContext,
+  ): Promise<string | null> {
+    const key = ghExecutionKey(args, cwd)
+    for (const token of tokens) {
+      const permit = this.executionPermits.get(token)
+      if (
+        !permit ||
+        permit.expires < this.now() ||
+        permit.actor !== this.actor(ctx)
+      )
+        continue
+      const pending = permit.pending
+      if (
+        pending &&
+        (!pending.attestation ||
+          this.pending.get(pending.id) !== pending ||
+          pending.expires < this.now())
+      )
+        continue
+      const at = permit.remaining.findIndex(
+        (value) => value === key || value === ghExecutionKey(args, '*'),
+      )
+      if (at < 0) continue
+      // Spend the exact parsed operation synchronously, before any asynchronous log write.
+      permit.remaining.splice(at, 1)
+      if (!permit.remaining.length) {
+        this.executionPermits.delete(token)
+        if (pending) this.pending.delete(pending.id)
+      }
+      await this.log(
+        ctx,
+        'gh_execution',
+        'passed once',
+        pending?.id ?? token,
+        pending?.attestation,
+      )
+      return null
+    }
+    return this.check(
+      'shell_run',
+      { command: quote(['gh', ...args]), cwd },
+      ctx,
+    )
+  }
+
   private remoteWrites = new Map<string, number>()
   private scriptNotes = new Map<string, number>()
   private remoteKey(input: JsonObject, ctx: ToolContext): string {
@@ -331,6 +424,7 @@ export class PrGate {
     tool: string,
     input: JsonObject,
     ctx: ToolContext,
+    options: { deferExecution?: boolean } = {},
   ): Promise<string | null> {
     if (['shell_run', 'Bash', 'PowerShell'].includes(tool))
       input = {
@@ -359,24 +453,13 @@ export class PrGate {
           await this.log(
             ctx,
             tool,
-            'unreadable local script (not gated)',
+            scriptReadNotes(input, tool).some((note) =>
+              note.startsWith('Unresolved push'),
+            )
+              ? 'unresolved push target (not gated)'
+              : 'unreadable local script (not gated)',
             randomUUID(),
           )
-        }
-      }
-      if (reviewApproval(tool, input)) {
-        const key = createHash('sha256')
-          .update(
-            canonical({
-              tool,
-              input: stableInput(tool, input),
-              actor: this.actor(ctx),
-            }),
-          )
-          .digest('hex')
-        if (!this.scriptNotes.has(key)) {
-          this.scriptNotes.set(key, this.now() + 60 * 60_000)
-          await this.log(ctx, tool, 'review approval (not gated)', randomUUID())
         }
       }
       return null
@@ -392,6 +475,11 @@ export class PrGate {
       (p) => p.key === key && p.actor === actor,
     )
     if (match?.attestation && match.expires >= now) {
+      if (
+        options.deferExecution &&
+        this.reserveExecution(tool, input, ctx, match)
+      )
+        return null
       // Remove synchronously before awaiting a log write: concurrent calls cannot consume twice.
       this.pending.delete(match.id)
       await this.log(ctx, tool, 'passed once', match.id, match.attestation)
@@ -646,7 +734,14 @@ export function withPrGate(
             : input
         const held = remote
           ? null
-          : await gate.check(tool.spec.name, effective, ctx)
+          : await gate.check(tool.spec.name, effective, ctx, {
+              deferExecution: [
+                'shell_run',
+                'Bash',
+                'PowerShell',
+                'run_code',
+              ].includes(tool.spec.name),
+            })
         if (held) {
           cleanupCommentFile(effective)
           markDestinationHold(ctx)
@@ -680,6 +775,7 @@ export function withPrGate(
             prepareRemoteGrant(ctx, tool.spec.name, args, signingKey)
           }
         }
+        if (remote) gate.permitRemoteExecution(tool.spec.name, effective, ctx)
         let result: string
         try {
           const run = () =>

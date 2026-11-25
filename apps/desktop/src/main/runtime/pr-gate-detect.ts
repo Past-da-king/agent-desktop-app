@@ -180,6 +180,16 @@ function gh(args: string[]): boolean {
   if (issue >= 0 && args[issue + 1] === 'comment') return comment()
   if (pr >= 0) {
     const action = args[pr + 1]
+    if (
+      (action === 'create' || action === 'new') &&
+      args.some((word) => /^(?:--reviewer(?:=|$)|-r)/.test(word))
+    )
+      return true
+    if (
+      (action === 'create' || action === 'new') &&
+      args.some((word) => /^(?:--reviewer(?:=|$)|-r)/.test(word))
+    )
+      return true
     if (action === 'create' || action === 'new')
       return !flags.some(
         (w) => /^--draft(?:=(?:true|1))?$/.test(w) || w === '-d',
@@ -189,7 +199,13 @@ function gh(args: string[]): boolean {
       return true
     if (action === 'edit')
       return args.some((w) => /^--add-reviewer(?:=|$)/.test(w))
-    if (action === 'review' && flags.includes('--approve')) return true
+    if (
+      action === 'review' &&
+      (flags.includes('--approve') ||
+        flags.includes('-a') ||
+        flags.includes('-a'))
+    )
+      return true
     if (action === 'comment' || action === 'review') return comment()
     return false
   }
@@ -440,7 +456,13 @@ function argv(words: string[], depth: number): boolean {
       }
       break
     }
-    return argv(args.slice(i), depth + 1)
+    const previous = remoteInspection
+    remoteInspection = true
+    try {
+      return argv(args.slice(i), depth + 1)
+    } finally {
+      remoteInspection = previous
+    }
   }
   if (exe === 'ssh') {
     let i = 0
@@ -448,7 +470,13 @@ function argv(words: string[], depth: number): boolean {
       const a = args[i++]!
       if (['-p', '-i', '-l', '-o', '-F', '-J', '-S'].includes(a)) i++
     }
-    return shell(args.slice(i + 1).join(' '), depth + 1)
+    const previous = remoteInspection
+    remoteInspection = true
+    try {
+      return shell(args.slice(i + 1).join(' '), depth + 1)
+    } finally {
+      remoteInspection = previous
+    }
   }
   if (
     [
@@ -523,7 +551,15 @@ function argv(words: string[], depth: number): boolean {
     let gitCwd = inspectionCwd
     while (args[at]?.startsWith('-')) {
       const flag = args[at++]!
-      if (flag === '-C' && args[at]) gitCwd = resolve(gitCwd, args[at]!)
+      if (flag === '-C' && args[at])
+        gitCwd = resolve(
+          gitCwd,
+          args[at] === '~'
+            ? homedir()
+            : args[at]!.startsWith('~/')
+              ? join(homedir(), args[at]!.slice(2))
+              : args[at]!,
+        )
       if (
         [
           '-C',
@@ -577,10 +613,24 @@ function argv(words: string[], depth: number): boolean {
         (args.some((word) => word === '-Body') && body === undefined),
     )
   }
-  if (['node', 'python', 'python3'].includes(exe)) {
+  if (exe === 'npx' && ['tsx', 'ts-node'].includes(args[0] ?? ''))
+    return argv(args, depth + 1)
+  if (exe === 'npx' && ['tsx', 'ts-node'].includes(args[0] ?? ''))
+    return argv(args, depth + 1)
+  if (['node', 'python', 'python3', 'tsx', 'ts-node'].includes(exe)) {
     const inline = option(args, '-e', '--eval', '-c')
     if (inline !== undefined) return script(inline)
-    const file = args.find((word) => !word.startsWith('-'))
+    let file: string | undefined
+    for (let at = 0; at < args.length; at++) {
+      if (['-r', '--require', '--import', '--loader'].includes(args[at]!)) {
+        at++
+        continue
+      }
+      if (!args[at]!.startsWith('-')) {
+        file = args[at]
+        break
+      }
+    }
     return file !== undefined && inspectFile(file, depth + 1)
   }
   if (exe.startsWith('$') && args.some((w) => /^(pr|issue|api)$/.test(w)))
@@ -719,8 +769,19 @@ export function sensitiveShell(source: string): boolean {
   )
 }
 function reviewablePush(args: string[], cwd = inspectionCwd): boolean {
+  if (
+    args.includes('--tags') &&
+    args.filter((word) => !word.startsWith('-')).length <= 1
+  )
+    return false
+  if (
+    args.includes('--tags') &&
+    args.filter((word) => !word.startsWith('-')).length <= 1
+  )
+    return false
   if (args.some((word) => ['--all', '--mirror'].includes(word))) return true
   const git = (...words: string[]): string => {
+    if (remoteInspection) return ''
     try {
       return execFileSync('git', ['-C', cwd, ...words], {
         encoding: 'utf8',
@@ -760,7 +821,13 @@ function reviewablePush(args: string[], cwd = inspectionCwd): boolean {
   const refs = positional.slice(1)
   if (!refs.length) refs.push(git('symbolic-ref', '--quiet', '--short', 'HEAD'))
   return refs.some((ref) => {
-    if (!ref || unreadable(ref) || ref.includes('*')) return true
+    if (!ref || unreadable(ref)) {
+      unresolvedPushes.push(
+        'Unresolved push target; passed cooperatively without local branch assumptions.',
+      )
+      return false
+    }
+    if (ref.includes('*')) return true
     let target = ref
       .replace(/^\+/, '')
       .split(':')
@@ -922,7 +989,7 @@ function shell(source: string, depth = 0): boolean {
 }
 function script(code: string, pageUrl = ''): boolean {
   if (
-    /\b(?:os\.system|subprocess\.(?:run|call|Popen)|execSync|spawnSync|exec|spawn)\s*\(/.test(
+    /\b(?:os\.system|subprocess\.(?:run|call|Popen)|execSync|execFileSync|execFile|spawnSync|exec|spawn)\s*\(/.test(
       code,
     )
   ) {
@@ -935,7 +1002,9 @@ function script(code: string, pageUrl = ''): boolean {
       )
     )
       return true
-    const ghAt = quoted.findIndex((value) => base(value) === 'gh')
+    const ghAt = quoted.findIndex((value) =>
+      ['gh', 'git'].includes(base(value)),
+    )
     if (ghAt >= 0 && argv(quoted.slice(ghAt), 1)) return true
   }
   if (/^https:\/\/github\.com(?:\/|$)/i.test(pageUrl)) {
@@ -946,6 +1015,7 @@ function script(code: string, pageUrl = ''): boolean {
         delimiter + new URL(path, pageUrl).href + delimiter,
     )
   }
+  if (/\b(?:octokit\.)?pulls\.merge\s*\(/.test(code)) return true
   const url = code.match(/https:\/\/(?:api\.)?github\.com\/[^'"\s)]+/)?.[0]
   if (!url && !/github\.com/.test(code)) return false
   if (/\.(?:click|submit)\s*\(/.test(code)) return true
@@ -957,11 +1027,20 @@ function script(code: string, pageUrl = ''): boolean {
   return githubWrite(
     url ?? 'https://api.github.com/graphql',
     method,
-    { draft: /\bdraft['"]?\s*:\s*true\b/.test(code), query: code, body: code },
+    {
+      draft: /\bdraft['"]?\s*:\s*true\b/.test(code),
+      event: /['"]?event['"]?\s*:\s*['"]APPROVE['"]/i.test(code)
+        ? 'APPROVE'
+        : '',
+      query: code,
+      body: code,
+    },
     !url,
   )
 }
 let inspectionCwd = process.cwd()
+let remoteInspection = false
+let unresolvedPushes: string[] = []
 let missingScripts: string[] = []
 function inspectFile(file: string, depth: number): boolean {
   try {
@@ -974,7 +1053,7 @@ function inspectFile(file: string, depth: number): boolean {
       return false
     }
     const text = readFileSync(path, 'utf8')
-    return /\.(?:py|mjs|cjs|js)$/i.test(path)
+    return /\.(?:py|mjs|cjs|js|ts|mts|cts)$/i.test(path)
       ? script(text)
       : shell(text, depth)
   } catch {
@@ -984,11 +1063,13 @@ function inspectFile(file: string, depth: number): boolean {
 }
 export function scriptReadNotes(input: Args, name = 'shell_run'): string[] {
   reviewableCall(name, input)
-  return [...missingScripts]
+  return [...missingScripts, ...unresolvedPushes]
 }
 export function reviewableCall(name: string, input: Args): boolean {
   inspectionCwd = String(input['cwd'] ?? homedir())
   missingScripts = []
+  unresolvedPushes = []
+  remoteInspection = false
   name = name.replace(/^mcp__agent__/, '')
   if (['shell_run', 'Bash', 'PowerShell', 'exec_command'].includes(name))
     return shell(
@@ -1016,7 +1097,7 @@ export function reviewableCall(name: string, input: Args): boolean {
     if (name === 'browser_click')
       return (
         input['_resolvedAction'] !== true ||
-        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge/i.test(
+        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge|\bapprove\b|submit\s+review|\bapprove\b|submit\s+review/i.test(
           String(input['name'] ?? ''),
         )
       )
@@ -1028,7 +1109,7 @@ export function reviewableCall(name: string, input: Args): boolean {
     return (
       /click|press|select|check/.test(String(input['action'])) &&
       (!input['name'] ||
-        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge/i.test(
+        /ready\s+for\s+review|request\s+review|create\s+pull\s+request|\bmerge\b|auto-?merge|\bapprove\b|submit\s+review|\bapprove\b|submit\s+review/i.test(
           String(input['name'] ?? ''),
         ))
     )
@@ -1041,7 +1122,7 @@ export function reviewableCall(name: string, input: Args): boolean {
   if (name === 'webapp_run' || name === 'webapp_test')
     return (
       /github/i.test(String(input['app'])) &&
-      /merge|mark_ready|(?:create|open|ready|request|merge).*(?:pull|pr|review)|(?:pull|pr).*(?:create|open|ready|merge)/i.test(
+      /approve|submit_review|add_reviewer|merge|mark_ready|(?:create|open|ready|request|merge).*(?:pull|pr|review)|(?:pull|pr).*(?:create|open|ready|merge)/i.test(
         String(input['tool']),
       )
     )
@@ -1060,7 +1141,11 @@ export function reviewableCall(name: string, input: Args): boolean {
     if (/(?:UPDATE|EDIT).*PULL_REQUEST/.test(slug))
       return [false, 'false'].includes(args['draft'] as boolean | string)
     if (/CREATE.*(?:COMMENT|REVIEW)/.test(slug))
-      return unreadable(args['body']) || readyComment(args['body'])
+      return (
+        String(args['event']).toUpperCase() === 'APPROVE' ||
+        unreadable(args['body']) ||
+        readyComment(args['body'])
+      )
     if (/GRAPHQL/.test(slug)) return graph(args['query'])
   }
   return false

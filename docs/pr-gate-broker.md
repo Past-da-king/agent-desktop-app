@@ -1,6 +1,6 @@
 # PR gate: credential broker proposal
 
-25 November 2026. Future option only, not built or planned for this release. The main agent selected a cooperative workflow guard; restricted identities and credential migration are out of scope. Supersedes the round-seven shell/shim security boundary. Candidate remains c089f75d, version 0.2.147, draft PR #19. No merge or release.
+25 November 2026. Future option only, not built or planned for this release. The main agent selected a cooperative workflow guard; restricted identities and credential migration are out of scope. Supersedes the round-seven shell/shim security boundary. This note is not a release candidate or implementation plan. No merge or release.
 
 ## Threat model and required boundary
 

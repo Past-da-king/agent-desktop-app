@@ -274,7 +274,7 @@ export class DevicesService {
   private rolesOf(id: string): DeviceRole[] | null {
     const row = this.rows.get(id)
     // A brain this computer joined (join) is trusted until its row arrives, like a headless node's (knownPeer).
-    if (row === undefined) return this.deps.knownPeer?.(id) ?? (this.config.get().peers.some((peer) => peer.id === id) ? ['brain', 'hands'] : null)
+    if (row === undefined) return this.passes.rolesFor(id) ?? this.deps.knownPeer?.(id) ?? (this.config.get().peers.some((peer) => peer.id === id) ? ['brain', 'hands'] : null)
     return row.revoked ? null : row.roles
   }
 
@@ -787,7 +787,7 @@ export class DevicesService {
       peers.set(nodeId, { id: nodeId, name: nodeName, fp: parts.fp, urls: [base, ...(known?.urls ?? parts.urls).filter((u) => u.replace(/\/+$/, '') !== base)] })
       this.config.save({ peers: [...peers.values()] })
       // Fetch authenticated authority without stamping a stale host snapshot locally.
-      if (this.deps.store.applyRemote) await bootstrapPeerAuthority({list: () => this.deps.store.list('device'), applyRemote: changes => this.deps.store.applyRemote!(changes)}, new SyncClient(base, pass, pinnedFetch(parts.fp)), peers.get(nodeId)!)
+      if (this.deps.store.applyRemote) await bootstrapPeerAuthority({list: () => this.deps.store.list('device'), applyRemote: changes => this.deps.store.applyRemote!(changes)}, new SyncClient(base, pass, pinnedFetch(parts.fp)), peers.get(nodeId)!).catch(() => this.deps.log?.('Joined; peer authority bootstrap deferred until replication.')).catch(() => this.deps.log?.('Joined; peer authority bootstrap deferred until replication.'))
       await this.writeSelf()
       this.uplink.refresh()
       this.changed()
@@ -916,11 +916,13 @@ export class DevicesService {
     const rows = await this.deps.store.list('device')
     if (generation !== this.reloadGeneration) return
     this.rows = new Map(rows.map((row) => [row.id, row]))
+    for (const row of rows) if (Array.isArray(row.roles)) this.passes.rememberRoles(row.id, row.roles)
   }
 
   private async saveRow(record: Partial<DeviceRecord | DeviceRow> & { id: string }): Promise<void> {
     const saved = await this.deps.store.upsert('device', record)
     this.rows.set(saved.id, saved)
+    if (Array.isArray(saved.roles)) this.passes.rememberRoles(saved.id, saved.roles)
   }
 
   private nextPriorityNow(): number {
