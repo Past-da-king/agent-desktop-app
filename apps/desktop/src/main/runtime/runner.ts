@@ -1,6 +1,6 @@
 import type { RequestSource } from '../../shared/request-source'
 import type { Asker } from '../../shared/approval-policy'
-import { requestById, requestFor } from './request-source'
+import { requestById, requestFor, requestFromMessage } from './request-source'
 import type { ApprovalOrigin } from '@agent/core'
 import type { ActsForMe } from './acts-for-me'
 import { needsHim, isRoutedPending } from '../../shared/card-state'
@@ -1370,7 +1370,7 @@ export class Runner {
       const once = scope !== undefined && !scope.rowUsed ? scope : undefined
       if (once !== undefined) once.viaBegin = true
       const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
-      if (userRow !== null) line.requestId = (await requestFor(this.store, line.chat))?.id ?? ''
+      if (userRow !== null) line.requestId = (await requestFromMessage(this.store, userRow.id))?.id ?? ''
       const fixedLease = leaseId ?? once?.leaseId
       lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
       line.leaseId = lease
@@ -1454,8 +1454,8 @@ export class Runner {
     const asker: Asker = owner.startsWith('helper:') ? 'helper' : owner === 'routine' ? 'routine' : owner === 'main' ? 'main' : owner.startsWith('chat:') ? 'project' : 'device'
     const actor = { asker, key: owner, request }
     return {
-      ask: (question, options, card, origin) => this.ask(question, options, signal, chat, card, origin, actor),
-      approve: (summary, details, scope, origin) => this.approve(summary, details, signal, scope, chat, origin, actor),
+      ask: async (question, options, card, origin) => this.ask(question, options, signal, chat, card, origin, { ...actor, request: request === undefined ? undefined : await requestById(this.store, request.id) ?? undefined }),
+      approve: async (summary, details, scope, origin) => this.approve(summary, details, signal, scope, chat, origin, { ...actor, request: request === undefined ? undefined : await requestById(this.store, request.id) ?? undefined }),
       notify: context.notify,
     }
   }
@@ -2169,9 +2169,22 @@ export class Runner {
    * A tool run for an agent on another device (docs/devices-protocol.md s11): its questions and approvals show here
    * in the main chat and the answer goes back; its browser work gets a tab of its own.
    */
+  /** Remote free-text envelopes cannot establish who asked. Resolve the app's replicated command record. */
+  async recordedDeviceToolContext(signal: AbortSignal, command: { id: string; tool: string; chatId: string }): Promise<ToolContext> {
+    const row = await this.store.get('device_command', command.id)
+    if (row === null || row.kind !== 'tool' || row.tool !== command.tool || row.chat !== command.chatId || (row.status !== 'queued' && row.status !== 'sent')) return this.deviceToolContext(signal)
+    let request: RequestSource | undefined
+    try {
+      const body: unknown = JSON.parse(row.body ?? '{}')
+      const id = typeof body === 'object' && body !== null ? (body as { request?: { id?: unknown } }).request?.id : undefined
+      if (typeof id === 'string') request = await requestById(this.store, id) ?? undefined
+    } catch { /* Missing evidence never becomes user authorization. */ }
+    return this.deviceToolContext(signal, { chatId: row.chat ?? MAIN_CHAT, owner: row.owner ?? '', ...(request === undefined ? {} : { request }) })
+  }
+
   deviceToolContext(signal: AbortSignal, command?: { chatId: string; owner?: string; request?: RequestSource }): ToolContext {
     const chat = command?.chatId || MAIN_CHAT
-    return { ...this.toolContext(signal, 'main', chat), ...this.deviceContext(chat, signal, command?.owner, command?.request), agentLabel: 'another device', owner: 'device' }
+    return { ...this.toolContext(signal, 'main', chat), ...this.deviceContext(chat, signal, command?.owner, command?.request), agentLabel: 'another device', owner: 'device', requestId: command?.request?.id ?? '' }
   }
 
   private toolContext(signal: AbortSignal, role: 'main' | 'routine' = 'main', chat: string = MAIN_CHAT): ToolContext {
@@ -2179,7 +2192,7 @@ export class Runner {
       agentLabel: role === 'routine' ? 'routine' : 'main',
       // Each chat drives its own browser tab, as each helper does.
       owner: browserOwnerOf(role, chat),
-      ...(role === 'routine' || this.line(chat).requestId === undefined ? {} : { requestId: this.line(chat).requestId }),
+      requestId: role === 'routine' ? '' : this.line(chat).requestId ?? '',
       ...(role === 'main' && chat !== MAIN_CHAT ? { chat } : {}),
       activity: async (text, meta) => {
         if (role === 'routine') {

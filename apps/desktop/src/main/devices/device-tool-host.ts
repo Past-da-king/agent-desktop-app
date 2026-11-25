@@ -7,7 +7,6 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 
-import { parseRequestSource } from '../../shared/request-source'
 import type { JsonObject, Tool, ToolContext } from '@agent/core'
 
 import { contentTypeFor } from './server'
@@ -50,7 +49,7 @@ export interface DeviceToolHostDeps {
   /** The app's tools (the main toolset); only the shareable ones are offered. */
   tools: () => Tool[]
   /** A context for one command: ask/approve show their cards in this app, the browser gets its own tab. */
-  context: (signal: AbortSignal, command: DeviceToolCommand) => ToolContext
+  context: (signal: AbortSignal, command: DeviceToolCommand) => ToolContext | Promise<ToolContext>
   /** The person's switches, per group. */
   shared: () => Record<ShareGroup, boolean>
   /** Where file_receive puts what it is given. */
@@ -170,7 +169,7 @@ export class DeviceToolHost {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), deadline)
     try {
-      const run = found.tool.run(command.args as JsonObject, this.deps.context(controller.signal, command))
+      const run = found.tool.run(command.args as JsonObject, await this.deps.context(controller.signal, command))
       const timeout = new Promise<never>((_resolve, reject) => {
         controller.signal.addEventListener('abort', () => reject(new Error(`${command.tool} took longer than ${Math.round(deadline / 1000)} s.`)), { once: true })
       })
@@ -192,8 +191,6 @@ export function toolCommand(raw: unknown): DeviceToolCommand | null {
   const args = typeof value['args'] === 'object' && value['args'] !== null && !Array.isArray(value['args']) ? (value['args'] as Record<string, unknown>) : {}
   return {
     kind: 'tool',
-    ...(typeof value['owner'] === 'string' ? { owner: value['owner'] } : {}),
-    ...(parseRequestSource(value['request']) === null ? {} : { request: parseRequestSource(value['request'])! }),
     id: value['id'],
     tool: value['tool'],
     args,
