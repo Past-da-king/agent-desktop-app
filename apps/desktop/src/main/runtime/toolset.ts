@@ -70,7 +70,7 @@ import type { PrGateSecrets } from './pr-gate-key'
 import { mediaTools, type MediaToolDeps } from '../tools/media'
 
 export interface ToolsetDeps extends CoreToolDeps {
-  /** App-owned transport signing key in Secrets, shared only with brains. */
+  /** Local Ed25519 signing key. Private keys never leave their originating brain. */
   prGateSecrets?: PrGateSecrets
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
   settings?: SettingsView
@@ -245,7 +245,7 @@ export function withOrigin(tools: Tool[]): Tool[] {
 
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
   // The vault guard sits outermost of all: what any tool returns, on any path, has vault values taken out.
-  const gate = prGateFor(deps.store, () => deps.settings?.get() ?? DEFAULT_SETTINGS, deps.prGateSecrets)
+  const gate = prGateFor(deps.store, () => deps.settings?.get() ?? DEFAULT_SETTINGS, deps.prGateSecrets, () => deps.deviceHub?.()?.selfId() ?? '')
   return guardTools(
     withOrigin(
       withPrGate([...workerToolsets(deps), ...gate.tools()], gate, async (name, input, ctx) =>

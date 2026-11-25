@@ -867,6 +867,8 @@ export type DeviceShareGroup = 'browser' | 'files' | 'notifications' | 'approval
 
 /** A paired device (protocol s4). Synced like every row; the pass hash is never in it. */
 export interface DeviceRow extends RowBase {
+  /** Origin brain verification key. Public, replicated with the device row. */
+  prGatePublicKey?: string
   name: string
   kind: DeviceKind
   platform: DevicePlatform

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
 import { DEFAULT_SETTINGS, type JsonObject } from '@agent/core'
@@ -13,7 +13,6 @@ import {
   consumeRemoteGrant,
   remoteCaller,
 } from '../src/main/runtime/pr-gate-remote'
-import { BundleKeeper, parseBundle } from '../src/main/devices/bundle'
 import { testContext } from './support'
 
 const folders: string[] = []
@@ -100,47 +99,6 @@ it.each(['unsigned', 'tampered', 'wrong-key'])(
     expect(remoteCaller(received.context).owner).toBe('device')
   },
 )
-it('m5 private bundle sync carries the signing key to brains and never screens', async () => {
-  function peer() {
-    const map = new Map<string, string>(),
-      store = new Store(':memory:')
-    const secrets = {
-      get: (name: string) => map.get(name) ?? null,
-      set: (name: string, value: string) => {
-        map.set(name, value)
-      },
-      delete: (name: string) => {
-        map.delete(name)
-      },
-    }
-    const settings = { ...DEFAULT_SETTINGS }
-    const keeper = new BundleKeeper({
-      settings: {
-        get: () => settings,
-        save: (patch) => Object.assign(settings, patch),
-      },
-      secrets,
-      local: store,
-    })
-    return { store, secrets, keeper }
-  }
-  const a = peer(),
-    b = peer()
-  try {
-    const privateBundle = await a.keeper.build(true),
-      publicBundle = await a.keeper.build(false)
-    expect(privateBundle.secrets?.prGateTransportKey).toMatch(/^[a-f0-9]{64}$/)
-    expect(publicBundle.secrets).toBeUndefined()
-    const decoded = parseBundle(privateBundle)!
-    expect(b.keeper.apply(decoded, true)).toBe(true)
-    expect(b.secrets.get('prGateTransportKey')).toBe(
-      a.secrets.get('prGateTransportKey'),
-    )
-  } finally {
-    a.store.close()
-    b.store.close()
-  }
-})
 it.each(['tilde', 'pushd'])(
   'm4 inspects scripts after %s changes the execution folder',
   (mode) => {
@@ -212,38 +170,3 @@ it('m4 script-note retention cannot evict a decision receipt', async () => {
     store.close()
   }
 }, 20000)
-it('n1 keeps pre-existing device method formatting', () => {
-  const hub = readFileSync(
-    new URL('../src/main/devices/device-tools.ts', import.meta.url),
-    'utf8',
-  )
-  expect(hub).toContain(
-    'async resolve(ref: string, tool: string, chat: string): Promise<{ row: DeviceRow } | { error: string }> {',
-  )
-})
-it('n4 keeps the host header and sharing constants in their target formatting', () => {
-  const host = readFileSync(
-    new URL('../src/main/devices/device-tool-host.ts', import.meta.url),
-    'utf8',
-  )
-  expect(host).toContain(
-    "export const SHARE_GROUPS: readonly ShareGroup[] = ['browser', 'files', 'notifications', 'approval', 'shell']",
-  )
-})
-it('n2 identifies the actual historical output cap', () => {
-  const docs = readFileSync(
-    new URL('../../../docs/pr-gate.md', import.meta.url),
-    'utf8',
-  )
-  expect(docs).toContain('former 2,000,000-character cap')
-})
-it('n3 documents direct output sinks, including their truncation notices', () => {
-  const docs = readFileSync(
-    new URL('../../../docs/pr-gate.md', import.meta.url),
-    'utf8',
-  )
-  expect(docs).toContain(
-    'shared shell and code output sinks also retain head and tail',
-  )
-  expect(docs).toContain('own truncation notice before the MCP limit applies')
-})

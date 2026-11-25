@@ -281,3 +281,106 @@ it('binds remote grants to canonical tool aliases', async () => {
     true,
   )
 })
+
+it('R5-m1 automatic routing survives a signed-out first remote candidate', async () => {
+  const t = setup(),
+    destination = setup()
+  const folder = mkdtempSync(join(tmpdir(), 'pr-gate-round4-'))
+  try {
+    const learned = new LearnedStore(join(folder, 'apps.json'))
+    learned.save({
+      id: 'code',
+      name: 'Code',
+      startUrl: 'https://github.com',
+      about: '',
+      tools: [],
+      trusted: false,
+      updatedAt: 0,
+    })
+    const executed = vi.fn(async () => 'remote mutation completed')
+    const target = withPrGate(
+      [fixture('webapp_run', executed)],
+      destination.gate,
+      async (_name, args) => ({ ...args, app: 'GitHub' }),
+    )[0]!
+    const hub = {
+      list: async () => [
+        {
+          id: 'server',
+          name: 'Server',
+          kind: 'server',
+          self: true,
+          online: true,
+          tools: ['webapp_run'],
+        },
+        {
+          id: 'stale',
+          name: 'Stale',
+          kind: 'desktop',
+          self: false,
+          online: true,
+          tools: ['webapp_run'],
+        },
+        {
+          id: 'desktop',
+          name: 'Desktop',
+          kind: 'desktop',
+          self: false,
+          online: true,
+          tools: ['webapp_run'],
+        },
+      ],
+      call: async (
+        _ref: string,
+        name: string,
+        args: JsonObject,
+        _chat: string,
+        ctx: import('@agent/core').ToolContext,
+      ) => {
+        const sent = remoteArguments(ctx, name, args)
+        const { receiveRemoteGrant, takeDestinationHold } =
+          await import('../src/main/runtime/pr-gate-remote')
+        const received = receiveRemoteGrant(
+          testContext({ owner: 'device' }),
+          name,
+          sent,
+        )
+        const destinationTool =
+          _ref === 'stale'
+            ? withPrGate(
+                [fixture('webapp_run', async () => 'Error: Not signed in')],
+                destination.gate,
+                async (_name, args) => ({ ...args, app: 'GitHub' }),
+              )[0]!
+            : target
+        const text = await destinationTool.run(received.args, received.context)
+        if (takeDestinationHold(received.context))
+          recordRemoteResult(ctx, { prGateHeld: true })
+        return { ok: true, state: 'done', device: 'Desktop', text }
+      },
+    } as unknown as DeviceToolHub
+    const local = vi.fn(async () => 'Error: Not signed in')
+    const routed = withLearnedRoute([fixture('webapp_run', local)], () => hub, {
+      learned,
+      selfId: () => 'server',
+      siteHere: async () => null,
+    })
+    // The action name is opaque at the origin, and the stored site is known only at destination.
+    const origin = withPrGate(routed, t.gate)[0]!
+    const input = { app: 'Code', tool: 'squash_and_merge' }
+    const held = await origin.run(input, t.ctx)
+    expect(held).toContain('NOT RUN')
+    expect(executed).not.toHaveBeenCalled()
+    const id = held.match(/Gate id: ([a-f0-9-]+)/)![1]!
+    expect(await t.gate.attest(id, proof(), t.ctx)).toContain(
+      'Attestation recorded',
+    )
+    expect(await origin.run(input, t.ctx)).toContain(
+      'remote mutation completed',
+    )
+    expect(executed).toHaveBeenCalledOnce()
+    expect(local).toHaveBeenCalled()
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
+})

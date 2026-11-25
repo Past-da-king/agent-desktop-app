@@ -247,7 +247,13 @@ function argv(words: string[], depth: number): boolean {
     start++
   words = words.slice(start)
   const exe = base(words[0] ?? ''),
-    args = words.slice(1)
+    args = words
+      .slice(1)
+      .map((word) =>
+        ['pwsh', 'powershell'].includes(base(words[0] ?? ''))
+          ? word.replace(/^(?:--|\/)(?=[a-z])/i, '-')
+          : word,
+      )
   if (!exe || INERT.has(exe)) return false
   if (['eval', 'iex', 'invoke-expression'].includes(exe))
     return shell(args.join(' '), depth + 1)
@@ -286,7 +292,19 @@ function argv(words: string[], depth: number): boolean {
         file = args[at + 1]
         break
       }
-      if (['-o', '-O', '--rcfile', '--init-file'].includes(word)) {
+      if (
+        [
+          '-o',
+          '-O',
+          '--rcfile',
+          '--init-file',
+          '-executionpolicy',
+          '-ep',
+          '-windowstyle',
+          '-inputformat',
+          '-outputformat',
+        ].includes(word.toLowerCase())
+      ) {
         at++
         continue
       }
@@ -524,11 +542,41 @@ function substitutions(source: string): string[] {
   }
   return out
 }
+// Preserve quoted hashes and hashes inside words; comments stop at their own newline.
+function stripShellComments(source: string): string {
+  let result = '',
+    q = ''
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]!
+    if (c === '\\' && q !== "'") {
+      result += c + (source[++i] ?? '')
+      continue
+    }
+    if (c === "'" || c === '"') {
+      if (!q) q = c
+      else if (q === c) q = ''
+    }
+    if (!q && c === '#' && (i === 0 || /[\s;|&()]/.test(source[i - 1]!))) {
+      while (i < source.length && source[i] !== '\n') i++
+      result += '\n'
+      continue
+    }
+    // shell-quote considers even an in-word hash a comment; quote that literal token byte.
+    result += !q && c === '#' ? "'#'" : c
+  }
+  return result
+}
 /** shell-quote supplies operators, quoted words, comments and variable boundaries. */
 function shell(source: string, depth = 0): boolean {
   if (depth > 12) return false
+  source = stripShellComments(source)
+  source = source.replace(/(^|[\s;&|])\.\\([^\s;&|]+)/g, '$1./$2')
   source = source.replace(/\\\r?\n/g, '')
   source = source.replace(/&\s*"([^"]*\\gh\.exe)"\s+/gi, 'gh ')
+  const hereString = source.match(
+    /\b(?:bash|sh|zsh|dash)\s*<<<\s*(["'])([\s\S]*?)\1/,
+  )
+  if (hereString && shell(hereString[2]!, depth + 1)) return true
   const redirected = source.match(
     /\b(?:bash|sh|zsh|dash)\s*<\s*['"]?([^\s'";&|]+)/,
   )
@@ -630,20 +678,29 @@ function shell(source: string, depth = 0): boolean {
       }
     }
     const initialCwd = inspectionCwd
+    let previousCwd = initialCwd
+    const directoryStack: string[] = []
     try {
       for (const part of parts) {
-        if (
-          ['cd', 'pushd'].includes(part[0] ?? '') &&
-          part[1] &&
-          !unreadable(part[1])
-        ) {
+        if (['cd', 'pushd', 'popd'].includes(part[0] ?? '')) {
+          const command = part[0],
+            operand = part[1]
           const target =
-            part[1] === '~'
-              ? homedir()
-              : part[1].startsWith('~/')
-                ? join(homedir(), part[1].slice(2))
-                : part[1]
-          inspectionCwd = resolve(inspectionCwd, target)
+            command === 'popd'
+              ? directoryStack.pop()
+              : operand === '-'
+                ? previousCwd
+                : !operand || operand === '~'
+                  ? homedir()
+                  : operand.startsWith('~/')
+                    ? join(homedir(), operand.slice(2))
+                    : operand
+          if (target && !unreadable(target)) {
+            if (command === 'pushd') directoryStack.push(inspectionCwd)
+            const old = inspectionCwd
+            inspectionCwd = resolve(inspectionCwd, target)
+            previousCwd = old
+          }
           continue
         }
         if (argv(part, depth)) return true
@@ -701,7 +758,10 @@ let inspectionCwd = process.cwd()
 let missingScripts: string[] = []
 function inspectFile(file: string, depth: number): boolean {
   try {
-    const path = resolve(inspectionCwd, file)
+    const path = resolve(
+      inspectionCwd,
+      process.platform === 'win32' ? file : file.replace(/^\.\\/, './'),
+    )
     if (statSync(path).size > 1_000_000) {
       missingScripts.push(path)
       return false
@@ -935,7 +995,10 @@ export function cleanupCommentFile(input: Args): void {
 function readCommentBody(file: string): string | null {
   try {
     if (file === '-' || unreadable(file)) return null
-    const path = resolve(inspectionCwd, file)
+    const path = resolve(
+      inspectionCwd,
+      process.platform === 'win32' ? file : file.replace(/^\.\\/, './'),
+    )
     return statSync(path).size <= 1_000_000 ? readFileSync(path, 'utf8') : null
   } catch {
     return null

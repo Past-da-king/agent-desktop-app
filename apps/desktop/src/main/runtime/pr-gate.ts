@@ -15,6 +15,12 @@ import {
 import {
   consumeRemoteGrant,
   incomingGrantId,
+  incomingSigner,
+  markAlreadyRan,
+  takeAlreadyRan,
+  incomingSigner,
+  markAlreadyRan,
+  takeAlreadyRan,
   beginPrGateCall,
   remoteCaller,
   prepareRemoteGrant,
@@ -22,7 +28,7 @@ import {
   takeRemoteChallenge,
 } from './pr-gate-remote'
 import { redactSecrets } from '../logger'
-import { prGateKey, type PrGateSecrets } from './pr-gate-key'
+import { prGateKey, publicKey, keyId, type PrGateSecrets } from './pr-gate-key'
 import { DEVICE_ARG_TOOLS } from '../devices/device-tools'
 import { LEARNED_RUN_TOOLS } from '../devices/learned-route'
 import { listWhere, type DataStore } from './data'
@@ -111,9 +117,10 @@ export class PrGate {
     private store: DataStore,
     private settings: () => Settings,
     private now = Date.now,
-    private transportKey: () => string = prGateKey,
+    private transportKey: () => string | Promise<string> = prGateKey,
+    private verifier?: (signer: string) => Promise<string | undefined>,
   ) {}
-  signingKey(): string {
+  async signingKey(): Promise<string> {
     return this.transportKey()
   }
   enabled(): boolean {
@@ -157,11 +164,18 @@ export class PrGate {
       kind: 'pr_gate',
       newestFirst: true,
     })
-    const notes = rows.filter(
-      (row) => row.text === 'unreadable local script (not gated)',
+    const notes = rows.filter((row) =>
+      [
+        'unreadable local script (not gated)',
+        'review approval (not gated)',
+      ].includes(row.text),
     )
     const decisions = rows.filter(
-      (row) => row.text !== 'unreadable local script (not gated)',
+      (row) =>
+        ![
+          'unreadable local script (not gated)',
+          'review approval (not gated)',
+        ].includes(row.text),
     )
     for (const row of [...notes.slice(100), ...decisions.slice(500)])
       await this.store.remove('chat_item', row.id)
@@ -272,8 +286,18 @@ export class PrGate {
     if (!id) return false
     const receipt =
       'pr-gate-used:' + createHash('sha256').update(id).digest('hex')
-    if (await this.store.get('chat_item', receipt)) return false
-    if (!consumeRemoteGrant(ctx, tool, input, this.transportKey())) return false
+    const signer = incomingSigner(ctx)
+    const key = this.verifier
+      ? signer
+        ? await this.verifier(signer)
+        : undefined
+      : await this.transportKey()
+    if (!key) return false
+    if (!consumeRemoteGrant(ctx, tool, input, key)) return false
+    if (await this.store.get('chat_item', receipt)) {
+      markAlreadyRan(ctx)
+      return false
+    }
     // Commit the tombstone BEFORE any effect can run. It survives process restart
     // and audit pruning, and contains no command, transport signature or key.
     await this.store.upsert('chat_item', {
@@ -283,8 +307,11 @@ export class PrGate {
       meta: JSON.stringify({ chat: PR_GATE_CHAT, at: this.now() }),
     })
     for (const old of await listWhere(this.store, 'chat_item', {
-      chat: PR_GATE_CHAT, kind: 'pr_gate_grant_used', before: this.now() - 24 * 60 * 60_000,
-    })) await this.store.remove('chat_item', old.id)
+      chat: PR_GATE_CHAT,
+      kind: 'pr_gate_grant_used',
+      before: this.now() - 24 * 60 * 60_000,
+    }))
+      await this.store.remove('chat_item', old.id)
     await this.log(ctx, tool, 'remote grant passed once', randomUUID())
     return true
   }
@@ -325,8 +352,21 @@ export class PrGate {
           )
         }
       }
-      if (reviewApproval(tool, input))
-        await this.log(ctx, tool, 'review approval (not gated)', randomUUID())
+      if (reviewApproval(tool, input)) {
+        const key = createHash('sha256')
+          .update(
+            canonical({
+              tool,
+              input: stableInput(tool, input),
+              actor: this.actor(ctx),
+            }),
+          )
+          .digest('hex')
+        if (!this.scriptNotes.has(key)) {
+          this.scriptNotes.set(key, this.now() + 60 * 60_000)
+          await this.log(ctx, tool, 'review approval (not gated)', randomUUID())
+        }
+      }
       return null
     }
     const actor = this.actor(ctx),
@@ -460,10 +500,42 @@ export function prGateFor(
   store: DataStore,
   settings: () => Settings,
   secrets?: PrGateSecrets,
+  selfId?: () => string,
 ): PrGate {
   let gate = gates.get(store)
   if (!gate) {
-    gate = new PrGate(store, settings, Date.now, () => prGateKey(secrets))
+    gate = new PrGate(
+      store,
+      settings,
+      Date.now,
+      async () => {
+        const key = prGateKey(secrets)
+        if (secrets) {
+          const id = selfId?.()
+          const row = id ? await store.get('device', id) : null
+          if (!row || row['revoked'] || !row.roles.includes('brain'))
+            throw new Error('PR gate signing requires this brain device row')
+          const pub = publicKey(key)
+          if (row.prGatePublicKey !== pub)
+            await store.upsert('device', { ...row, prGatePublicKey: pub })
+        }
+        return key
+      },
+      secrets
+        ? async (signer) => {
+            for (const row of await store.list('device'))
+              if (
+                !row['revoked'] &&
+                !row['revoked'] &&
+                row.roles.includes('brain') &&
+                row.prGatePublicKey &&
+                keyId(row.prGatePublicKey) === signer
+              )
+                return row.prGatePublicKey
+            return undefined
+          }
+        : undefined,
+    )
     gates.set(store, gate)
   }
   return gate
@@ -505,6 +577,8 @@ export function withPrGate(
         const remote =
           gate.enabled() &&
           (await gate.acceptRemote(tool.spec.name, input, ctx))
+        if (takeAlreadyRan(ctx))
+          return 'This gated command already ran once on this device; inspect current state, do not repeat it.'
         const effective =
           (gate.enabled() || tool.spec.name === 'app_action') && resolve
             ? await resolve(tool.spec.name, input, ctx)
@@ -524,6 +598,7 @@ export function withPrGate(
           DEVICE_ARG_TOOLS.has(tool.spec.name)
         if (
           routable &&
+          !remote &&
           gate.enabled() &&
           (reviewableCall(tool.spec.name, effective) ||
             gate.isRemoteWrite(effective, ctx))
@@ -535,12 +610,17 @@ export function withPrGate(
                 ctx,
                 String(input['tool'] ?? ''),
                 args as JsonObject,
-                gate.signingKey(),
+                await gate.signingKey(),
               )
           } else {
             const { device: _device, ...args } = input
             void _device
-            prepareRemoteGrant(ctx, tool.spec.name, args, gate.signingKey())
+            prepareRemoteGrant(
+              ctx,
+              tool.spec.name,
+              args,
+              await gate.signingKey(),
+            )
           }
         }
         let result: string

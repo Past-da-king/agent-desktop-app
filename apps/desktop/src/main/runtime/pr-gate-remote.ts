@@ -2,15 +2,10 @@
  * App-only linked-device gate state. Enumerable symbols survive the production
  * origin/vault context copies without changing destination ownership.
  */
-import {
-  createHash,
-  createHmac,
-  randomUUID,
-  timingSafeEqual,
-} from 'node:crypto'
+import { createHash, randomUUID, sign, verify } from 'node:crypto'
 import type { JsonObject, ToolContext } from '@agent/core'
 import { canonTool } from '../devices/device-tools'
-import { prGateKey } from './pr-gate-key'
+import { prGateKey, privateKey, publicKey, keyId } from './pr-gate-key'
 
 interface Caller {
   owner: string
@@ -21,6 +16,7 @@ export interface RemotePrGrant extends Caller {
   id: string
   hash: string
   expires: number
+  signer?: string
   signature?: string
 }
 interface CallState {
@@ -28,6 +24,10 @@ interface CallState {
   freshUntil?: number
   incoming?: RemotePrGrant
   outgoing?: RemotePrGrant
+  retry?: () => RemotePrGrant
+  alreadyRan?: boolean
+  retry?: () => RemotePrGrant
+  alreadyRan?: boolean
   caller?: Caller
   localHold?: boolean
   remoteHold?: boolean
@@ -104,23 +104,50 @@ function digest(tool: string, args: JsonObject): string {
     )
     .digest('hex')
 }
-function signature(grant: RemotePrGrant, key: string): string {
-  const { signature: _signature, ...body } = grant
+function body(grant: RemotePrGrant): Buffer {
+  const { signature: _signature, ...value } = grant
   void _signature
-  return createHmac('sha256', key)
-    .update(JSON.stringify(ordered(body)))
-    .digest('hex')
+  return Buffer.from(JSON.stringify(ordered(value)))
+}
+function body(grant: RemotePrGrant): Buffer {
+  const { signature: _signature, ...value } = grant
+  void _signature
+  return Buffer.from(JSON.stringify(ordered(value)))
+}
+function signature(grant: RemotePrGrant, key: string): string {
+  return sign(null, body(grant), privateKey(key)).toString('hex')
 }
 function signed(grant: RemotePrGrant, key: string): boolean {
   if (
     typeof grant.signature !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(grant.signature)
+    !/^[a-f0-9]{128}$/.test(grant.signature)
   )
     return false
-  return timingSafeEqual(
-    Buffer.from(grant.signature, 'hex'),
-    Buffer.from(signature(grant, key), 'hex'),
-  )
+  try {
+    const pub = key.includes('PUBLIC KEY') ? key : publicKey(key)
+    return (
+      grant.signer === keyId(pub) &&
+      verify(null, body(grant), pub, Buffer.from(grant.signature, 'hex'))
+    )
+  } catch {
+    return false
+  }
+}
+export function markAlreadyRan(ctx: ToolContext): void {
+  state(ctx).alreadyRan = true
+}
+export function takeAlreadyRan(ctx: ToolContext): boolean {
+  const ran = state(ctx).alreadyRan === true
+  delete state(ctx).alreadyRan
+  return ran
+}
+export function incomingSigner(ctx: ToolContext): string | undefined {
+  return state(ctx).incoming?.signer
+}
+// Only the app routing loop calls this after a definite sign-in refusal.
+export function retryRemoteGrant(ctx: ToolContext): void {
+  const call = state(ctx)
+  if (call.retry) call.outgoing = call.retry()
 }
 export function incomingGrantId(ctx: ToolContext): string | undefined {
   return state(ctx).incoming?.id
@@ -131,14 +158,19 @@ export function prepareRemoteGrant(
   args: JsonObject,
   key = prGateKey(),
 ): void {
-  const grant: RemotePrGrant = {
-    id: randomUUID(),
-    hash: digest(tool, args),
-    expires: Date.now() + TRANSIT_MS,
-    ...remoteCaller(ctx),
+  const mint = (): RemotePrGrant => {
+    const grant: RemotePrGrant = {
+      signer: keyId(publicKey(key)),
+      id: randomUUID(),
+      hash: digest(tool, args),
+      expires: Date.now() + TRANSIT_MS,
+      ...remoteCaller(ctx),
+    }
+    grant.signature = signature(grant, key)
+    return grant
   }
-  grant.signature = signature(grant, key)
-  state(ctx).outgoing = grant
+  state(ctx).retry = mint
+  state(ctx).outgoing = mint()
 }
 export function remoteArguments(
   ctx: ToolContext | undefined,

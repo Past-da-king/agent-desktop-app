@@ -1,3 +1,4 @@
+import { retryRemoteGrant } from '../runtime/pr-gate-remote'
 /**
  * Learned apps run in the browser where their site is signed in, on whichever linked device that is.
  *
@@ -180,6 +181,7 @@ async function autoRun(
       deps.learned.noteDevice(app.id, where.id)
       return `On ${label} (its browser is where ${app.name} is signed in): ${outcome.text}`
     }
+    if (outcome.state === 'done' && /not signed in/i.test(outcome.text)) retryRemoteGrant(ctx)
     checked.push(`${label}: ${short(outcome.text)}`)
     // A device that refused or failed for another reason than its sign-in has said its answer.
     if (outcome.state === 'done' && !retryElsewhere(outcome.text, readOnly)) return `On ${label}: ${outcome.text}`
