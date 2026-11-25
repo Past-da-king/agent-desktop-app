@@ -39,3 +39,20 @@ it('the Windows outside-job supervisor connects over a local channel, samples di
     Object.defineProperty(process, 'platform', original)
   }
 }, 10000)
+
+it('sends the socket identity before a disk sample that finishes before connect', async () => {
+  const { createServer } = await import('node:net')
+  const { recoverySocketBootstrap } = await import('../src/main/freeze-recovery')
+  const messages: unknown[] = []
+  const server = createServer(socket => {
+    let buffer = ''
+    socket.on('data', chunk => { buffer += chunk; let i; while ((i = buffer.indexOf('\n')) >= 0) { messages.push(JSON.parse(buffer.slice(0, i))); buffer = buffer.slice(i + 1) } })
+  })
+  await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
+  const port = (server.address() as { port: number }).port
+  const child = spawn(process.execPath, ['-e', recoverySocketBootstrap(port, 'test-identity') + "process.send({type:'early-disk'});"], { stdio: 'ignore' })
+  try {
+    for (let i = 0; i < 100 && messages.length < 2; i++) await new Promise(r => setTimeout(r, 10))
+    expect(messages).toEqual([{ token: 'test-identity' }, { type: 'early-disk' }])
+  } finally { child.kill('SIGKILL'); await new Promise(r => server.close(r)) }
+})

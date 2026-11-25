@@ -104,10 +104,10 @@ setInterval(() => {
 export function recoverySocketBootstrap(port: number, token: string): string {
   return `
 const channel = require('node:net').connect(${port}, '127.0.0.1')
-let connected = true, buffer = ''
+let connected = true, identified = false, buffer = '', queued = []
 Object.defineProperty(process, 'connected', { get: () => connected })
-process.send = message => { if (connected) channel.write(JSON.stringify(message) + '\\n'); return connected }
-channel.once('connect', () => channel.write(JSON.stringify({ token: ${JSON.stringify(token)} }) + '\\n'))
+process.send = message => { if (connected) { const line = JSON.stringify(message) + '\\n'; if (identified) channel.write(line); else queued.push(line) }; return connected }
+channel.once('connect', () => { channel.write(JSON.stringify({ token: ${JSON.stringify(token)} }) + '\\n'); identified = true; for (const line of queued) channel.write(line); queued = [] })
 channel.on('data', chunk => { buffer += chunk; let i; while ((i = buffer.indexOf('\\n')) >= 0) { const line = buffer.slice(0, i); buffer = buffer.slice(i + 1); try { process.emit('message', JSON.parse(line)) } catch {} } })
 channel.on('error', () => { connected = false; process.emit('disconnect') })
 channel.on('close', () => { connected = false; process.emit('disconnect') })
