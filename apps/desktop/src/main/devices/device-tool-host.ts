@@ -7,6 +7,7 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 
+import { parseRequestSource } from '../../shared/request-source'
 import type { JsonObject, Tool, ToolContext } from '@agent/core'
 
 import { contentTypeFor } from './server'
@@ -41,7 +42,7 @@ const READ_ONLY = new Set(['browser_look', 'browser_read', 'browser_wait_for', '
 
 /** The group a tool of this app belongs to, or null when it is not one this node shares. */
 export function groupOf(name: string): ShareGroup | null {
-  if (name.startsWith('browser_')) return 'browser'
+  if (name.startsWith('browser_') || name === 'webapp_run' || name === 'webapp_test') return 'browser'
   return FIXED_GROUPS[name] ?? null
 }
 
@@ -191,6 +192,8 @@ export function toolCommand(raw: unknown): DeviceToolCommand | null {
   const args = typeof value['args'] === 'object' && value['args'] !== null && !Array.isArray(value['args']) ? (value['args'] as Record<string, unknown>) : {}
   return {
     kind: 'tool',
+    ...(typeof value['owner'] === 'string' ? { owner: value['owner'] } : {}),
+    ...(parseRequestSource(value['request']) === null ? {} : { request: parseRequestSource(value['request'])! }),
     id: value['id'],
     tool: value['tool'],
     args,

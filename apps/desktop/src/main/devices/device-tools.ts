@@ -1,3 +1,5 @@
+import { parseRequestSource, type RequestSource } from '../../shared/request-source'
+import { requestById, requestFor } from '../runtime/request-source'
 /**
  * Shared device tools (docs/devices-protocol.md s11), the brain side.
  *
@@ -381,6 +383,7 @@ export class DeviceToolHub {
     }
     const deadlineMs = spec.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
     const at = this.now()
+    const request = ctx?.requestId === undefined ? await requestFor(this.deps.store, chat, ctx?.owner?.startsWith('helper:') ? ctx.owner.slice(7) : '') : await requestById(this.deps.store, ctx.requestId)
     const command = await this.deps.store.upsert('device_command', {
       id: `cmd_${randomUUID()}`,
       target: row.id,
@@ -393,6 +396,7 @@ export class DeviceToolHub {
       chat,
       brainId: this.deps.selfId(),
       owner: ctx?.owner ?? '',
+      ...(request === null ? {} : { body: JSON.stringify(request) }),
       expiresAt: at + QUEUE_TTL_MS + deadlineMs,
       updatedAt: at,
     } as Partial<DeviceCommandRow> & { target: string })
@@ -536,7 +540,7 @@ function hhmm(ms: number): string {
 }
 
 export function toolPayload(row: DeviceCommandRow): Record<string, unknown> {
-  return { id: row.id, kind: 'tool', tool: row.tool ?? '', args: decodeResult(row.args) ?? {}, chatId: row.chat, deadlineMs: row.deadlineMs ?? DEFAULT_DEADLINE_MS }
+  return { ...(row.owner === undefined ? {} : { owner: row.owner }), ...(row.body === undefined ? {} : { request: decodeResult(row.body) }), id: row.id, kind: 'tool', tool: row.tool ?? '', args: decodeResult(row.args) ?? {}, chatId: row.chat, deadlineMs: row.deadlineMs ?? DEFAULT_DEADLINE_MS }
 }
 
 function encodeResult(value: unknown): string {
@@ -566,7 +570,7 @@ export interface DeviceToolRunnerDeps {
   tools: () => Tool[]
   shareGroups?: () => Partial<Record<string, boolean>>
   /** The context a tool runs with here: the person on this node answers ask_user / request_approval. */
-  context?: (chat: string, signal: AbortSignal) => Partial<ToolContext>
+  context?: (chat: string, signal: AbortSignal, owner?: string, request?: RequestSource) => Partial<ToolContext>
   now?: () => number
   /** The safety sweep's period (tests shorten it). */
   sweepMs?: number
@@ -620,7 +624,7 @@ export class DeviceToolRunner {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), row.deadlineMs ?? DEFAULT_DEADLINE_MS)
       try {
-        const extra = this.deps.context?.(row.chat, controller.signal) ?? {}
+        const extra = this.deps.context?.(row.chat, controller.signal, row.owner, parseRequestSource(decodeResult(row.body)) ?? undefined) ?? {}
         const ctx: ToolContext = {
           agentLabel: 'device',
           owner: `device:${row.brainId}`,

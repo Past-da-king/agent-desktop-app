@@ -162,13 +162,13 @@ function appsRun(input: Record<string, unknown>): Verdict {
 }
 
 function webappRun(input: Record<string, unknown>): Verdict {
-  const words = `${str(input['tool'])} ${str(input['description'])}`
+  const words = `${str(input['tool']).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ')} ${str(input['description'])}`
   if (input['sends'] === true) return HIM('outbound', 'The saved tool sends something out.')
   if (SEND_WORDS.test(words)) return HIM('outbound', 'The saved tool sends or posts.')
   if (MONEY_WORDS.test(words)) return HIM('money', 'The saved tool concerns money.')
   if (HANDS_WORDS.test(words)) return HIM('hands', 'The saved tool needs his own hands.')
   if (SECRET_WORDS.test(words)) return HIM('secret', 'The saved tool handles a secret.')
-  if (/\b(delete|remove|deploy|release|destroy|purge|trash|archive|restore|rename|move|update|create|add|sync|import)\b/i.test(words)) return AGENT('app-change', 'A saved site tool that changes things inside a task he set.')
+  if (/\b(delete|remove|deploy|release|destroy|purge|trash|archive|restore|rename|move|update|create|add|sync|import|grant|revoke|access|get|read|list|inspect|fetch)\b/i.test(words)) return AGENT('app-change', 'A saved site tool that changes things inside a task he set.')
   return HIM('unknown', 'A saved tool the app cannot tell is safe.')
 }
 
@@ -285,6 +285,7 @@ export function classifyCard(facts: CardFacts): Verdict {
     case 'browser_upload':
       return HIM('outbound', 'A file leaves this computer for a web page.')
     case 'app_update':
+      return AGENT('app-change', 'A verified app update inside a task.')
     case 'device_remove':
     case 'device_join':
       return HIM('own-setting', 'It changes the app or his devices.')

@@ -1,3 +1,4 @@
+import { parseRequestSource, requestLabel, type RequestSource } from '../../shared/request-source'
 /**
  * Agent acts for me on approvals (23 Nov 2026).
  *
@@ -79,6 +80,7 @@ export interface StampArgs {
   /** The helper id or chat the card belongs to: Undo holds this asker's next cards for him. */
   askerKey: string
   origin?: CardOrigin | undefined
+  request?: RequestSource | undefined
   summary: string
   details?: string | undefined
   options?: string[] | undefined
@@ -142,7 +144,7 @@ export class ActsForMe {
   /** The meta a card gets when it is raised. A card in the agent's lane is routed to the main agent when the setting is on. */
   stamp(args: StampArgs): Record<string, unknown> {
     const hold = this.holding(args.askerKey)
-    return stampCard({
+    return { ...(args.request === undefined ? {} : { request: args.request }), ...stampCard({
       kind: args.kind,
       asker: args.asker,
       ...(args.origin === undefined ? {} : { origin: args.origin }),
@@ -152,7 +154,7 @@ export class ActsForMe {
       actsForMe: this.enabled(),
       holdForHim: hold,
       now: this.now(),
-    })
+    }) }
   }
 
   private holding(key: string): boolean {
@@ -217,13 +219,18 @@ export class ActsForMe {
           kind: row.kind === 'approval' ? 'approval' : 'question',
           asker: this.labelOf(row),
           summary: String(meta['summary'] ?? row.text),
-          details: clip(String(meta['details'] ?? ''), 2000),
+          details: clip([String(meta['details'] ?? ''), this.requestText(meta)].filter(Boolean).join('\n'), 3000),
           options: Array.isArray(meta['options']) ? meta['options'].filter((each): each is string => typeof each === 'string') : [],
           rule: String(meta['laneRule'] ?? ''),
           ageMs: now - row.createdAt,
         }
       })
       .sort((a, b) => b.ageMs - a.ageMs)
+  }
+
+  private requestText(meta: Record<string, unknown>): string {
+    const source = parseRequestSource(meta['request'])
+    return source === null ? '' : requestLabel(source)
   }
 
   private labelOf(row: ChatItem): string {
@@ -261,16 +268,18 @@ export class ActsForMe {
     // The hard safety: recomputed from the real tool call the app stamped. The words on the card, and the lane stored
     // when it was raised, cannot move a card into the agent's lane; a stored "him" or a recomputed "him" both refuse.
     const meta = metaOfCard(row)
+
+    if (args.action === 'escalate') {
+      await this.escalate(args.id, reason)
+      return { ok: true, message: 'Escalated: it is now on his Needs you panel with your reason.' }
+    }
+
     const verdict = verdictOfRow(row)
     if (verdict.lane !== 'agent' || meta['lane'] === 'him') {
       const why = verdict.lane !== 'agent' ? verdict.why : String(meta['laneWhy'] ?? 'It is his.')
       return { ok: false, message: `Refused: ${why} This card is Ayanda's to answer; it stays on his Needs you panel.` }
     }
 
-    if (args.action === 'escalate') {
-      await this.escalate(args.id, reason)
-      return { ok: true, message: 'Escalated: it is now on his Needs you panel with your reason.' }
-    }
     const asker = this.labelOf(row)
     const summary = clip(String(meta['summary'] ?? row.text), 240)
     if (row.kind === 'approval' && args.action === 'answer') return { ok: false, message: 'This is an approval: use approve or decline.' }
@@ -297,7 +306,7 @@ export class ActsForMe {
       by: BY_MAIN,
       decision: args.action,
       ...(args.action === 'answer' ? { answer: args.answer.trim() } : {}),
-      reason,
+      reason: [reason, this.requestText(meta)].filter(Boolean).join('\n'),
       asker,
       summary,
       undo,

@@ -169,6 +169,8 @@ export interface ApprovalOrigin {
 
 /** What a running tool can reach: the person, and who it is running for. */
 export interface ToolContext {
+  /** The app-recorded user's message this turn belongs to, never a model argument. */
+  requestId?: string
   /** "main" for the user-facing agent; a helper's label otherwise. */
   agentLabel: string
   /** A stable id for who is acting ("main", "routine", "helper:<id>"): each one gets its own browser tab. */

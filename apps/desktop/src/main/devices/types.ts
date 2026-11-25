@@ -43,6 +43,9 @@ export interface DeviceFacts {
 
 /** A device command of kind "tool" (protocol s5.2 and s11): run `tool` with `args`, answer with device.result. */
 export interface DeviceToolCommand {
+  /** The app's run identity, outside model-supplied args. */
+  owner?: string
+  request?: import('../../shared/request-source').RequestSource
   kind: 'tool'
   id: string
   tool: string
