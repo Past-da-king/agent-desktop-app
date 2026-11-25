@@ -251,7 +251,7 @@ function argv(words: string[], depth: number): boolean {
       .slice(1)
       .map((word) =>
         ['pwsh', 'powershell'].includes(base(words[0] ?? ''))
-          ? word.replace(/^(?:--|\/)(?=[a-z])/i, '-')
+          ? word.replace(/^(?:--|\/)(?=[a-z]+$)/i, '-')
           : word,
       )
   if (!exe || INERT.has(exe)) return false
