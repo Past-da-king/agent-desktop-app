@@ -9,7 +9,7 @@ import { Supervisor } from '../src/main/workers/supervisor'
 import { waitFor } from '../../../packages/core/test/helpers'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
-import { guardChild, guardPipe, childPipeFailure, isChildPipeError, safeSocketWrite, installChildPipeGuards, createPipeGuard } from '../src/main/runtime/safe-pipe'
+import { guardChild, guardPipe, childPipeFailure, isChildPipeError, safeSocketWrite, createPipeGuard } from '../src/main/runtime/safe-pipe'
 import { uncaughtHandler, uncaughtPolicy } from '../src/main/alive'
 
 function pipeError(code: string): Error {
@@ -58,22 +58,32 @@ describe('dead process pipes', () => {
   })
 
   it('guards SDK-style ESM spawns through the installed Node boundary', async () => {
-    installChildPipeGuards()
-    const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { stdio: 'pipe' })
-    let reason = ''
-    child.on('error', (error) => { reason = error.message })
-    const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
-    child.stdin!.emit('error', pipeError('EPIPE'))
-    await closed
-    expect(reason).toContain('engine process ended: write EPIPE')
-    expect(childPipeFailure(child)?.message).toBe(reason)
+    // Isolate the global Node export hook so it cannot affect later Vitest files.
+    const moduleUrl = new URL('../src/main/runtime/safe-pipe.ts', import.meta.url).href
+    const script = `
+      import { spawn } from 'node:child_process'
+      import { installChildPipeGuards, childPipeFailure } from ${JSON.stringify(moduleUrl)}
+      installChildPipeGuards()
+      const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], { stdio: 'pipe' })
+      let reason = ''
+      child.on('error', error => { reason = error.message })
+      const closed = new Promise(resolve => child.once('close', resolve))
+      child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+      await closed
+      process.stdout.write(JSON.stringify({ reason, retained: childPipeFailure(child)?.message }))
+    `
+    const fixture = spawn(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = '', stderr = ''
+    fixture.stdout!.on('data', chunk => { stdout += String(chunk) })
+    fixture.stderr!.on('data', chunk => { stderr += String(chunk) })
+    try {
+      const [code] = await once(fixture, 'close')
+      expect(code, stderr).toBe(0)
+      const result = JSON.parse(stdout) as { reason: string; retained: string }
+      expect(result.reason).toContain('engine process ended: write EPIPE')
+      expect(result.retained).toBe(result.reason)
+    } finally { fixture.kill('SIGKILL') }
   })
-
-
-
-
-
-
 
   it.each(['EOF', 'EPIPE', 'ECONNRESET', 'ERR_STREAM_DESTROYED'])('classifies %s low-level writes without hiding real faults', (code) => {
     expect(uncaughtPolicy(pipeError(code))).toBe('log')
