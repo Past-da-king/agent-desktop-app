@@ -1,3 +1,4 @@
+import { safeSocketWrite } from './runtime/safe-pipe'
 /** Separate process: recovery must not depend on the frozen Electron main thread or its logger. */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -170,7 +171,7 @@ export function startFreezeRecovery(userData: string, executable: string, args: 
           if (!accepted) {
             if (message.token !== token || socket !== undefined || stopping) { client.destroy(); return }
             accepted = true; socket = client
-            const beat = (): void => { if (!client.destroyed) client.write(JSON.stringify({ type: 'beat', memory: process.memoryUsage() }) + '\n') }
+            const beat = (): void => { if (!client.destroyed) safeSocketWrite(client, JSON.stringify({ type: 'beat', memory: process.memoryUsage() }) + '\n') }
             timer = setInterval(beat, 1000); timer.unref(); beat(); settled()
           } else diskMessage(message)
         } catch { client.destroy(); return }

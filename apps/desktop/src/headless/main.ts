@@ -1,3 +1,4 @@
+import { installChildPipeGuards, onPipeWarning, isChildPipeError } from '../main/runtime/safe-pipe'
 import { compareDeviceOrder } from '@agent/core'
 /**
  * agent-node: the agent runtime as a plain Node service, for servers and any computer without a screen.
@@ -204,6 +205,7 @@ async function start(args: Args): Promise<number> {
     return 1
   }
 
+  installChildPipeGuards()
   const runtime = await startHeadlessRuntime({ dataDir, appDir: appDir(), version: version() })
   // Ask each plan's engine whether its login works BEFORE the node says it is ready to anyone: a node that starts with a
   // dead login must not be picked by a phone for the seconds before the first watch tick.
@@ -248,8 +250,15 @@ async function start(args: Args): Promise<number> {
   }
   process.on('SIGTERM', () => stop('SIGTERM'))
   process.on('SIGINT', () => stop('SIGINT'))
-  process.on('uncaughtException', (error) => runtime.logger.error('Uncaught exception', { message: error.message, stack: error.stack }))
-  process.on('unhandledRejection', (reason) => runtime.logger.error('Unhandled promise rejection', { reason: String(reason) }))
+  onPipeWarning((message, fields) => runtime.logger.warn(message, fields))
+  process.on('uncaughtException', (error) => {
+    if (isChildPipeError(error)) runtime.logger.warn('Process pipe ended (carried on)', { message: error.message })
+    else runtime.logger.error('Uncaught exception', { message: error.message, stack: error.stack })
+  })
+  process.on('unhandledRejection', (reason) => {
+    if (isChildPipeError(reason)) runtime.logger.warn('Process pipe rejection (carried on)', { reason: String(reason) })
+    else runtime.logger.error('Unhandled promise rejection', { reason: String(reason) })
+  })
   return await new Promise<number>(() => undefined)
 }
 
@@ -421,6 +430,7 @@ async function ask(args: Args): Promise<number> {
     console.error('The node is running on this data folder; ask from a paired device, or stop it first.')
     return 1
   }
+  installChildPipeGuards()
   const runtime = await startHeadlessRuntime({ dataDir, appDir: appDir(), version: version(), quiet: true })
   try {
     const before = new Set((await runtime.store.list('chat_item')).map((row) => row.id))

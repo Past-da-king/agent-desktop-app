@@ -1,3 +1,4 @@
+import { installChildPipeGuards, onPipeWarning } from './runtime/safe-pipe'
 import { peerNoteAudio } from './voice/peer-audio'
 import { ActsForMe } from './runtime/acts-for-me'
 import { createWorkersChanged } from './workers/changed'
@@ -263,17 +264,16 @@ function showCalmDialog(detail: string, offerRestart: boolean): void {
 onDestroyedSkip((what, error) =>
   logger.warn('Skipped a closed page or window', { what, stack: error instanceof Error ? error.stack : String(error) }),
 )
-process.on(
-  'uncaughtException',
-  uncaughtHandler({
-    log: (message, fields) => logger.error(message, fields),
-    dialog: () => showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true),
-  }),
-)
+installChildPipeGuards()
+onPipeWarning((message, fields) => logger.warn(message, fields))
 
-process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled promise rejection', { reason: String(reason) })
+const handleUnexpected = uncaughtHandler({
+  warn: (message, fields) => logger.warn(message, fields),
+  log: (message, fields) => logger.error(message, fields),
+  dialog: () => showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true),
 })
+process.on('uncaughtException', handleUnexpected)
+process.on('unhandledRejection', (reason) => handleUnexpected(reason instanceof Error ? reason : new Error(String(reason))))
 
 interface WindowState {
   width: number

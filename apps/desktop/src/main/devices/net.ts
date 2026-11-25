@@ -1,3 +1,4 @@
+import { safeSocketWrite } from '../runtime/safe-pipe'
 /**
  * Optional overlay network for Devices (docs/devices-protocol.md s10). When the person picks Network = Tailscale or
  * Headscale in Settings > Devices, this starts the `agent-net` sidecar (tools/agent-net, Go + tsnet) as a child
@@ -259,7 +260,7 @@ export function socksConnect(proxy: string, host: string, port: number, timeoutM
         buffer = buffer.subarray(2)
         stage = 1
         try {
-          socket.write(request())
+          safeSocketWrite(socket, request())
         } catch (error) {
           return fail(error as Error)
         }
@@ -283,7 +284,7 @@ export function socksConnect(proxy: string, host: string, port: number, timeoutM
     socket.once('error', (error) => {
       if (stage < 2) fail(error)
     })
-    socket.once('connect', () => socket.write(Buffer.from([5, 1, 0])))
+    socket.once('connect', () => safeSocketWrite(socket, Buffer.from([5, 1, 0])))
   })
 }
 

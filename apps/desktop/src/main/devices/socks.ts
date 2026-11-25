@@ -1,3 +1,4 @@
+import { safeSocketWrite } from '../runtime/safe-pipe'
 /**
  * Reaching another node through a SOCKS5 proxy (RFC 1928, no authentication, CONNECT). Some machines can only reach
  * the person's other devices that way, e.g. a server whose mesh VPN runs in userspace and offers a local SOCKS5
@@ -48,7 +49,7 @@ export function socksConnect(proxy: SocksProxy, host: string, port: number, time
       reject(error)
     }
     socket.once('error', (error) => fail(new Error(`The proxy could not be reached: ${error.message}`)))
-    socket.once('connect', () => socket.write(Buffer.from([0x05, 0x01, 0x00])))
+    socket.once('connect', () => safeSocketWrite(socket, Buffer.from([0x05, 0x01, 0x00])))
     const onData = (chunk: Buffer): void => {
       buffered = Buffer.concat([buffered, chunk])
       if (stage === 'greet') {
@@ -56,7 +57,7 @@ export function socksConnect(proxy: SocksProxy, host: string, port: number, time
         if (buffered[0] !== 0x05 || buffered[1] !== 0x00) return fail(new Error('The proxy wants a sign-in, which is not supported.'))
         buffered = buffered.subarray(2)
         stage = 'connect'
-        socket.write(connectRequest(host, port))
+        safeSocketWrite(socket, connectRequest(host, port))
         if (buffered.length === 0) return
       }
       // VER REP RSV ATYP BND.ADDR BND.PORT

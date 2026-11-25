@@ -15,7 +15,14 @@ child.stdout.setEncoding('utf8')
 child.stderr.setEncoding('utf8')
 child.stdout.on('data', (data) => parentPort.postMessage({ out: data }))
 child.stderr.on('data', (data) => parentPort.postMessage({ err: data }))
-child.stdin.on('error', () => undefined)
+let pipeEnded = false
+const pipeFailed = (error) => {
+  if (pipeEnded) return
+  pipeEnded = true
+  parentPort.postMessage({ failed: 'engine process ended: ' + String(error.message || error) })
+  child.kill()
+}
+for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe.on('error', pipeFailed)
 child.on('error', (error) => { parentPort.postMessage({ failed: String(error && error.message || error) }); process.exit(0) })
 child.on('exit', (code) => { parentPort.postMessage({ exit: code === null ? -1 : code }); process.exit(0) })
 parentPort.on('message', (m) => {
@@ -23,7 +30,7 @@ parentPort.on('message', (m) => {
     if (typeof m.write === 'string') child.stdin.write(m.write)
     if (m.end === true) child.stdin.end()
     if (m.kill === true) child.kill()
-  } catch {}
+  } catch (error) { pipeFailed(error) }
 })
 parentPort.postMessage({ started: child.pid })
 `
@@ -60,13 +67,14 @@ export function spawnOffThread(file: string, args: string[]): ChildProcessWithou
     if (typeof m.started === 'number') child['pid'] = m.started
     if (typeof m.out === 'string') stdout.emit('data', m.out)
     if (typeof m.err === 'string') stderr.emit('data', m.err)
-    if (typeof m.failed === 'string') {
+    if (typeof m.failed === 'string' && !ended) {
       child.emit('error', new Error(m.failed))
       end(-1)
     }
     if (typeof m.exit === 'number') end(m.exit)
   })
   worker.on('error', (error) => {
+    if (ended) return
     child.emit('error', error)
     end(-1)
   })

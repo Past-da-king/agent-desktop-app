@@ -1,3 +1,4 @@
+import { isChildPipeError } from './runtime/safe-pipe'
 /**
  * Electron objects (a window, a page, a page's debugger) end while their events, timers and promises are still
  * in flight: a tab closes as it navigates, a window goes as a send is on its way. Any native call on one that has
@@ -88,22 +89,30 @@ export function safeSend(win: Window | null | undefined, channel: string, ...arg
  * under a callback: logged and carried on. Anything else gets the crash dialog.
  */
 export function uncaughtPolicy(error: unknown): 'log' | 'dialog' {
-  return isDestroyedError(error) ? 'log' : 'dialog'
+  return isDestroyedError(error) || isChildPipeError(error) ? 'log' : 'dialog'
 }
 
 export interface UncaughtHooks {
+  warn?: (message: string, fields: Record<string, unknown>) => void
+  now?: () => number
   log: (message: string, fields: Record<string, unknown>) => void
   dialog: () => void
 }
 
 /** The process's uncaughtException listener: always logged with its stack, the dialog only for a real fault. */
 export function uncaughtHandler(hooks: UncaughtHooks): (error: Error) => void {
+  let lastDialog = -Infinity
   return (error) => {
     const policy = uncaughtPolicy(error)
-    hooks.log(policy === 'log' ? 'Uncaught exception from a closed page or window (carried on)' : 'Uncaught exception', {
+    const log = policy === 'log' ? hooks.warn ?? hooks.log : hooks.log
+    log(policy === 'log' ? 'Expected closed resource error (carried on)' : 'Uncaught exception', {
       message: error?.message,
       stack: error?.stack,
     })
-    if (policy === 'dialog') hooks.dialog()
+    const now = hooks.now?.() ?? Date.now()
+    if (policy === 'dialog' && now - lastDialog >= 30_000) {
+      lastDialog = now
+      hooks.dialog()
+    }
   }
 }
