@@ -330,13 +330,8 @@ export class PrGate {
     }
     this.pending.set(pending.id, pending)
     if (!match) await this.log(ctx, tool, 'held for attestation', pending.id)
-    const pages = (
-      await Promise.all(
-        this.settings().prGateSkillPages.map((title) =>
-          listWhere(this.store, 'memory', { contains: title }),
-        ),
-      )
-    ).flat()
+    // Memory payload substring queries are case-sensitive; titles are not.
+    const pages = await this.store.list('memory')
     const wanted = this.settings().prGateSkillPages
     const found = wanted.flatMap((title) =>
       pages

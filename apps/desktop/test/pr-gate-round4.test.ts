@@ -243,7 +243,7 @@ it('runs a genuinely auto-routed learned call through the origin and destination
     const routed = withLearnedRoute([fixture('webapp_run', local)], () => hub, {
       learned,
       selfId: () => 'server',
-      siteHere: async () => false,
+      siteHere: async () => null,
     })
     // The action name is opaque at the origin, and the stored site is known only at destination.
     const origin = withPrGate(routed, t.gate)[0]!
