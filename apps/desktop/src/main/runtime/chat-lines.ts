@@ -1,3 +1,4 @@
+import { senderOfRow, viaLabel } from '../../shared/sender'
 /**
  * Several chats at once: which chat a row belongs to, where each chat keeps its model transcript, and branching
  * a chat from one of its messages into a new chat.
@@ -206,7 +207,7 @@ export function transcriptUpTo<T extends { json: string }>(turns: T[], point: Pi
 export function handoffText(rows: ChatItem[], limit = 12_000): string {
   const lines: string[] = []
   for (const row of rows) {
-    if (row.kind === 'user' && row.text.trim() !== '') lines.push(`User: ${row.text.trim()}`)
+    if (row.kind === 'user' && row.text.trim() !== '') lines.push(`${senderOfRow(row) === null ? 'User:' : viaLabel(senderOfRow(row)!)} ${row.text.trim()}`)
     else if ((row.kind === 'agent' || row.kind === 'report') && row.text.trim() !== '') lines.push(`You: ${row.text.trim()}`)
   }
   let text = lines.join('\n\n')

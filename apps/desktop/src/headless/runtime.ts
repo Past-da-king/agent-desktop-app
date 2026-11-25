@@ -822,7 +822,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       preferred: () => settings.get().devicesPreferred,
       // A late device result goes only to the run that asked for it (devices/device-tools.ts routeLate).
       noteBack: async (chat, text, owner) => {
-        await routeLate({ deliver: (note, where) => theRunner.deliver(note, where), helper: (id, note) => helpers.lateResult(id, note) }, chat, text, owner)
+        await routeLate({ deliver: (note, where) => theRunner.deliver(note, where, { from: 'system', name: 'Linked device', chat: where }), helper: (id, note) => helpers.lateResult(id, note) }, chat, text, owner)
       },
       context: (chat, signal) => theRunner.deviceContext(chat, signal),
     },

@@ -14,7 +14,7 @@ import { isIconImage } from '../../shared/project-icon'
 import type { DataStore } from '../runtime/data'
 import { chatOf, chatTitle, newProjectChatId, newestOfChat, parseMeta, titleOfChat } from '../runtime/chat-lines'
 
-import { viaFromMeta, type ChatVia } from '../../shared/sender'
+import { toolVia, viaFromMeta, type ChatVia } from '../../shared/sender'
 
 /** Who a message came from (shared/sender.ts): every sender that is not the person writes it on the row. */
 export { viaLabel, type ChatVia } from '../../shared/sender'
@@ -252,10 +252,10 @@ function messageMain(deps: ProjectToolDeps): Tool {
       const chat = ctx.chat ?? MAIN_CHAT
       const projects = await deps.store.list('project')
       const project = projectOfChat(projects, chat)
-      if (project === null) return 'You are in the main thread already; just answer the user.'
+      if (project === null && !ctx.owner?.startsWith('helper:') && ctx.owner !== 'routine') return 'You are in the main thread already; just answer the user.'
       const message = text(input['message'])
       if (message === '') return 'Pass the message.'
-      await deps.post(MAIN_CHAT, message, { from: 'project', name: project.name, chat, title: await titleOfChat(deps.store, chat) })
+      await deps.post(MAIN_CHAT, message, project === null || ctx.owner?.startsWith('helper:') || ctx.owner === 'routine' ? toolVia(ctx) : { from: 'project', id: project.id, name: project.name, chat, title: await titleOfChat(deps.store, chat), icon: project.icon })
       return 'Sent to the main agent.'
     },
   }

@@ -141,3 +141,11 @@ describe('app_action tool', () => {
     expect(String(await tool.run({ method: 'browser.back' }, testContext()))).toMatch(/not available/i)
   })
 })
+
+
+it('agent chat.send marks headerless text with its trusted helper identity', async () => {
+  const invoker = fakeInvoker()
+  const tool = toolNamed(appActionTools({ invoker: () => invoker }), 'app_action')
+  await tool.run({ method: 'chat.send', args: ['Headerless report', [], 'main'] }, testContext({ owner: 'helper:h1', agentLabel: 'Phone player', chat: 'main' }))
+  expect(invoker.calls[0]?.args[3]).toEqual({ via: { from: 'helper', id: 'h1', name: 'Phone player', chat: 'main' } })
+})

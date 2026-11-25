@@ -9,7 +9,7 @@ import { hostname } from 'node:os'
 
 import { MAIN_CHAT, type ChatItem, type JsonObject } from '@agent/core'
 
-import { liveFromInput } from '../../shared/sender'
+import { liveFromInput, viaFromMeta } from '../../shared/sender'
 import { listWhere, type DataStore } from '../runtime/data'
 import { wireOf } from './registry'
 import type { DeviceFacts, DeviceKind, DevicePlatform, MessageOrigin } from './types'
@@ -44,8 +44,9 @@ export function messageOrigin(event: unknown): MessageOrigin | undefined {
  */
 export function originWithLive(origin: MessageOrigin | undefined, raw: unknown): MessageOrigin | undefined {
   const live = liveFromInput(raw)
-  if (live === null) return origin
-  return { ...(origin ?? ({} as MessageOrigin)), live }
+  const via = typeof raw === 'object' && raw !== null ? viaFromMeta(raw as Record<string, unknown>) : null
+  if (live === null && via === null) return origin
+  return { ...(origin ?? ({} as MessageOrigin)), ...(live === null ? {} : { live }), ...(via === null ? {} : { via }) }
 }
 
 /** The same as originFrom (the name the sync side uses). */
