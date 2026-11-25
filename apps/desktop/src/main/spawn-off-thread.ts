@@ -20,7 +20,12 @@ const terminatePipeChild = ${terminatePipeChild.toString()}
 let pipeEnded = false
 let pipeFailureMessage = null
 const pipeFailed = (error) => {
-  if (pipeEnded) return
+  if (pipeEnded) {
+    if (!['EOF', 'EPIPE', 'ECONNRESET', 'ERR_STREAM_DESTROYED', 'ERR_STREAM_WRITE_AFTER_END'].includes(error.code)) {
+      parentPort.postMessage({ fault: String(error.message || error), code: error.code })
+    }
+    return
+  }
   pipeEnded = true
   pipeFailureMessage = { failed: 'engine process ended: ' + String(error.message || error), pipe: true, code: error.code }
   terminatePipeChild(child)
@@ -67,10 +72,14 @@ export function spawnOffThread(file: string, args: string[]): ChildProcessWithou
     child.emit('exit', code, null)
     void worker.terminate().catch(() => undefined)
   }
-  worker.on('message', (m: { out?: string; err?: string; failed?: string; pipe?: boolean; code?: string; exit?: number; started?: number }) => {
+  worker.on('message', (m: { out?: string; err?: string; failed?: string; fault?: string; pipe?: boolean; code?: string; exit?: number; started?: number }) => {
     if (typeof m.started === 'number') child['pid'] = m.started
     if (typeof m.out === 'string') stdout.emit('data', m.out)
     if (typeof m.err === 'string') stderr.emit('data', m.err)
+    if (typeof m.fault === 'string') {
+      const error = Object.assign(new Error(m.fault), { code: m.code })
+      try { if (child.listenerCount('error') > 0) child.emit('error', error) } finally { reportPipeFailure(error) }
+    }
     if (typeof m.failed === 'string' && !ended) {
       const error = Object.assign(new Error(m.failed), { code: m.code })
       if (m.pipe) reportPipeFailure(error)

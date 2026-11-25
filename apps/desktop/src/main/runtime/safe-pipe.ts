@@ -49,9 +49,10 @@ export function createPipeGuard(report: (error: Error) => void): PipeGuard {
     guarded.add(stream)
     let reported = false
     const fail = (reason: unknown): void => {
-      if (reported) return
-      reported = true
       const error = reason instanceof Error ? reason : new Error(String(reason))
+      const expected = codes.has(codeOf(error))
+      if (expected && reported) return
+      if (expected) reported = true
       try { ended(error) } finally { report(error) }
     }
     stream.on('error', fail)
@@ -90,7 +91,10 @@ export const guardPipe: PipeGuard = createPipeGuard(reportPipeFailure)
 /** Notify existing error/exit owners, then stop the child so their normal lifecycle completes. */
 export function guardChild<T extends ChildProcess>(child: T): T {
   const ended = (error: Error): void => {
-    if (failures.has(child)) return
+    if (failures.has(child)) {
+      if (!codes.has(codeOf(error)) && child.listenerCount('error') > 0) child.emit('error', error)
+      return
+    }
     const reason = Object.assign(new Error(`engine process ended: ${error.message}`), { code: codeOf(error) })
     if (isChildPipeError(error)) Reflect.set(reason, pipeFailure, true)
     failures.set(child, reason)
@@ -107,33 +111,44 @@ export function guardChild<T extends ChildProcess>(child: T): T {
 /** Bounded shutdown preserves the existing exit/close owner path, including lost OS events.
  * Self-contained so the off-thread host uses the same lifecycle in its isolate. */
 export function terminatePipeChild(child: ChildProcess): void {
-  let exited = false, closed = false
+  let exited = child.exitCode != null || child.signalCode != null
+  if (exited) return
+  let exitDelivered = false, closeDelivered = false
+  let force: NodeJS.Timeout | undefined, finish: NodeJS.Timeout | undefined
+  const cancel = (): void => { clearTimeout(force); clearTimeout(finish) }
   const originalEmit = child.emit
   child.emit = function (this: ChildProcess, event: string | symbol, ...args: unknown[]): boolean {
-    if (event === 'exit') { if (exited) return false; exited = true }
-    if (event === 'close') { if (closed) return false; closed = true }
+    if (event === 'exit') { if (exitDelivered) return false; exitDelivered = true; exited = true; cancel() }
+    if (event === 'close') { if (closeDelivered) return false; closeDelivered = true; exited = true; cancel() }
     return Reflect.apply(originalEmit, this, [event, ...args])
   } as typeof child.emit
-  const force = setTimeout(() => {
+  const complete = (): void => {
+    if (!exitDelivered) child.emit('exit', -1, 'SIGKILL')
+    if (!closeDelivered) child.emit('close', -1, 'SIGKILL')
+  }
+  force = setTimeout(() => {
     if (exited) return
     try { child.kill('SIGKILL') } catch { /* OS may already have reaped it. */ }
-    const finish = setTimeout(() => {
-      if (!exited) child.emit('exit', -1, 'SIGKILL')
-      if (!closed) child.emit('close', -1, 'SIGKILL')
-    }, 250)
+    if (exited) return
+    finish = setTimeout(() => { if (!exited) complete() }, 250)
     finish.unref()
-    child.once('close', () => clearTimeout(finish))
   }, 500)
   force.unref()
-  child.once('exit', () => clearTimeout(force))
-  // Windows kill() is process-only; taskkill also tears down descendants such as WSL hosts.
+  // The async import may resolve after exit/close. Never start a PID-based kill after that latch.
   if (process.platform === 'win32' && child.pid !== undefined) {
+    const pid = child.pid
     void import('node:child_process').then(({ spawn }) => {
-      const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
-      killer.on('error', () => undefined)
+      if (exited) return
+      const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      killer.once('error', () => undefined)
+      killer.once('close', (code) => {
+        if (exited) return
+        if (code === 0) complete()
+      })
     }).catch(() => undefined)
+  } else {
+    try { child.kill('SIGTERM') } catch { /* Escalation and owner deadline still run. */ }
   }
-  else { try { child.kill('SIGTERM') } catch { /* Escalation and owner deadline still run. */ } }
 }
 
 let installed = false

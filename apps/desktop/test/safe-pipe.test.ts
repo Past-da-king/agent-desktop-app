@@ -217,3 +217,46 @@ it('kills a real child which ignores SIGTERM and ends its existing owner', async
     expect(childPipeFailure(child)?.message).toContain('write EOF')
   } finally { child.kill('SIGKILL') }
 })
+
+
+describe('review round two regressions', () => {
+  it.each(['exit', 'close', 'timer race'])('never launches Windows taskkill after child %s', async (ending) => {
+    const { terminatePipeChild } = await import('../src/main/runtime/safe-pipe')
+    const timers: Array<() => void> = []
+    const spawn = vi.fn(() => new EventEmitter())
+    let load!: (value: { spawn: typeof spawn }) => void
+    const loaded = new Promise<{ spawn: typeof spawn }>(resolve => { load = resolve })
+    const run = new Function('process', 'loadChildProcesses', 'setTimeout', 'clearTimeout', 'return (' + terminatePipeChild.toString().replace(/(?:import|__vite_ssr_dynamic_import__)\(['"]node:child_process['"]\)/, 'loadChildProcesses()') + ')')(
+      { platform: 'win32' }, () => loaded,
+      (callback: () => void) => { timers.push(callback); return { unref: () => undefined } }, () => undefined,
+    ) as typeof terminatePipeChild
+    const child = Object.assign(new EventEmitter(), { pid: 123456, exitCode: null, signalCode: null, kill: vi.fn(() => true) })
+    run(child as never)
+    if (ending === 'timer race') timers[0]!()
+    child.emit(ending === 'close' ? 'close' : 'exit', 0, null)
+    load({ spawn })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(spawn).not.toHaveBeenCalled()
+    const kills = child.kill.mock.calls.length
+    for (const timer of timers) timer()
+    expect(child.kill).toHaveBeenCalledTimes(kills)
+  })
+
+  it('delivers a distinct TypeError after EOF to the child owner and real-fault handler', async () => {
+    const api = await import('../src/main/runtime/safe-pipe')
+    const fault = vi.fn(), owner = vi.fn()
+    api.onPipeFault(fault)
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), stdio: [], exitCode: 0, signalCode: null, kill: vi.fn() })
+    child.on('error', owner)
+    api.guardChild(child as never)
+    const error = new TypeError('distinct fault after EOF')
+    try {
+      child.stdin.emit('error', pipeError('EOF'))
+      child.stdin.emit('error', pipeError('EOF'))
+      child.stdin.emit('error', error)
+      expect(owner).toHaveBeenCalledTimes(2)
+      expect(owner.mock.calls[1]?.[0].message).toContain('distinct fault after EOF')
+      expect(fault).toHaveBeenCalledWith(error)
+    } finally { api.onPipeFault(() => undefined) }
+  })
+})

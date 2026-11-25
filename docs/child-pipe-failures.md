@@ -42,3 +42,9 @@ Pipe failures now stop children with SIGTERM, escalate after 500 ms to SIGKILL, 
 Only the five expected pipe codes are warnings. Unexpected asynchronous event and callback errors notify the owner and the registered real-fault path; desktop uses the same error logger and rate-limited dialog handler, headless logs at error severity. Without a registered fault handler unexpected failures are rethrown on a microtask.
 
 Five additional regression cases fail on unchanged bcdea3a with only the tests copied in: rejection end payload guarding; missing OS exit completion; unexpected event fault; unexpected callback fault; real SIGTERM-resistant child. Reports /tmp/pipe-review-red-v2.json and /tmp/pipe-review-green-v2.json. Full baseline/candidate suites and combined trial merge remain deferred until after 08:00 SAST Thursday 26 November 2026.
+
+## Second independent review repairs
+
+Windows shutdown uses one terminal latch for exit, close and successful taskkill completion. Both escalation timers are cancelled on termination. The asynchronous child_process import checks that latch immediately before spawning taskkill; a taskkill result received after child termination is ignored. This prevents a delayed PID-based kill from being launched after the owned child ended.
+
+Expected pipe failures alone are deduplicated. A later unexpected error still reaches both the child owner and the fault handler; the off-thread relay preserves that distinction too. Four regression cases fail at dea8d69 and pass after repair: deferred Windows launch after exit, after close, and racing escalation, plus TypeError after EOF. Windows tests intercept spawn under a synthetic win32 platform and do not execute taskkill. Native Windows proof and full suites remain pending.
