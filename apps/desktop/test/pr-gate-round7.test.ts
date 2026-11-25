@@ -232,7 +232,9 @@ it('R7 execution program compiles as standalone child JavaScript', async () => {
   const { GH_EXEC_PROGRAM } = await import('../src/main/runtime/pr-gate-exec')
   expect(() => new Script(GH_EXEC_PROGRAM)).not.toThrow()
 })
-it.skipIf(process.platform === 'win32').each(['bash -c', 'bash -lc'])(
+it
+  .skipIf(process.platform === 'win32')
+  .each(['bash --noprofile --norc -c', 'bash --noprofile --norc -lc'])(
   'R7 shim checks a computed wrapper at execution time before real gh: %s',
   async (wrapper) => {
     const { withGhExecution, ghExecutionEnv } =
@@ -246,7 +248,13 @@ it.skipIf(process.platform === 'win32').each(['bash -c', 'bash -lc'])(
       check = vi
         .spyOn(gate, 'check')
         .mockResolvedValue('HELD BY EXECUTION GATE')
-    const env = { ...process.env, PATH: cwd + ':' + process.env.PATH }
+    const env = {
+      HOME: cwd,
+      GH_CONFIG_DIR: cwd,
+      GH_TOKEN: '',
+      GITHUB_TOKEN: '',
+      PATH: cwd + ':/usr/bin:/bin',
+    }
     const result = await withGhExecution(gate, testContext(), () =>
       child(`${wrapper} "$(echo gh pr merge 1)"`, ghExecutionEnv(env), cwd),
     )
@@ -276,7 +284,13 @@ it.skipIf(process.platform === 'win32')(
     const result = await withGhExecution(gate, testContext(), () =>
       child(
         'gh pr view',
-        ghExecutionEnv({ ...process.env, PATH: cwd + ':' + process.env.PATH }),
+        ghExecutionEnv({
+          HOME: cwd,
+          GH_CONFIG_DIR: cwd,
+          GH_TOKEN: '',
+          GITHUB_TOKEN: '',
+          PATH: cwd + ':/usr/bin:/bin',
+        }),
         cwd,
         'stdin bytes\n',
       ),

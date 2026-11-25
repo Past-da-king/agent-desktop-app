@@ -1,5 +1,7 @@
 # PR gate
 
+This is a cooperative workflow guard for well-meaning agents, not an unbypassable credential gate. It checks the app shell, code, engine and learned-app paths and the scoped gh shim. Existing credentials remain in place. Owner-equivalent code can read existing gh credentials or call GitHub directly; the GitHub web UI and arbitrary browser interactions can bypass it. Shell parsing is an early warning, not a security boundary.
+
 Settings > Git and developer (enable Developer settings if hidden) contains the gate,
 memory-policy page titles and the synced event log. New installs default off. The gate
 and page list sync to linked devices. Agents need the person's approval to change either,
@@ -57,10 +59,10 @@ shim remains active. The PowerShell option resolver uses ordered minimum prefixe
 Windows PowerShell's positional argument means Command, while pwsh's means File.
 Detection, body signatures, snapshots and review-approval parsing share normalization.
 
-Every enabled brain injects a short-lived gh shim at the front of its shell PATH:
+Enabled app execution scopes inject a short-lived gh shim at the front of their shell PATH:
 app shell/code tools, Claude's shell and Codex's engine environment, desktop and
 headless. The shim asks the same gate using the actual argv and cwd before invoking
-real gh. This catches computed wrappers such as `bash -c "$(echo gh pr merge 1)"`.
+real gh. This catches computed wrappers only while PATH still resolves gh through the shim. Login profiles can replace PATH; absolute gh paths and direct HTTP calls can bypass it.
 A scope whose exact outer command already consumed its attestation or verified
 remote grant carries that authorization through execution; an ungated outer call
 cannot create authorization. Engine-native execution uses the same gate's pending
@@ -134,3 +136,9 @@ A grant is bound to the command and caller, not a destination device id. An auto
 Before execution, the destination writes a deterministic consumed-grant receipt to its persisted store. The receipt survives process restart and is separate from the pr_gate audit retention budget. Receipts are kept for twenty-four hours, longer than a signed grant can be accepted. A repeated signed grant cannot execute again after restart. The ordinary command-reply cache remains process-local; this receipt protects gated mutations, not arbitrary ungated commands.
 
 Each gated call receives its own context capsule, including when parallel calls share a Claude turn. Learned-app automatic routing carries the capsule through its actual routing wrapper. Resolver and policy checks always see the actual tool and arguments, so adding a device field cannot bypass policy-page protection.
+
+## Release scope and proof limits
+
+No credential broker, restricted OS principal or credential migration is included. The broker note is a future option only. The current shell warning is deliberately conservative and may hold opaque GitHub-related commands, including branch pushes; that is a known workflow limitation, not proof of security. Readable shell scripts have partial inspection; interpreter files and dynamic requests are not comprehensively inspected. BASH_ENV is scoped to execution but replaces an inherited value and does not reliably restore PATH in login shells. The current Windows batch and WSL launcher paths have argument/semantic limitations and remain unproven. Do not infer universal brain, login-shell or WSL coverage from PATH injection.
+
+Execution tests use disposable HOME and gh config directories, no inherited tokens, no owner profile scripts and fake gh executables. Runtime tests, test compilation and Windows/WSL proof remain pending after 08:30 SAST Thursday 26 November 2026. Source typechecking alone is not runtime proof.
