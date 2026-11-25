@@ -50,8 +50,10 @@ it('retains destination ownership and copied-context grant and hold state', () =
   expect(copy.owner).toBe('device')
   expect(copy.agentLabel).toBe('device-label')
   expect(copy.chat).toBe('destination-chat')
-  expect(remoteCaller(copy).owner).toBe('helper:origin')
+  expect(remoteCaller(copy).owner).toBe('device')
   expect(consumeRemoteGrant(copy, 'shell_run', received.args)).toBe(true)
+  expect(copy.owner).toBe('device')
+  expect(remoteCaller(copy).owner).toBe('helper:origin')
   expect(consumeRemoteGrant({ ...copy }, 'shell_run', received.args)).toBe(
     false,
   )

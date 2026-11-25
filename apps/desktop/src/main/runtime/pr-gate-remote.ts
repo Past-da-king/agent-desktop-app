@@ -2,9 +2,15 @@
  * App-only linked-device gate state. Enumerable symbols survive the production
  * origin/vault context copies without changing destination ownership.
  */
-import { createHash, randomUUID } from 'node:crypto'
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto'
 import type { JsonObject, ToolContext } from '@agent/core'
 import { canonTool } from '../devices/device-tools'
+import { prGateKey } from './pr-gate-key'
 
 interface Caller {
   owner: string
@@ -15,9 +21,11 @@ export interface RemotePrGrant extends Caller {
   id: string
   hash: string
   expires: number
+  signature?: string
 }
 interface CallState {
   fromHost?: boolean
+  freshUntil?: number
   incoming?: RemotePrGrant
   outgoing?: RemotePrGrant
   caller?: Caller
@@ -96,17 +104,41 @@ function digest(tool: string, args: JsonObject): string {
     )
     .digest('hex')
 }
+function signature(grant: RemotePrGrant, key: string): string {
+  const { signature: _signature, ...body } = grant
+  void _signature
+  return createHmac('sha256', key)
+    .update(JSON.stringify(ordered(body)))
+    .digest('hex')
+}
+function signed(grant: RemotePrGrant, key: string): boolean {
+  if (
+    typeof grant.signature !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(grant.signature)
+  )
+    return false
+  return timingSafeEqual(
+    Buffer.from(grant.signature, 'hex'),
+    Buffer.from(signature(grant, key), 'hex'),
+  )
+}
+export function incomingGrantId(ctx: ToolContext): string | undefined {
+  return state(ctx).incoming?.id
+}
 export function prepareRemoteGrant(
   ctx: ToolContext,
   tool: string,
   args: JsonObject,
+  key = prGateKey(),
 ): void {
-  state(ctx).outgoing = {
+  const grant: RemotePrGrant = {
     id: randomUUID(),
     hash: digest(tool, args),
     expires: Date.now() + TRANSIT_MS,
     ...remoteCaller(ctx),
   }
+  grant.signature = signature(grant, key)
+  state(ctx).outgoing = grant
 }
 export function remoteArguments(
   ctx: ToolContext | undefined,
@@ -149,27 +181,34 @@ export function receiveRemoteGrant(
     grant.hash !== digest(tool, clean)
   )
     return { context: ctx, args: clean }
-  state(ctx).caller = {
-    owner: grant.owner,
-    agentLabel: grant.agentLabel,
-    chat: grant.chat,
-  }
-  // Execution freshness uses the destination clock, independent of origin skew.
-  state(ctx).incoming = { ...grant, expires: now + 60_000 }
+  // Verify identity only when the gate can supply its private signing key.
+  state(ctx).incoming = grant
+  state(ctx).freshUntil = now + 60_000
   return { context: ctx, args: clean }
 }
 export function consumeRemoteGrant(
   ctx: ToolContext,
   tool: string,
   args: JsonObject,
+  key = prGateKey(),
 ): boolean {
   const grant = state(ctx).incoming
-  if (!grant || grant.hash !== digest(tool, args) || grant.expires < Date.now())
+  if (
+    !grant ||
+    grant.hash !== digest(tool, args) ||
+    (state(ctx).freshUntil ?? 0) < Date.now() ||
+    !signed(grant, key)
+  )
     return false
   delete state(ctx).incoming
   for (const [id, expiry] of consumed)
     if (expiry < Date.now()) consumed.delete(id)
   if (consumed.has(grant.id)) return false
   consumed.set(grant.id, Date.now() + TRANSIT_MS + SKEW_MS)
+  state(ctx).caller = {
+    owner: grant.owner,
+    agentLabel: grant.agentLabel,
+    chat: grant.chat,
+  }
   return true
 }

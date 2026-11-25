@@ -23,23 +23,10 @@ import type {
   DeviceToolResult,
 } from './types'
 
-export type ShareGroup =
-  'browser' | 'files' | 'notifications' | 'approval' | 'shell'
-export const SHARE_GROUPS: readonly ShareGroup[] = [
-  'browser',
-  'files',
-  'notifications',
-  'approval',
-  'shell',
-]
+export type ShareGroup = 'browser' | 'files' | 'notifications' | 'approval' | 'shell'
+export const SHARE_GROUPS: readonly ShareGroup[] = ['browser', 'files', 'notifications', 'approval', 'shell']
 /** Protocol s11 defaults: on for browser, files, notifications and approval; off for shell. */
-export const DEFAULT_SHARE: Readonly<Record<ShareGroup, boolean>> = {
-  browser: true,
-  files: true,
-  notifications: true,
-  approval: true,
-  shell: false,
-}
+export const DEFAULT_SHARE: Readonly<Record<ShareGroup, boolean>> = { browser: true, files: true, notifications: true, approval: true, shell: false }
 
 const DEFAULT_DEADLINE_MS = 120_000
 const BROWSER_DEADLINE_MS = 600_000
@@ -61,15 +48,7 @@ const FIXED_GROUPS: Record<string, ShareGroup> = {
   run_code: 'shell',
 }
 
-const READ_ONLY = new Set([
-  'browser_look',
-  'browser_read',
-  'browser_wait_for',
-  'files_list',
-  'files_read',
-  'files_find',
-  'file_send',
-])
+const READ_ONLY = new Set(['browser_look', 'browser_read', 'browser_wait_for', 'files_list', 'files_read', 'files_find', 'file_send'])
 
 /** The group a tool of this app belongs to, or null when it is not one this node shares. */
 export function groupOf(name: string): ShareGroup | null {

@@ -14,6 +14,7 @@ import {
 } from '@agent/core'
 import {
   consumeRemoteGrant,
+  incomingGrantId,
   beginPrGateCall,
   remoteCaller,
   prepareRemoteGrant,
@@ -21,6 +22,7 @@ import {
   takeRemoteChallenge,
 } from './pr-gate-remote'
 import { redactSecrets } from '../logger'
+import { prGateKey, type PrGateSecrets } from './pr-gate-key'
 import { DEVICE_ARG_TOOLS } from '../devices/device-tools'
 import { LEARNED_RUN_TOOLS } from '../devices/learned-route'
 import { listWhere, type DataStore } from './data'
@@ -109,7 +111,11 @@ export class PrGate {
     private store: DataStore,
     private settings: () => Settings,
     private now = Date.now,
+    private transportKey: () => string = prGateKey,
   ) {}
+  signingKey(): string {
+    return this.transportKey()
+  }
   enabled(): boolean {
     return this.settings().prGateEnabled
   }
@@ -262,7 +268,23 @@ export class PrGate {
     input: JsonObject,
     ctx: ToolContext,
   ): Promise<boolean> {
-    if (!consumeRemoteGrant(ctx, tool, input)) return false
+    const id = incomingGrantId(ctx)
+    if (!id) return false
+    const receipt =
+      'pr-gate-used:' + createHash('sha256').update(id).digest('hex')
+    if (await this.store.get('chat_item', receipt)) return false
+    if (!consumeRemoteGrant(ctx, tool, input, this.transportKey())) return false
+    // Commit the tombstone BEFORE any effect can run. It survives process restart
+    // and audit pruning, and contains no command, transport signature or key.
+    await this.store.upsert('chat_item', {
+      id: receipt,
+      kind: 'pr_gate_grant_used',
+      text: 'Remote PR grant consumed',
+      meta: JSON.stringify({ chat: PR_GATE_CHAT, at: this.now() }),
+    })
+    for (const old of await listWhere(this.store, 'chat_item', {
+      chat: PR_GATE_CHAT, kind: 'pr_gate_grant_used', before: this.now() - 24 * 60 * 60_000,
+    })) await this.store.remove('chat_item', old.id)
     await this.log(ctx, tool, 'remote grant passed once', randomUUID())
     return true
   }
@@ -287,6 +309,7 @@ export class PrGate {
         const noteKey = canonical({
           tool,
           notes: scriptReadNotes(input, tool),
+          cwd: input['cwd'] ?? ctx.commandFallback?.cwd ?? homedir(),
           actor: this.actor(ctx),
         })
         const now = this.now()
@@ -433,10 +456,14 @@ export class PrGate {
   }
 }
 const gates = new WeakMap<DataStore, PrGate>()
-export function prGateFor(store: DataStore, settings: () => Settings): PrGate {
+export function prGateFor(
+  store: DataStore,
+  settings: () => Settings,
+  secrets?: PrGateSecrets,
+): PrGate {
   let gate = gates.get(store)
   if (!gate) {
-    gate = new PrGate(store, settings)
+    gate = new PrGate(store, settings, Date.now, () => prGateKey(secrets))
     gates.set(store, gate)
   }
   return gate
@@ -508,11 +535,12 @@ export function withPrGate(
                 ctx,
                 String(input['tool'] ?? ''),
                 args as JsonObject,
+                gate.signingKey(),
               )
           } else {
             const { device: _device, ...args } = input
             void _device
-            prepareRemoteGrant(ctx, tool.spec.name, args)
+            prepareRemoteGrant(ctx, tool.spec.name, args, gate.signingKey())
           }
         }
         let result: string

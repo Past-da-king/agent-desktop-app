@@ -66,9 +66,12 @@ import { calendarTools, type CalendarReader } from '../tools/calendar'
 import { miniAppTools, type MiniAppUi } from '../tools/miniapps'
 import { gitTools, type GitToolDeps } from '../tools/git'
 import { prGateFor, withPrGate } from './pr-gate'
+import type { PrGateSecrets } from './pr-gate-key'
 import { mediaTools, type MediaToolDeps } from '../tools/media'
 
 export interface ToolsetDeps extends CoreToolDeps {
+  /** App-owned transport signing key in Secrets, shared only with brains. */
+  prGateSecrets?: PrGateSecrets
   /** The live settings. Without them the tools fall back to the defaults (tests, browser preview). */
   settings?: SettingsView
   /** Paths the person picked in this session; read and written without asking again. */
@@ -242,7 +245,7 @@ export function withOrigin(tools: Tool[]): Tool[] {
 
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
   // The vault guard sits outermost of all: what any tool returns, on any path, has vault values taken out.
-  const gate = prGateFor(deps.store, () => deps.settings?.get() ?? DEFAULT_SETTINGS)
+  const gate = prGateFor(deps.store, () => deps.settings?.get() ?? DEFAULT_SETTINGS, deps.prGateSecrets)
   return guardTools(
     withOrigin(
       withPrGate([...workerToolsets(deps), ...gate.tools()], gate, async (name, input, ctx) =>

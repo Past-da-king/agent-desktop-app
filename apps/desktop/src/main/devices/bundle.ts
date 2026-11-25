@@ -14,6 +14,7 @@
  * two brains never bounce a bundle back and forth.
  */
 import { createHash, randomBytes } from 'node:crypto'
+import { PR_GATE_KEY, prGateKey } from '../runtime/pr-gate-key'
 
 import {
   keyNameFor,
@@ -57,6 +58,8 @@ export const SHARED_SETTINGS = [
 export type SharedSettings = Partial<Pick<Settings, (typeof SHARED_SETTINGS)[number]>>
 
 export interface BundleSecrets {
+  /** App-owned PR transport authentication, brains only. */
+  prGateTransportKey?: string
   /** Secret name (apiKey, apiKey-<account>) -> key. */
   keys: Record<string, string>
   composioKey?: string
@@ -225,6 +228,7 @@ export class BundleKeeper {
 
     if (bundle.secrets !== undefined) {
       const s = bundle.secrets
+      if (typeof s.prGateTransportKey === 'string' && /^[a-f0-9]{64}$/.test(s.prGateTransportKey)) secrets.set(PR_GATE_KEY, s.prGateTransportKey)
       for (const [name, value] of Object.entries(s.keys)) {
         if (/^apiKey(-[A-Za-z0-9_-]+)?$/.test(name) && typeof value === 'string' && value !== '') secrets.set(name, value)
       }
@@ -256,7 +260,7 @@ export class BundleKeeper {
     }
     const legacy = this.sources.secrets.get('apiKey')
     if (hasValue(legacy)) keys['apiKey'] = legacy
-    const secrets: BundleSecrets = { keys, passes: this.sources.passes?.all() ?? {} }
+    const secrets: BundleSecrets = { keys, passes: this.sources.passes?.all() ?? {}, prGateTransportKey: prGateKey(this.sources.secrets) }
     const composio = this.sources.secrets.get(COMPOSIO)
     if (hasValue(composio)) secrets.composioKey = composio
     const gemini = this.sources.secrets.get(GEMINI)
@@ -392,6 +396,7 @@ export function parseBundle(value: unknown): StateBundle | null {
     const passes: Record<string, string> = {}
     if (isRecord(s['passes'])) for (const [k, v] of Object.entries(s['passes'])) if (typeof v === 'string' && /^[0-9a-f]{64}$/.test(v)) passes[k] = v
     bundle.secrets = { keys, passes }
+    if (typeof s['prGateTransportKey'] === 'string' && /^[a-f0-9]{64}$/.test(s['prGateTransportKey'])) bundle.secrets.prGateTransportKey = s['prGateTransportKey']
     if (typeof s['composioKey'] === 'string') bundle.secrets.composioKey = s['composioKey']
     if (typeof s['composioUserId'] === 'string') bundle.secrets.composioUserId = s['composioUserId']
     if (typeof s['geminiKey'] === 'string') bundle.secrets.geminiKey = s['geminiKey']
