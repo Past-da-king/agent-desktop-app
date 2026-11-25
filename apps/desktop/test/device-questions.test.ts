@@ -65,3 +65,14 @@ it('keeps cancellation tombstones after periodic pruning and still authenticates
  expect(await x.questions.ask('phone',x.call)).toEqual({handled:true,answer:null})
  expect(x.approve).not.toHaveBeenCalled()
 })
+
+it.each(['user','agent'])('lost context labels a fallback only from the stored %s source', async (kind) => {
+ const x = await setup()
+ const source = await x.store.upsert('chat_item',{kind,text:'The actual saved request',meta:'{}'})
+ await x.store.upsert('device_command',{id:x.row.id,body:JSON.stringify({id:source.id,at:1,text:'FORGED snapshot'})})
+ x.questions.clear()
+ const response = await x.questions.ask('phone',[...x.call,{request:{id:'forged',at:1,text:'FORGED payload'}}])
+ expect(response).toMatchObject({handled:false,answer:null})
+ if (kind==='user') expect(response.request).toEqual({id:source.id,at:source.createdAt,text:source.text})
+ else expect(response.request).toBeUndefined()
+})

@@ -1,3 +1,5 @@
+import { parseRequestSource, type RequestSource } from '../../shared/request-source'
+import { requestById } from '../runtime/request-source'
 import type { ApprovalOrigin, JsonObject, ToolContext } from '@agent/core'
 import type { DataStore } from '../runtime/data'
 
@@ -24,7 +26,7 @@ export class DeviceQuestions {
       }
     }
   }
-  async ask(device: string, args: unknown[]): Promise<{ handled: boolean; answer: string | null }> {
+  async ask(device: string, args: unknown[]): Promise<{ handled: boolean; answer: string | null; request?: RequestSource }> {
     this.prune()
     const [id, sequence, question, options, offeredOrigin] = args
     if (typeof id !== 'string' || typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1 || sequence > 128 || typeof question !== 'string' || question.length > 16000 || !Array.isArray(options) || options.length > 20 || !options.every((item) => typeof item === 'string' && item.length <= 1000)) throw new Error('Invalid device question.')
@@ -32,7 +34,15 @@ export class DeviceQuestions {
     if (row === null || row.kind !== 'tool' || row.brainId !== this.self() || row.target !== device || row.expiresAt <= this.now() || (row.status !== 'queued' && row.status !== 'sent')) throw new Error('That command is not active for this device.')
     if (this.cancelled.has(id)) return { handled: true, answer: null }
     const active = this.contexts.get(id)
-    if (active === undefined) return { handled: false, answer: null }
+    if (active === undefined) {
+      // A restarted brain can lose its waiter. Only its stored command/user record may label the phone fallback.
+      let request: RequestSource | null = null
+      try {
+        const source = parseRequestSource(JSON.parse(row.body ?? '{}'))
+        if (source !== null) request = await requestById(this.store, source.id)
+      } catch { /* No verified request means an unquoted person card. */ }
+      return { handled: false, answer: null, ...(request === null ? {} : { request }) }
+    }
     let input: JsonObject = {}
     try { const parsed: unknown = JSON.parse(row.args ?? '{}'); if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) input = parsed as JsonObject } catch { /* No invented arguments. */ }
     let origin: ApprovalOrigin = { tool: row.tool ?? '', input }
