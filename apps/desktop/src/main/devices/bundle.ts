@@ -27,10 +27,12 @@ import {
 } from '@agent/core'
 
 import type { LearnedApp } from '../apps/store'
-import type { DevicesHost, PassTable } from './types'
+import type { DevicesHost, PassTable, PairingAuthority } from './types'
 
 /** Settings that belong to the person, not to one machine (hotkeys, folders, start-up and sync stay local). */
 export const SHARED_SETTINGS = [
+  'prGateEnabled',
+  'prGateSkillPages',
   'userName',
   'agentName',
   'accent',
@@ -62,6 +64,7 @@ export interface BundleSecrets {
   geminiKey?: string
   /** deviceId -> sha256(pass) hex. */
   passes: Record<string, string>
+  pairingAuthority?: Record<string, PairingAuthority>
   /** The Vault, values and all (vault/store.ts). Only ever sent to a brain, like the keys above. */
   vault?: { changedAt: number; items: unknown[]; prefs?: unknown }
 }
@@ -229,7 +232,7 @@ export class BundleKeeper {
       if (typeof s.composioKey === 'string' && s.composioKey !== '') secrets.set(COMPOSIO, s.composioKey)
       if (typeof s.geminiKey === 'string' && s.geminiKey !== '') secrets.set(GEMINI, s.geminiKey)
       if (typeof s.composioUserId === 'string' && s.composioUserId !== '') connected?.setUserId(s.composioUserId)
-      passes?.replaceAll({ ...s.passes })
+      passes?.replaceAll({ ...s.passes }, s.pairingAuthority)
       if (s.vault !== undefined) this.sources.vault?.replaceAll(s.vault, this.forcing)
       // An account removed on the other brain takes its key with it.
       for (const account of settings.get().accounts) if (!incomingIds.has(account.id)) secrets.delete(keyNameFor(account.id))
@@ -254,7 +257,7 @@ export class BundleKeeper {
     }
     const legacy = this.sources.secrets.get('apiKey')
     if (hasValue(legacy)) keys['apiKey'] = legacy
-    const secrets: BundleSecrets = { keys, passes: this.sources.passes?.all() ?? {} }
+    const secrets: BundleSecrets = { keys, passes: this.sources.passes?.all() ?? {}, pairingAuthority: this.sources.passes?.authority?.() ?? {} }
     const composio = this.sources.secrets.get(COMPOSIO)
     if (hasValue(composio)) secrets.composioKey = composio
     const gemini = this.sources.secrets.get(GEMINI)
@@ -390,6 +393,14 @@ export function parseBundle(value: unknown): StateBundle | null {
     const passes: Record<string, string> = {}
     if (isRecord(s['passes'])) for (const [k, v] of Object.entries(s['passes'])) if (typeof v === 'string' && /^[0-9a-f]{64}$/.test(v)) passes[k] = v
     bundle.secrets = { keys, passes }
+    if (isRecord(s['pairingAuthority'])) {
+      const authority: Record<string, PairingAuthority> = {}
+      for (const [id, value] of Object.entries(s['pairingAuthority'])) {
+        if (!isRecord(value) || !Number.isFinite(value['pairedAt']) || !Number.isFinite(value['deniedAt']) || !Array.isArray(value['roles'])) continue
+        authority[id] = { pairedAt: value['pairedAt'] as number, deniedAt: value['deniedAt'] as number, roles: value['roles'].filter((role): role is import('./types').DeviceRole => ['brain','hands','screen'].includes(String(role))) }
+      }
+      bundle.secrets.pairingAuthority = authority
+    }
     if (typeof s['composioKey'] === 'string') bundle.secrets.composioKey = s['composioKey']
     if (typeof s['composioUserId'] === 'string') bundle.secrets.composioUserId = s['composioUserId']
     if (typeof s['geminiKey'] === 'string') bundle.secrets.geminiKey = s['geminiKey']

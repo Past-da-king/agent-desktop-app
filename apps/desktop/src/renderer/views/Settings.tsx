@@ -10,6 +10,7 @@ import { AnsweredForYouLink } from './AnsweredForYou'
  * changed. A row says its default and offers Reset only while its value is not the default, and a group of rows (the
  * AI accounts, the folders, the devices) is never emptied by one button.
  */
+import { PrGateSettings } from './PrGateSettings'
 import type { AiAccount, AiAccountStatus, AiPicks, GitLogEntry, Settings as SettingsValues } from '@agent/core'
 import { DICTATION_MODELS, VOICES } from '@agent/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -1440,7 +1441,8 @@ function GitSection({ settings, put, resetRow }: SectionProps): JSX.Element {
   }
 
   return (
-    <SectionBlock id="git" name="Git and developer" line="What is committed and pushed after a run.">
+    <SectionBlock id="git" name="Git and developer" line="Review gates, commits and pushes.">
+      <PrGateSettings />
       <SettingRow spec={row('gitAutoCommit')} changed={changedNow(row('gitAutoCommit'), settings)} onReset={() => resetRow(row('gitAutoCommit'))}>
         <Switch on={settings?.gitAutoCommit === true} label="Commit after each run" onToggle={(next) => put({ gitAutoCommit: next })} />
       </SettingRow>

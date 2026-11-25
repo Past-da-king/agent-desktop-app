@@ -1,3 +1,4 @@
+import { remoteGateExecution } from '../runtime/pr-gate-remote'
 /**
  * Learned apps run in the browser where their site is signed in, on whichever linked device that is.
  *
@@ -16,6 +17,7 @@
  * A run that worked here is recorded on the app, so the other devices know where it is signed in (the list travels in
  * the state bundle). A command that came from another device always runs here: it was already routed.
  */
+import { retryRemoteGrant, markNotSignedIn } from '../runtime/pr-gate-remote'
 import { MAIN_CHAT, type JsonObject, type Tool, type ToolContext } from '@agent/core'
 
 import { hostOf, type LearnedApp, type LearnedStore } from '../apps/store'
@@ -180,6 +182,7 @@ async function autoRun(
       deps.learned.noteDevice(app.id, where.id)
       return `On ${label} (its browser is where ${app.name} is signed in): ${outcome.text}`
     }
+    if (outcome.failure === 'not-signed-in') retryRemoteGrant(ctx)
     checked.push(`${label}: ${short(outcome.text)}`)
     // A device that refused or failed for another reason than its sign-in has said its answer.
     if (outcome.state === 'done' && !retryElsewhere(outcome.text, readOnly)) return `On ${label}: ${outcome.text}`
@@ -226,6 +229,16 @@ export function withLearnedRoute(tools: Tool[], hub: () => DeviceToolHub | null,
         const routed = owner === 'device' || owner.startsWith('device:')
         // Without Devices, with "here", or for a command another device already routed: here, as asked.
         if (active === null || app === null || named !== '' || routed || deps.selfId() === '') {
+          if (
+            routed &&
+            remoteGateExecution(ctx) &&
+            app &&
+            deps.siteHere &&
+            (await deps.siteHere(app.startUrl, ctx)) === false
+          ) {
+            markNotSignedIn(ctx)
+            return 'Error: Not signed in on this device.'
+          }
           const out = await tool.run(rest, ctx)
           if (app !== null && learnedRanOk(out)) deps.learned.noteDevice(app.id, deps.selfId())
           return out

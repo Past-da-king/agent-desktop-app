@@ -1,3 +1,4 @@
+import { ghExecutionEnv } from '../runtime/pr-gate-exec'
 /**
  * `run_code`: a small scratch folder and a child process, so the agent can calculate, transform data
  * and build files. It runs JavaScript with Node or Python with python3, asks first every time, and
@@ -136,7 +137,7 @@ function runCodeTool(deps: CodeToolDeps): Tool {
         if ('error' in filled) return filled.error
         runnable = filled.code
       }
-      return execute({ language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps, input, outputLimit: resultLimitOf(ctx, MAX_CODE_OUTPUT_CHARS) })
+      return execute({ language, code: runnable, shown: code, program: chosen.program, appRuntime: chosen.appRuntime, deps: ctx.commandFallback ? {...deps,timeoutMs:ctx.commandFallback.timeoutSec * 1000} : deps, input, executionCwd:ctx.commandFallback?.cwd, outputLimit: resultLimitOf(ctx, ctx.commandFallback?.outputChars ?? MAX_CODE_OUTPUT_CHARS) })
     },
   }
 }
@@ -193,6 +194,7 @@ interface ExecuteRequest {
   input?: JsonObject
   /** How much output to keep: the model's limit, or a script's larger one (ToolContext.resultLimit). */
   outputLimit?: number
+  executionCwd?: string
 }
 
 async function execute(request: ExecuteRequest): Promise<string> {
@@ -237,15 +239,27 @@ async function execute(request: ExecuteRequest): Promise<string> {
   const extra = request.appRuntime ? { ELECTRON_RUN_AS_NODE: '1' } : {}
   let child: ChildProcess
   try {
-    child = spawnResolved(request.program.path, [...request.program.prefix, script], {
-      platform,
-      cwd: folder,
-      env: { ...sanitiseEnv(env), HOME: folder, USERPROFILE: folder, ...extra },
-      detached: platform !== 'win32',
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      ...(request.deps.spawnImpl === undefined ? {} : { spawnImpl: request.deps.spawnImpl }),
-    })
+    child = spawnResolved(
+      request.program.path,
+      [...request.program.prefix, script],
+      {
+        platform,
+        cwd: request.executionCwd ?? folder,
+        env: ghExecutionEnv({
+          ...sanitiseEnv(env),
+          ...(request.executionCwd
+            ? {}
+            : { HOME: folder, USERPROFILE: folder }),
+          ...extra,
+        }),
+        detached: platform !== 'win32',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        ...(request.deps.spawnImpl === undefined
+          ? {}
+          : { spawnImpl: request.deps.spawnImpl }),
+      },
+    )
   } catch (error) {
     record('failed', null, `Could not start: ${messageOf(error)}`)
     return `Could not run the program: ${messageOf(error)}`
@@ -337,32 +351,11 @@ async function listFiles(folder: string, scriptName: string): Promise<string[]> 
 
 class OutputSink {
   total = 0
-  private readonly parts: string[] = []
-  private length = 0
-  private cut = false
-
-  constructor(private readonly limit: number) {}
-
-  push(chunk: Buffer): void {
-    const text = chunk.toString('utf8')
-    this.total += text.length
-    if (this.length >= this.limit) {
-      this.cut = true
-      return
-    }
-    const piece = text.slice(0, this.limit - this.length)
-    this.parts.push(piece)
-    this.length += piece.length
-    if (piece.length < text.length) this.cut = true
-  }
-
-  text(): string {
-    return this.parts.join('')
-  }
-
-  truncated(): boolean {
-    return this.cut || this.total > this.limit
-  }
+  private readonly capture: StreamCapture
+  constructor(private readonly limit: number) { this.capture = new StreamCapture(limit) }
+  push(chunk: Buffer): void { this.total += chunk.toString('utf8').length; this.capture.push(chunk) }
+  text(): string { return this.capture.text() }
+  truncated(): boolean { return this.total > this.limit }
 }
 
 function messageOf(error: unknown): string {

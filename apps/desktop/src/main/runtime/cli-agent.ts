@@ -1,3 +1,4 @@
+import { ghExecutionEnv, finishGhExecution } from './pr-gate-exec'
 /**
  * Runs one turn of the agent on the person's own AI plan, through the official SDKs, the same way the
  * phone app does (assets/runtime/bridge-claude.mjs, bridge-codex.mjs):
@@ -24,6 +25,12 @@ import type { TurnMessage, TurnMessages } from './note-tools'
 import { SDK_TOOLS } from './sdk-permissions'
 import { markReleased } from '../tools/run-capture'
 import { claudeLaunch, codexLaunch, type EngineAccess } from './engine-policy'
+
+function nativeShellFinished(raw: unknown): Record<string, never> {
+  const data = raw as { tool_name?: string; tool_input?: JsonObject }
+  finishGhExecution(data.tool_name, data.tool_input)
+  return {}
+}
 
 export type CliId = 'claude' | 'codex'
 
@@ -55,7 +62,7 @@ export function engineFolders(turn: Pick<CliTurn, 'workDir' | 'folder'>): { cwd:
  * settingSources: [] does for Claude.
  */
 export function codexSettings(
-  turn: Pick<CliTurn, 'workDir' | 'folder' | 'access' | 'model' | 'mcp'>,
+  turn: Pick<CliTurn, 'workDir' | 'folder' | 'access' | 'model' | 'mcp' | 'appCommandsOnly'>,
   platform: NodeJS.Platform = process.platform,
 ): {
   config: NonNullable<CodexOptions['config']>
@@ -84,7 +91,7 @@ export function codexSettings(
         apps: false,
         plugins: false,
         goals: false,
-        ...(launch.ownShell ? {} : { shell_tool: false, unified_exec: false }),
+        ...(launch.ownShell && !turn.appCommandsOnly ? {} : { shell_tool: false, unified_exec: false }),
       },
       skills: { include_instructions: false },
       include_apps_instructions: false,
@@ -140,6 +147,8 @@ export interface CliTurn {
    * anywhere, as Claude's tools do then), 'asked' otherwise (every action goes through the app's tools and cards).
    */
   access?: EngineAccess
+  /** Gate commands through app tools without reducing sandbox or network access. */
+  appCommandsOnly?: boolean
   signal: AbortSignal
   onEvent: (event: AgentEvent) => Promise<void>
   /** Claude: asked before each of Claude Code's own tools runs (see sdk-permissions.ts). */
@@ -223,7 +232,7 @@ function engineEnv(extra: Record<string, string> = {}, home?: HomeEntry): Record
   env['MCP_TIMEOUT'] = '60000'
   // claude.ai account connectors (Gmail, Drive, Docs...) would act without the app's approvals.
   env['ENABLE_CLAUDEAI_MCP_SERVERS'] = 'false'
-  return { ...env, ...extra }
+  return ghExecutionEnv({ ...env, ...extra }) as Record<string, string>
 }
 
 export async function runCliTurn(turn: CliTurn): Promise<CliResult> {
@@ -327,6 +336,8 @@ async function runClaude(turn: CliTurn): Promise<CliResult> {
         // fires for every call, including the "safe-looking" commands Claude Code would otherwise auto-approve
         // without asking (canUseTool alone is skipped for those).
         hooks: {
+          PostToolUse: [{ matcher: 'Bash|PowerShell', hooks: [async (data) => nativeShellFinished(data)] }],
+          PostToolUseFailure: [{ matcher: 'Bash|PowerShell', hooks: [async (data) => nativeShellFinished(data)] }],
           PreToolUse: [
             {
               hooks: [

@@ -8,7 +8,7 @@ import { join, normalize, resolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 
-import { compareDeviceOrder, hasTiedPriorities, type DeviceJoinResult, type DeviceRow, type DevicesStatus, type ListWhere, type PairingOfferInfo } from '@agent/core'
+import { decodeStamp, compareDeviceOrder, hasTiedPriorities, type DeviceJoinResult, type DeviceRow, type DevicesStatus, type ListWhere, type PairingOfferInfo } from '@agent/core'
 
 import { filterRows } from '../../shared/list-where'
 
@@ -21,6 +21,8 @@ import { OverlayNet, setOverlayNet } from './net'
 import { originFrom, setLocalOrigin } from './origin'
 import { formatShortCode, handlePair, pairUri, parsePairUri, PairingOffers } from './pairing'
 import { pinnedFetch } from './pinned-fetch'
+import { bootstrapPeerAuthority } from './replicate'
+import { SyncClient } from '@agent/core'
 import { devicesState, probeHealth } from './sync'
 import { AnswerOrder } from './answer-order'
 import { SecretPassTable, hashPass, newPass, type SecretsLike } from './passes'
@@ -32,6 +34,12 @@ import { wireOf, type HandlerRegistry } from './registry'
 import { DevicesServer, contentTypeFor } from './server'
 import type { BrainRef, DeviceFacts, DeviceKind, DeviceRecord, DeviceRole, DevicesHost, DeviceToolResult, RouteReply, RouteRequest } from './types'
 
+function deviceDenyTime(row: DeviceRow): number {
+  const fields = (row as unknown as { _deviceFields?: Record<string, string> })._deviceFields
+  const stamp = fields?.['revoked']
+  return stamp ? decodeStamp(stamp)?.millis ?? Date.now() : Date.now()
+}
+
 const SEEN_EVERY_MS = 60_000
 /** How stale the firewall reading may get before a status read looks again (netsh is slow and prints every rule). */
 const FIREWALL_RECHECK_MS = 10 * 60_000
@@ -41,6 +49,7 @@ const INTERFACES_TTL_MS = 5_000
 
 /** The bits of the Store this service uses (main/db.ts). */
 export interface DeviceStoreLike {
+  applyRemote?(changes: import('@agent/core').Change[], via?: string): Promise<void>
   list(entity: 'device'): Promise<DeviceRow[]>
   /** Deletes a row (a tombstone that replicates). Without it a taken-out device's row stays, marked revoked. */
   remove?(entity: 'device', id: string): Promise<void>
@@ -269,9 +278,10 @@ export class DevicesService {
 
   /** A paired device's roles: null when it is unknown or taken out (it then may do nothing). */
   private rolesOf(id: string): DeviceRole[] | null {
+    if (this.passes.isRevoked(id)) return null
     const row = this.rows.get(id)
     // A brain this computer joined (join) is trusted until its row arrives, like a headless node's (knownPeer).
-    if (row === undefined) return this.deps.knownPeer?.(id) ?? (this.config.get().peers.some((peer) => peer.id === id) ? ['brain', 'hands'] : null)
+    if (row === undefined) return this.passes.rolesFor(id) ?? this.deps.knownPeer?.(id) ?? (this.config.get().peers.some((peer) => peer.id === id) ? ['brain', 'hands'] : null)
     return row.revoked ? null : row.roles
   }
 
@@ -783,6 +793,17 @@ export class DevicesService {
       const known = peers.get(nodeId)
       peers.set(nodeId, { id: nodeId, name: nodeName, fp: parts.fp, urls: [base, ...(known?.urls ?? parts.urls).filter((u) => u.replace(/\/+$/, '') !== base)] })
       this.config.save({ peers: [...peers.values()] })
+      // An explicit successful pairing can renew trust in a host previously taken out here.
+      if (this.passes.isRevoked(nodeId)) {
+        const rejoinedAt = Math.max(Date.now(), (this.passes.authority()[nodeId]?.deniedAt ?? -1) + 1)
+        const roles = cleanRoles(node['roles'])
+        const renewed = roles.length ? roles : ['brain', 'hands'] as DeviceRole[]
+        this.passes.rememberRoles(nodeId, renewed, rejoinedAt)
+        const old = this.rows.get(nodeId)
+        if (old?.revoked) await this.saveRow({ id: nodeId, roles: renewed, pairedAt: rejoinedAt, revoked: false })
+      }
+      // Fetch authenticated authority without stamping a stale host snapshot locally.
+      if (this.deps.store.applyRemote) await bootstrapPeerAuthority({list: () => this.deps.store.list('device'), applyRemote: changes => this.deps.store.applyRemote!(changes)}, new SyncClient(base, pass, pinnedFetch(parts.fp)), peers.get(nodeId)!).catch(() => this.deps.log?.('Joined; peer authority bootstrap deferred until replication.'))
       await this.writeSelf()
       this.uplink.refresh()
       this.changed()
@@ -910,12 +931,34 @@ export class DevicesService {
     const generation = ++this.reloadGeneration
     const rows = await this.deps.store.list('device')
     if (generation !== this.reloadGeneration) return
+    // A deletion may arrive in the same replication page as the revoke. Keep
+    // a local deny and invalidate the host's bearer hash before forgetting rows.
+    const incoming = new Set(rows.map(row => row.id))
+    for (const id of this.rows.keys()) if (!incoming.has(id) && id !== this.identity.nodeId) {
+      // The deny belongs to the pairing this brain knew, so a re-pair that follows the forget is never refused because this brain heard of the delete late.
+      this.passes.remove(id, this.knownPairedAt(id))
+      this.dropPeer(id)
+      this.srv?.closeDevice(id)
+    }
     this.rows = new Map(rows.map((row) => [row.id, row]))
+    for (const row of rows) {
+      if (row.revoked) {
+        this.passes.remove(row.id, deviceDenyTime(row))
+        this.dropPeer(row.id)
+        this.srv?.closeDevice(row.id)
+      } else if (Array.isArray(row.roles)) this.passes.rememberRoles(row.id, row.roles, row.pairedAt)
+    }
+  }
+
+  private knownPairedAt(id: string): number | undefined {
+    return this.passes.authority()[id]?.pairedAt ?? this.rows.get(id)?.pairedAt
   }
 
   private async saveRow(record: Partial<DeviceRecord | DeviceRow> & { id: string }): Promise<void> {
     const saved = await this.deps.store.upsert('device', record)
     this.rows.set(saved.id, saved)
+    if (saved.revoked) this.passes.remove(saved.id, deviceDenyTime(saved))
+    else if (Array.isArray(saved.roles)) this.passes.rememberRoles(saved.id, saved.roles, saved.pairedAt)
   }
 
   private nextPriorityNow(): number {
@@ -924,7 +967,7 @@ export class DevicesService {
     return max + 1
   }
 
-  /** This node's own row: always a brain and hands; its place in the brain order is the person's. */
+  /** Refresh local facts without changing the person's roles, revocation or answer order. */
   private async writeSelf(): Promise<void> {
     const { tools, ...facts } = this.selfFacts()
     const existing = this.rows.get(this.identity.nodeId)
@@ -934,14 +977,14 @@ export class DevicesService {
       name: facts.name,
       kind: facts.kind,
       platform: facts.platform,
-      roles: ['brain', 'hands'],
+      roles: existing?.roles ?? ['brain', 'hands'],
       priority,
       urls: facts.urls,
       fp: this.identity.fp,
       facts,
       pairedAt: existing?.pairedAt ?? this.now(),
       lastSeen: this.now(),
-      revoked: false,
+      revoked: existing?.revoked ?? false,
       tools: tools ?? [],
     }
     const same = existing !== undefined && JSON.stringify(toRecord({ ...existing, lastSeen: 0 })) === JSON.stringify({ ...record, lastSeen: 0 })
@@ -1030,7 +1073,12 @@ export class DevicesService {
           offers: this.offers,
           passes: this.passes,
           meshId: this.identity.meshId,
-          node: { id: this.identity.nodeId, name: this.deps.nodeName() },
+          node: {
+            id: this.identity.nodeId,
+            name: this.deps.nodeName(),
+            roles: this.rows.get(this.identity.nodeId)?.roles ?? ['brain', 'hands'],
+            prGatePublicKey: this.rows.get(this.identity.nodeId)?.prGatePublicKey,
+          },
           saveDevice: (row) => this.saveRow(row),
           brains: async () => this.brains(),
           nextPriority: async () => this.nextPriorityNow(),

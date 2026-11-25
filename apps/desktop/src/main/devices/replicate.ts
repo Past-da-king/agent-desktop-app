@@ -14,7 +14,7 @@ import { compareDeviceOrder } from '@agent/core'
  * wins), so A <-> B <-> C converges when A cannot reach C, with no echo storm. Whichever side can reach the other
  * does both directions, so a node behind a firewall still syncs.
  */
-import { SyncClient, changeFromJson, changeToJson, type Change, type DeviceRow } from '@agent/core'
+import { SyncClient, SyncException, changeFromJson, changeToJson, type Change, type DeviceRow } from '@agent/core'
 
 import { ENTITY_NAMES } from '../db'
 import type { DevicesHost } from './types'
@@ -30,6 +30,28 @@ export interface ReplicaStore {
   localValue(key: string): string | null
   setLocalValue(key: string, value: string): void
   list(entity: 'device'): Promise<DeviceRow[]>
+}
+
+/** The caller supplies the configured peer's fingerprint-pinned client. Preserve remote stamps. */
+export async function bootstrapPeerAuthority(store: Pick<ReplicaStore, 'list' | 'applyRemote'>, client: SyncClient, peer: PeerTarget): Promise<void> {
+  if ((await store.list('device')).some(row => row.id === peer.id)) return
+  let cursor = 0
+  let own: Change | undefined
+  for (;;) {
+    const page = await client.pull(cursor, { wait: 0, entities: ['device'] })
+    for (const change of page.changes) {
+      if (change.entity === 'device' && change.id === peer.id) own = change
+    }
+    if (page.cursor <= cursor || !page.changes.length) {
+      if (own && !own.deleted && own.payload['fp'] === peer.fp && Array.isArray(own.payload['roles'])) {
+        await store.applyRemote([own])
+        return
+      }
+      break
+    }
+    cursor = page.cursor
+  }
+  throw new Error('Device authority not bootstrapped for pinned peer ' + peer.id)
 }
 
 const MAX_WAIT_SECONDS = 55
@@ -57,6 +79,15 @@ export function registerSyncRoutes(host: DevicesHost, store: ReplicaStore, bundl
       for (const item of raw) {
         const change = changeFromJson(item)
         if (change !== null) changes.push(change)
+      }
+      if (caller && !(await store.list('device')).some(row => row.id === caller)) {
+        const own = changes.filter(change => change.entity === 'device' && change.id === caller && !change.deleted).at(-1)
+        const roles = host.pairedRoles?.(caller)
+        if (!own) return {status: 409, json: {code: 'AUTHORITY_BOOTSTRAP_REQUIRED', error: 'Send the authenticated caller self row first.'}}
+        if (!roles?.length) return {status: 403, json: {error: 'Pairing authority metadata is unavailable; pair this device again.'}}
+        const payload: Record<string, unknown> = {...own.payload, roles}
+        if (!roles.includes('brain')) delete payload['prGatePublicKey']
+        await store.applyRemote([{...own, payload}])
       }
       if (changes.length > 0) await store.applyRemote(changes, caller)
       return { status: 200, json: { cursor: store.logSeq() } }
@@ -442,6 +473,7 @@ class PeerLink {
       try {
         const client = this.client(url, pass)
         this.dirty = false
+        await bootstrapPeerAuthority(this.deps.store, client, this.peer)
         await this.pushLocked(client)
         if (this.stopped) return false
         await this.backfill(client)
@@ -485,7 +517,7 @@ class PeerLink {
       }
     }
     this.lastError = lastError
-    this.deps.log?.(`devices: could not reach ${this.peer.name}: ${lastError}`)
+    this.deps.log?.(lastError.includes('authority not bootstrapped') ? `devices: authority not bootstrapped for ${this.peer.name}: ${lastError}` : `devices: could not reach ${this.peer.name}: ${lastError}`)
     return false
   }
 
@@ -522,7 +554,23 @@ class PeerLink {
       const from = this.cursorOf('push')
       const page = this.deps.store.changesAfter(from, PAGE, this.peer.id)
       if (page.cursor === from) return
-      if (page.changes.length > 0) await client.push(this.deps.selfId(), page.changes)
+      if (page.changes.length > 0) {
+        try { await client.push(this.deps.selfId(), page.changes) }
+        catch (error) {
+          if (!(error instanceof SyncException) || error.status !== 409) throw error
+          // A reset host lost our row, but retained our authenticated pairing roles.
+          let own: Change | undefined, cursor = 0
+          for (;;) {
+            const rows = this.deps.store.changesAfter(cursor, PAGE, undefined, ['device'])
+            for (const change of rows.changes) if (change.id === this.deps.selfId()) own = change
+            if (rows.cursor <= cursor || !rows.changes.length) break
+            cursor = rows.cursor
+          }
+          if (!own) throw new Error('Local self authority row is unavailable for reset-host recovery')
+          await client.push(this.deps.selfId(), [own])
+          await client.push(this.deps.selfId(), page.changes)
+        }
+      }
       this.deps.store.setLocalValue(this.key('push'), String(page.cursor))
     }
   }

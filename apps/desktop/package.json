@@ -1,6 +1,6 @@
 {
   "name": "@agent/desktop",
-  "version": "0.2.146",
+  "version": "0.2.147",
   "private": true,
   "main": "out/main/index.js",
   "scripts": {
@@ -18,13 +18,15 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.304",
     "@fontsource-variable/roboto-flex": "^5.3.0",
-    "@openai/codex-sdk": "^0.163.0"
+    "@openai/codex-sdk": "^0.163.0",
+    "shell-quote": "^1.12.0"
   },
   "devDependencies": {
     "@agent/core": "*",
     "@deepseek-ai/cordis": "4.0.5",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
+    "@types/shell-quote": "^1.7.5",
     "@vitejs/plugin-react": "^5.1.0",
     "electron": "44.9.1",
     "electron-builder": "^26.18.0",

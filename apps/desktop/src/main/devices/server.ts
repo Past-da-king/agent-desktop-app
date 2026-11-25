@@ -171,6 +171,8 @@ export class DevicesServer implements DevicesHost {
     }
   }
 
+  pairedRoles(deviceId: string): DeviceRole[] | null { return this.options.rolesOf(deviceId) }
+
   factsOf(deviceId: string): DeviceFacts | null {
     let latest: DeviceFacts | null = null
     for (const session of this.sessions) if (session.deviceId === deviceId && session.facts !== null && session.facts.wakeOnly !== true) latest = session.facts

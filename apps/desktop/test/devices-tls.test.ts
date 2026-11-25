@@ -69,6 +69,10 @@ describe.skipIf(!hasOpenssl())('nodes over pinned HTTPS', () => {
       n.host.passes.set('pass-a', { deviceId: 'dev_a', node: true })
       n.host.passes.set('pass-b', { deviceId: 'dev_b', node: true })
     }
+    // Paired nodes hold each other's device rows (replication refuses a peer it has no pinned authority row for).
+    for (const n of [a, b])
+      for (const peer of [{ id: 'dev_a', fp: certA.fp }, { id: 'dev_b', fp: certB.fp }])
+        await n.store.upsert('device', { id: peer.id, name: peer.id, kind: 'desktop', platform: 'linux', roles: ['brain', 'hands'], priority: 0, urls: [], fp: peer.fp, facts: {} as never, pairedAt: 1, lastSeen: 1, revoked: false })
 
     // A replicates with B using the real default client: pinned to B's fingerprint.
     const replicator = new Replicator({

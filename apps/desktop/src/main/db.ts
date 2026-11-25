@@ -620,6 +620,23 @@ export class Store implements SyncStore {
     this.oneCommit(() => {
       if (entity === 'memory') this.keepVersion(id, existing === null || existing.deleted ? null : existing.payload, payload, writer)
       const stamp = encodeStamp(this.hlc.now())
+      if (entity === 'device') {
+        const fields = {
+          ...(existing?.payload['_deviceFields'] as
+            Record<string, string> | undefined),
+        }
+        for (const key of Object.keys(payload)) {
+          if (key === '_deviceFields') continue
+          if (!fields[key]) fields[key] = existing?.stamp ?? stamp
+          if (
+            !existing ||
+            JSON.stringify(payload[key]) !==
+              JSON.stringify(existing.payload[key])
+          )
+            fields[key] = stamp
+        }
+        payload['_deviceFields'] = fields
+      }
       this.db
         .prepare(
           `INSERT INTO rows(entity, cid, stamp, deleted, payload, local, restored)
@@ -1013,6 +1030,18 @@ export class Store implements SyncStore {
   private applyRemoteRows(changes: Change[], via: string, hold: true): StoreChange[]
   private applyRemoteRows(changes: Change[], via: string, hold = false): StoreChange[] | void {
     const touched: StoreChange[] = []
+    const sender = via ? this.readRow('device', via) : null
+    const trustedDeviceWriter =
+      !via ||
+      (!!sender &&
+        !sender.deleted &&
+        Array.isArray(sender.payload['roles']) &&
+        sender.payload['roles'].includes('brain') &&
+        !sender.payload['revoked'])
+    // Reject the page before applying it. The pull cursor and push acknowledgement must
+    // not pass authority rows whose authenticated sender is not bootstrapped yet.
+    if (via && !sender && changes.some((change) => change.entity === 'device'))
+      throw new Error('Device authority is not bootstrapped for peer ' + via)
     /** Helper cards (chat_item ids) whose end is kept over an incoming stale "working" write. */
     const keep: string[] = []
     for (const change of changes) {
@@ -1024,6 +1053,61 @@ export class Store implements SyncStore {
 
       this.hlc.observe(remote)
       const existing = this.readRow(change.entity, change.id)
+      if (change.entity === 'device' && !change.deleted && !existing?.deleted) {
+        const old = existing?.payload ?? {}
+        const payload: Record<string, unknown> = { ...old }
+        const localFields = old['_deviceFields'] as
+          Record<string, string> | undefined
+        const remoteFields = change.payload['_deviceFields'] as
+          Record<string, string> | undefined
+        const fields = { ...localFields }
+        const authority = new Set(['fp', 'urls', 'roles', 'prGatePublicKey', 'revoked'])
+        for (const [field, value] of Object.entries(change.payload)) {
+          if (field === '_deviceFields') continue
+          if (authority.has(field) && !trustedDeviceWriter) continue
+          if (
+            field === 'prGatePublicKey' &&
+            !(
+              Array.isArray(change.payload['roles']) &&
+              change.payload['roles'].includes('brain')
+            )
+          )
+            continue
+          const incomingStamp = remoteFields?.[field] ?? change.stamp
+          const previousStamp =
+            localFields?.[field] ??
+            (Object.hasOwn(old, field) ? existing?.stamp : undefined)
+          const incoming = decodeStamp(incomingStamp)
+          const previous = previousStamp ? decodeStamp(previousStamp) : null
+          if (!incoming || (previous && compareStamps(previous, incoming) >= 0))
+            continue
+          payload[field] = value
+          fields[field] = incomingStamp
+        }
+        payload['_deviceFields'] = fields
+        if (JSON.stringify(payload) === JSON.stringify(old)) continue
+        const local = existing ? decodeStamp(existing.stamp) : null
+        const stamp =
+          local && compareStamps(local, remote) > 0
+            ? existing!.stamp
+            : change.stamp
+        this.db
+          .prepare(
+            `INSERT INTO rows(entity, cid, stamp, deleted, payload, local, restored)
+          VALUES('device', ?, ?, 0, ?, 0, 0)
+          ON CONFLICT(entity, cid) DO UPDATE SET stamp = excluded.stamp,
+          payload = excluded.payload, local = 0`,
+          )
+          .run(change.id, stamp, JSON.stringify(payload))
+        this.logChange('device', change.id, via)
+        touched.push({
+          entity: 'device',
+          row: { id: change.id, ...payload } as EntityMap['device'],
+        })
+        continue
+      }
+      if (change.entity === 'device' && change.deleted && !trustedDeviceWriter)
+        continue
       // A card (approval or question) is decided once, first decision wins on every device (runtime/card-claim.ts):
       // where the two copies differ on the decision, the winner's is kept whichever copy is newer, so a later
       // conflicting decision, or a write that has none, can never undo the first.
