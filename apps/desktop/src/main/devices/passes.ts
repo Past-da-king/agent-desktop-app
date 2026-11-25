@@ -4,7 +4,7 @@
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
-import type { PassTable } from './types'
+import type { PassTable, PairingAuthority, DeviceRole } from './types'
 
 /** What the secrets module gives this file (main/secrets.ts Secrets). */
 export interface SecretsLike {
@@ -39,51 +39,158 @@ export class SecretPassTable implements PassTable {
     return { ...this.cache }
   }
 
-  set(deviceId: string, hash: string): void {
+  set(deviceId: string, hash: string, pairedAt = Date.now()): void {
+    const authority = this.authority()
+    const old = authority[deviceId]
+    if (old && (pairedAt <= old.deniedAt || pairedAt < old.pairedAt)) return
+    authority[deviceId] = {
+      pairedAt,
+      deniedAt: old?.deniedAt ?? 0,
+      roles: old?.roles ?? [],
+    }
+    this.writeAuthority(authority)
     this.write({ ...this.all(), [deviceId]: hash })
-    if (this.isRevoked(deviceId)) this.forgetRoles(deviceId)
   }
 
-  remove(deviceId: string): void {
+  remove(deviceId: string, deniedAt?: number): void {
+    const authority = this.authority(),
+      old = authority[deviceId]
+    // Repeated row refreshes must neither move the deny forward nor rewrite secrets.
+    if (
+      deniedAt === undefined &&
+      old &&
+      old.deniedAt >= old.pairedAt &&
+      !this.all()[deviceId]
+    )
+      return
+    const at = deniedAt ?? Date.now()
+    if (old && at < old.pairedAt) return
+    authority[deviceId] = {
+      pairedAt: old?.pairedAt ?? 0,
+      deniedAt: Math.max(at, old?.deniedAt ?? 0),
+      roles: [],
+    }
     const next = this.all()
     delete next[deviceId]
+    this.writeAuthority(authority)
     this.write(next)
-    this.rememberRoles(deviceId, null)
   }
 
-  replaceAll(table: Record<string, string>): void {
-    const clean: Record<string, string> = {}
-    for (const [id, hash] of Object.entries(table)) {
-      if (typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && id !== '') clean[id] = hash
+  replaceAll(
+    table: Record<string, string>,
+    incoming: Record<string, PairingAuthority> = {},
+  ): void {
+    const authority = this.authority(),
+      current = this.all(),
+      clean: Record<string, string> = {}
+    for (const id of new Set([
+      ...Object.keys(authority),
+      ...Object.keys(table),
+      ...Object.keys(incoming),
+    ])) {
+      const local = authority[id],
+        remote = incoming[id]
+      const valid =
+        remote &&
+        Number.isFinite(remote.pairedAt) &&
+        Number.isFinite(remote.deniedAt) &&
+        Array.isArray(remote.roles)
+      const newest =
+        valid && (!local || remote.pairedAt > local.pairedAt) ? remote : local
+      const deniedAt = Math.max(
+        local?.deniedAt ?? 0,
+        valid ? remote.deniedAt : 0,
+      )
+      if (newest)
+        authority[id] = {
+          pairedAt: newest.pairedAt,
+          deniedAt,
+          roles: newest.roles.filter((role) =>
+            ['brain', 'hands', 'screen'].includes(role),
+          ),
+        }
+      const useRemote = valid
+        ? !local || remote.pairedAt >= local.pairedAt
+        : !local
+      const hash = useRemote ? table[id] : current[id]
+      if (
+        hash &&
+        /^[0-9a-f]{64}$/.test(hash) &&
+        (!authority[id] || authority[id]!.pairedAt > deniedAt)
+      )
+        clean[id] = hash
     }
+    this.writeAuthority(authority)
     this.write(clean)
   }
 
-  /** Pairing authority metadata survives a database restore along with pass hashes. */
-  rolesFor(deviceId: string): import('./types').DeviceRole[] | null {
-    if (!this.all()[deviceId] || this.isRevoked(deviceId)) return null
+  /** Authority versions survive database reset and travel with the pass bundle. */
+  authority(): Record<string, PairingAuthority> {
     try {
-      const value = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}')[deviceId]
-      return Array.isArray(value) ? value.filter((role): role is import('./types').DeviceRole => ['brain','hands','screen'].includes(role)) : null
-    } catch { return null }
+      const parsed = JSON.parse(
+        this.secrets.get('devicePairingAuthority') ?? '{}',
+      )
+      const clean: Record<string, PairingAuthority> = {}
+      for (const [id, value] of Object.entries(parsed)) {
+        const v = value as PairingAuthority
+        if (
+          v &&
+          Number.isFinite(v.pairedAt) &&
+          Number.isFinite(v.deniedAt) &&
+          Array.isArray(v.roles)
+        )
+          clean[id] = v
+      }
+      // Migrate the earlier unversioned deny conservatively once.
+      const legacy = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}')
+      for (const [id, roles] of Object.entries(legacy))
+        if (!clean[id])
+          clean[id] = {
+            pairedAt: 0,
+            deniedAt: roles === null ? 1 : -1,
+            roles: Array.isArray(roles)
+              ? roles.filter((role): role is DeviceRole =>
+                  ['brain', 'hands', 'screen'].includes(role),
+                )
+              : [],
+          }
+      return clean
+    } catch {
+      return {}
+    }
+  }
+  rolesFor(deviceId: string): DeviceRole[] | null {
+    if (!this.all()[deviceId] || this.isRevoked(deviceId)) return null
+    return this.authority()[deviceId]?.roles ?? null
   }
   isRevoked(deviceId: string): boolean {
-    try { return JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}')[deviceId] === null }
-    catch { return false }
+    const state = this.authority()[deviceId]
+    return !!state && state.deniedAt >= state.pairedAt
   }
-  forgetRoles(deviceId: string): void {
-    let all: Record<string, unknown> = {}
-    try { all = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}') } catch { return }
-    delete all[deviceId]
-    this.secrets.set('devicePairingRoles', JSON.stringify(all))
+  rememberRoles(
+    deviceId: string,
+    roles: DeviceRole[] | null,
+    pairedAt?: number,
+  ): void {
+    if (roles === null) {
+      this.remove(deviceId)
+      return
+    }
+    const authority = this.authority(),
+      old = authority[deviceId]
+    const at = pairedAt ?? old?.pairedAt ?? 0
+    if (old && at <= old.deniedAt) return
+    authority[deviceId] = {
+      pairedAt: Math.max(at, old?.pairedAt ?? 0),
+      deniedAt: old?.deniedAt ?? -1,
+      roles,
+    }
+    this.writeAuthority(authority)
   }
-  rememberRoles(deviceId: string, roles: import('./types').DeviceRole[] | null): void {
-    if (roles !== null && this.isRevoked(deviceId)) return
-    let all: Record<string, unknown> = {}
-    try { all = JSON.parse(this.secrets.get('devicePairingRoles') ?? '{}') } catch { /* first record */ }
-    if (JSON.stringify(all[deviceId]) === JSON.stringify(roles)) return
-    all[deviceId] = roles
-    this.secrets.set('devicePairingRoles', JSON.stringify(all))
+  private writeAuthority(authority: Record<string, PairingAuthority>): void {
+    const value = JSON.stringify(authority)
+    if (this.secrets.get('devicePairingAuthority') !== value)
+      this.secrets.set('devicePairingAuthority', value)
   }
 
   /** The device a pass belongs to, or null. */
@@ -103,9 +210,17 @@ export class SecretPassTable implements PassTable {
     if (raw === null || raw === '') return {}
     try {
       const parsed = JSON.parse(raw) as unknown
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        Array.isArray(parsed)
+      )
+        return {}
       const out: Record<string, string> = {}
-      for (const [id, hash] of Object.entries(parsed as Record<string, unknown>)) if (typeof hash === 'string') out[id] = hash
+      for (const [id, hash] of Object.entries(
+        parsed as Record<string, unknown>,
+      ))
+        if (typeof hash === 'string') out[id] = hash
       return out
     } catch {
       return {}
@@ -113,6 +228,7 @@ export class SecretPassTable implements PassTable {
   }
 
   private write(table: Record<string, string>): void {
+    if (JSON.stringify(this.all()) === JSON.stringify(table)) return
     this.cache = { ...table }
     if (Object.keys(table).length === 0) this.secrets.delete(PASS_SECRET)
     else this.secrets.set(PASS_SECRET, JSON.stringify(table))

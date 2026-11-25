@@ -102,7 +102,13 @@ export class PrGate {
   private pending = new Map<string, Pending>()
   private executionPermits = new Map<
     string,
-    { actor: string; expires: number; remaining: string[]; pending?: Pending }
+    {
+      actor: string
+      expires: number
+      remaining: string[]
+      pending?: Pending
+      source?: string
+    }
   >()
   private reserveExecution(
     tool: string,
@@ -129,6 +135,7 @@ export class PrGate {
     this.executionPermits.set(token, {
       actor: this.actor(ctx),
       expires: this.now() + 60_000,
+      source: String(input['command'] ?? input['cmd'] ?? ''),
       remaining,
       ...(pending ? { pending } : {}),
     })
@@ -143,11 +150,16 @@ export class PrGate {
     this.reserveExecution(tool, input, ctx)
   }
   /** End of the shell/turn consumes deferred reservations even if gh never ran. */
-  finishGhExecution(tokens: Set<string>, operations?: string[]): void {
+  finishGhExecution(
+    tokens: Set<string>,
+    operations?: string[],
+    source?: string,
+  ): void {
     for (const token of tokens) {
       const permit = this.executionPermits.get(token)
       if (
         operations &&
+        permit?.source !== source &&
         !permit?.remaining.some((key) => operations.includes(key))
       )
         continue
@@ -480,7 +492,9 @@ export class PrGate {
     }
     if (
       tool === 'run_code' &&
-      /\bgh\b/.test(String(input['code'] ?? '')) &&
+      /(?:exec\w*|spawn\w*|run|call|check_call|Popen|system|popen)\s*\([^)]*\bgh\b/.test(
+        String(input['code'] ?? ''),
+      ) &&
       ghOperations(tool, input, '*').length === 0
     ) {
       return 'NOT RUN: Computed gh arguments in run_code cannot bind an exact execution grant. Use shell_run with the resolved gh command and working folder; do not retry this code for another attestation.'

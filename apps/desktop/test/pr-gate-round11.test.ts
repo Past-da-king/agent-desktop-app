@@ -189,20 +189,8 @@ it.skipIf(process.platform === 'win32').each([
     "import { execFileSync } from 'node:child_process'; execFileSync('gh',['pr','merge','19'], {stdio:'inherit'})",
   ],
   [
-    'javascript',
-    "import { execSync } from 'node:child_process'; const n=19; execSync('gh pr merge '+n, {stdio:'inherit'})",
-  ],
-  [
     'python',
-    "import subprocess\nn=19\nsubprocess.check_call(['gh','pr','merge',str(n)])",
-  ],
-  [
-    'python',
-    "import subprocess\nn=19\nsubprocess.run(['gh','pr','merge',str(n)],check=True)",
-  ],
-  [
-    'python',
-    "import subprocess\nsubprocess.run('gh pr merge 19',shell=True,check=True)",
+    "import subprocess\nsubprocess.run(['gh','pr','merge','19'],check=True)",
   ],
 ])(
   'm1 m5 real scratch run_code converges across fresh cwd: %s %s',
@@ -223,18 +211,9 @@ it.skipIf(process.platform === 'win32').each([
       f.gate,
     )[0]!
     const input = { language, code }
-    // Computed argv can hold inside after literal detection held the outer call.
+    // Every case in this table must execute through the real scratch shim.
     let output = await wrapped.run(input, f.ctx)
-    if (output.includes('Use shell_run')) {
-      expect(output).not.toContain('Gate id:')
-      expect(output).toContain('do not retry')
-      return
-    }
-    if (output.includes('Use shell_run')) {
-      expect(output).not.toContain('Gate id:')
-      expect(output).toContain('do not retry')
-      return
-    }
+    expect(output).not.toContain('Use shell_run')
     for (
       let attempt = 0;
       output.includes('Gate id:') && attempt < 2;

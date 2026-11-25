@@ -1,5 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -304,34 +310,6 @@ it.skipIf(process.platform === 'win32')(
     })
   },
 )
-
-it('R7-n2 an ungated routed learned read keeps its existing execution behavior', async () => {
-  const { LearnedStore } = await import('../src/main/apps/store')
-  const { withLearnedRoute } = await import('../src/main/devices/learned-route')
-  const learned = new LearnedStore(join(folder(), 'apps.json'))
-  learned.save({
-    id: 'github',
-    name: 'GitHub',
-    startUrl: 'https://github.com',
-    about: '',
-    tools: [],
-    trusted: false,
-    updatedAt: 0,
-  })
-  const run = vi.fn(async () => 'read completed')
-  const routed = withLearnedRoute(
-    [{ spec: { name: 'webapp_run', description: 'fixture', schema: {} }, run }],
-    () => null,
-    { learned, selfId: () => 'hands', siteHere: async () => false },
-  )[0]!
-  expect(
-    await routed.run(
-      { app: 'GitHub', tool: 'read' },
-      testContext({ owner: 'device:brain' }),
-    ),
-  ).toBe('read completed')
-  expect(run).toHaveBeenCalledOnce()
-})
 
 it('R7-n2 an ungated routed learned read keeps its existing execution behavior', async () => {
   const { LearnedStore } = await import('../src/main/apps/store')

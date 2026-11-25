@@ -172,8 +172,8 @@ export async function handlePair(body: unknown, deps: PairDeps): Promise<PairAns
   // A node (it shows a certificate) keeps the id it already has, so every node in the mesh knows it by one name.
   const asked = typeof value['nodeId'] === 'string' ? value['nodeId'] : ''
   const deviceId = facts.fingerprint !== '' && NODE_ID.test(asked) && asked !== deps.node.id ? asked : newId('dev_')
+  const pairedAt = Math.max(now, (deps.passes.authority?.()[deviceId]?.deniedAt ?? -1) + 1)
   const pass = newPass()
-  deps.passes.set(deviceId, hashPass(pass))
   const priority = roles.includes('brain') ? await deps.nextPriority() : 0
   await deps.saveDevice({
     id: deviceId,
@@ -185,9 +185,10 @@ export async function handlePair(body: unknown, deps: PairDeps): Promise<PairAns
     urls: facts.urls,
     fp: facts.fingerprint,
     facts,
-    pairedAt: now,
+    pairedAt,
     lastSeen: now,
     revoked: false,
   })
+  deps.passes.set(deviceId, hashPass(pass), pairedAt)
   return { status: 200, json: { deviceId, pass, meshId: deps.meshId, node: deps.node, brains: await deps.brains() } }
 }

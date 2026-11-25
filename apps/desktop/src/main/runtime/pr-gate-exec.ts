@@ -25,6 +25,7 @@ export function finishGhExecution(tool?: string, input?: JsonObject): void {
     tool && input
       ? ghOperations(tool, { ...input, _engineCwdUntracked: true }, '*')
       : undefined,
+    input ? String(input['command'] ?? input['cmd'] ?? '') : undefined,
   )
   if (!tool) scope.permits.clear()
 }

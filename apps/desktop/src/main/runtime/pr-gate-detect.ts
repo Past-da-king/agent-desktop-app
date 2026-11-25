@@ -182,7 +182,7 @@ function gh(args: string[]): boolean {
     const action = args[pr + 1]
     if (
       (action === 'create' || action === 'new') &&
-      flags.some((word) => /^(?:--reviewer(?:=|$)|-r$)/.test(word))
+      flags.some((word) => /^(?:--reviewer(?:=|$)|-r)/.test(word))
     )
       return true
     if (action === 'create' || action === 'new')

@@ -21,6 +21,7 @@ export function ghOperations(
   fallback: string,
 ): string[] {
   const out: string[] = []
+  const native = input['_engineCwdUntracked'] === true
   const inspect = (text: string, initial: string, depth = 0): void => {
     if (depth > 8) return
     let cwd = initial
@@ -84,7 +85,6 @@ export function ghOperations(
           .replace(/\.exe$/i, '')
           .toLowerCase()
         if (exe === 'cd' && part[1]) {
-          if (cwd === '*') continue
           cwd = resolve(
             cwd,
             part[1] === '~'
@@ -95,7 +95,8 @@ export function ghOperations(
           )
           continue
         }
-        if (exe === 'gh') out.push(ghExecutionKey(part.slice(1), cwd))
+        if (exe === 'gh')
+          out.push(ghExecutionKey(part.slice(1), native ? '*' : cwd))
         else if (exe === 'npx' && ['tsx', 'ts-node'].includes(part[1] ?? ''))
           inspect(part.slice(1).join(' '), cwd, depth + 1)
         else if (
@@ -104,7 +105,8 @@ export function ghOperations(
           const at = part.findIndex((word) =>
             ['-e', '--eval', '-c'].includes(word),
           )
-          if (at >= 0) out.push(...codeOperations(part[at + 1] ?? '', cwd))
+          if (at >= 0)
+            out.push(...codeOperations(part[at + 1] ?? '', native ? '*' : cwd))
           else {
             let file: string | undefined
             for (let at = 1; at < part.length; at++) {
@@ -123,7 +125,12 @@ export function ghOperations(
               try {
                 const path = resolve(cwd, file)
                 if (statSync(path).size <= 1_000_000)
-                  out.push(...codeOperations(readFileSync(path, 'utf8'), cwd))
+                  out.push(
+                    ...codeOperations(
+                      readFileSync(path, 'utf8'),
+                      native ? '*' : cwd,
+                    ),
+                  )
               } catch {
                 /* inspected best effort */
               }
@@ -139,10 +146,7 @@ export function ghOperations(
       /* Unknown wrappers do not acquire a broad execution pass. */
     }
   }
-  const cwd =
-    tool === 'run_code' || input['_engineCwdUntracked'] === true
-      ? '*'
-      : String(input['cwd'] ?? fallback)
+  const cwd = tool === 'run_code' ? '*' : String(input['cwd'] ?? fallback)
   if (tool === 'run_code')
     out.push(...codeOperations(String(input['code'] ?? ''), cwd))
   else inspect(String(input['command'] ?? input['cmd'] ?? ''), cwd)
