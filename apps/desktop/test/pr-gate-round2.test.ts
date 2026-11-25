@@ -427,4 +427,6 @@ it.each([
   (tool, args, expected) => expect(reviewableCall(tool, args)).toBe(expected),
 )
 
-it.each(['wsl -d Ubuntu -- echo gh pr ready 3', 'ssh -p 22 host "echo gh pr ready 3"', 'gh co 3', 'gh pr update-branch'])('R7 opaque sensitive wrapper or unknown gh action holds: %s', (command) => expect(reviewableCall('shell_run', { command })).toBe(true))
+it.each(['wsl -d Ubuntu -- echo gh pr ready 3', 'ssh -p 22 host "echo gh pr ready 3"'])('R7 opaque sensitive wrapper holds: %s', (command) => expect(reviewableCall('shell_run', { command })).toBe(true))
+// Cooperative guard (round 9): only actions that send a PR out are held. These are ordinary work.
+it.each(['gh co 3', 'gh pr update-branch', 'gh pr checkout 3'])('ordinary gh action passes: %s', (command) => expect(reviewableCall('shell_run', { command })).toBe(false))

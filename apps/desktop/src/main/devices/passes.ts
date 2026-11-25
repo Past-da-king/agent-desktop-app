@@ -116,7 +116,8 @@ export class SecretPassTable implements PassTable {
       const useRemote = valid
         ? !local || remote.pairedAt >= local.pairedAt
         : !local
-      const hash = useRemote ? table[id] : current[id]
+      // A pass the incoming bundle neither lists nor versions is dropped: a bundle can remove a pass. A newer local pairing still wins over an older incoming entry.
+      const hash = !valid && table[id] === undefined ? undefined : useRemote ? table[id] : current[id]
       if (
         hash &&
         /^[0-9a-f]{64}$/.test(hash) &&

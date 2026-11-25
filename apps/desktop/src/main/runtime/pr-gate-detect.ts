@@ -338,14 +338,15 @@ function argv(words: string[], depth: number): boolean {
         if (!word.startsWith('-') && !word.startsWith('/'))
           return exe === 'powershell'
             ? shell(args.slice(at).join(' '), depth + 1)
-            : inspectFile(word, depth + 1)
+            : inspectFile(word, depth + 1) ||
+                (/\s/.test(word) && shell(word, depth + 1))
         const parameter = powerShellParameter(raw)
         if (!parameter) return sensitiveShell(args.slice(at).join(' '))
         if (parameter === 'encodedcommand') {
           try {
-            return shell(
-              Buffer.from(args[at + 1] ?? '', 'base64').toString('utf16le'),
-              depth + 1,
+            const bytes = Buffer.from(args[at + 1] ?? '', 'base64')
+            return [bytes.toString('utf16le'), bytes.toString('utf8')].some(
+              (text) => shell(text, depth + 1) || sensitiveShell(text),
             )
           } catch {
             return sensitiveShell(args.slice(at + 1).join(' '))
@@ -1041,7 +1042,7 @@ function inspectFile(file: string, depth: number): boolean {
     const text = readFileSync(path, 'utf8')
     return /\.(?:py|mjs|cjs|js|ts|mts|cts)$/i.test(path)
       ? script(text)
-      : shell(text, depth)
+      : shell(text, depth) || opaqueSending(text)
   } catch {
     missingScripts.push(file)
     return false
@@ -1051,21 +1052,37 @@ export function scriptReadNotes(input: Args, name = 'shell_run'): string[] {
   reviewableCall(name, input)
   return [...missingScripts, ...unresolvedPushes]
 }
+// Constructs the parser cannot follow all the way: here-strings and heredocs, substitutions, ANSI-C quotes,
+// PowerShell block comments and here-strings, eval, encoded commands, a command run through another shell or host.
+const OPAQUE =
+  /<<|<#|@['"]|\$\(|`|\$'|\beval\b|\b(?:iex|invoke-expression)\b|\b(?:ssh|wsl|python3?|node)\b/i
+/**
+ * Backstop: when the parser did not hold a command but the command uses a construct it cannot follow, and its
+ * text names an action that sends a PR out, hold it. Plain text with no such construct (echo, grep, docs) passes.
+ */
+function opaqueSending(source: string): boolean {
+  if (!OPAQUE.test(source)) return false
+  // A PowerShell block comment ends at #> and what follows it still runs; a shell would read it as a comment.
+  const withoutBlocks = source.replace(/<#[\s\S]*?#>/g, ' ')
+  return [source, source.replace(/\x5c /g, ' '), withoutBlocks].some(
+    (text) => sensitiveShell(text),
+  )
+}
 export function reviewableCall(name: string, input: Args): boolean {
   inspectionCwd = String(input['cwd'] ?? homedir())
   missingScripts = []
   unresolvedPushes = []
   remoteInspection = false
   name = name.replace(/^mcp__agent__/, '')
-  if (['shell_run', 'Bash', 'PowerShell', 'exec_command'].includes(name))
-    return shell(
-      String(input['command'] ?? input['cmd'] ?? '').replace(
-        name === 'PowerShell' || input['shell'] === 'powershell'
-          ? /\x60\r?\n/g
-          : /$^/g,
-        '',
-      ),
+  if (['shell_run', 'Bash', 'PowerShell', 'exec_command'].includes(name)) {
+    const text = String(input['command'] ?? input['cmd'] ?? '').replace(
+      name === 'PowerShell' || input['shell'] === 'powershell'
+        ? /\x60\r?\n/g
+        : /$^/g,
+      '',
     )
+    return shell(text) || opaqueSending(text)
+  }
   if (name === 'device_tool')
     return reviewableCall(String(input['tool'] ?? ''), object(input['args']))
   if (name === 'browser_fetch') {

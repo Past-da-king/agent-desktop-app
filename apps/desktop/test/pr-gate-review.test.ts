@@ -43,8 +43,10 @@ describe('review findings: shell grammar and all review surfaces',()=>{
   ['webapp_run',{app:'GitHub',tool:'ready_pull_request'}],
   ['apps_run',{slug:'GITHUB_MERGE_A_PULL_REQUEST',arguments:{}}],
  ])('holds %s %j',(tool,args)=>expect(reviewableCall(tool,args)).toBe(true))
- it('does not hold review approval or unrelated buttons',()=>{
-  expect(reviewableCall('apps_run',{slug:'GITHUB_CREATE_A_REVIEW_FOR_A_PULL_REQUEST',arguments:{event:'APPROVE'}})).toBe(false)
+ it('holds review approval but not unrelated buttons',()=>{
+  // M1 (round 9): an approval sends a PR on, so it is held wherever the docs say; other review events are not.
+  expect(reviewableCall('apps_run',{slug:'GITHUB_CREATE_A_REVIEW_FOR_A_PULL_REQUEST',arguments:{event:'APPROVE'}})).toBe(true)
+  expect(reviewableCall('apps_run',{slug:'GITHUB_CREATE_A_REVIEW_FOR_A_PULL_REQUEST',arguments:{event:'COMMENT'}})).toBe(false)
   expect(reviewableCall('browser_act',{action:'click',name:'Ready for review',pageUrl:'https://example.com'})).toBe(false)
  })
 })

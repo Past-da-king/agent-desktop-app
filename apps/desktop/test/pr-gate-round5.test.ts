@@ -69,10 +69,10 @@ it.each([
 ])('proof4 comments stop at the newline: %s', (command) =>
   expect(reviewableCall('shell_run', { command })).toBe(true),
 )
-it('R7 sensitive text in a same-line comment is held conservatively', () =>
+it('text in a same-line comment never runs, so it is not held (cooperative guard, round 9)', () =>
   expect(
     reviewableCall('shell_run', { command: 'ls # x; gh pr merge 1' }),
-  ).toBe(true))
+  ).toBe(false))
 it.each(['echo "# gh pr merge 1"', "echo 'a#b gh pr ready 1'", 'echo a#b'])(
   'proof4 quoted and in-word hashes stay literal: %s',
   (command) => expect(reviewableCall('shell_run', { command })).toBe(false),

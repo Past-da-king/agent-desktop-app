@@ -53,7 +53,8 @@ describe('review findings: protection, private engine path and launch parity',()
   const id=held.message.match(/Gate id: ([a-f0-9-]+)/)![1]!
   await toolNamed(t.tools,'pr_gate_attest').run({gateId:id,attestation:proof()},t.ctx)
   expect(await permission('Bash',{command:'gh pr ready 3',description:'A different description',timeout:900000})).toEqual({allow:true})
-  expect(await permission('Bash',{command:'gh pr ready 3'})).toMatchObject({allow:false})
+  // Round 9 B1: the Claude permission check does not spend the grant; the gh shim spends it when the action really runs (see the round 9 end-to-end test).
+  expect(await permission('Bash',{command:'gh pr ready 3'})).toEqual({allow:true})
   t.settings.prGateEnabled=false
   expect(toolsForTurn({tools:t.tools,cli:'claude',thread:'helper:author'}).some(tool=>tool.spec.name==='shell_run')).toBe(false)
   expect(await permission('PowerShell',{command:'gh pr ready 3'})).toEqual({allow:true})

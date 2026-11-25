@@ -53,6 +53,29 @@ async function node(id: string): Promise<Node> {
 function mesh(all: Node[]): void {
   for (const a of all) for (const b of all) a.host.passes.set(b.pass, { deviceId: b.id, node: true })
 }
+/**
+ * A paired peer always has a device row (pairing writes it, and a joining node is seeded with its host's). Replication
+ * refuses a peer it holds no pinned authority row for (the PR gate trusts signing keys only from known peers), so the
+ * nodes here start paired: every store holds a row for every node.
+ */
+async function pair(all: Node[]): Promise<void> {
+  for (const self of all)
+    for (const peer of all)
+      await self.store.upsert('device', {
+        id: peer.id,
+        name: peer.id,
+        kind: 'desktop',
+        platform: 'linux',
+        roles: ['brain', 'hands'],
+        priority: 0,
+        urls: [],
+        fp: '',
+        facts: {} as never,
+        pairedAt: 1,
+        lastSeen: 1,
+        revoked: false,
+      })
+}
 
 function target(peer: Node): PeerTarget {
   return { id: peer.id, name: peer.id, urls: [peer.host.url], fp: '' }
@@ -119,6 +142,7 @@ describe('replication between nodes', () => {
     const b = await node('dev_b')
     const c = await node('dev_c')
     mesh([a, b, c])
+    await pair([a, b, c])
     // A only knows B; C only knows B; B is reached by both and reaches nobody itself (behind a firewall).
     link(a, [b]).start()
     link(c, [b]).start()
@@ -157,6 +181,7 @@ describe('replication between nodes', () => {
       nodes.push(n)
     }
     mesh([a, b, c])
+    await pair([a, b, c])
     const ra = link(a, [b])
     const rc = link(c, [b])
 
@@ -182,6 +207,7 @@ describe('replication between nodes', () => {
     const a = await node('dev_a')
     const b = await node('dev_b')
     mesh([a, b])
+    await pair([a, b])
     const ra = link(a, [b])
     b.host.down = true
     await a.store.upsert('memory', { title: 'While B was away' })
@@ -226,6 +252,7 @@ describe('replication between nodes', () => {
     const a = await node('dev_a')
     const b = await node('dev_b')
     mesh([a, b])
+    await pair([a, b])
     let heard = 0
     const ra = link(a, [b], 1, () => (heard += 1))
     b.host.down = true
@@ -275,6 +302,7 @@ describe('replication between nodes', () => {
     const a = await node('dev_a')
     const b = await node('dev_b')
     mesh([a, b])
+    await pair([a, b])
     const replicator = link(a, [b], 20)
     replicator.start()
     await a.store.upsert('memory', { title: 'First' })
@@ -300,6 +328,7 @@ describe('replication between nodes', () => {
     const a = await node('dev_a')
     const b = await node('dev_b')
     mesh([a, b])
+    await pair([a, b])
     await a.store.upsert('memory', { title: 'Known to every version' })
     const wake = await a.store.upsert('wakeup', { title: 'Standup', severity: 'urgent' } as never)
     // B ran an older version: it pulled A's whole log but dropped the wake-up (unknown to it), and kept no record of
@@ -327,6 +356,7 @@ describe('replication between nodes', () => {
     const a = await node('dev_a')
     const b = await node('dev_b')
     mesh([a, b])
+    await pair([a, b])
     await a.store.upsert('wakeup', { title: 'Lunch' } as never)
     moved.pulled = 0
     link(b, [a]).start()

@@ -216,7 +216,8 @@ it('attests a device call at origin, carries real identity and consumes exactly 
     chatId: 'project-42',
     deadlineMs: 1000,
   })
-  expect(JSON.stringify(replay)).toContain('NOT RUN')
+  // A replay of the same command answers from the durable receipt (round 10) and never runs it again.
+  expect(JSON.stringify(replay)).toContain('already ran once')
   expect(executed).toHaveBeenCalledTimes(1)
   expect(await tools[0]!.run(input, origin.ctx)).toContain('NOT RUN')
 })
