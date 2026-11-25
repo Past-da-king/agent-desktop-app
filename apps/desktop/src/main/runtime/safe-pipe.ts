@@ -109,7 +109,7 @@ export function guardChild<T extends ChildProcess>(child: T): T {
 export function terminatePipeChild(child: ChildProcess): void {
   let exited = false, closed = false
   const originalEmit = child.emit
-  child.emit = function (event: string | symbol, ...args: unknown[]): boolean {
+  child.emit = function (this: ChildProcess, event: string | symbol, ...args: unknown[]): boolean {
     if (event === 'exit') { if (exited) return false; exited = true }
     if (event === 'close') { if (closed) return false; closed = true }
     return Reflect.apply(originalEmit, this, [event, ...args])
@@ -128,10 +128,10 @@ export function terminatePipeChild(child: ChildProcess): void {
   child.once('exit', () => clearTimeout(force))
   // Windows kill() is process-only; taskkill also tears down descendants such as WSL hosts.
   if (process.platform === 'win32' && child.pid !== undefined) {
-      void import('node:child_process').then(({ spawn }) => {
-        const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
-        killer.on('error', () => undefined)
-      }).catch(() => undefined)
+    void import('node:child_process').then(({ spawn }) => {
+      const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      killer.on('error', () => undefined)
+    }).catch(() => undefined)
   }
   else { try { child.kill('SIGTERM') } catch { /* Escalation and owner deadline still run. */ } }
 }
