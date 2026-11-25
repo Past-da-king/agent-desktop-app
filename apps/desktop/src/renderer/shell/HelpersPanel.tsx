@@ -1,3 +1,4 @@
+import { ApprovalContext } from '../ui/ApprovalContext'
 import { MAIN_CHAT, type ChatItem, type MascotId, type ProjectRow } from '@agent/core'
 import { PlaceChip } from '../ui/PlaceChip'
 import { Fragment, useEffect, useMemo, useState } from 'react'
@@ -169,6 +170,7 @@ export function HelperCardList({
   nameChats?: boolean
   id?: string
 }): JSX.Element | null {
+  const waiting = useWaiting()
   const { stopping, stop } = useStop()
   // A helper's own helpers sit folded under it, closed until its row is opened.
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(NONE)
@@ -248,6 +250,7 @@ export function HelperCardList({
             </span>
             <span className={`pill ${s.tone}`}>{s.label}</span>
           </button>
+          {waiting.filter((item) => metaText(parseMeta(item.meta), 'helper') === card.id || (target.kind === 'project-chat' && chatOf(item) === target.chat && metaText(parseMeta(item.meta), 'helper') === '')).map((item) => <ApprovalContext key={item.id} meta={parseMeta(item.meta)} />)}
           {stoppable ? (
             <button
               type="button"
@@ -514,6 +517,7 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
               <Icon name="chev" size={16} />
             </button>
           </section>
+          <ApprovalContext meta={parseMeta(row?.meta ?? '{}')} />
           {current !== undefined ? (
             <div className="hp-now">
               <span className="eyebrow">NOW</span>
