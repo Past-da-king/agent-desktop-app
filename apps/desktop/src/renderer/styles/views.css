@@ -526,3 +526,8 @@ button.mem-note:hover{background:color-mix(in srgb,var(--pc) 88%,var(--on-pc))}
 .mention-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mention-chip-x{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
 .mention-chip-x:hover{background:color-mix(in srgb,var(--pf-solid) 20%,transparent)}
+
+.approval-context { min-width: 0; max-width: 100%; margin-block: 8px; overflow-wrap: anywhere; }
+.approval-context summary { cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.approval-context details[open] summary { display: block; }
+.approval-context details > div { white-space: pre-wrap; }

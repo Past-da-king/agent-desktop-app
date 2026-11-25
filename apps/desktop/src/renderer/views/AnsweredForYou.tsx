@@ -1,3 +1,6 @@
+import { useEntity } from '../state/useData'
+import { parseMeta } from '../lib/meta'
+import { ApprovalContext } from '../ui/ApprovalContext'
 import { useEffect, useState } from 'react'
 import type { AnsweredForYou } from '@agent/core'
 import { agent } from '../bridge'
@@ -10,6 +13,7 @@ export function AnsweredForYouLink(): JSX.Element {
 }
 
 export function AnsweredForYouDialog({ onClose }: { onClose: () => void }): JSX.Element {
+  const cards = useEntity('chat_item')
   const [rows, setRows] = useState<AnsweredForYou[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -37,6 +41,7 @@ export function AnsweredForYouDialog({ onClose }: { onClose: () => void }): JSX.
     {loading ? <p className="muted" role="status">Loading answers...</p> : rows.length === 0 ? <p className="rowempty">Your agent has not answered any cards for you yet.</p> : <ol className="acts-list">{rows.map((row) => <li key={row.id} className="acts-entry">
       <div className="small muted"><time dateTime={new Date(row.at).toISOString()}>{new Date(row.at).toLocaleString()}</time> · {row.asker}</div>
       <b>{row.summary}</b>
+      <ApprovalContext meta={parseMeta(cards.find((card) => card.id === row.id)?.meta ?? '{}')} />
       <div>{row.decision === 'answer' ? row.answer : row.decision === 'approve' ? 'Approved' : 'Declined'}</div>
       <p className="muted">{row.reason}</p>
       {row.undone > 0 ? <span className="small muted">Undone</span> : row.undo !== 'none' ? <Button variant="text" size="sm" disabled={busy !== ''} onClick={() => void undo(row.id)}>{busy === row.id ? 'Undoing...' : 'Undo'}</Button> : <span className="small muted">This action cannot be undone.</span>}
