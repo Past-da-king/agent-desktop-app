@@ -8,7 +8,7 @@ import { join, normalize, resolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { networkInterfaces } from 'node:os'
 
-import type { DeviceJoinResult, DeviceRow, DevicesStatus, ListWhere, PairingOfferInfo } from '@agent/core'
+import { compareDeviceOrder, hasTiedPriorities, type DeviceJoinResult, type DeviceRow, type DevicesStatus, type ListWhere, type PairingOfferInfo } from '@agent/core'
 
 import { filterRows } from '../../shared/list-where'
 
@@ -21,7 +21,8 @@ import { OverlayNet, setOverlayNet } from './net'
 import { originFrom, setLocalOrigin } from './origin'
 import { formatShortCode, handlePair, pairUri, parsePairUri, PairingOffers } from './pairing'
 import { pinnedFetch } from './pinned-fetch'
-import { devicesState } from './sync'
+import { devicesState, probeHealth } from './sync'
+import { AnswerOrder } from './answer-order'
 import { SecretPassTable, hashPass, newPass, type SecretsLike } from './passes'
 import { DEFAULT_SHARE, SHARE_GROUPS, type DeviceToolHost, type ShareGroup } from './device-tool-host'
 import type { FirewallState, WindowsFirewall } from './firewall'
@@ -52,6 +53,7 @@ export interface DeviceStoreLike {
   onChange(listener: (change: { entity: string }) => void): () => void
   /** The newest change-log seq (db.ts logSeq). */
   logSeq?(): number
+  batch?<T>(work: () => Promise<T>): Promise<T>
 }
 
 export interface IpcHandleLike {
@@ -70,6 +72,7 @@ export interface DevicesServiceDeps {
   platform: string
   /** The node can run turns now (an AI account is set up). */
   ready: () => boolean
+  availability?: () => string
   /** A turn is running. */
   busy: () => boolean
   /** The built renderer (out/renderer), served at /app/. */
@@ -115,7 +118,7 @@ function toRecord(row: DeviceRow): DeviceRecord {
 
 function sortDevices(rows: DeviceRow[]): DeviceRow[] {
   const brain = (row: DeviceRow): number => (row.roles.includes('brain') ? 0 : 1)
-  return [...rows].sort((a, b) => brain(a) - brain(b) || a.priority - b.priority || a.pairedAt - b.pairedAt)
+  return [...rows].sort((a, b) => brain(a) - brain(b) || compareDeviceOrder(a, b))
 }
 
 /** "3F2A 9C01 77DE 0B41": the start of the fingerprint as hex in groups, to compare by eye on both screens. */
@@ -159,6 +162,11 @@ export class DevicesService {
   private readonly dir: string
   private allowedCache = new Map<string, number>()
   private offStore: (() => void) | null = null
+  private orderWrite: Promise<void> = Promise.resolve()
+  private reloadGeneration = 0
+  private repairedOrder = false
+  private answerTimer: NodeJS.Timeout | null = null
+  private readonly answerOrder: AnswerOrder
   private ipv6 = true
   /** The optional overlay network (protocol s10); does nothing until the person picks one. */
   readonly net: OverlayNet
@@ -166,6 +174,26 @@ export class DevicesService {
 
   constructor(private readonly deps: DevicesServiceDeps) {
     this.now = deps.now ?? Date.now
+    this.answerOrder = new AnswerOrder({
+      selfId: () => this.identity.nodeId,
+      brains: () => this.list().filter(row => row.roles.includes('brain') && !row.revoked),
+      health: async (brain) => {
+        const row = this.rows.get(brain.id)
+        if (row === undefined) return false
+        const health = await probeHealth(row)
+        return health.up && health.ready
+      },
+      busy: () => this.deps.busy(),
+      selfReady: () => this.deps.ready(),
+      screens: () => (this.srv?.connectedIds() ?? []).filter(id => {
+        const facts = this.srv?.factsOf(id)
+        return facts?.kind === 'phone' || facts?.kind === 'tablet' || this.rows.get(id)?.roles.includes('screen') === true
+      }),
+      handback: (id) => {
+        this.deps.log?.('Answer order: handing idle screen back', { device: id, why: this.answerOrder.line() })
+        this.srv?.handbackScreen(id)
+      },
+    })
     this.dir = join(deps.userData, 'devices')
     this.config = new DevicesConfigFile(join(this.dir, 'config.json'))
     this.net = new OverlayNet({
@@ -222,7 +250,13 @@ export class DevicesService {
           }
         },
         logSeq: () => this.deps.store.logSeq?.() ?? 0,
-        callRpc: (session, method, args) => callAllowed(this.deps.registry, this.server.added(), { deviceId: session.deviceId, origin: () => session.origin(), get open() { return session.open }, roles: this.rolesOf(session.deviceId) }, method, args),
+        callRpc: (session, method, args) => {
+          if ((method === 'chat.send' || method === 'chat.sendOnce') && !this.deps.ready()) {
+            session.close(4011, 'this brain is not ready')
+            return Promise.reject(new Error(this.deps.availability?.() || 'This device is not ready to answer.'))
+          }
+          return callAllowed(this.deps.registry, this.server.added(), { deviceId: session.deviceId, origin: () => session.origin(), get open() { return session.open }, roles: this.rolesOf(session.deviceId) }, method, args)
+        },
         onConnections: () => this.changed(),
         onSeen: (id) => this.seen(id),
         onHello: (id, facts) => void this.hello(id, facts),
@@ -253,6 +287,13 @@ export class DevicesService {
   /** The brain this node is serving its tools to right now, or null. */
   servingTo(): string | null {
     return this.uplink.target
+  }
+
+  handbackScreens(): void {
+    for (const id of this.srv?.connectedIds() ?? []) {
+      const facts = this.srv?.factsOf(id)
+      if (facts?.kind === 'phone' || facts?.kind === 'tablet') this.srv?.handbackScreen(id)
+    }
   }
 
   /** Checks the link to the answering brain now instead of at the next 15 s check. */
@@ -293,9 +334,10 @@ export class DevicesService {
   /** Reads the device rows, writes this node's own, and listens when Devices is on. */
   async start(): Promise<void> {
     await this.reloadRows()
+    await this.repairOrder()
     this.offStore = this.deps.store.onChange((change) => {
       // A device row that changes as the app closes finds the database shut: that is not an error to report.
-      if (change.entity === 'device') void this.reloadRows().then(() => this.uplink.tick()).catch(() => undefined)
+      if (change.entity === 'device') void this.reloadRows().then(() => this.repairOrder()).then(() => this.uplink.tick()).catch(() => undefined)
     })
     if (this.enabled) {
       await this.switchOn()
@@ -306,6 +348,8 @@ export class DevicesService {
   }
 
   async stop(): Promise<void> {
+    if (this.answerTimer !== null) clearInterval(this.answerTimer)
+    this.answerTimer = null
     this.offStore?.()
     this.offStore = null
     setOverlayNet(null)
@@ -347,6 +391,16 @@ export class DevicesService {
     this.selfPass()
     await this.writeSelf()
     this.uplink.start()
+    if (this.answerTimer === null) {
+      const check = (): void => {
+        if (!this.enabled) return
+        const before = this.answerOrder.line()
+        void this.answerOrder.tick().then(() => { if (before !== this.answerOrder.line()) this.changed() }).catch(() => undefined)
+      }
+      check()
+      this.answerTimer = setInterval(check, 15_000)
+      this.answerTimer.unref?.()
+    }
     void this.checkFirewall(true)
   }
 
@@ -430,7 +484,7 @@ export class DevicesService {
     if (row === undefined || row.revoked) return
     this.seenAt.set(id, this.now())
     const { tools, ...rest } = facts
-    await this.saveRow({ ...row, name: facts.name, urls: facts.urls, facts: rest, tools: tools ?? [], lastSeen: this.now() }).catch(() => undefined)
+    await this.saveRow({ id, name: facts.name, urls: facts.urls, facts: rest, tools: tools ?? [], lastSeen: this.now() }).catch(() => undefined)
   }
 
   selfFacts(): DeviceFacts {
@@ -475,6 +529,7 @@ export class DevicesService {
       shareGroups: this.shareGroups(),
       firewall: this.deps.firewall?.needed === true && config.enabled ? this.firewallState : 'not-needed',
       servingTo: this.uplink.target ?? '',
+      answering: config.enabled ? `${this.deps.availability?.() || this.answerOrder.line()}${hasTiedPriorities(this.list().filter(row => row.roles.includes('brain') && !row.revoked)) ? ' Order has tied positions; using pairing order, then device id.' : ''}` : 'Devices is off.',
     }
   }
 
@@ -561,40 +616,62 @@ export class DevicesService {
     if (roles.length === 0) throw new Error('A device needs at least one role.')
     const becameBrain = roles.includes('brain') && !row.roles.includes('brain')
     const priority = becameBrain ? this.nextPriorityNow() : row.priority
-    await this.saveRow({ ...row, roles, priority })
+    await this.saveRow({ id, roles, ...(becameBrain ? { priority } : {}) })
+    await this.editOrder(() => undefined)
   }
 
-  /** Puts a brain at a place in the order its devices try them in (0 = first). */
+  /** Serialize order edits and write the entire ranking, even when the moved row already has that number. */
+  private editOrder(edit: (brains: DeviceRow[]) => void): Promise<void> {
+    const work = this.orderWrite.then(async () => {
+      await this.reloadRows()
+      const brains = this.list().filter(row => row.roles.includes('brain') && !row.revoked)
+      edit(brains)
+      // Write only order fields: a stale metadata writer must never put an old rank back.
+      const write = async (): Promise<void> => {
+        for (let priority = 0; priority < brains.length; priority++) {
+          const row = brains[priority]
+          if (row !== undefined) await this.saveRow({ id: row.id, priority })
+        }
+      }
+      if (this.deps.store.batch !== undefined) await this.deps.store.batch(write)
+      else await write()
+      this.changed()
+    })
+    this.orderWrite = work.catch(() => undefined)
+    return work
+  }
+
   async setPosition(id: string, index: number): Promise<void> {
-    const brains = this.list().filter((row) => row.roles.includes('brain') && !row.revoked)
-    const at = brains.findIndex((row) => row.id === id)
-    if (at < 0) throw new Error('Only devices that answer can be put in order.')
-    const [moved] = brains.splice(at, 1)
-    if (moved === undefined) return
-    const to = Math.max(0, Math.min(brains.length, Math.floor(Number.isFinite(index) ? index : 0)))
-    brains.splice(to, 0, moved)
-    for (let i = 0; i < brains.length; i += 1) {
-      const row = brains[i]
-      if (row !== undefined && row.priority !== i) await this.saveRow({ ...row, priority: i })
-    }
-    this.changed()
+    return this.editOrder(brains => {
+      const at = brains.findIndex(row => row.id === id)
+      if (at < 0) throw new Error('Only devices that answer can be put in order.')
+      const moved = brains.splice(at, 1)[0]
+      if (moved !== undefined) brains.splice(Math.max(0, Math.min(brains.length, Math.floor(Number.isFinite(index) ? index : 0))), 0, moved)
+    })
   }
 
   async move(id: string, direction: 'up' | 'down'): Promise<void> {
-    const brains = this.list().filter((row) => row.roles.includes('brain') && !row.revoked)
-    const at = brains.findIndex((row) => row.id === id)
-    if (at < 0) throw new Error('Only devices that answer can be put in order.')
-    const to = direction === 'up' ? at - 1 : at + 1
-    if (to < 0 || to >= brains.length) return
-    const moved = brains[at]
-    const other = brains[to]
-    if (moved === undefined || other === undefined) return
-    brains[at] = other
-    brains[to] = moved
-    for (let i = 0; i < brains.length; i += 1) {
-      const row = brains[i]
-      if (row !== undefined && row.priority !== i) await this.saveRow({ ...row, priority: i })
-    }
+    return this.editOrder(brains => {
+      const at = brains.findIndex(row => row.id === id)
+      if (at < 0) throw new Error('Only devices that answer can be put in order.')
+      const to = direction === 'up' ? at - 1 : at + 1
+      if (to < 0 || to >= brains.length) return
+      const moved = brains[at], other = brains[to]
+      if (moved !== undefined && other !== undefined) { brains[at] = other; brains[to] = moved }
+    })
+  }
+
+  private async repairOrder(): Promise<void> {
+    if (this.repairedOrder || (this.config.get().orderRepairVersion ?? 0) >= 1) return
+    const brains = this.list().filter(row => row.roles.includes('brain') && !row.revoked)
+    if (!hasTiedPriorities(brains)) return
+    // Mark before writing: store change listeners may call us again while the repair is queued.
+    this.repairedOrder = true
+    try {
+      await this.editOrder(() => undefined)
+      this.config.save({ orderRepairVersion: 1 })
+      this.deps.log?.('Answer order: repaired tied priorities', { devices: brains.map(row => row.id) })
+    } catch (error) { this.repairedOrder = false; throw error }
   }
 
   async revoke(id: string): Promise<void> {
@@ -603,7 +680,7 @@ export class DevicesService {
     if (row === undefined) throw new Error('That device is not paired.')
     this.passes.remove(id)
     this.dropPeer(id)
-    await this.saveRow({ ...row, revoked: true })
+    await this.saveRow({ id, revoked: true })
     this.srv?.closeDevice(id)
     this.changed()
   }
@@ -825,11 +902,13 @@ export class DevicesService {
   }
 
   private async reloadRows(): Promise<void> {
+    const generation = ++this.reloadGeneration
     const rows = await this.deps.store.list('device')
+    if (generation !== this.reloadGeneration) return
     this.rows = new Map(rows.map((row) => [row.id, row]))
   }
 
-  private async saveRow(record: DeviceRecord | DeviceRow): Promise<void> {
+  private async saveRow(record: Partial<DeviceRecord | DeviceRow> & { id: string }): Promise<void> {
     const saved = await this.deps.store.upsert('device', record)
     this.rows.set(saved.id, saved)
   }
@@ -861,7 +940,10 @@ export class DevicesService {
       tools: tools ?? [],
     }
     const same = existing !== undefined && JSON.stringify(toRecord({ ...existing, lastSeen: 0 })) === JSON.stringify({ ...record, lastSeen: 0 })
-    if (!same) await this.saveRow(record)
+    if (!same) {
+      if (existing === undefined) await this.saveRow(record)
+      else { const { priority: _priority, ...metadata } = record; await this.saveRow(metadata) }
+    }
     setLocalOrigin(originFrom(this.identity.nodeId, facts))
   }
 
@@ -872,7 +954,7 @@ export class DevicesService {
     const row = this.rows.get(id)
     if (row === undefined || row.revoked) return
     const facts = this.srv?.factsOf(id) ?? null
-    let patch: DeviceRow = { ...row, lastSeen: at }
+    let patch: Partial<DeviceRow> & { id: string } = { id, lastSeen: at }
     if (facts !== null) {
       const { tools: _tools, ...plain } = facts
       patch = { ...patch, facts: plain, name: facts.name, urls: facts.urls }
@@ -883,7 +965,7 @@ export class DevicesService {
   private brains(): BrainRef[] {
     return this.list()
       .filter((row) => row.roles.includes('brain') && !row.revoked)
-      .map((row) => ({ id: row.id, name: row.name, urls: row.urls, fp: row.fp, priority: row.priority }))
+      .map((row) => ({ id: row.id, name: row.name, urls: row.urls, fp: row.fp, priority: row.priority, pairedAt: row.pairedAt }))
   }
 
   /** Whether a device may fetch this file (protocol s5: named in a chat, the attachments folder, a project folder). */

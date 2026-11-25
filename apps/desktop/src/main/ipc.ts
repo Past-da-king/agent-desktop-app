@@ -183,6 +183,7 @@ export interface InstantSendDeps {
 }
 
 export interface IpcDeps {
+  answerBlocker?: () => string
   acts?: import('./runtime/acts-for-me').ActsForMe
   instant?: InstantSendDeps
   /** His recordings on disk; a linked phone's dictations land here too. */
@@ -531,6 +532,8 @@ export function registerIpc(deps: IpcDeps): () => void {
   // ---- chat ----
 
   handle(CHANNELS.chat.send, async (event, rawText, rawAttachments, rawChat, rawOptions) => {
+    const blocked = deps.answerBlocker?.()
+    if (blocked) throw new Error(blocked)
     const text = requireString(rawText, 'message', MAX_MESSAGE)
     const attachments = requireAttachments(rawAttachments)
     const target = optionalChat(rawChat)
@@ -551,6 +554,8 @@ export function registerIpc(deps: IpcDeps): () => void {
   // A phone's message with its own id (docs/devices-protocol.md s8): answered as soon as it is safely held, never run twice.
   const sendOnceGate = makeSendOnce({ exists: async (rowId) => (await store.get('chat_item', rowId)) !== null })
   handle(CHANNELS.chat.sendOnce, async (event, rawInput) => {
+    const blocked = deps.answerBlocker?.()
+    if (blocked) throw new Error(blocked)
     const input = typeof rawInput === 'object' && rawInput !== null ? (rawInput as Record<string, unknown>) : {}
     const text = requireString(input['text'], 'message', MAX_MESSAGE)
     const attachments = requireAttachments(input['attachments'] ?? [])

@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Attachment, RunState } from '@agent/core'
 
@@ -40,6 +40,7 @@ let dispose: (() => void) | null = null
 let base = ''
 let pastedBytes: Uint8Array | null = null
 let fp = ''
+let canAnswer = true
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'agent-node-'))
@@ -47,6 +48,7 @@ beforeEach(async () => {
   const settings = new SettingsStore(join(dir, 'settings.json'), { hostname: () => 'test-node' })
   const secrets = new Secrets(join(dir, 'secrets'), storage)
   const account = new AccountService(store, settings, secrets, { autoStart: false })
+  canAnswer = true
   sends = []
   windowEvents = []
   const chat: ChatRunner = {
@@ -75,7 +77,7 @@ beforeEach(async () => {
     appVersion: '9.9.9',
     nodeName: () => settings.get().deviceName,
     platform: 'linux',
-    ready: () => true,
+    ready: () => canAnswer,
     busy: () => false,
     rendererDir: renderer,
     emitWindow: (channel) => void windowEvents.push(channel),
@@ -127,6 +129,56 @@ async function pair(roles: string[] = ['screen']): Promise<{ deviceId: string; p
 }
 
 describe('the desktop node', () => {
+  it('does not restore a stale rank when self metadata finishes after an order edit', async () => {
+    const brain = await pair(['brain', 'hands'])
+    let entered!: () => void, release!: () => void
+    const waiting = new Promise<void>(r => { entered = r })
+    const gate = new Promise<void>(r => { release = r })
+    const original = store.upsert.bind(store)
+    let held = false
+    const spy = vi.spyOn(store, 'upsert').mockImplementation((async (...args: Parameters<Store['upsert']>) => {
+      const [entity, input] = args
+      if (!held && entity === 'device' && input.id === service.identity.nodeId && 'urls' in input) {
+        held = true; entered(); await gate
+      }
+      return original(...args)
+    }) as Store['upsert'])
+    const metadata = service.setExtraUrls(['https://127.0.0.1:12345'])
+    try {
+      await waiting
+      await service.setPosition(brain.deviceId, 0)
+    } finally { release() }
+    await metadata
+    spy.mockRestore()
+    const rows = (await store.list('device')).filter(r => r.roles.includes('brain'))
+    expect(new Set(rows.map(r => r.priority)).size).toBe(rows.length)
+    expect(rows.find(r => r.id === service.identity.nodeId)?.priority).toBe(1)
+  })
+
+  it('repairs ties once and arrows renumber every brain even at a boundary', async () => {
+    const one = await pair(['brain']), two = await pair(['brain'])
+    await store.upsert('device', { id: one.deviceId, priority: 0 })
+    await store.upsert('device', { id: two.deviceId, priority: 0 })
+    await new Promise(r => setTimeout(r, 100))
+    await service.setPosition(one.deviceId, 0)
+    await service.move(one.deviceId, 'up')
+    expect(service.list().filter(r => r.roles.includes('brain')).map(r => r.priority)).toEqual([0, 1, 2])
+    expect(service.status().answering).toBeTruthy()
+  })
+
+  it('drops an unavailable screen before accepting a message so the phone can fail over safely', async () => {
+    const paired = await pair()
+    const client = await connectRpc(base, fp, paired.pass, phone)
+    canAnswer = false
+    try {
+      const result = client.call('chat.sendOnce', { sendId: 'disk-test-12345', text: 'safe message' }).then(() => 'accepted')
+      expect(await Promise.race([result, client.closed])).toBe(4011)
+      expect(sends).toEqual([])
+      const health = await pinnedRequest(`${base}/v1/health`, fp)
+      expect(health.json()).toMatchObject({ ready: false })
+    } finally { client.close() }
+  })
+
   it('pairs a device over pinned TLS and refuses the wrong certificate', async () => {
     const health = await pinnedRequest(`${base}/v1/health`, fp)
     expect(health.status).toBe(200)

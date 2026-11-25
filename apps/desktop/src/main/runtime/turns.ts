@@ -1,3 +1,4 @@
+import { compareDeviceOrder } from '@agent/core'
 /**
  * Turn leases, crash resume and failover (docs/devices-protocol.md s8).
  *
@@ -344,5 +345,5 @@ export class TurnLeases implements LeaseHook {
 
 /** The brains in rank order from the device rows. */
 export async function rankedBrains(store: DataStore): Promise<DeviceRow[]> {
-  return (await store.list('device')).filter((row) => !row.revoked && row.roles.includes('brain')).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))
+  return (await store.list('device')).filter((row) => !row.revoked && row.roles.includes('brain')).sort((a, b) => compareDeviceOrder(a, b))
 }

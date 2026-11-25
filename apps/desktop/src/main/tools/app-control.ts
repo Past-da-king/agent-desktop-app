@@ -177,6 +177,7 @@ function statusText(devices: DevicesControl, deps: AppControlDeps): string {
   if (status.firewall !== 'not-needed') lines.push(`Windows Firewall: ${status.firewall}${status.firewall === 'blocked' || status.firewall === 'missing' ? ' (devices_firewall_allow fixes it, one Windows prompt)' : ''}.`)
   if (status.network !== undefined && status.network.mode !== 'none') lines.push(`Network: ${status.network.mode}, ${status.network.state}${status.network.addresses.length > 0 ? ` (${status.network.addresses.join(', ')})` : ''}.`)
   lines.push(`Other devices may use here: ${SHARE_GROUPS.map((group) => `${group} ${status.shareGroups[group] ? 'on' : 'off'}`).join(', ')}.`)
+  if (status.answering) lines.push(status.answering)
   if (status.servingTo !== '') lines.push(`Lending its tools to: ${rows.find((row) => row.id === status.servingTo)?.name ?? status.servingTo}.`)
   const revoked = rows.filter((row) => row.revoked).length
   lines.push(rows.length === 0 ? 'No devices yet.' : `Devices (${rows.length - revoked} in${revoked > 0 ? `, ${revoked} taken out: device_remove with clear_revoked clears them` : ''}):`)

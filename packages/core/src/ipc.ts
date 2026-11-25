@@ -881,6 +881,8 @@ export interface DeviceRow extends RowBase {
 
 /** Settings > Devices: whether this computer lets other devices connect, and how they reach it. */
 export interface DevicesStatus {
+  /** Current answer placement and the reason; absent on older nodes. */
+  answering?: string
   enabled: boolean
   /** The server is listening now. */
   running: boolean
