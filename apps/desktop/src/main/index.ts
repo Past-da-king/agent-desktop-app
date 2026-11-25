@@ -915,6 +915,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     if (state.blocked) devices?.handbackScreens()
   })
 
+  await freezeRecovery?.ready
   store = new Store(join(dir, 'agent.db'))
   // Checkpoints off the main thread (db-checkpoint.ts): a checkpoint inside an ordinary write took up to 2 s.
   store.startCheckpointer({ log: (line, detail) => logger.info(line, detail) })

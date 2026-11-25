@@ -1,7 +1,10 @@
 /** Separate process: recovery must not depend on the frozen Electron main thread or its logger. */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createServer, type Socket } from 'node:net'
+import { randomBytes } from 'node:crypto'
+import { startViaWmi } from './self-update'
 
 export interface RecoveryOptions {
   parentPid: number
@@ -17,6 +20,7 @@ export interface RecoveryOptions {
   windowMs?: number
   restartDelayMs?: number
   dataPath?: string
+  relaunchEnv?: Record<string, string>
   diskIntervalMs?: number
 }
 
@@ -36,6 +40,7 @@ process.on('message', message => {
   if (message?.type === 'beat') { last = Date.now(); memory = message.memory ?? {}; clearRecoveredHold(); if (message.ack && process.connected) process.send({ type: 'beatAck', id: message.ack }) }
 })
 process.on('disconnect', () => { if (!recovering) process.exit(0) })
+process.on('error', error => { if (error.code !== 'EPIPE' && error.code !== 'ERR_IPC_CHANNEL_CLOSED') { try { log('Watchdog error', { why: error.message }) } catch {} } })
 let diskBlocked = false
 function clearRecoveredHold() {
   if (!heldForDisk || diskBlocked || Date.now() - last >= timeout) return
@@ -86,7 +91,7 @@ setInterval(() => {
     process.kill(o.parentPid, 'SIGKILL')
     log('Frozen main stopped', { attempt: history.length })
     setTimeout(() => {
-      const child = cp.spawn(o.executable, o.args, { detached: true, stdio: 'ignore', windowsHide: true, env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'ELECTRON_RUN_AS_NODE')) })
+      const child = cp.spawn(o.executable, o.args, { detached: true, stdio: 'ignore', windowsHide: true, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'ELECTRON_RUN_AS_NODE')), ...o.relaunchEnv } })
       child.once('error', error => { log('Relaunch failed', { why: error.message }); process.exit(0) })
       child.once('spawn', () => { log('Relaunched', { pid: child.pid }); child.unref(); process.exit(0) })
     }, o.restartDelayMs ?? Math.min(30000, 1000 * 2 ** (history.length - 1)))
@@ -95,24 +100,81 @@ setInterval(() => {
 `
 }
 
-export interface FreezeRecovery { stop(): void; unavailable(): boolean }
+/** A WMI-created process cannot inherit Electron's Windows job; a local authenticated socket carries heartbeats. */
+export function recoverySocketBootstrap(port: number, token: string): string {
+  return `
+const channel = require('node:net').connect(${port}, '127.0.0.1')
+let connected = true, buffer = ''
+Object.defineProperty(process, 'connected', { get: () => connected })
+process.send = message => { if (connected) channel.write(JSON.stringify(message) + '\\n'); return connected }
+channel.once('connect', () => channel.write(JSON.stringify({ token: ${JSON.stringify(token)} }) + '\\n'))
+channel.on('data', chunk => { buffer += chunk; let i; while ((i = buffer.indexOf('\\n')) >= 0) { const line = buffer.slice(0, i); buffer = buffer.slice(i + 1); try { process.emit('message', JSON.parse(line)) } catch {} } })
+channel.on('error', () => { connected = false; process.emit('disconnect') })
+channel.on('close', () => { connected = false; process.emit('disconnect') })
+`
+}
+export interface FreezeRecovery { ready?: Promise<void>; stop(): void; unavailable(): boolean }
 export function startFreezeRecovery(userData: string, executable: string, args: string[], onError: (why: string) => void, onDisk?: (freeGb: number, totalGb: number) => void): FreezeRecovery {
   mkdirSync(join(userData, 'logs'), { recursive: true })
   const marker = join(userData, 'logs', 'main-unavailable.json')
-  // A new main process is healthy; the restart history deliberately survives it.
   rmSync(marker, { force: true })
-  const child = spawn(executable, ['-e', recoveryWorkerCode({ parentPid: process.pid, executable, args, marker, dataPath: userData, log: join(userData, 'logs', 'freeze-watchdog.log'), state: join(userData, 'logs', 'freeze-restarts.json') })], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-  })
-  let stopping = false
-  child.on('error', error => onError(error.message))
-  child.once('exit', (code, signal) => { clearInterval(timer); if (!stopping) onError(`Watchdog exited (${signal ?? code ?? 'unknown'}).`) })
-  child.on('message', (message: { type?: string; free?: number; total?: number }) => { if (message.type === 'disk' && typeof message.free === 'number' && typeof message.total === 'number') onDisk?.(message.free, message.total) })
-  const beat = (): void => { if (child.connected) child.send({ type: 'beat', memory: process.memoryUsage() }, error => { if (error !== null) onError(error.message) }) }
-  const timer = setInterval(beat, 1000)
-  timer.unref(); child.unref(); beat()
-  return {
-    unavailable: () => existsSync(marker),
-    stop: () => { stopping = true; clearInterval(timer); if (child.connected) child.send({ type: 'stop' }, () => { if (child.connected) child.disconnect() }) },
+  const options: RecoveryOptions = { parentPid: process.pid, executable, args, marker, dataPath: userData, log: join(userData, 'logs', 'freeze-watchdog.log'), state: join(userData, 'logs', 'freeze-restarts.json') }
+  const diskMessage = (message: { type?: string; free?: number; total?: number }): void => { if (message.type === 'disk' && typeof message.free === 'number' && typeof message.total === 'number') onDisk?.(message.free, message.total) }
+  if (process.platform !== 'win32') {
+    const child = spawn(executable, ['-e', recoveryWorkerCode(options)], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, detached: true, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })
+    let stopping = false
+    child.on('error', error => onError(error.message))
+    child.once('exit', (code, signal) => { clearInterval(timer); if (!stopping) onError(`Watchdog exited (${signal ?? code ?? 'unknown'}).`) })
+    child.on('message', diskMessage)
+    const beat = (): void => { if (child.connected) child.send({ type: 'beat', memory: process.memoryUsage() }, error => { if (error !== null) onError(error.message) }) }
+    const timer = setInterval(beat, 1000)
+    timer.unref(); child.unref(); beat()
+    return { unavailable: () => existsSync(marker), stop: () => { stopping = true; clearInterval(timer); if (child.connected) child.send({ type: 'stop' }, () => { if (child.connected) child.disconnect() }) } }
   }
+  let socket: Socket | undefined, stopping = false, timer: ReturnType<typeof setInterval> | undefined
+  const token = randomBytes(32).toString('hex')
+  const script = join(userData, 'logs', `freeze-supervisor-${process.pid}.cjs`)
+  const server = createServer(client => {
+    let buffer = '', accepted = false
+    client.on('error', () => undefined)
+    client.on('data', chunk => {
+      buffer += chunk
+      if (buffer.length > 65536) { client.destroy(); return }
+      let i: number
+      while ((i = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, i); buffer = buffer.slice(i + 1)
+        try {
+          const message = JSON.parse(line)
+          if (!accepted) {
+            if (message.token !== token || socket !== undefined || stopping) { client.destroy(); return }
+            accepted = true; socket = client
+            const beat = (): void => { if (!client.destroyed) client.write(JSON.stringify({ type: 'beat', memory: process.memoryUsage() }) + '\n') }
+            timer = setInterval(beat, 1000); timer.unref(); beat(); settled()
+          } else diskMessage(message)
+        } catch { client.destroy(); return }
+      }
+    })
+    client.on('close', () => { if (accepted) { if (timer) clearInterval(timer); if (!stopping) onError('Freeze watchdog disconnected.') } })
+  })
+  let settled = (): void => undefined
+  const ready = new Promise<void>(resolve => {
+    const timeout = setTimeout(() => { onError('Freeze watchdog did not connect within 30 seconds.'); resolve() }, 30000)
+    settled = () => { clearTimeout(timeout); resolve() }
+    server.on('error', error => { onError(error.message); settled() })
+    server.listen(0, '127.0.0.1', () => {
+      if (stopping) { settled(); return }
+      const address = server.address()
+      if (address === null || typeof address === 'string') { settled(); return }
+      // Preserve only launch-path choices. Account credentials remain in their normal encrypted/home stores.
+      options.relaunchEnv = { AGENT_USER_DATA: userData, AGENT_CODEX_PATH: process.env['AGENT_CODEX_PATH'] ?? '', AGENT_CLAUDE_PATH: process.env['AGENT_CLAUDE_PATH'] ?? '' }
+      const cleanup = `process.on('exit', () => { try { require('node:fs').unlinkSync(__filename) } catch {} });\n`
+      writeFileSync(script, cleanup + recoverySocketBootstrap(address.port, token) + recoveryWorkerCode(options), { mode: 0o600 })
+      const quote = (value: string): string => "'" + value.replaceAll("'", "''") + "'"
+      const ps = `$env:ELECTRON_RUN_AS_NODE='1'; & ${quote(executable)} ${quote(script)}`
+      const command = `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${Buffer.from(ps, 'utf16le').toString('base64')}`
+      void startViaWmi(command).catch(error => { onError(String(error)); settled() })
+    })
+  })
+  server.unref()
+  return { ready, unavailable: () => existsSync(marker), stop: () => { stopping = true; if (timer) clearInterval(timer); socket?.end(JSON.stringify({ type: 'stop' }) + '\n'); server.close(); settled() } }
 }
