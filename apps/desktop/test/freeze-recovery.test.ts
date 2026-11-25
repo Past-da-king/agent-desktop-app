@@ -63,3 +63,20 @@ it('holds recovery while disk is critical, then clears its unavailable flag when
   const exited = new Promise(r=>child.once('exit',r)); child.send({type:'stop'}); await exited
  } finally {if(beat) clearInterval(beat); child.kill('SIGKILL'); victim.kill('SIGKILL')}
 },10_000)
+
+it('keeps supervising a replacement that exits before startup, retries within the persisted cap and waits for readiness', async () => {
+ const dir = mkdtempSync(join(tmpdir(),'freeze-startup-')); dirs.push(dir)
+ const log=join(dir,'log'),state=join(dir,'state'),marker=join(dir,'marker'),attempts=join(dir,'attempts')
+ const victim=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'})
+ const replacement=`const f=require('node:fs');const p=${JSON.stringify(attempts)};let n=0;try{n=Number(f.readFileSync(p,'utf8'))}catch{};f.writeFileSync(p,String(++n));if(n>1){f.rmSync(${JSON.stringify(marker)},{force:true});setTimeout(()=>{},300)}`
+ const options={parentPid:victim.pid!,executable:process.execPath,args:['-e',replacement],log,state,marker,timeoutMs:120,intervalMs:20,startupMs:0,maxRestarts:2,restartDelayMs:10,confirmStartup:true}
+ const worker=spawn(process.execPath,['-e',recoveryWorkerCode(options)],{stdio:['ignore','ignore','pipe','ipc']})
+ try{
+  worker.send({type:'beat'})
+  await new Promise<void>((resolve,reject)=>{worker.once('exit',code=>code===0?resolve():reject(Error('exit '+code)))})
+  expect(readFileSync(attempts,'utf8')).toBe('2')
+  expect(JSON.parse(readFileSync(state,'utf8'))).toHaveLength(2)
+  expect(readFileSync(log,'utf8')).toContain('Replacement exited before startup')
+  expect(readFileSync(log,'utf8')).toContain('Replacement ready')
+ }finally{worker.kill('SIGKILL');victim.kill('SIGKILL')}
+},10000)

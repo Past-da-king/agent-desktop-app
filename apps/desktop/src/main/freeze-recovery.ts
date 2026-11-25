@@ -20,6 +20,8 @@ export interface RecoveryOptions {
   windowMs?: number
   restartDelayMs?: number
   dataPath?: string
+  confirmStartup?: boolean
+  startupConfirmMs?: number
   relaunchEnv?: Record<string, string>
   diskIntervalMs?: number
 }
@@ -90,11 +92,31 @@ setInterval(() => {
     // Kill only the exact parent we were launched to watch. WAL and durable turn leases recover on startup.
     process.kill(o.parentPid, 'SIGKILL')
     log('Frozen main stopped', { attempt: history.length })
-    setTimeout(() => {
-      const child = cp.spawn(o.executable, o.args, { detached: true, stdio: 'ignore', windowsHide: true, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'ELECTRON_RUN_AS_NODE')), ...o.relaunchEnv } })
-      child.once('error', error => { log('Relaunch failed', { why: error.message }); process.exit(0) })
-      child.once('spawn', () => { log('Relaunched', { pid: child.pid }); child.unref(); process.exit(0) })
-    }, o.restartDelayMs ?? Math.min(30000, 1000 * 2 ** (history.length - 1)))
+    const launch = () => {
+      const child = cp.spawn(o.executable, o.args, { detached: true, stdio: 'ignore', windowsHide: true, env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'ELECTRON_RUN_AS_NODE')), ...o.relaunchEnv } })
+      let finished = false, poll, deadline
+      const retry = why => {
+        if (finished) return
+        finished = true; clearInterval(poll); clearTimeout(deadline)
+        log('Replacement exited before startup', { why })
+        if (history.length >= (o.maxRestarts ?? 3)) { log('Restart cap reached', { attempts: history.length }); process.exit(0) }
+        history.push(Date.now())
+        const next = o.state + '.tmp'
+        fs.writeFileSync(next, JSON.stringify(history)); fs.renameSync(next, o.state)
+        setTimeout(launch, o.restartDelayMs ?? Math.min(30000, 1000 * 2 ** (history.length - 1)))
+      }
+      child.once('error', error => retry(error.message))
+      child.once('spawn', () => {
+        log('Relaunched', { pid: child.pid })
+        if (!o.confirmStartup) { child.unref(); process.exit(0); return }
+        // A successful CreateProcess is not a running app. Windows may still hold its old single-instance lock.
+        // Keep the launching supervisor alive until the new main has opened its own supervisor, or retry a refused start.
+        poll = setInterval(() => { if (!fs.existsSync(o.marker)) { finished = true; clearInterval(poll); clearTimeout(deadline); log('Replacement ready', { pid: child.pid }); child.unref(); process.exit(0) } }, 50)
+        deadline = setTimeout(() => { log('Replacement startup timed out', { pid: child.pid }); child.kill('SIGKILL') }, o.startupConfirmMs ?? 120000)
+      })
+      child.once('exit', (code, signal) => { if (o.confirmStartup) retry(String(signal ?? code ?? 'unknown')) })
+    }
+    setTimeout(launch, o.restartDelayMs ?? Math.min(30000, 1000 * 2 ** (history.length - 1)))
   } catch (error) { try { log('Recovery refused or failed', { why: error.message }) } catch {} process.exit(0) }
 }, interval)
 `
@@ -166,6 +188,7 @@ export function startFreezeRecovery(userData: string, executable: string, args: 
       const address = server.address()
       if (address === null || typeof address === 'string') { settled(); return }
       // Preserve only launch-path choices. Account credentials remain in their normal encrypted/home stores.
+      options.confirmStartup = true
       options.relaunchEnv = { AGENT_USER_DATA: userData, AGENT_CODEX_PATH: process.env['AGENT_CODEX_PATH'] ?? '', AGENT_CLAUDE_PATH: process.env['AGENT_CLAUDE_PATH'] ?? '' }
       const cleanup = `process.on('exit', () => { try { require('node:fs').unlinkSync(__filename) } catch {} });\n`
       writeFileSync(script, cleanup + recoverySocketBootstrap(address.port, token) + recoveryWorkerCode(options), { mode: 0o600 })
