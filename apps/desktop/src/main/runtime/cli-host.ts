@@ -1,3 +1,4 @@
+import { withGhExecution } from './pr-gate-exec'
 /**
  * The piece the Runner talks to when the agent runs on the person's own plan (Claude or ChatGPT) instead
  * of an API key. It owns the local tool server, finds the engine each SDK ships with (unpacked from the
@@ -589,10 +590,22 @@ export class CliHost {
           },
         })
       mkdirSync(dir, { recursive: true })
-      let result = await run(stored)
-      if (result.error === 'SESSION_LOST') result = await run(null)
-      if (continues && result.sessionId !== null && (this.forgotten.get(request.thread) ?? 0) === generation) {
-        this.saveSessions({ ...this.sessions(), [key]: result.sessionId, [`${key}#rev`]: String(PROMPT_REVISION) })
+      const guardedRun = (session: string | null) =>
+        withGhExecution(gateForTools(request.tools), request.context, () =>
+          run(session),
+        )
+      let result = await guardedRun(stored)
+      if (result.error === 'SESSION_LOST') result = await guardedRun(null)
+      if (
+        continues &&
+        result.sessionId !== null &&
+        (this.forgotten.get(request.thread) ?? 0) === generation
+      ) {
+        this.saveSessions({
+          ...this.sessions(),
+          [key]: result.sessionId,
+          [`${key}#rev`]: String(PROMPT_REVISION),
+        })
       }
       // A turn that ends on a dead login settles it for this computer at once; one that ran proves it works.
       if (isSignInFailure(result.error)) this.refuse(request.cli, request.accountId)

@@ -1,3 +1,4 @@
+import { ghExecutionEnv } from '../runtime/pr-gate-exec'
 /**
  * `shell_run`: the agent may use this computer's shell, but only with the person's explicit yes,
  * every single time, with the exact command on the card. There is no "always allow" (PLAN.md 7).
@@ -347,7 +348,10 @@ function declinedRun(command: string, note: string): ToolRun {
 async function runCommand(request: RunRequest): Promise<string> {
   const platform = request.deps.platform ?? process.platform
   // A vault value the command names comes in here, after the clean-up that drops anything looking like a key.
-  const env = { ...sanitiseEnv({ ...(request.deps.env ?? process.env) }), ...vaultEnv() }
+  const env = ghExecutionEnv({
+    ...sanitiseEnv({ ...(request.deps.env ?? process.env) }),
+    ...vaultEnv(),
+  })
 
   // No folder named means the person's home folder, as the tool tells the model, never the app's install folder.
   const cwd = request.cwd ?? (request.deps.home ?? homedir)()

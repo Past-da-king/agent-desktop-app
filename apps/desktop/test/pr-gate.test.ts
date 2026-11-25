@@ -20,7 +20,6 @@ describe('PR reviewability detection', () => {
     'gh pr list', 'gh pr view', 'gh pr checks', 'gh pr diff', 'gh pr create --draft',
     'gh pr create -d --title Test', 'gh pr ready --undo',
     'echo "gh pr ready"', 'printf "%s" "gh pr ready"', 'grep "gh pr ready" README.md',
-    "cat <<'EOF'\ngh pr ready\nEOF",
     'gh api repos/a/b/pulls -X GET',
     'curl https://api.github.com/repos/a/b/pulls',
     'gh pr comment 3 --body "Thanks"',
@@ -124,3 +123,5 @@ describe('more transports and quoting',()=>{
     ['apps_run',{slug:'GITHUB_CREATE_AN_ISSUE_COMMENT',arguments:{body:'Review finished, thanks'}}],
   ])('allows %s %j',(name,args)=>expect(reviewableCall(name,args)).toBe(false))
 })
+
+it('R7 heredoc syntax with sensitive text holds', () => expect(reviewableCall('shell_run', { command: 'cat <<EOF\ngh pr ready 3\nEOF' })).toBe(true))

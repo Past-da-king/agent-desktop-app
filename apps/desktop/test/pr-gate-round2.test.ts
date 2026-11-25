@@ -34,15 +34,11 @@ it.each([
   'sudo echo gh pr ready 3',
   'env echo gh pr ready 3',
   'xargs echo gh pr ready 3',
-  'wsl -d Ubuntu -- echo gh pr ready 3',
-  'ssh -p 22 host "echo gh pr ready 3"',
   'command -v gh',
   'sudo apt-get install -y gh',
   'gh',
-  'gh co 3',
   'gh -R o/r issue list',
   'gh issue create --title pr',
-  'gh pr update-branch',
   'bash ./missing-build.sh',
   'sh -e missing.sh',
   'bash -n missing.sh',
@@ -430,3 +426,5 @@ it.each([
   'navigation and typed connector evidence: %s %j',
   (tool, args, expected) => expect(reviewableCall(tool, args)).toBe(expected),
 )
+
+it.each(['wsl -d Ubuntu -- echo gh pr ready 3', 'ssh -p 22 host "echo gh pr ready 3"', 'gh co 3', 'gh pr update-branch'])('R7 opaque sensitive wrapper or unknown gh action holds: %s', (command) => expect(reviewableCall('shell_run', { command })).toBe(true))

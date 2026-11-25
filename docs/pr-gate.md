@@ -45,14 +45,37 @@ app runs retain their existing limits. Secret-looking environment variables cont
 to be removed by the app's existing policy; agents use Vault placeholders for secrets.
 This is deliberate and is not native-shell environment parity.
 
-Shell tokenisation uses shell-quote, with grammar handling for executable substitutions,
-shell-fed heredocs, wrappers and control statements. Documentation strings stay inert.
-Recognised paths include gh REST/GraphQL, curl/PowerShell, connector actions, browser
-replays resolved from the actual tab, GitHub web writes, named create/ready/request/merge
-buttons and index-only GitHub clicks. Unreadable bodies on clear PR writes are held.
-Local script files are read (up to 1 MB) and held only for a detected PR write.
-Unreadable script files pass and produce an audit note; syntax-only shell checks pass.
-Read-only gh commands, executable lookups and unrelated build scripts pass.
+Shell detection fails closed on raw text mentioning `gh`, `github.com`,
+`api.github.com`, or `git push` unless the command is positively understood.
+Read-only gh lookups, draft creation, explicit review approvals, undo-to-draft and
+plainly parsed non-PR commands pass. Here-strings, heredocs, block comments,
+substitutions, unknown switches and other opaque sensitive syntax are held. A
+comment or data string cannot erase the raw-text boundary. Commands with none of
+those references keep normal execution; readable local script files are inspected
+under the same rule. An unreadable file produces an audit note, and the execution
+shim remains active. The PowerShell option resolver uses ordered minimum prefixes;
+Windows PowerShell's positional argument means Command, while pwsh's means File.
+Detection, body signatures, snapshots and review-approval parsing share normalization.
+
+Every enabled brain injects a short-lived gh shim at the front of its shell PATH:
+app shell/code tools, Claude's shell and Codex's engine environment, desktop and
+headless. The shim asks the same gate using the actual argv and cwd before invoking
+real gh. This catches computed wrappers such as `bash -c "$(echo gh pr merge 1)"`.
+A scope whose exact outer command already consumed its attestation or verified
+remote grant carries that authorization through execution; an ungated outer call
+cannot create authorization. Engine-native execution uses the same gate's pending
+holds and attestations. An agent may need to attest the resolved execution hold as
+well as an opaque native wrapper; app shell_run keeps them in one scope.
+The private, random loopback channel lives only for that command or engine turn,
+is never replicated, and disappears on completion. Real gh is resolved outside the
+shim directory, preserving the existing headless account guard. Stdin/stdout/stderr
+are inherited and the real exit code is retained. Refusal or an unavailable channel
+returns 75. Windows uses gh.cmd and an app-owned Node runtime; the WSL launcher
+installs a scoped Linux PATH shim and forwards the chosen distribution, user, cwd
+and streams through Windows interop. Real Windows/WSL proof is a separate required
+verification step; source typechecking does not prove that platform behavior.
+No machine-wide PATH, live gh installation or live service is changed by this build.
+
 A readable direct comment body file is snapshotted into inline argv before checking
 and execution only for bash/sh. Bodies larger than 100 KB are snapshotted into a private
 temporary file, avoiding operating-system argv limits. Native shell body files are
@@ -102,9 +125,9 @@ Older origins may forward model-supplied transport fields, but unsigned grants a
 ## Round-four transport hardening
 Transport grants use per-brain Ed25519 signatures over id, command digest, caller, signer identity and expiry. Each brain keeps its own private key in Secrets as prGateSigningKeyV2. Only the public verification key is published on its synced device row. A hands-only destination verifies against those brain rows and does not need any signing secret. Private signing keys are never included in state bundles. Unsigned or altered grants and unknown public keys fail closed. This replaces the old shared HMAC field; older releases cannot attest across this boundary.
 
-Rotation: call `pr_gate_rotate_key` on the originating brain. It generates a fresh local Secrets key, publishes only the replacement public key on the device row, and returns its public fingerprint. Device-row publication also happens at toolset startup and when the local device row becomes available. Wait for device-row replication before resuming remote calls. Other brains keep their keys. In-flight old-key grants are refused; no private key is copied. With Devices off, local gated calls still run and local key rotation waits to publish until the brain row exists. Hands-only devices cannot publish or rotate signing keys.
+Rotation: call `pr_gate_rotate_key` on the originating brain. The tool asks for explicit consent with the exact secret replacement and in-flight-grant impact, and writes an audit row for both decline and completion. It generates a fresh local Secrets key, publishes only the replacement public key on the device row, and returns its public fingerprint. Device-row publication also happens at toolset startup and when the local device row becomes available. Wait for device-row replication before resuming remote calls. Other brains keep their keys. In-flight old-key grants are refused; no private key is copied. With Devices off, local gated calls still run and local key rotation waits to publish until the brain row exists. Hands-only devices cannot publish or rotate signing keys.
 
-Agents with shell access on a brain can read its key, including the headless cipher key under the same operating-system user. This is a workflow guard, not a sandbox against that user. Replication checks protected device authority fields at the shared database boundary: only an already trusted brain may change roles or public keys. A hands or screen peer cannot promote itself or relay a replacement authority row; authority changes must arrive directly from a brain. Publication changes only the public-key field and preserves concurrent device metadata.
+Agents with shell access on a brain can read its key, including the headless cipher key under the same operating-system user. This is a workflow guard, not a sandbox against that user. Replication checks protected device authority fields at the shared database boundary: only an already trusted brain may change roles or public keys. A hands or screen peer cannot promote itself or relay a replacement authority row; authority changes must arrive directly from a brain. Device writes carry per-field HLC stamps, so key publication merges independently of concurrent name, order and role changes across replicas. Self-fact refresh preserves the person’s roles and revocation. Pairing seeds the pinned host’s roles and public key from its authenticated answer before the first pull. An unknown authority sender rejects the page before pull cursor advancement or push acknowledgement; it cannot silently lose authority rows. An existing database reset without its paired authority must recover that authority before replication proceeds.
 
 A grant is bound to the command and caller, not a destination device id. An automatic learned-app route may mint a fresh signed grant for its next hop only after an app-owned structured not-signed-in refusal established before execution. The durable receipt prevents a consumed grant from executing twice. A correctly signed consumed grant answers already ran without a new challenge, even after its execution expiry, while the twenty-four-hour durable receipt is retained. In-process duplicates receive the same notice. Expired unused grants remain held.
 

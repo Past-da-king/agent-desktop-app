@@ -783,6 +783,30 @@ export class DevicesService {
       const known = peers.get(nodeId)
       peers.set(nodeId, { id: nodeId, name: nodeName, fp: parts.fp, urls: [base, ...(known?.urls ?? parts.urls).filter((u) => u.replace(/\/+$/, '') !== base)] })
       this.config.save({ peers: [...peers.values()] })
+      // The authenticated, fingerprint-pinned pairing answer establishes the first authority.
+      // Old hosts expose brain membership in `brains`; never guess brain from an arbitrary row.
+      const pairedRoles = Array.isArray(node['roles'])
+        ? node['roles'].filter((role): role is 'brain' | 'hands' | 'screen' =>
+            ['brain', 'hands', 'screen'].includes(String(role)),
+          )
+        : listed.some(
+              (raw) =>
+                typeof raw === 'object' &&
+                raw !== null &&
+                (raw as Record<string, unknown>)['id'] === nodeId,
+            )
+          ? ['brain' as const]
+          : ['hands' as const]
+      await this.deps.store.upsert('device', {
+        id: nodeId,
+        name: nodeName,
+        roles: pairedRoles,
+        fp: parts.fp,
+        urls: peers.get(nodeId)!.urls,
+        ...(typeof node['prGatePublicKey'] === 'string'
+          ? { prGatePublicKey: node['prGatePublicKey'] }
+          : {}),
+      })
       await this.writeSelf()
       this.uplink.refresh()
       this.changed()
@@ -924,7 +948,7 @@ export class DevicesService {
     return max + 1
   }
 
-  /** This node's own row: always a brain and hands; its place in the brain order is the person's. */
+  /** Refresh local facts without changing the person's roles, revocation or answer order. */
   private async writeSelf(): Promise<void> {
     const { tools, ...facts } = this.selfFacts()
     const existing = this.rows.get(this.identity.nodeId)
@@ -934,14 +958,14 @@ export class DevicesService {
       name: facts.name,
       kind: facts.kind,
       platform: facts.platform,
-      roles: ['brain', 'hands'],
+      roles: existing?.roles ?? ['brain', 'hands'],
       priority,
       urls: facts.urls,
       fp: this.identity.fp,
       facts,
       pairedAt: existing?.pairedAt ?? this.now(),
       lastSeen: this.now(),
-      revoked: false,
+      revoked: existing?.revoked ?? false,
       tools: tools ?? [],
     }
     const same = existing !== undefined && JSON.stringify(toRecord({ ...existing, lastSeen: 0 })) === JSON.stringify({ ...record, lastSeen: 0 })
@@ -1030,7 +1054,12 @@ export class DevicesService {
           offers: this.offers,
           passes: this.passes,
           meshId: this.identity.meshId,
-          node: { id: this.identity.nodeId, name: this.deps.nodeName() },
+          node: {
+            id: this.identity.nodeId,
+            name: this.deps.nodeName(),
+            roles: this.rows.get(this.identity.nodeId)?.roles ?? ['brain', 'hands'],
+            prGatePublicKey: this.rows.get(this.identity.nodeId)?.prGatePublicKey,
+          },
           saveDevice: (row) => this.saveRow(row),
           brains: async () => this.brains(),
           nextPriority: async () => this.nextPriorityNow(),

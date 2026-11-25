@@ -1,3 +1,4 @@
+import { withGhExecution } from './pr-gate-exec'
 /**
  * A review workflow guard, shared by the desktop and headless toolsets.
  * This recognises explicit GitHub operations; it is not a sandbox for arbitrary programs.
@@ -27,7 +28,13 @@ import {
   takeRemoteChallenge,
 } from './pr-gate-remote'
 import { redactSecrets } from '../logger'
-import { prGateKey, publicKey, keyId, type PrGateSecrets } from './pr-gate-key'
+import {
+  prGateKey,
+  newPrGateKey,
+  publicKey,
+  keyId,
+  type PrGateSecrets,
+} from './pr-gate-key'
 import { DEVICE_ARG_TOOLS } from '../devices/device-tools'
 import { LEARNED_RUN_TOOLS } from '../devices/learned-route'
 import { listWhere, type DataStore } from './data'
@@ -481,10 +488,25 @@ export class PrGate {
             'Rotate this brain PR gate signing key and publish its new public verification key. In-flight old grants are refused.',
           schema: schema([], {}),
         },
-        run: async () =>
-          this.rotate
-            ? this.rotate()
-            : 'PR gate rotation is unavailable in this isolated toolset.',
+        run: async (_input, ctx) => {
+          if (!this.rotate)
+            return 'PR gate rotation is unavailable in this isolated toolset.'
+          const summary = 'Rotate this brain PR gate signing key'
+          const details =
+            'Replace the local signing secret and publish a new public verification key. All in-flight old grants will be refused until retried after replication.'
+          if (
+            !(await ctx.approve(summary, details, undefined, {
+              tool: 'pr_gate_rotate_key',
+              input: {},
+            }))
+          ) {
+            await this.log(ctx, 'pr_gate_rotate_key', 'declined', '')
+            return 'PR gate key rotation declined.'
+          }
+          const result = await this.rotate()
+          await this.log(ctx, 'pr_gate_rotate_key', result, '')
+          return result
+        },
       },
       {
         spec: {
@@ -560,7 +582,6 @@ export function prGateFor(
         row = id ? await store.get('device', id) : null
       if (row && (row['revoked'] || !row.roles.includes('brain')))
         return 'Refused: only a brain may rotate and publish a PR gate signing key.'
-      const { newPrGateKey } = await import('./pr-gate-key')
       newPrGateKey(secrets)
       const key = await signing()
       return key
@@ -661,10 +682,16 @@ export function withPrGate(
         }
         let result: string
         try {
-          result = await tool.run(
-            tool.spec.name === 'shell_run' ? effective : input,
-            ctx,
+          const run = () =>
+            tool.run(tool.spec.name === 'shell_run' ? effective : input, ctx)
+          result = ['shell_run', 'Bash', 'PowerShell', 'run_code'].includes(
+            tool.spec.name,
           )
+            ? await withGhExecution(gate, ctx, run, {
+                tool: tool.spec.name,
+                input: effective,
+              })
+            : await run()
         } finally {
           cleanupCommentFile(effective)
         }

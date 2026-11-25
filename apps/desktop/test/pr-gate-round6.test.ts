@@ -33,8 +33,8 @@ afterEach(() => {
   stores.splice(0).forEach((s) => s.close())
   folders.splice(0).forEach((f) => rmSync(f, { recursive: true, force: true }))
 })
-function database(offset=0) {
-  const s = new Store(':memory:',()=>Date.now()+offset)
+function database(offset = 0) {
+  const s = new Store(':memory:', () => Date.now() + offset)
   stores.push(s)
   return s
 }
@@ -118,17 +118,17 @@ it.each([
   ).toBe(true)
 })
 it.each([
-  '-NonInteractive',
-  '-ExecutionPolicy',
-  '-ConfigurationName',
-  '-co',
-  '-comm',
-])(
-  'R6-M1 non-command and ambiguous prefixes do not execute following text: %s',
-  (flag) =>
+  ['-NonInteractive', true],
+  ['-ExecutionPolicy', false],
+  ['-ConfigurationName', false],
+  ['-co', true],
+  ['-comm', true],
+] as const)(
+  'R6-M1 ordered prefixes and known non-command operands: %s',
+  (flag, held) =>
     expect(
       reviewableCall('shell_run', { command: `pwsh ${flag} "gh pr merge 1"` }),
-    ).toBe(false),
+    ).toBe(held),
 )
 it('R6-M2 attested local browser call works with Devices off and no device row', async () => {
   const gate = prGateFor(database(), settings, secrets(), () => ''),
@@ -242,9 +242,9 @@ it('R6-m3 rotation tool republishes a key and the hands verifier rejects old gra
   const rotate = origin
     .tools()
     .find((t) => t.spec.name === 'pr_gate_rotate_key')!
-  expect(await rotate.run({}, ctx)).toContain(
-    'rotated and public key published',
-  )
+  expect(
+    await rotate.run({}, testContext({ ...ctx, approve: async () => true })),
+  ).toContain('rotated and public key published')
   const row = (await brain.get('device', 'brain'))!
   await hands.upsert('device', row)
   expect(row.prGatePublicKey).not.toBe(publicKey(old))
@@ -297,23 +297,61 @@ it('R6-m3 public key publishes at startup before the first gated call', async ()
   )
 })
 
-it('R6-n6 sign-in preflight marks a structured refusal before the learned tool runs',async()=>{
- const {LearnedStore}=await import('../src/main/apps/store')
- const {withLearnedRoute}=await import('../src/main/devices/learned-route')
- const {takeNotSignedIn}=await import('../src/main/runtime/pr-gate-remote')
- const learned=new LearnedStore(join(folder(),'apps.json'))
- learned.save({id:'github',name:'GitHub',startUrl:'https://github.com',about:'',tools:[],trusted:false,updatedAt:0})
- const run=vi.fn(async()=> 'unsafe'),ctx=testContext({owner:'device:brain'})
- const routed=withLearnedRoute([tool('webapp_run',run)],()=>null,{learned,selfId:()=> 'hands',siteHere:async()=>false})[0]!
- expect(await routed.run({app:'GitHub',tool:'merge'},ctx)).toContain('Error: Not signed in')
- expect(run).not.toHaveBeenCalled();expect(takeNotSignedIn(ctx)).toBe(true)
+it('R6-n6 sign-in preflight marks a structured refusal before a verified gated learned tool runs', async () => {
+  const { LearnedStore } = await import('../src/main/apps/store')
+  const { withLearnedRoute } = await import('../src/main/devices/learned-route')
+  const { takeNotSignedIn } = await import('../src/main/runtime/pr-gate-remote')
+  const learned = new LearnedStore(join(folder(), 'apps.json'))
+  learned.save({
+    id: 'github',
+    name: 'GitHub',
+    startUrl: 'https://github.com',
+    about: '',
+    tools: [],
+    trusted: false,
+    updatedAt: 0,
+  })
+  const key = prGateKey(),
+    args = { app: 'GitHub', tool: 'merge' }
+  const origin = testContext({ owner: 'helper:author' })
+  prepareRemoteGrant(origin, 'webapp_run', args, key)
+  const received = receiveRemoteGrant(
+    testContext({ owner: 'device:brain' }),
+    'webapp_run',
+    remoteArguments(origin, 'webapp_run', args),
+  )
+  const gate = new PrGate(database(), settings, Date.now, () => key)
+  expect(
+    await gate.acceptRemote('webapp_run', received.args, received.context),
+  ).toBe(true)
+  const run = vi.fn(async () => 'unsafe')
+  const routed = withLearnedRoute([tool('webapp_run', run)], () => null, {
+    learned,
+    selfId: () => 'hands',
+    siteHere: async () => false,
+  })[0]!
+  expect(await routed.run(args, received.context)).toContain(
+    'Error: Not signed in',
+  )
+  expect(run).not.toHaveBeenCalled()
+  expect(takeNotSignedIn(received.context)).toBe(true)
 })
 
-it('R6-m2 a trusted brain can demote a row while its old public key is retained',async()=>{
- const destination=database(),sender=database(10000),id=sender.deviceId
- await destination.upsert('device',{id,roles:['brain']})
- await destination.upsert('device',{id:'other',roles:['brain'],prGatePublicKey:'old'})
- await sender.upsert('device',{id:'other',roles:['hands'],prGatePublicKey:'old'})
- await destination.applyRemote(sender.changesAfter(0).changes,id)
- expect((await destination.get('device','other'))!.roles).toEqual(['hands'])
+it('R6-m2 a trusted brain can demote a row while its old public key is retained', async () => {
+  const destination = database(),
+    sender = database(10000),
+    id = sender.deviceId
+  await destination.upsert('device', { id, roles: ['brain'] })
+  await destination.upsert('device', {
+    id: 'other',
+    roles: ['brain'],
+    prGatePublicKey: 'old',
+  })
+  await sender.upsert('device', {
+    id: 'other',
+    roles: ['hands'],
+    prGatePublicKey: 'old',
+  })
+  await destination.applyRemote(sender.changesAfter(0).changes, id)
+  expect((await destination.get('device', 'other'))!.roles).toEqual(['hands'])
 })

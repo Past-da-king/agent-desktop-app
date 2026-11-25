@@ -1,3 +1,4 @@
+import { remoteGateExecution } from '../runtime/pr-gate-remote'
 /**
  * Learned apps run in the browser where their site is signed in, on whichever linked device that is.
  *
@@ -228,7 +229,13 @@ export function withLearnedRoute(tools: Tool[], hub: () => DeviceToolHub | null,
         const routed = owner === 'device' || owner.startsWith('device:')
         // Without Devices, with "here", or for a command another device already routed: here, as asked.
         if (active === null || app === null || named !== '' || routed || deps.selfId() === '') {
-          if(routed && app && deps.siteHere && await deps.siteHere(app.startUrl,ctx)===false){
+          if (
+            routed &&
+            remoteGateExecution(ctx) &&
+            app &&
+            deps.siteHere &&
+            (await deps.siteHere(app.startUrl, ctx)) === false
+          ) {
             markNotSignedIn(ctx)
             return 'Error: Not signed in on this device.'
           }

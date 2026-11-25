@@ -1,3 +1,4 @@
+import { ghExecutionEnv } from './pr-gate-exec'
 /**
  * Runs one turn of the agent on the person's own AI plan, through the official SDKs, the same way the
  * phone app does (assets/runtime/bridge-claude.mjs, bridge-codex.mjs):
@@ -225,7 +226,7 @@ function engineEnv(extra: Record<string, string> = {}, home?: HomeEntry): Record
   env['MCP_TIMEOUT'] = '60000'
   // claude.ai account connectors (Gmail, Drive, Docs...) would act without the app's approvals.
   env['ENABLE_CLAUDEAI_MCP_SERVERS'] = 'false'
-  return { ...env, ...extra }
+  return ghExecutionEnv({ ...env, ...extra }) as Record<string, string>
 }
 
 export async function runCliTurn(turn: CliTurn): Promise<CliResult> {

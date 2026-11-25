@@ -240,6 +240,61 @@ const PREFIX = new Set([
   '{',
   '}',
 ])
+// MatchSwitch is ordered in pwsh, not a unique-prefix search.
+const POWERSHELL_PARAMETERS: [string, string][] = [
+  ['version', 'v'],
+  ['help', 'h'],
+  ['login', 'l'],
+  ['noexit', 'noe'],
+  ['noprofile', 'nop'],
+  ['nologo', 'nol'],
+  ['noninteractive', 'noni'],
+  ['interactive', 'i'],
+  ['configurationname', 'config'],
+  ['configurationfile', 'configurationfile'],
+  ['custompipename', 'custompipename'],
+  ['commandwithargs', 'commandwithargs'],
+  ['commandwithargs', 'cwa'],
+  ['command', 'c'],
+  ['windowstyle', 'w'],
+  ['file', 'f'],
+  ['outputformat', 'o'],
+  ['outputformat', 'of'],
+  ['inputformat', 'inp'],
+  ['inputformat', 'if'],
+  ['executionpolicy', 'ex'],
+  ['executionpolicy', 'ep'],
+  ['encodedcommand', 'e'],
+  ['encodedcommand', 'ec'],
+  ['encodedarguments', 'encodeda'],
+  ['encodedarguments', 'ea'],
+  ['settingsfile', 'settingsfile'],
+  ['workingdirectory', 'wo'],
+  ['workingdirectory', 'wd'],
+  ['sta', 'sta'],
+  ['mta', 'mta'],
+  ['sshservermode', 'sshs'],
+  ['token', 'to'],
+]
+const POWERSHELL_OPERANDS = new Set([
+  'configurationname',
+  'configurationfile',
+  'custompipename',
+  'executionpolicy',
+  'inputformat',
+  'outputformat',
+  'encodedarguments',
+  'settingsfile',
+  'windowstyle',
+  'workingdirectory',
+  'token',
+])
+function powerShellParameter(raw: string): string | undefined {
+  return POWERSHELL_PARAMETERS.find(
+    ([name, minimum]) =>
+      raw.length >= minimum.length && (name.startsWith(raw) || minimum === raw),
+  )?.[0]
+}
 function argv(words: string[], depth: number): boolean {
   if (depth > 12) return false
   let start = 0
@@ -259,76 +314,36 @@ function argv(words: string[], depth: number): boolean {
     return shell(args.join(' '), depth + 1)
   if (SHELLS.has(exe)) {
     if (['pwsh', 'powershell'].includes(exe)) {
-      const names = [
-        'command',
-        'commandwithargs',
-        'configurationname',
-        'custompipename',
-        'encodedcommand',
-        'executionpolicy',
-        'file',
-        'inputformat',
-        'interactive',
-        'login',
-        'mta',
-        'noexit',
-        'nologo',
-        'noninteractive',
-        'noprofile',
-        'outputformat',
-        'settingsfile',
-        'sshservermode',
-        'sta',
-        'version',
-        'windowstyle',
-        'workingdirectory',
-        'help',
-      ]
-      const aliases: Record<string, string> = {
-        c: 'command',
-        ec: 'encodedcommand',
-        e: 'encodedcommand',
-        ep: 'executionpolicy',
-        f: 'file',
-      }
-      const operands = new Set([
-        'configurationname',
-        'custompipename',
-        'executionpolicy',
-        'inputformat',
-        'outputformat',
-        'settingsfile',
-        'version',
-        'windowstyle',
-        'workingdirectory',
-      ])
       for (let at = 0; at < args.length; at++) {
         const word = args[at]!,
           raw = word.replace(/^(?:--?|\/)/, '').toLowerCase()
         if (!word.startsWith('-') && !word.startsWith('/'))
-          return inspectFile(word, depth + 1)
-        const matches = names.filter((name) => name.startsWith(raw))
-        // -Command has a documented alias -c even though CommandWithArgs also exists.
-        const parameter =
-          aliases[raw] ??
-          (names.includes(raw)
-            ? raw
-            : matches.length === 1
-              ? matches[0]
-              : undefined)
-        if (parameter === 'encodedcommand') return true
+          return exe === 'powershell'
+            ? shell(args.slice(at).join(' '), depth + 1)
+            : inspectFile(word, depth + 1)
+        const parameter = powerShellParameter(raw)
+        if (!parameter) return sensitiveShell(args.slice(at).join(' '))
+        if (parameter === 'encodedcommand') {
+          try {
+            return shell(
+              Buffer.from(args[at + 1] ?? '', 'base64').toString('utf16le'),
+              depth + 1,
+            )
+          } catch {
+            return sensitiveShell(args.slice(at + 1).join(' '))
+          }
+        }
         if (parameter === 'command' || parameter === 'commandwithargs')
           return shell(
             args
               .slice(at + 1)
               .join(' ')
-              .replace(/<#[\s\S]*?#>/g, ' ')
               .replace(/\x60\r?\n/g, ''),
             depth + 1,
           )
         if (parameter === 'file')
           return args[at + 1] ? inspectFile(args[at + 1]!, depth + 1) : false
-        if (parameter && operands.has(parameter)) at++
+        if (parameter && POWERSHELL_OPERANDS.has(parameter)) at++
         else if (
           !parameter &&
           word.startsWith('/') &&
@@ -494,12 +509,29 @@ function argv(words: string[], depth: number): boolean {
       ? shell(args.slice(at + 1, at + 2).join(' '), depth + 1)
       : false
   }
-  if (exe === 'git')
+  if (exe === 'git') {
+    let at = 0
+    while (args[at]?.startsWith('-')) {
+      const flag = args[at++]!
+      if (
+        [
+          '-C',
+          '-c',
+          '--git-dir',
+          '--work-tree',
+          '--namespace',
+          '--exec-path',
+        ].includes(flag)
+      )
+        at++
+    }
+    if (args[at] === 'push') return true
     return args.some(
       (word) =>
         word.includes('=!') &&
         shell(word.slice(word.indexOf('=!') + 2), depth + 1),
     )
+  }
   if (exe === 'gh') return gh(args)
   if (
     [
@@ -549,7 +581,7 @@ function substitutions(source: string): string[] {
   let quote = ''
   for (let i = 0; i < source.length; i++) {
     const c = source[i]!
-    if (c === '\\') {
+    if (c === '\\' && quote !== "'") {
       i++
       continue
     }
@@ -602,20 +634,29 @@ function substitutions(source: string): string[] {
   }
   return out
 }
-function commandSource(source: string): string {
-  const lines = source.split('\n'),
-    kept: string[] = []
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!,
-      match = stripShellComments(line).match(
-        /(?<![<\w])<<-?(?!<)\s*['"]?([a-zA-Z_][\w-]*)['"]?/,
-      )
-    if (match && lines.slice(i + 1).some((v) => v.trim() === match[1])) {
-      kept.push(line.replace(match[0], ''))
-      while (++i < lines.length && lines[i]!.trim() !== match[1]) {}
-    } else kept.push(line)
+/** One normalization path for detection, body binding, snapshots and approval audit. */
+export function commandSource(source: string): string {
+  // Strip comments before joining continuations: a comment ending in backslash ends
+  // at its newline. Sensitive opaque syntax was already held on the raw source.
+  source = stripShellComments(source)
+  source = source.replace(/\\\r?\n/g, '')
+  source = source.replace(/(^|[\s;&|])\.\\([^\s;&|]+)/g, '$1./$2')
+  source = source.replace(/&\s*"([^"]*\\gh\.exe)"\s+/gi, 'gh ')
+  let quote = '',
+    normalized = ''
+  for (let at = 0; at < source.length; at++) {
+    const char = source[at]!
+    if (char === '\\' && quote !== "'") {
+      normalized += char + (source[++at] ?? '')
+      continue
+    }
+    if (char === "'" || char === '"') {
+      if (!quote) quote = char
+      else if (quote === char) quote = ''
+    }
+    normalized += char === '\n' && !quote ? ';' : char
   }
-  return stripShellComments(kept.join('\n').replace(/<#[\s\S]*?#>/g, ' '))
+  return normalized
 }
 // Preserve quoted hashes and hashes inside words; comments stop at their own newline.
 function stripShellComments(source: string): string {
@@ -647,12 +688,158 @@ function stripShellComments(source: string): string {
   }
   return result
 }
+/** Raw text is the fail-closed boundary; comments and quoted data cannot erase it. */
+export function sensitiveShell(source: string): boolean {
+  return /(?:\bgh(?:\.exe)?\b|(?:api\.)?github\.com|\bgit\s+push\b)/i.test(
+    source,
+  )
+}
+function confidentShell(source: string): boolean {
+  // These constructs require runtime resolution. Never infer safety from a partial parse.
+  let quoted = ''
+  for (const char of source) {
+    if (char === '\n' || char === '\r') return false
+    if (char === "'" || char === '"') {
+      if (!quoted) quoted = char
+      else if (quoted === char) quoted = ''
+      continue
+    }
+    if (quoted === "'") continue
+    if (/[$`\\]/.test(char) || (!quoted && /[#<>()[\]{}]/.test(char)))
+      return false
+  }
+  if (quoted) return false
+  try {
+    const entries = parse(source),
+      parts: string[][] = [[]]
+    for (const entry of entries) {
+      if (typeof entry === 'string') parts[parts.length - 1]!.push(entry)
+      else if ('op' in entry && [';', '&&', '||'].includes(entry.op))
+        parts.push([])
+      else return false
+    }
+    return parts.every((words) => {
+      if (!words.length) return true
+      const exe = base(words[0]!),
+        args = words.slice(1)
+      if (exe === 'pwsh' || exe === 'powershell') {
+        for (let at = 0; at < args.length; at++) {
+          const word = args[at]!
+          if (!/^[-/]/.test(word))
+            return (
+              exe === 'powershell' && confidentShell(args.slice(at).join(' '))
+            )
+          const parameter = powerShellParameter(
+            word.replace(/^(?:--?|\/)/, '').toLowerCase(),
+          )
+          if (!parameter) return false
+          if (parameter === 'command' || parameter === 'commandwithargs')
+            return confidentShell(args.slice(at + 1).join(' '))
+          if (parameter === 'file' || parameter === 'encodedcommand')
+            return false
+          if (POWERSHELL_OPERANDS.has(parameter)) at++
+        }
+        return true
+      }
+      if (exe === 'gh') {
+        while (
+          args[0] === '-R' ||
+          args[0] === '--repo' ||
+          args[0] === '--hostname'
+        )
+          args.splice(0, 2)
+        while (/^--(?:repo|hostname)=/.test(args[0] ?? '')) args.shift()
+        if (args[0]?.startsWith('-')) return false
+        if (
+          args[0] === 'pr' &&
+          args[1] === 'review' &&
+          args.includes('--approve') &&
+          !gh([...args])
+        )
+          return true
+        if (args[0] === 'pr' && args[1] === 'ready' && args.includes('--undo'))
+          return true
+        if (!args.length) return true
+        if (
+          ['pr', 'issue'].includes(args[0] ?? '') &&
+          ['comment', 'review'].includes(args[1] ?? '') &&
+          !gh([...args])
+        )
+          return true
+        if (args[0] === 'pr' && args[1] === 'create' && !gh([...args]))
+          return true
+        if (
+          args[0] === 'issue' &&
+          ['create', 'edit', 'close', 'reopen'].includes(args[1] ?? '')
+        )
+          return true
+        if (['pr', 'issue'].includes(args[0] ?? ''))
+          return (
+            ['list', 'view', 'status', 'checks', 'diff'].includes(
+              args[1] ?? '',
+            ) ||
+            (args[0] === 'pr' &&
+              args[1] === 'create' &&
+              args.includes('--draft')) ||
+            gh([...args])
+          )
+        if (args[0] === 'api')
+          return (
+            gh([...args]) ||
+            args.some((word) => /^\/?(?:repos|repositories)\//.test(word)) ||
+            !args.some((w) =>
+              /^(-[fFX]|--(?:method|field|raw-field|input))(=|$)/.test(w),
+            ) ||
+            ['GET', 'HEAD'].includes(option(args, '--method', '-X') ?? '')
+          )
+        return ['auth', 'version', '--version', 'help', '--help'].includes(
+          args[0] ?? '',
+        )
+      }
+      if (['curl', 'wget', 'invoke-restmethod', 'irm'].includes(exe))
+        return !argv(words, 1)
+      if (
+        ['apt', 'apt-get'].includes(exe) ||
+        (exe === 'sudo' && ['apt', 'apt-get'].includes(args[0] ?? ''))
+      )
+        return true
+      if (exe === 'git')
+        return [
+          'status',
+          'diff',
+          'log',
+          'show',
+          'pull',
+          'fetch',
+          'commit',
+          'add',
+          'branch',
+          'rev-parse',
+          'clone',
+          'checkout',
+          'switch',
+          'config',
+          'remote',
+          'worktree',
+        ].includes(args[0] ?? '')
+      return (
+        INERT.has(exe) ||
+        ['cd', 'pwd', 'ls', 'dir', 'which', 'where', 'get-command'].includes(
+          exe,
+        ) ||
+        (exe === 'command' && ['-v', '-V'].includes(args[0] ?? ''))
+      )
+    })
+  } catch {
+    return false
+  }
+}
 /** shell-quote supplies operators, quoted words, comments and variable boundaries. */
 function shell(source: string, depth = 0): boolean {
-  if (depth > 12) return false
-  source = source.replace(/(^|[\s;&|])\.\\([^\s;&|]+)/g, '$1./$2')
-  source = source.replace(/\\\r?\n/g, '')
-  source = source.replace(/&\s*"([^"]*\\gh\.exe)"\s+/gi, 'gh ')
+  if (depth > 12) return sensitiveShell(source)
+  if (sensitiveShell(source) && !confidentShell(source)) return true
+  source = commandSource(source)
+  if (sensitiveShell(source) && !confidentShell(source)) return true
   const hereString = source.match(
     /\b(?:bash|sh|zsh|dash)\s*<<<\s*(["'])([\s\S]*?)\1/,
   )
@@ -699,13 +886,13 @@ function shell(source: string, depth = 0): boolean {
       bodies.push(body.join('\n'))
   }
   if (bodies.some((b) => shell(b, depth + 1) || script(b))) return true
-  source = stripShellComments(kept.join('\n').replace(/<#[\s\S]*?#>/g, ' '))
+  source = commandSource(kept.join('\n'))
   if (substitutions(source).some((s) => shell(s, depth + 1))) return true
   let q = '',
     normal = ''
   for (let i = 0; i < source.length; i++) {
     const c = source[i]!
-    if (c === '\\') {
+    if (c === '\\' && q !== "'") {
       normal += c + (source[++i] ?? '')
       continue
     }

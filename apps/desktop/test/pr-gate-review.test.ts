@@ -30,7 +30,7 @@ describe('review findings: shell grammar and all review surfaces',()=>{
  it.each([
   'gh pr create --dry-run','gh pr create --draft=1',
   'gh pr comment 3 -b "Not ready for review yet"',
-  'cat <<EOF\ngh pr ready 3\nEOF','echo "gh pr ready 3"',
+  'echo "gh pr ready 3"',
   'gh pr review 3 --approve','gh pr review 3 --comment -b "Looks good"',
  ])('passes %s',command=>expect(reviewableCall('shell_run',{command})).toBe(false))
  it.each([
@@ -62,3 +62,5 @@ it('snapshots readable comment bodies and holds unknown ones',()=>{
   expect(captured['command']).not.toContain('--body-file')
  }finally{rmSync(dir,{recursive:true,force:true})}
 })
+
+it('R7 heredoc syntax with sensitive text holds', () => expect(reviewableCall('shell_run', { command: 'cat <<EOF\ngh pr ready 3\nEOF' })).toBe(true))

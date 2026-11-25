@@ -259,3 +259,8 @@ export function consumeRemoteGrant(
   }
   return true
 }
+
+/** Only verified gated calls need the pre-execution sign-in fence. */
+export function remoteGateExecution(ctx: ToolContext): boolean {
+  return Boolean(state(ctx)?.caller)
+}

@@ -127,11 +127,18 @@ export function parsePairUri(uri: string): PairUriParts | null {
   }
 }
 
+export interface PairHost {
+  id: string
+  name: string
+  roles?: string[]
+  prGatePublicKey?: string
+}
+
 export interface PairDeps {
   offers: PairingOffers
   passes: PassTable
   meshId: string
-  node: { id: string; name: string }
+  node: PairHost
   /** Writes (or rewrites) the new device's row. */
   saveDevice(row: DeviceRecord): Promise<void>
   /** Every brain the new device may try, this node included, by priority. */
@@ -142,7 +149,7 @@ export interface PairDeps {
 }
 
 export type PairAnswer =
-  | { status: 200; json: { deviceId: string; pass: string; meshId: string; node: { id: string; name: string }; brains: BrainRef[] } }
+  | { status: 200; json: { deviceId: string; pass: string; meshId: string; node: PairHost; brains: BrainRef[] } }
   | { status: 400 | 403 | 410; json: { error: string } }
 
 const NODE_ID = /^dev_[A-Za-z0-9_-]{8,64}$/

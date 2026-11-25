@@ -1,3 +1,4 @@
+import { ghExecutionEnv } from '../runtime/pr-gate-exec'
 /**
  * `run_code`: a small scratch folder and a child process, so the agent can calculate, transform data
  * and build files. It runs JavaScript with Node or Python with python3, asks first every time, and
@@ -238,15 +239,27 @@ async function execute(request: ExecuteRequest): Promise<string> {
   const extra = request.appRuntime ? { ELECTRON_RUN_AS_NODE: '1' } : {}
   let child: ChildProcess
   try {
-    child = spawnResolved(request.program.path, [...request.program.prefix, script], {
-      platform,
-      cwd: request.executionCwd ?? folder,
-      env: { ...sanitiseEnv(env), ...(request.executionCwd ? {} : {HOME:folder,USERPROFILE:folder}), ...extra },
-      detached: platform !== 'win32',
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      ...(request.deps.spawnImpl === undefined ? {} : { spawnImpl: request.deps.spawnImpl }),
-    })
+    child = spawnResolved(
+      request.program.path,
+      [...request.program.prefix, script],
+      {
+        platform,
+        cwd: request.executionCwd ?? folder,
+        env: ghExecutionEnv({
+          ...sanitiseEnv(env),
+          ...(request.executionCwd
+            ? {}
+            : { HOME: folder, USERPROFILE: folder }),
+          ...extra,
+        }),
+        detached: platform !== 'win32',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        ...(request.deps.spawnImpl === undefined
+          ? {}
+          : { spawnImpl: request.deps.spawnImpl }),
+      },
+    )
   } catch (error) {
     record('failed', null, `Could not start: ${messageOf(error)}`)
     return `Could not run the program: ${messageOf(error)}`

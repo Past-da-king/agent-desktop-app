@@ -75,3 +75,42 @@ describe('a joining node lets in the brain it paired with before that brain\'s r
     expect((await pinnedRequest(`${plain.base}/v1/devices`, plain.fp, { headers: { Authorization: `Bearer ${pass}` } })).status).toBe(401)
   })
 })
+
+it('R7-B1 fresh pairing bootstraps the host authority before its first pull', async () => {
+  const host = await node(),
+    joined = await node()
+  const hostId = host.service.identity.nodeId
+  expect(await joined.store.get('device', hostId)).toBeNull()
+  await host.store.upsert('device', {
+    id: hostId,
+    prGatePublicKey: 'paired-host-key',
+  })
+  await expect
+    .poll(
+      () =>
+        host.service.list().find((row) => row.id === hostId)?.prGatePublicKey,
+    )
+    .toBe('paired-host-key')
+  const link = host.service
+    .offer()
+    .uri.replace(/([?&])u=[^&]*/, '$1u=' + encodeURIComponent(host.base))
+  await joined.service.join(link)
+  expect(await joined.store.get('device', hostId)).toMatchObject({
+    roles: ['brain', 'hands'],
+    prGatePublicKey: 'paired-host-key',
+  })
+  await joined.store.applyRemote(host.store.changesAfter(0).changes, hostId)
+  expect((await joined.store.get('device', hostId))?.prGatePublicKey).toBe(
+    'paired-host-key',
+  )
+})
+it('R7-m5 refreshing a demoted desktop does not restore its brain role', async () => {
+  const self = await node(),
+    id = self.service.identity.nodeId
+  await self.store.upsert('device', { id, roles: ['hands'] })
+  await expect
+    .poll(() => self.service.list().find((row) => row.id === id)?.roles)
+    .toEqual(['hands'])
+  await self.service.configure({ port: self.service.status().port })
+  expect((await self.store.get('device', id))?.roles).toEqual(['hands'])
+})
