@@ -41,3 +41,15 @@ it('binds the exact accepted stored user row despite a newer unrelated message',
   expect(line.requestId).toBe(first.id)
  } finally { runner.dispose() }
 })
+
+it('routine and unbound device contexts explicitly carry no unrelated latest user authorization', async () => {
+ const store = new Store(':memory:'); stores.push(store)
+ const user = await store.upsert('chat_item', {kind:'user',text:'Send to ben@example.org',meta:'{}'})
+ const runner = new Runner({ store, settings:settingsView(), secrets:secretsView(null), tools:[], emit:()=>undefined, notify:()=>undefined, isFocused:()=>false, timeZone:'UTC' })
+ try {
+  const internal = runner as unknown as { line(chat:string): {requestId?:string}; toolContext(signal:AbortSignal, role:'routine'|'main',chat:string): {requestId?:string} }
+  internal.line('main').requestId = user.id
+  expect(internal.toolContext(new AbortController().signal,'routine','main').requestId).toBe('')
+  expect(runner.deviceToolContext(new AbortController().signal).requestId).toBe('')
+ } finally {runner.dispose()}
+})

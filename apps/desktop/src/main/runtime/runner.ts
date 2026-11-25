@@ -2184,7 +2184,7 @@ export class Runner {
 
   deviceToolContext(signal: AbortSignal, command?: { chatId: string; owner?: string; request?: RequestSource }): ToolContext {
     const chat = command?.chatId || MAIN_CHAT
-    return { ...this.toolContext(signal, 'main', chat), ...this.deviceContext(chat, signal, command?.owner, command?.request), agentLabel: 'another device', owner: 'device' }
+    return { ...this.toolContext(signal, 'main', chat), ...this.deviceContext(chat, signal, command?.owner, command?.request), agentLabel: 'another device', owner: 'device', requestId: command?.request?.id ?? '' }
   }
 
   private toolContext(signal: AbortSignal, role: 'main' | 'routine' = 'main', chat: string = MAIN_CHAT): ToolContext {
@@ -2192,7 +2192,7 @@ export class Runner {
       agentLabel: role === 'routine' ? 'routine' : 'main',
       // Each chat drives its own browser tab, as each helper does.
       owner: browserOwnerOf(role, chat),
-      ...(role === 'routine' || this.line(chat).requestId === undefined ? {} : { requestId: this.line(chat).requestId }),
+      requestId: role === 'routine' ? '' : this.line(chat).requestId ?? '',
       ...(role === 'main' && chat !== MAIN_CHAT ? { chat } : {}),
       activity: async (text, meta) => {
         if (role === 'routine') {
