@@ -1,3 +1,4 @@
+import { installChildPipeGuards, onPipeWarning, onPipeFault, isChildPipeError } from './runtime/safe-pipe'
 import { peerNoteAudio } from './voice/peer-audio'
 import { ActsForMe } from './runtime/acts-for-me'
 import { createWorkersChanged } from './workers/changed'
@@ -264,16 +265,20 @@ function showCalmDialog(detail: string, offerRestart: boolean): void {
 onDestroyedSkip((what, error) =>
   logger.warn('Skipped a closed page or window', { what, stack: error instanceof Error ? error.stack : String(error) }),
 )
-process.on(
-  'uncaughtException',
-  uncaughtHandler({
-    log: (message, fields) => logger.error(message, fields),
-    dialog: () => showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true),
-  }),
-)
+installChildPipeGuards()
+onPipeWarning((message, fields) => logger.warn(message, fields))
 
+const handleUnexpected = uncaughtHandler({
+  warn: (message, fields) => logger.warn(message, fields),
+  log: (message, fields) => logger.error(message, fields),
+  dialog: () => showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true),
+})
+onPipeFault(handleUnexpected)
+process.on('uncaughtException', handleUnexpected)
+// A rejection is only logged, as before: an expected pipe end is a warning, never a dialog.
 process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled promise rejection', { reason: String(reason) })
+  if (reason instanceof Error && isChildPipeError(reason)) logger.warn('Expected closed resource rejection (carried on)', { message: reason.message })
+  else logger.error('Unhandled promise rejection', { reason: String(reason) })
 })
 
 interface WindowState {

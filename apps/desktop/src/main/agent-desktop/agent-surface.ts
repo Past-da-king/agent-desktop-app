@@ -1,3 +1,4 @@
+import { childPipeFailure } from '../runtime/safe-pipe'
 // AgentSurface: a desktop/session the agent owns, where real input can be sent to an app without
 // ever touching the user's pointer, keyboard or focus. The PC equivalent of the phone's background
 // screen. Stage 3 of [[Decision: the agent never takes his mouse, keyboard or focus (11 Nov 2026)]].
@@ -81,10 +82,14 @@ export function createAgentSurface(exePath: string, args: string[] = []): AgentS
         }
       }
     });
-    proc.on("exit", () => {
+    const child = proc;
+    const finish = (error: Error): void => {
+      if (proc !== child) return;
       proc = null;
-      while (queue.length) queue.shift()!.reject(new Error("agent-desktop sidecar exited"));
-    });
+      while (queue.length) queue.shift()!.reject(error);
+    };
+    child.on("error", finish);
+    child.on("exit", () => finish(childPipeFailure(child) ?? new Error("agent-desktop sidecar exited")));
     return proc;
   }
 

@@ -1,3 +1,5 @@
+import { ownRunTree } from './run-tree'
+import { childPipeFailure, registerChildPipeCleanup } from './safe-pipe'
 /**
  * The real pieces behind `environment.ts`: node:fs, node:os and execFile. Kept apart so the scan
  * itself stays injectable and testable on any platform.
@@ -65,6 +67,7 @@ export const execVersion: ExecFn = (file, args, options) =>
     try {
       child = spawnResolved(file, args, {
         platform: process.platform,
+        detached: process.platform !== 'win32',
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
@@ -73,19 +76,24 @@ export const execVersion: ExecFn = (file, args, options) =>
       return
     }
 
+    const tree = ownRunTree(child, process.platform, () => killProcessTree(child.pid, process.platform))
+    registerChildPipeCleanup(child, tree.kill)
     let stdout = ''
     let stderr = ''
     let settled = false
-    const finish = (error: Error | null): void => {
+    const finish = (error: Error | null, release = true): void => {
       if (settled) return
       settled = true
+      if (release) tree.release()
       clearTimeout(timer)
       if (error !== null && stdout.trim() === '' && stderr.trim() === '') reject(error)
       else resolve({ stdout, stderr })
     }
     const timer = setTimeout(() => {
-      killProcessTree(child.pid, process.platform)
-      finish(new Error('version check timed out'))
+      tree.kill()
+      // Cleanup was attempted. If the tree is still not ours to release (Windows leader already gone, EPERM),
+      // the probe still answers at its deadline and the close-time cleanup keeps the latch.
+      finish(new Error('version check timed out'), tree.settled)
     }, options.timeoutMs)
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -94,8 +102,13 @@ export const execVersion: ExecFn = (file, args, options) =>
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8')
     })
-    child.once('error', (error) => finish(error))
-    child.once('close', () => finish(null))
+    let pipeError: Error | null = null
+    child.once('error', (error) => {
+      if (childPipeFailure(child) === undefined) finish(error)
+      else pipeError = error
+    })
+    tree.onSettled(() => { clearTimeout(timer); if (tree.closed) finish(pipeError) })
+    child.once('close', () => { if (tree.settled) finish(pipeError) })
   })
 
 export function hostEnvironment(): EnvironmentService {
