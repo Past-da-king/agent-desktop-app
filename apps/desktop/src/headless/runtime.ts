@@ -28,6 +28,7 @@ import { AppsService } from '../main/apps/service'
 import { ConnectedAppsFile, LearnedStore } from '../main/apps/store'
 import { FileBrainLocks } from '../main/brain-locks'
 import { Store } from '../main/db'
+import { appClock, watchOsClock } from '../main/clock/app-clock'
 import { HandlerRegistry, recordHandlers } from '../main/devices/registry'
 import { devicesState, ownBrainIds, type DevicesSyncDeps } from '../main/devices/sync'
 import { TurnLeases } from '../main/runtime/turns'
@@ -230,7 +231,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
     notify: options.actions?.notify ?? ((title) => logger.info('Notification', { title })),
   }
 
-  const store = new Store(join(dir, 'agent.db'))
+  const store = new Store(join(dir, 'agent.db'), () => appClock.now())
+  watchOsClock()
   const settings = new SettingsStore(join(dir, 'settings.json'))
   const secrets = new Secrets(join(dir, 'secrets'), new FileKeyCipher(join(dir, 'secrets.key')))
   // The Vault, as on the computer: its own encrypted file here, filled from a brain through the bundle.

@@ -488,6 +488,18 @@ export function DevicesSettings(): JSX.Element {
           </div>
         ) : null}
 
+        {enabled && status?.clock?.warn === true ? (
+          <div className="rowc dv-clock" role="alert">
+            <div className="ri warn">
+              <Icon name="clock" size={22} />
+            </div>
+            <div className="rt">
+              <b>Clocks do not agree</b>
+              <span>{status.clock.line}</span>
+            </div>
+          </div>
+        ) : null}
+
         {enabled && !readOnly && status?.wslRelay?.available === true ? (
           <div className="rowc dv-relay">
             <div className={`ri${status.wslRelay.state === 'running' ? ' ok' : status.wslRelay.state === 'unavailable' || status.wslRelay.state === 'error' ? ' warn' : ''}`}>

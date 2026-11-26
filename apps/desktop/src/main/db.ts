@@ -166,6 +166,8 @@ const READ_LOG_MS = 1_000
 const ARCHIVE_MIN_BYTES = 4_000
 const ARCHIVE_AGE_MS = 3 * 24 * 3_600_000
 const ARCHIVE_SLICE_ROWS = 25
+/** A new chat row follows the newest one up to this far ahead of our clock (a further one is a broken clock). */
+const CHAT_FOLLOW_MAX_MS = 24 * 3_600_000
 
 export class Store implements SyncStore {
   readonly deviceId: string
@@ -188,6 +190,8 @@ export class Store implements SyncStore {
   private readLog: ((line: string, detail?: Record<string, unknown>) => void) | null = null
   private readLoggedAt = 0
   private archiveTimer: ReturnType<typeof setTimeout> | null = null
+  /** The newest chat row's createdAt (any device's), read once and then kept as rows land; null until read. */
+  private newestChatAt: number | null = null
 
   constructor(file: string, clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
@@ -659,7 +663,9 @@ export class Store implements SyncStore {
       // No vault value is ever written into a synced row (vault/redact.ts): chat items, turns, memory, tasks.
       payload[key] = redactDeep(value)
     }
-    if ((existing === null || existing.deleted) && typeof payload.createdAt !== 'number') payload.createdAt = timestamp
+    if ((existing === null || existing.deleted) && typeof payload.createdAt !== 'number') {
+      payload.createdAt = entity === 'chat_item' ? this.chatCreatedAt(timestamp) : timestamp
+    }
     if (UPDATED_AT_ENTITIES.has(entity)) payload.updatedAt = timestamp
 
     const writer = currentWriter()
@@ -682,10 +688,36 @@ export class Store implements SyncStore {
       if (existing?.archived === true) this.dropBody(entity, id)
       this.logChange(entity, id, '')
     })
+    if (entity === 'chat_item') this.noteChatAt(payload.createdAt)
 
     const saved = { id, ...payload } as EntityMap[E]
     this.emit({ entity, row: saved })
     return saved
+  }
+
+  /**
+   * When a new chat row is written: now by the (corrected) clock, but never before the newest chat row already here,
+   * from this device or another. A chat is read in createdAt order on every device, so a row stamped before the one
+   * it answers would land up the chat, out of view (26 Nov 2026: the PC's clock was 35 minutes slow). A newest row
+   * more than a day ahead is someone's broken clock, and is not followed.
+   */
+  private chatCreatedAt(now: number): number {
+    const newest = this.newestChat()
+    if (newest >= now && newest - now <= CHAT_FOLLOW_MAX_MS) return newest + 1
+    return now
+  }
+
+  private newestChat(): number {
+    if (this.newestChatAt === null) {
+      const row = this.db.prepare(`SELECT MAX(${CREATED_SQL}) AS at FROM rows INDEXED BY rows_created WHERE entity = 'chat_item'`).get() as { at?: unknown } | undefined
+      this.newestChatAt = numberField(row?.at)
+    }
+    return this.newestChatAt
+  }
+
+  private noteChatAt(at: unknown): void {
+    const value = numberField(at)
+    if (this.newestChatAt !== null && value > this.newestChatAt && value - this.now() <= CHAT_FOLLOW_MAX_MS) this.newestChatAt = value
   }
 
   /**
@@ -1129,6 +1161,7 @@ export class Store implements SyncStore {
         .run(change.entity, change.id, change.stamp, change.deleted ? 1 : 0, JSON.stringify(payload), change.restore === true && !change.deleted ? 1 : 0)
       if (existing?.archived === true) this.dropBody(change.entity, change.id)
       this.logChange(change.entity, change.id, via)
+      if (change.entity === 'chat_item' && !change.deleted) this.noteChatAt(payload.createdAt)
       touched.push(change.deleted ? { entity: change.entity, id: change.id, deleted: true } : { entity: change.entity, row: { id: change.id, ...payload } as EntityMap[EntityName] })
     }
     for (const id of new Set(keep)) {

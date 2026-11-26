@@ -172,6 +172,7 @@ export interface BrowserControl {
 }
 
 import { phoneDictationNote, type Recordings } from './recordings/store'
+import { appClock } from './clock/app-clock'
 
 /** Instant send, wired in index.ts (dictation/pending.ts and the dictation controller). */
 export interface InstantSendDeps {
@@ -553,7 +554,7 @@ export function registerIpc(deps: IpcDeps): () => void {
   })
 
   // A phone's message with its own id (docs/devices-protocol.md s8): answered as soon as it is safely held, never run twice.
-  const sendOnceGate = makeSendOnce({ exists: async (rowId) => (await store.get('chat_item', rowId)) !== null })
+  const sendOnceGate = makeSendOnce({ exists: async (rowId) => (await store.get('chat_item', rowId)) !== null, now: () => appClock.now() })
   handle(CHANNELS.chat.sendOnce, async (event, rawInput) => {
     const blocked = deps.answerBlocker?.()
     if (blocked) throw new Error(blocked)

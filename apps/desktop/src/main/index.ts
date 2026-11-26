@@ -68,6 +68,7 @@ import { runTurnstileProbe } from './browser/turnstile-probe'
 import { fallbackUserAgent } from './browser/emulation'
 import { runDevtoolsProbe } from './browser/devtools-probe'
 import { Store } from './db'
+import { appClock, watchOsClock } from './clock/app-clock'
 import { Logger } from './logger'
 import { onDestroyedSkip, safeSend, uncaughtHandler, whileAlive } from './alive'
 import { Notifier } from './notify'
@@ -916,7 +917,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
   }, () => devices?.probeTarget() ?? null)
 
   await freezeRecovery?.ready
-  store = new Store(join(dir, 'agent.db'))
+  store = new Store(join(dir, 'agent.db'), () => appClock.now())
+  // Is the OS keeping this clock synced? (w32tm: on 26 Nov 2026 it was stopped and the clock 35 min slow.)
+  watchOsClock()
   // Checkpoints off the main thread (db-checkpoint.ts): a checkpoint inside an ordinary write took up to 2 s.
   store.startCheckpointer({ log: (line, detail) => logger.info(line, detail) })
   // Reads of the big tables run in worker threads (db-reader.ts): no read can hold the window or the links.
