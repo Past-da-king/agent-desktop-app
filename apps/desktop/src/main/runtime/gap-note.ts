@@ -16,6 +16,7 @@ const MAX_CHARS = 14_000
 const MAX_STEP_CHARS = 220
 /** With no mark (first turn on this computer): this many of the newest lines of the conversation. */
 export const FIRST_TURN_ROWS = 30
+export const SEEN_ROWS = 200
 const MAX_ROWS = 120
 
 function clip(text: string, max: number): string {

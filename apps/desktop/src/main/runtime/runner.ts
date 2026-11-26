@@ -68,7 +68,7 @@ import { quietTapNote } from './openui-prompt'
 import { prepareMessage, type PreparedMessage } from './attachment-text'
 import type { PendingTakes } from '../dictation/pending'
 import { branchChat, chatOf, chatTag, handoffText, threadFor } from './chat-lines'
-import { FIRST_TURN_ROWS, GAP_KINDS, gapNote } from './gap-note'
+import { FIRST_TURN_ROWS, GAP_KINDS, SEEN_ROWS, gapNote } from './gap-note'
 import {
   CLASSIFIER_SYSTEM,
   alongsideBrief,
@@ -155,6 +155,18 @@ export const WAITING_FOR_USER = 'Waiting for you'
 export type ProviderFactory = (settings: Settings, apiKey: string) => LlmProvider | null
 
 /** Devices (docs/devices-protocol.md s8), each part optional: turn leases work with Devices off too. */
+/**
+ * The main chat has one brain answering it at a time (devices/offload-wire.ts). `holder` names that brain when it is
+ * another one (null: answer here); `post` sends it a message of his already stored here, by its row id.
+ */
+export interface MainRoute {
+  holder(): Promise<string | null>
+  post(to: string, rowId: string, text: string): Promise<void>
+}
+
+/** How long a send waits to learn who holds the main chat before it just answers here. */
+export const MAIN_ROUTE_WAIT_MS = 1_500
+
 export interface RunnerDevices {
   /** Turn leases: crash resume and failover (runtime/turns.ts). */
   leases?: LeaseHook
@@ -327,8 +339,9 @@ export class Runner {
   private readonly locks: BrainLocks | undefined
   private readonly devices: RunnerDevices | undefined
   private readonly presence: RunnerDeps['presence']
+  private mainRoute: MainRoute | null = null
   /** When the message each chat is answering now was written: nothing from that moment on is 'earlier'. */
-  private readonly turnAt = new Map<string, number>()
+  private readonly turnRow = new Map<string, string>()
   private readonly localMarks: RunnerDeps['local']
   private readonly memoryMarks = new Map<string, string>()
   private readonly git: RunGitHookLike | null
@@ -508,6 +521,54 @@ export class Runner {
 
   // ---- the person's side ------------------------------------------------------------------
 
+  /** Devices on: the main chat's one holder (devices/offload-wire.ts wrapRunner sets it). */
+  setMainRoute(route: MainRoute | null): void {
+    this.mainRoute = route
+  }
+
+  /** The other brain that answers this chat now, or null to answer here. Never waits long, never throws. */
+  private async elsewhere(chat: string): Promise<string | null> {
+    const route = this.mainRoute
+    if (chat !== MAIN_CHAT || route === null || this.disposing) return null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([route.holder(), new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), MAIN_ROUTE_WAIT_MS) })])
+    } catch {
+      return null
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  /**
+   * A message of his to the main chat that another of his computers stored and sent here, because this brain holds
+   * the main chat now. Its row is already in the chat (written there, it replicates): the turn answers that row and
+   * never writes it again. Never sent on: the brain that holds the chat answers, so two brains cannot pass it back and forth.
+   */
+  async runPosted(chat: string, rowId: string, text: string): Promise<void> {
+    if (this.disposing) return
+    const clean = text.trim()
+    if (clean === '') return
+    // The row normally arrives with the message; give replication a moment so the turn knows when it was sent.
+    let row = await this.store.get('chat_item', rowId).catch(() => null)
+    for (let wait = 0; row === null && wait < 6; wait++) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      row = await this.store.get('chat_item', rowId).catch(() => null)
+    }
+    const line = this.line(chat)
+    const prepared = await prepareMessage(clean, [])
+    if (!line.running) {
+      this.budget?.reset()
+      line.goal = clean
+      line.lastUserAt = this.now()
+      await this.begin(line, prepared.text, prepared.images, null, undefined, { id: rowId, createdAt: row?.createdAt ?? this.now() })
+      return
+    }
+    const sinceLastMs = this.now() - line.lastUserAt
+    line.lastUserAt = this.now()
+    await this.routeBusy(line, rowId, clean, prepared, false, '', sinceLastMs)
+  }
+
   /**
    * Put a message in a chat. When the chat is idle it starts a run. When the chat is busy the message is
    * routed: about the same task, it joins the running work; different work, it runs alongside as its own run
@@ -531,6 +592,15 @@ export class Runner {
       ...this.originMeta(origin as JsonObject | undefined),
       ...(via === undefined ? {} : { via: via as unknown as JsonObject }),
       ...(live === null ? {} : { live: live as unknown as JsonObject }),
+    }
+    // Another brain holds the main chat: his row is stored here at once (he sees it go out), that brain answers it.
+    if (attachments.length === 0 && via === undefined && live === null) {
+      const to = await this.elsewhere(chat)
+      if (to !== null && this.mainRoute !== null) {
+        const row = await this.addUserItem(chat, clean, JSON.stringify({ ...meta, answeredOn: to }))
+        await this.mainRoute.post(to, row.id, prepared.text)
+        return
+      }
     }
     const line = this.line(chat)
 
@@ -591,6 +661,13 @@ export class Runner {
     await this.refineDictated(take, said, clean).catch(() => undefined)
     if (this.disposing) return
     const forAgent = settled?.note ? `${said}\n(${settled.note})` : said
+    if (attachments.length === 0) {
+      const to = await this.elsewhere(line.chat)
+      if (to !== null && this.mainRoute !== null) {
+        await this.mainRoute.post(to, rowId, forAgent)
+        return
+      }
+    }
     const prepared = await prepareMessage(forAgent, attachments)
     if (!line.running) {
       this.budget?.reset()
@@ -1352,6 +1429,7 @@ export class Runner {
     images: string[],
     user: { text: string; meta: string } | null,
     leaseId?: string,
+    posted?: { id: string; createdAt: number },
   ): Promise<void> {
     // Quitting: no new turn starts (his messages wait in their rows, undelivered, for the next start).
     if (this.disposing) return
@@ -1373,9 +1451,9 @@ export class Runner {
       const once = scope !== undefined && !scope.rowUsed ? scope : undefined
       if (once !== undefined) once.viaBegin = true
       const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
-      this.turnAt.set(line.chat, userRow?.createdAt ?? this.now())
+      this.turnRow.set(line.chat, userRow?.id ?? posted?.id ?? '')
       const fixedLease = leaseId ?? once?.leaseId
-      lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
+      lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? posted?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
       line.leaseId = lease
       // The lease is stored before anyone hears the turn started, so a brain that dies right after can be taken over.
       await this.devices?.leases?.settled?.()
@@ -1864,45 +1942,57 @@ export class Runner {
     return undefined
   }
 
-  private mark(chat: string): number | null {
-    const key = `ctx_to:${chat}`
+  /** The rows of this chat this computer's engine has seen (their ids), or null when it has never answered here. */
+  private heard(chat: string): Set<string> | null {
+    const key = `ctx_seen:${chat}`
     const raw = this.localMarks?.get(key) ?? this.memoryMarks.get(key) ?? null
-    const n = raw === null ? NaN : Number(raw)
-    return Number.isFinite(n) ? n : null
+    if (raw === null) return null
+    try {
+      const ids = JSON.parse(raw) as unknown
+      return Array.isArray(ids) ? new Set(ids.filter((id): id is string => typeof id === 'string')) : null
+    } catch {
+      return null
+    }
   }
 
-  /** The note of what happened in this chat while this computer's engine was away, or ''. */
+  /**
+   * The note of what happened in this chat while this computer's engine was away, or ''. By row id, never by time:
+   * a computer with a wrong clock writes rows that sort before ones this one has already seen (26 Nov 2026).
+   */
   private async crossBrainNote(chat: string): Promise<string> {
-    const since = this.mark(chat)
-    const before = this.turnAt.get(chat) ?? this.now()
+    const seen = this.heard(chat)
+    const current = this.turnRow.get(chat) ?? ''
     try {
       return await gapNote(
         {
-          between: async (from, to) => {
-            if (from !== null) return (await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], since: from, before: to, limit: 400 })).sort((a, b) => a.createdAt - b.createdAt)
-            const conversation = await listWhere(this.store, 'chat_item', { chat, kinds: ['user', 'agent', 'report'], before: to, newestFirst: true, limit: FIRST_TURN_ROWS })
-            const oldest = conversation.reduce((at, row) => Math.min(at, row.createdAt), to)
-            if (conversation.length === 0) return []
-            // The steps taken in between come with them (what each tool did).
-            return (await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], since: oldest - 1, before: to, limit: 400 })).sort((a, b) => a.createdAt - b.createdAt)
+          between: async () => {
+            if (seen === null) {
+              const conversation = await listWhere(this.store, 'chat_item', { chat, kinds: ['user', 'agent', 'report'], newestFirst: true, limit: FIRST_TURN_ROWS + 1 })
+              const rows = conversation.filter((row) => row.id !== current)
+              if (rows.length === 0) return []
+              const oldest = rows.reduce((at, row) => Math.min(at, row.createdAt), Number.MAX_SAFE_INTEGER)
+              return (await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], since: oldest - 1, limit: 400 })).filter((row) => row.id !== current).sort((a, b) => a.createdAt - b.createdAt)
+            }
+            const newest = await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], newestFirst: true, limit: SEEN_ROWS })
+            return newest.filter((row) => row.id !== current && !seen.has(row.id)).sort((a, b) => a.createdAt - b.createdAt)
           },
         },
-        since,
-        before,
+        null,
+        0,
       )
     } catch {
       return ''
     }
   }
 
-  /** The engine here has now seen everything in the chat: the next gap starts after its newest row. */
+  /** The engine here has now seen everything in the chat. */
   private async markHeard(chat: string): Promise<void> {
-    const newest = await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], newestFirst: true, limit: 1 })
-    const at = newest[0]?.createdAt
-    if (at === undefined) return
-    const key = `ctx_to:${chat}`
-    this.memoryMarks.set(key, String(at))
-    this.localMarks?.set(key, String(at))
+    const newest = await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], newestFirst: true, limit: SEEN_ROWS })
+    if (newest.length === 0) return
+    const key = `ctx_seen:${chat}`
+    const value = JSON.stringify(newest.map((row) => row.id))
+    this.memoryMarks.set(key, value)
+    this.localMarks?.set(key, value)
   }
 
   private async runCliRoutine(trigger: TriggerRow, brain: Brain & { kind: 'plan' }): Promise<RoutineRunResult> {

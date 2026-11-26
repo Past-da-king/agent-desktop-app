@@ -6,7 +6,7 @@
  *
  * Off (no effect at all) while Devices is off, and while no other brain beats a node row.
  */
-import { MAIN_CHAT, NO_LIMIT_CAP, accountsOf, resolvePick, type AiAccount, type ChatEvent, type ChatItem, type ChatRunInfo, type DataChange, type JobRow, type ProjectRow, type RunState, type Settings, type TriggerRow, type TurnLeaseRow } from '@agent/core'
+import { MAIN_CHAT, NO_LIMIT_CAP, accountsOf, compareDeviceOrder, resolvePick, type AiAccount, type ChatEvent, type ChatItem, type ChatRunInfo, type DataChange, type JobRow, type ProjectRow, type RunState, type Settings, type TriggerRow, type TurnLeaseRow } from '@agent/core'
 
 import { brainFor, isBrain, type ProviderFactory } from '../runtime/brains'
 import type { HelperManager, OffloadLink } from '../runtime/helpers'
@@ -14,6 +14,33 @@ import { Offload, TAKE_BACK_MS, type NodeCapacity, type PlaceResult, type SlotCl
 import type { ChatVia } from '../tools/projects'
 import { devicesState, ownBrainIds } from './sync'
 import { appNow } from '../clock/app-clock'
+
+/**
+ * The main chat stays with the brain that answered it last while that brain is reachable and the talk is recent, so
+ * a conversation is never split between two brains; after a quiet spell it goes to the first ready brain in the
+ * answer order. Every brain answers the same question the same way from the same synced rows.
+ */
+export const MAIN_STICKY_MS = 20 * 60_000
+/** A main-chat message the holder has not taken in this long is answered here instead (it went away). */
+export const MAIN_TAKE_BACK_MS = 20_000
+/** A holder that let a message go untaken is passed over for this long. */
+const MAIN_PASS_OVER_MS = 2 * 60_000
+
+/** Who answers the main chat: the brain id, or '' for nobody known (answer here). Pure, for tests. */
+export function pickMainHolder(input: {
+  lastLease: { brainId: string; at: number } | null
+  now: number
+  order: string[]
+  isSelf: (id: string) => boolean
+  ready: (id: string) => boolean
+}): string {
+  const last = input.lastLease
+  if (last !== null && last.brainId !== '' && input.now - last.at < MAIN_STICKY_MS) {
+    if (input.isSelf(last.brainId) || input.ready(last.brainId)) return last.brainId
+  }
+  for (const id of input.order) if (input.isSelf(id) || input.ready(id)) return id
+  return ''
+}
 
 /** How long an AI account that failed to sign in here is left out of this brain's offer. */
 const CANNOT_RUN_MS = 6 * 3_600_000
@@ -27,6 +54,8 @@ type ReplicaStore = ConstructorParameters<typeof Offload>[0]['store'] & {
 
 export interface OffloadRunner {
   send(text: string, attachments?: unknown[], chat?: string, origin?: never): Promise<void>
+  /** A main-chat message another brain stored: answer that row (runtime/runner.ts). */
+  runPosted?(chat: string, rowId: string, text: string): Promise<void>
   receive(chat: string, text: string, via: ChatVia): Promise<void>
   stop(chat?: string): void
   state(chat?: string): RunState
@@ -82,6 +111,87 @@ export function brainReachable(links: Array<{ peer: string; ok: boolean }>, isCo
   return links.some((link) => link.peer === id && link.ok) || isConnected(id)
 }
 
+export interface MainRouteDeps {
+  store: Pick<ReplicaStore, 'get' | 'upsert' | 'list'> & { listWhere?: ReplicaStore['listWhere'] }
+  offload: Pick<Offload, 'mainReady' | 'send'>
+  selfId: () => string
+  isSelf: (id: string) => boolean
+  now: () => number
+  runner: () => Pick<OffloadRunner, 'runPosted'> | null
+  onSent?: (to: string) => void
+  onTakeBack?: () => void
+  log?: (line: string, detail?: Record<string, unknown>) => void
+  takeBackMs?: number
+}
+
+/**
+ * The main chat's one holder: which brain answers it (holder), how a message of his stored here goes to that brain
+ * (post: the row id, taken back and answered here when the holder does not take it in time), and the lease watch
+ * that keeps who answered last (noteLease, fed every main-chat turn lease any brain writes).
+ */
+export function makeMainRoute(deps: MainRouteDeps): {
+  holder(): Promise<string | null>
+  post(to: string, rowId: string, text: string): Promise<void>
+  noteLease(lease: TurnLeaseRow): void
+} {
+  const { store, offload, selfId, isSelf, now } = deps
+  let lastMain: { brainId: string; at: number } | null = null
+  const passedOver = new Map<string, number>()
+  const noteLease = (lease: TurnLeaseRow): void => {
+    if (lease.kind !== 'turn' || lease.chatId !== MAIN_CHAT || lease.brainId === '') return
+    const at = Math.max(lease.heartbeatAt || 0, lease.startedAt || 0)
+    if (lastMain !== null && at < lastMain.at) return
+    lastMain = { brainId: lease.brainId, at }
+  }
+  void (store.listWhere !== undefined ? store.listWhere('turn_lease', { newestFirst: true, limit: 300 }) : store.list('turn_lease'))
+    .then((rows) => {
+      for (const row of rows as TurnLeaseRow[]) noteLease(row)
+    })
+    .catch(() => undefined)
+  const usable = (id: string): boolean => (passedOver.get(id) ?? 0) <= now()
+  const holder = async (): Promise<string | null> => {
+    if (selfId() === '') return null
+    const brains = (await store.list('device')).filter((row) => !row.revoked && row.roles.includes('brain')).sort(compareDeviceOrder)
+    const order = brains.map((row) => row.id)
+    const last = lastMain as { brainId: string; at: number } | null
+    if (last !== null && !order.includes(last.brainId)) order.push(last.brainId)
+    const ready = new Map<string, boolean>()
+    for (const id of order) {
+      if (isSelf(id) || !usable(id)) continue
+      ready.set(id, await offload.mainReady(id).catch(() => false))
+    }
+    const picked = pickMainHolder({ lastLease: last, now: now(), order, isSelf, ready: (id) => ready.get(id) === true })
+    return picked === '' || isSelf(picked) ? null : picked
+  }
+  const post = async (to: string, rowId: string, text: string): Promise<void> => {
+    const id = await offload.send(to, 'post', MAIN_CHAT, { text, item: rowId })
+    deps.onSent?.(to)
+    deps.log?.('Main chat: sent to the brain holding it', { to, row: rowId })
+    const timer = setTimeout(() => {
+      void (async () => {
+        const row = await store.get('job', id).catch(() => null)
+        if (row === null || row.status !== 'sent') return
+        await store.upsert('job', { id, status: 'done', info: 'taken back', at: now() }).catch(() => undefined)
+        passedOver.set(to, now() + MAIN_PASS_OVER_MS)
+        deps.onTakeBack?.()
+        deps.log?.('Main chat: the holder did not take the message, answering here', { to, row: rowId })
+        await deps.runner()?.runPosted?.(MAIN_CHAT, rowId, text)
+      })().catch(() => undefined)
+    }, deps.takeBackMs ?? MAIN_TAKE_BACK_MS)
+    timer.unref?.()
+  }
+  return { holder, post, noteLease }
+}
+
+/** A main-chat message another brain stored and sent here: answer that row. False: not one (or no runner yet). */
+export function handleMainPost(msg: JobRow, runner: Pick<OffloadRunner, 'runPosted'> | null, log?: MainRouteDeps['log']): boolean | null {
+  if (msg.op !== 'post' || msg.helper !== MAIN_CHAT || msg.item === '') return null
+  if (runner === null || runner.runPosted === undefined) return false
+  log?.('Main chat: answering a message sent on another device', { from: msg.from, row: msg.item })
+  void runner.runPosted(MAIN_CHAT, msg.item, msg.text).catch(() => undefined)
+  return true
+}
+
 export function startOffload(deps: OffloadWireDeps): OffloadWire {
   const { store, helpers, settings } = deps
   const now = (): number => appNow()
@@ -126,6 +236,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
       cap: limit < 0 ? 0 : limit === 0 ? NO_LIMIT_CAP : Math.min(NO_LIMIT_CAP, limit),
       active: helpers.activeCount(),
       browser: deps.browser(),
+      mainPost: true,
     }
   }
 
@@ -137,6 +248,8 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
   const START_GRACE_MS = 60_000
 
   const handle = async (msg: JobRow): Promise<boolean> => {
+    const mainPost = handleMainPost(msg, deps.runner(), deps.log)
+    if (mainPost !== null) return mainPost
     if (msg.op === 'post') {
       const runner = deps.runner()
       if (runner === null) return false
@@ -175,7 +288,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     isSelf,
     up: (id) => offload.up(id),
     place: (req) => offload.place(req),
-    send: (to, op, helper, extra) => offload.send(to, op, helper, extra),
+    send: (to, op, helper, extra) => offload.send(to, op, helper, extra).then(() => undefined),
     leaseHolder: (id) => offload.leaseHolder(id),
     deviceName: (id) => offload.deviceName(id),
     cannotRun: (account, why) => {
@@ -211,12 +324,48 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
     if (row.kind === 'claim' && row.op === 'chat') void learnChatShell(row.helper)
   })
 
+  // ---- the main chat's one holder ----------------------------------------------------------------------------------
+  let mainThere = ''
+  const main = makeMainRoute({
+    store,
+    offload,
+    selfId,
+    isSelf,
+    now,
+    runner: () => deps.runner(),
+    onSent: (to) => {
+      starting.set(MAIN_CHAT, now())
+      mainThere = to
+      deps.emitChat?.({ type: 'run_started' })
+    },
+    onTakeBack: () => void starting.delete(MAIN_CHAT),
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+  const noteMain = main.noteLease
+  const mainHolder = main.holder
+  const postMain = main.post
+
   // A start nobody took is run here; a placed chat's turn shows as running here.
   const takeBack = setInterval(() => void helpers.takeBack(TAKE_BACK_MS).catch(() => 0), 10_000)
   takeBack.unref?.()
   const offLeases = store.onChange((change: DataChange) => {
     if (change.entity !== 'turn_lease' || change.row === undefined) return
     const lease = change.row as TurnLeaseRow
+    if (lease.kind === 'turn' && lease.chatId === MAIN_CHAT) {
+      noteMain(lease)
+      if (isSelf(lease.brainId)) return
+      // The main chat answered on another brain shows as working here too (and Stop reaches it).
+      const running = lease.status === 'running'
+      starting.delete(MAIN_CHAT)
+      if (running && !runningThere.has(MAIN_CHAT)) {
+        runningThere.add(MAIN_CHAT)
+        mainThere = lease.brainId
+        deps.emitChat?.({ type: 'run_started' })
+      } else if (!running && runningThere.delete(MAIN_CHAT)) {
+        deps.emitChat?.({ type: 'run_finished' })
+      }
+      return
+    }
     if (lease.kind !== 'turn' || lease.chatId === MAIN_CHAT || isSelf(lease.brainId) || !placedChats.has(lease.chatId)) return
     const running = lease.status === 'running'
     starting.delete(lease.chatId)
@@ -294,8 +443,10 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
       const pick = resolvePick(settings.get(), undefined, 'main')
       return offload.claimRoutine('memory-daily', day, { text: 'End of day memory pass', account: pick.account, localFolder: true })
     },
-    wrapRunner: <T extends object>(runner: T): T =>
-      new Proxy(runner, {
+    wrapRunner: <T extends object>(runner: T): T => {
+      const settable = runner as { setMainRoute?: (route: { holder(): Promise<string | null>; post(to: string, rowId: string, text: string): Promise<void> }) => void }
+      settable.setMainRoute?.({ holder: mainHolder, post: postMain })
+      return new Proxy(runner, {
         get(target, prop, receiver) {
           const value = Reflect.get(target, prop, receiver) as unknown
           if (prop === 'send' && typeof value === 'function') {
@@ -306,6 +457,9 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
           }
           if (prop === 'stop' && typeof value === 'function') {
             return (chat?: string) => {
+              if ((chat === undefined || chat === MAIN_CHAT) && (runningThere.has(MAIN_CHAT) || startingNow(MAIN_CHAT)) && mainThere !== '') {
+                void offload.send(mainThere, 'chatstop', MAIN_CHAT).catch(() => undefined)
+              }
               if (chat !== undefined && chat !== MAIN_CHAT) {
                 void offload.routeChat(chat).then((to) => (to === null ? undefined : offload.send(to, 'chatstop', chat))).catch(() => undefined)
               }
@@ -315,7 +469,7 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
           if (prop === 'state' && typeof value === 'function') {
             return (chat?: string) => {
               const local = (value as (chat?: string) => RunState).call(target, chat)
-              return chat === undefined ? local : state(local, chat)
+              return state(local, chat ?? MAIN_CHAT)
             }
           }
           if (prop === 'states' && typeof value === 'function') {
@@ -327,7 +481,8 @@ export function startOffload(deps: OffloadWireDeps): OffloadWire {
           }
           return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value
         },
-      }),
+      })
+    },
     state,
     shellFor: (chat) => chatShells.get(chat),
     stop: () => {
