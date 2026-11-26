@@ -1,3 +1,4 @@
+import { safeSocketEnd } from '../runtime/safe-pipe'
 /**
  * The node's HTTPS server (protocol s2 and s5): one port, its own certificate, routes added by the parts that
  * plug in (DevicesHost), pass auth by Bearer header or the agent_pass cookie, and the RPC WebSocket at /v1/rpc.
@@ -442,7 +443,7 @@ export class DevicesServer implements DevicesHost {
     const from = peerOf(req.socket)
     if (url.pathname !== '/v1/rpc') {
       this.connLog.note(`ws-404:${from}`, 'Devices link refused', { reason: 'not-found', path: safePath(req.url), from })
-      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
+      safeSocketEnd(socket, 'HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
       return
     }
     const who = this.whoIs(req.headers)
@@ -450,7 +451,7 @@ export class DevicesServer implements DevicesHost {
       // Say why, in the log and to the device: an old pass after a reset, a revoked device, or no pass at all.
       this.connLog.note(`ws-401:${who.reason}:${from}`, 'Devices link refused', { reason: who.reason, ...(who.device !== undefined ? { device: who.device } : {}), from })
       const body = JSON.stringify({ error: REFUSED_MESSAGES[who.reason], reason: who.reason })
-      socket.end(
+      safeSocketEnd(socket,
         'HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Type: application/json; charset=utf-8\r\n' +
           `X-Agent-Refused: ${who.reason}\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
       )

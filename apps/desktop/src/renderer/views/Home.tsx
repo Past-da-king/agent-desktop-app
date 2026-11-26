@@ -1,3 +1,4 @@
+import { ApprovalContext } from '../ui/ApprovalContext'
 import type { ChatItem, GoalRow, TaskRow, TriggerRow } from '@agent/core'
 import { useMemo, useState } from 'react'
 
@@ -105,6 +106,7 @@ function ApprovalCard({ item }: { item: ChatItem }): JSX.Element {
         APPROVE BEFORE I DO THIS
       </div>
       <div className="q">{metaText(parseMeta(item.meta), 'summary') || item.text}</div>
+      <ApprovalContext meta={parseMeta(item.meta)} />
       <div className="chips">
         <Button
           style={{ height: 44 }}

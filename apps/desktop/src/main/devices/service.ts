@@ -15,6 +15,7 @@ import { filterRows } from '../../shared/list-where'
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../../shared/devices-channels'
 import { qrMatrix } from '../../shared/qr'
 import { WslRelay, type WslRelayDeps } from './wsl-relay'
+import { appClock } from '../clock/app-clock'
 import { DevicesConfigFile, advertisedUrls, normaliseUrl, type DevicesConfig, type InterfaceMap, type JoinedPeer } from './config'
 import { cleanRoles, platformOf } from './facts'
 import { joinMesh, loadIdentity, type NodeIdentity } from './identity'
@@ -32,6 +33,7 @@ import { callAllowed } from './rpc'
 import { wireOf, type HandlerRegistry } from './registry'
 import { DevicesServer, contentTypeFor } from './server'
 import type { BrainRef, DeviceFacts, DeviceKind, DeviceRecord, DeviceRole, DevicesHost, DeviceToolResult, RouteReply, RouteRequest } from './types'
+import { appNow } from '../clock/app-clock'
 
 const SEEN_EVERY_MS = 60_000
 /** How stale the firewall reading may get before a status read looks again (netsh is slow and prints every rule). */
@@ -195,7 +197,7 @@ export class DevicesService {
   private publishedUrls = ''
 
   constructor(private readonly deps: DevicesServiceDeps) {
-    this.now = deps.now ?? Date.now
+    this.now = deps.now ?? appNow
     this.answerOrder = new AnswerOrder({
       selfId: () => this.identity.nodeId,
       brains: () => this.list().filter(row => row.roles.includes('brain') && !row.revoked),
@@ -582,6 +584,7 @@ export class DevicesService {
       firewall: this.deps.firewall?.needed === true && config.enabled ? this.firewallState : 'not-needed',
       servingTo: this.uplink.target ?? '',
       ...(this.wslRelay.available || config.wslRelay === true ? { wslRelay: this.wslRelay.status() } : {}),
+      clock: clockStatus(),
       answering: config.enabled ? `${[this.answerOrder.line(), this.deps.availability?.()].filter(Boolean).join(' ')}${hasTiedPriorities(this.list().filter(row => row.roles.includes('brain') && !row.revoked)) ? ' Order has tied positions; using pairing order, then device id.' : ''}` : 'Devices is off.',
     }
   }
@@ -1294,3 +1297,9 @@ export function getDevicesService(): DevicesService | null {
 }
 
 export type { DeviceRole }
+
+/** Settings > Devices: this device's clock against its peers (warn past two minutes). */
+function clockStatus(): NonNullable<DevicesStatus['clock']> {
+  const report = appClock.report()
+  return { correctionMs: report.correctionMs, selfSynced: report.selfSynced, warn: report.warn, line: report.line }
+}

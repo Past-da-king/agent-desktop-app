@@ -149,6 +149,36 @@ describe("a card's X or swipe (helpers.dismiss)", () => {
     expect((await store.get('project', p.id))?.panelHidden).toEqual({ c1: T0 + 2000 })
   })
 
+  it("a chat card no project holds (its project dropped the chat) closes with its X too, and stays closed (27 Nov 2026)", async () => {
+    const store = new Store(':memory:', () => T0)
+    cleanups.push(() => store.close())
+    // The chat's own agent row is there; no project lists the chat any more. The card waits on him (a reply).
+    await store.upsert('chat_item', { id: 'pa-c9', kind: 'helper', text: 'brief', meta: JSON.stringify({ id: 'pa-c9', label: 'Agent Desktop App', state: 'done', projectChat: 'c9', startedAt: T0, endedAt: T0 + 40 }) })
+    await store.upsert('chat_item', { id: 'u9', kind: 'user', text: 'HELLO', meta: JSON.stringify({ chat: 'c9' }), createdAt: T0 + 50 } as never)
+    await store.upsert('chat_item', { id: 'a9', kind: 'agent', text: 'Hi Ayanda. The release is still paused.', meta: JSON.stringify({ chat: 'c9' }), createdAt: T0 + 60 } as never)
+    const shown = async (): Promise<string[]> => helperCards(await store.list('chat_item'), await store.list('project'), { now: T0 + 100 }).map((card) => card.label)
+    expect(await shown()).toEqual(['Agent Desktop App'])
+    const card = helperCards(await store.list('chat_item'), await store.list('project'), { now: T0 + 100 })[0]!
+    const result = await dismissCard(card.id, {
+      get: (id) => store.get('chat_item', id),
+      upsertItem: (patch) => store.upsert('chat_item', patch),
+      projects: () => store.list('project'),
+      upsertProject: (patch) => store.upsert('project', patch),
+      cards: async () => [cardOf({ id: card.id, row: card.row.id, kind: 'project-chat', projectChat: 'c9', activityAt: card.activityAt })],
+      stopHelper: async () => false,
+      stopChat: () => undefined,
+      chatRunning: () => false,
+      // The PC's clock is 35 minutes slow: the close must still cover the reply it was closed on.
+      now: () => T0 - 35 * 60_000,
+      sleep: async () => undefined,
+    })
+    expect(result).toEqual({ ok: true, stopped: false })
+    expect(await shown()).toEqual([])
+    // A new message in that chat brings its card back.
+    await store.upsert('chat_item', { id: 'a10', kind: 'agent', text: 'Now it is done.', meta: JSON.stringify({ chat: 'c9' }), createdAt: T0 + 90 } as never)
+    expect(await shown()).toEqual(['Agent Desktop App'])
+  })
+
   it('an unknown card says so', async () => {
     const store = new Store(':memory:', () => T0)
     cleanups.push(() => store.close())

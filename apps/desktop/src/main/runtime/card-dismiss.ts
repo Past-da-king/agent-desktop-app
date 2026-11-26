@@ -67,10 +67,16 @@ export async function dismissCard(ref: string, deps: CardDismissDeps): Promise<D
       }
     }
     const project = (await deps.projects()).find((each) => each.chats.includes(projectChat))
+    // Stamped after the stop has landed, so the stop's own lines do not bring the card back.
+    const latest = (await deps.cards()).find((each) => each.projectChat === projectChat)
+    const at = Math.max(now(), latest?.activityAt ?? card?.activityAt ?? 0)
     if (project !== undefined) {
-      // Stamped after the stop has landed, so the stop's own lines do not bring the card back.
-      const latest = (await deps.cards()).find((each) => each.projectChat === projectChat)
-      await deps.upsertProject({ id: project.id, panelHidden: closePatch(project, projectChat, Math.max(now(), latest?.activityAt ?? 0)) })
+      await deps.upsertProject({ id: project.id, panelHidden: closePatch(project, projectChat, at) })
+    } else {
+      // No project holds the chat any more (27 Nov 2026: its X did nothing): the close goes on the chat's own agent row.
+      const own = await deps.get(latest?.row ?? rowId)
+      if (own === null) return { ok: false, why: 'There is no such card.' }
+      await deps.upsertItem({ id: own.id, kind: own.kind, text: own.text, meta: JSON.stringify({ ...parse(own.meta), cardClosedAt: at }) })
     }
     return { ok: true, stopped }
   }

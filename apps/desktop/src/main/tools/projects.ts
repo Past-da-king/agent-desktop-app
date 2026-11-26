@@ -1,3 +1,4 @@
+import { requestById, requestFor } from '../runtime/request-source'
 /**
  * Projects as tools, so the one main agent can work across them (21 Oct 2026). In the main thread it lists
  * projects and what each chat is doing, starts a chat in a project with a brief, and sends a message into one; a
@@ -14,7 +15,7 @@ import { isIconImage } from '../../shared/project-icon'
 import type { DataStore } from '../runtime/data'
 import { chatOf, chatTitle, newProjectChatId, newestOfChat, parseMeta, titleOfChat } from '../runtime/chat-lines'
 
-import { viaFromMeta, type ChatVia } from '../../shared/sender'
+import { toolVia, viaFromMeta, type ChatVia } from '../../shared/sender'
 
 /** Who a message came from (shared/sender.ts): every sender that is not the person writes it on the row. */
 export { viaLabel, type ChatVia } from '../../shared/sender'
@@ -210,7 +211,8 @@ function projectChatStart(deps: ProjectToolDeps): Tool {
       await deps.store.upsert('project', { id: project.id, chats: [...project.chats, chat] })
       const device = text(input['device'])
       await deps.place?.(chat, project, brief, device === '' ? undefined : device)
-      await deps.post(chat, brief, viaOf(ctx, projects, deps))
+      const request = ctx.requestId === undefined ? await requestFor(deps.store, ctx.chat ?? MAIN_CHAT, ctx.owner?.startsWith('helper:') ? ctx.owner.slice(7) : '') : await requestById(deps.store, ctx.requestId)
+      await deps.post(chat, brief, { ...viaOf(ctx, projects, deps), ...(request === null ? {} : { requestId: request.id }) })
       return `Started a chat in ${project.name} (chat ${chat}). It is working on it and will write back with what it finds; project_list shows how it is going.`
     },
   }
@@ -234,7 +236,8 @@ function projectChatSend(deps: ProjectToolDeps): Tool {
       if (project === null) return `No project chat ${chat}. project_list shows the chats.`
       const message = text(input['message'])
       if (message === '') return 'Pass the message.'
-      await deps.post(chat, message, viaOf(ctx, projects, deps))
+      const request = ctx.requestId === undefined ? await requestFor(deps.store, ctx.chat ?? MAIN_CHAT, ctx.owner?.startsWith('helper:') ? ctx.owner.slice(7) : '') : await requestById(deps.store, ctx.requestId)
+      await deps.post(chat, message, { ...viaOf(ctx, projects, deps), ...(request === null ? {} : { requestId: request.id }) })
       return `Sent to the chat in ${project.name}.`
     },
   }
@@ -252,10 +255,10 @@ function messageMain(deps: ProjectToolDeps): Tool {
       const chat = ctx.chat ?? MAIN_CHAT
       const projects = await deps.store.list('project')
       const project = projectOfChat(projects, chat)
-      if (project === null) return 'You are in the main thread already; just answer the user.'
+      if (project === null && !ctx.owner?.startsWith('helper:') && ctx.owner !== 'routine') return 'You are in the main thread already; just answer the user.'
       const message = text(input['message'])
       if (message === '') return 'Pass the message.'
-      await deps.post(MAIN_CHAT, message, { from: 'project', name: project.name, chat, title: await titleOfChat(deps.store, chat) })
+      await deps.post(MAIN_CHAT, message, project === null || ctx.owner?.startsWith('helper:') || ctx.owner === 'routine' ? toolVia(ctx) : { from: 'project', id: project.id, name: project.name, chat, title: await titleOfChat(deps.store, chat), icon: project.icon })
       return 'Sent to the main agent.'
     },
   }

@@ -31,6 +31,18 @@ export interface Pulled {
   entities?: string[]
 }
 
+/** The answering node's clock on its last answer (devices nodes add it; the hosted service does not). */
+export interface PeerTime {
+  /** Our raw clock when the request went out and when the answer came back. */
+  sentAt: number
+  receivedAt: number
+  /** The peer's clock when it answered, and how long it held the request first (a long poll). */
+  peerNow: number
+  heldMs: number
+  /** The peer's OS says its clock is synced, or not; null when it did not say. */
+  synced: boolean | null
+}
+
 export interface AuthResult {
   userId: number
   token: string
@@ -48,6 +60,10 @@ export class SyncClient {
   private readonly base: string
   private readonly token: string
   private readonly fetchImpl: typeof fetch
+  /** The peer's clock as its last answer gave it (PeerClock samples it), or null. */
+  lastPeerTime: PeerTime | null = null
+  /** Our raw clock, uncorrected (tests pass a skewed one). */
+  rawClock: () => number = Date.now
 
   constructor(baseUrl: string, token: string, fetchImpl: typeof fetch = fetch, allowHttp = false) {
     const reason = blockReason(baseUrl, allowHttp)
@@ -117,6 +133,7 @@ export class SyncClient {
     }
     if (body !== undefined) headers['Content-Type'] = 'application/json'
     try {
+      const sentAt = this.rawClock()
       const res = await this.fetchImpl(this.base + path, {
         method,
         headers,
@@ -125,7 +142,19 @@ export class SyncClient {
       })
       const text = await res.text()
       if (!res.ok) throw new SyncException(res.status, errorMessage(text))
-      return parseObject(text)
+      const json = parseObject(text)
+      const peerNow = json['now']
+      if (typeof peerNow === 'number' && Number.isFinite(peerNow)) {
+        const synced = json['clockSynced']
+        this.lastPeerTime = {
+          sentAt,
+          receivedAt: this.rawClock(),
+          peerNow,
+          heldMs: numberOr(json['heldMs'], 0),
+          synced: typeof synced === 'boolean' ? synced : null,
+        }
+      }
+      return json
     } catch (error) {
       throw wrapNetworkError(error)
     }

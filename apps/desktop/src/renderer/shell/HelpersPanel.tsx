@@ -1,3 +1,5 @@
+import { isLiveCard } from '../../shared/card-state'
+import { ApprovalContext } from '../ui/ApprovalContext'
 import { MAIN_CHAT, type ChatItem, type MascotId, type ProjectRow } from '@agent/core'
 import { PlaceChip } from '../ui/PlaceChip'
 import { Fragment, useEffect, useMemo, useState } from 'react'
@@ -169,6 +171,7 @@ export function HelperCardList({
   nameChats?: boolean
   id?: string
 }): JSX.Element | null {
+  const waiting = useWaiting()
   const { stopping, stop } = useStop()
   // A helper's own helpers sit folded under it, closed until its row is opened.
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(NONE)
@@ -201,6 +204,7 @@ export function HelperCardList({
         </span>
         <span className={`pill ${shown.waiting ? 'warn' : 'pri'}`}>{shown.waiting ? 'Needs you' : 'Working'}</span>
       </button>
+      {waiting.filter((item) => chatOf(item) === MAIN_CHAT && metaText(parseMeta(item.meta), 'helper') === '').map((item) => <ApprovalContext key={item.id} meta={parseMeta(item.meta)} />)}
       {shown.waiting ? null : (
         <button type="button" className="hp-close hp-stop" aria-label={`Stop ${shown.label}`} title="Stop the main chat's run now" onClick={() => void agent.chat.stop(MAIN_CHAT).catch(stopFailed)}>
           <Icon name="x" size={16} />
@@ -248,6 +252,7 @@ export function HelperCardList({
             </span>
             <span className={`pill ${s.tone}`}>{s.label}</span>
           </button>
+          {waiting.filter((item) => metaText(parseMeta(item.meta), 'helper') === card.id || (target.kind === 'project-chat' && chatOf(item) === target.chat && metaText(parseMeta(item.meta), 'helper') === '')).map((item) => <ApprovalContext key={item.id} meta={parseMeta(item.meta)} />)}
           {stoppable ? (
             <button
               type="button"
@@ -470,6 +475,10 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
     )
   }
 
+  const card = [...items].reverse().find((item) => isLiveCard(item) && parseMeta(item.meta)['helper'] === id)
+  const sourceId = parseMeta(row?.meta ?? '{}')['requestId']
+  const source = items.find((item) => item.kind === 'user' && item.id === sourceId)
+  const context = card !== undefined ? parseMeta(card.meta) : source === undefined ? {} : { request: { id: source.id, at: source.createdAt, text: source.text } }
   const s = stateLabel(helper)
   const current = [...helper.activity].reverse().find((step) => metaText(parseMeta(step.meta), 'status') === 'running')
   return (
@@ -514,6 +523,7 @@ export function HelperDetail({ id, items, projects, onClose: close }: { id: stri
               <Icon name="chev" size={16} />
             </button>
           </section>
+          <ApprovalContext meta={context} />
           {current !== undefined ? (
             <div className="hp-now">
               <span className="eyebrow">NOW</span>

@@ -1,3 +1,4 @@
+import type { RequestSource } from './request-source'
 /**
  * Who may answer a card: the person, or the main agent on his behalf ("Agent acts for me on approvals", 23 Nov 2026).
  *
@@ -27,6 +28,7 @@ export interface CardFacts {
   kind: 'approval' | 'question'
   asker: Asker
   origin?: CardOrigin | undefined
+  request?: RequestSource | undefined
   /** What the agent wrote on the card. Only ever used to send a card to the person, never to hand one to the agent. */
   summary: string
   details?: string
@@ -52,7 +54,7 @@ const AGENT = (rule: string, why: string): Verdict => ({ lane: 'agent', rule, wh
 /** Writing to people. */
 const SEND_WORDS = /\b(send|sends|sending|sent|post|posts|posting|publish|reply|replies|replying|comment|comments|message|messages|messaging|dm|dms|e-?mail|e-?mails|mail|whatsapp|sms|text message|texts|tweet|tweets|share|shares|sharing|invite|invites|forward|broadcast|announce|slack|telegram|discord|linkedin|instagram|facebook|tiktok)\b/i
 /** Costing money. */
-const MONEY_WORDS = /\b(pay|paid|payment|payments|purchase|purchases|buy|buying|bought|checkout|subscribe|subscription|billing|invoice|credits|top[- ]?up|refund|charge|charged|credit card|debit card|bank card|company card|cvv|iban|eft|bank transfer|wire transfer|upgrade (?:the |your )?(?:plan|subscription))\b|\bUS\$|\bR\s?\d|\$\s?\d/i
+const MONEY_WORDS = /\b(money|pay|paid|payment|payments|purchase|purchases|buy|buying|bought|checkout|subscribe|subscription|billing|invoice|credits|top[- ]?up|refund|charge|charged|credit card|debit card|bank card|company card|cvv|iban|eft|bank transfer|wire transfer|upgrade (?:the |your )?(?:plan|subscription))\b|\bUS\$|\bR\s?\d|\$\s?\d/i
 /** His own hands: only he can do these. */
 const HANDS_WORDS = /(passkey|2fa|two[- ]factor|one[- ]time|verification code|\botp\b|captcha|sign[- ]?in|log[- ]?in|\bpassword|on my phone|your phone|phone tap|step[- ]?up|biometric|fingerprint|card number|needs you in the browser|your turn|done, carry on)/i
 /** Secrets and keys: a person's call. */
@@ -161,14 +163,18 @@ function appsRun(input: Record<string, unknown>): Verdict {
   return HIM('unknown', 'An action the app does not recognise.')
 }
 
+function operationWords(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').replace(/[_-]+/g, ' ')
+}
+
 function webappRun(input: Record<string, unknown>): Verdict {
-  const words = `${str(input['tool'])} ${str(input['description'])}`
-  if (input['sends'] === true) return HIM('outbound', 'The saved tool sends something out.')
-  if (SEND_WORDS.test(words)) return HIM('outbound', 'The saved tool sends or posts.')
+  const words = operationWords(`${str(input['tool'])} ${str(input['description'])}`)
   if (MONEY_WORDS.test(words)) return HIM('money', 'The saved tool concerns money.')
   if (HANDS_WORDS.test(words)) return HIM('hands', 'The saved tool needs his own hands.')
   if (SECRET_WORDS.test(words)) return HIM('secret', 'The saved tool handles a secret.')
-  if (/\b(delete|remove|deploy|release|destroy|purge|trash|archive|restore|rename|move|update|create|add|sync|import)\b/i.test(words)) return AGENT('app-change', 'A saved site tool that changes things inside a task he set.')
+  if (input['sends'] === true) return HIM('outbound', 'The saved tool sends something out.')
+  if (SEND_WORDS.test(words)) return HIM('outbound', 'The saved tool sends or posts.')
+  if (/\b(delete|remove|deploy|release|destroy|purge|trash|archive|restore|rename|move|update|create|add|sync|import|grant|revoke|access|get|read|list|inspect|fetch)\b/i.test(words)) return AGENT('app-change', 'A saved site tool that changes things inside a task he set.')
   return HIM('unknown', 'A saved tool the app cannot tell is safe.')
 }
 
@@ -215,7 +221,7 @@ const SAFE_TOOLS_AGENT: Record<string, string> = {
 // ---- the verdict ---------------------------------------------------------------------------------------------
 
 /** The one decision: whose card is this. Unknown is always the person's. */
-export function classifyCard(facts: CardFacts): Verdict {
+function classifyUnrequested(facts: CardFacts): Verdict {
   if (!TASK_ASKERS.includes(facts.asker)) {
     return HIM('own-card', facts.asker === 'main' ? "It is the main agent's own card, so he decides." : 'It did not come from a task he set.')
   }
@@ -285,6 +291,7 @@ export function classifyCard(facts: CardFacts): Verdict {
     case 'browser_upload':
       return HIM('outbound', 'A file leaves this computer for a web page.')
     case 'app_update':
+      return AGENT('app-change', 'A verified app update inside a task.')
     case 'device_remove':
     case 'device_join':
       return HIM('own-setting', 'It changes the app or his devices.')
@@ -294,4 +301,43 @@ export function classifyCard(facts: CardFacts): Verdict {
       return HIM('unknown', `The app does not know the tool ${tool}.`)
     }
   }
+}
+
+/** The app's verified request can authorize a send only to every concrete recipient named in that request. */
+function requestedSend(facts: CardFacts): boolean {
+  if (facts.request === undefined || facts.origin === undefined) return false
+  const request = facts.request.text.trim()
+  // Eligibility requires an affirmative send directive, never a mention, prohibition, read, draft or conditional.
+  if (!/^(?:(?:please\s+)|(?:(?:can|could|would|will)\s+you\s+)|(?:i\s+(?:want|need)\s+you\s+to\s+))*(send|email|message|reply|forward|share|post|publish)\b/i.test(request)) return false
+  if (/\b(do not|don't|never|without|not yet|nothing|hold|draft|prepare|approve|approval|pending|if|unless|after|when|once|before|until|find|search|read|show)\b/i.test(request)) return false
+  const operation = operationWords(`${facts.origin.tool} ${str(facts.origin.input['slug'])} ${str(facts.origin.input['action'])} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`)
+  if (MONEY_WORDS.test(operation) || HANDS_WORDS.test(operation) || SECRET_WORDS.test(operation)) return false
+  const recipients: string[] = []
+  let protectedInput = false
+  const visit = (value: unknown, recipient = false, depth = 0): void => {
+    if (depth > 8) { protectedInput = true; return }
+    if (recipient && value !== null && typeof value !== 'object' && typeof value !== 'string') protectedInput = true
+    if (typeof value === 'string' && /\{\{vault:/.test(value)) protectedInput = true
+    if (typeof value === 'string' && recipient) { recipients.push(...value.split(/[,;]/).map((part) => part.trim()).filter(Boolean)); return }
+    if (Array.isArray(value)) { for (const item of value) visit(item, recipient, depth + 1); return }
+    if (typeof value === 'object' && value !== null) for (const [key, child] of Object.entries(value)) {
+      const words = operationWords(key)
+      if (MONEY_WORDS.test(words) || HANDS_WORDS.test(words) || SECRET_WORDS.test(words) || /^(amount|currency|funds)$/i.test(key)) protectedInput = true
+      visit(child, recipient || /^(to|cc|bcc)$|recipient|receiver|destination|target|email|phone|address|channel|chat/i.test(key), depth + 1)
+    }
+  }
+  visit(facts.origin.input)
+  const text = facts.request.text.toLowerCase()
+  return !protectedInput && recipients.length > 0 && recipients.every((recipient) => {
+    if (recipient.length < 3) return false
+    const escaped = recipient.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`(^|[^\\p{L}\\p{N}\\p{M}@._+\\-])${escaped}($|[^\\p{L}\\p{N}\\p{M}@._+\\-])`, 'iu').test(text)
+  })
+}
+
+export function classifyCard(facts: CardFacts): Verdict {
+  const verdict = classifyUnrequested(facts)
+  return verdict.rule === 'outbound' && TASK_ASKERS.includes(facts.asker) && requestedSend(facts)
+    ? AGENT('requested-outbound', 'The originating user request explicitly names this send and every recipient.')
+    : verdict
 }

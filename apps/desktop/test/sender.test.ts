@@ -11,12 +11,14 @@ import { startFakeAi, type FakeAi } from '../../../packages/core/test/fake-ai'
 import { sleep, waitFor } from '../../../packages/core/test/helpers'
 import { Store } from '../src/main/db'
 import { Runner } from '../src/main/runtime/runner'
+import { projectTools } from '../src/main/tools/projects'
+import { testContext, toolNamed } from './support'
 import { buildToolset } from '../src/main/runtime/toolset'
 import { voiceTools } from '../src/main/tools/voice'
 import { callHandoff, type CallHandoffDeps } from '../src/main/voice/handoff'
 import { callIdentity } from '../src/main/voice/service'
 import { viaOf } from '../src/renderer/lib/projects'
-import { callVia, senderLine, viaFromMeta } from '../src/shared/sender'
+import { callVia, senderLine, viaFromMeta, legacyVia, senderBody, isOwnMessage, toolVia } from '../src/shared/sender'
 import { secretsView, settingsView } from './support'
 
 /** Third-person talk about the agent, as if it were someone else. */
@@ -131,4 +133,72 @@ describe('every message says who really sent it', () => {
     expect(viaFromMeta({ via: { from: 'alien', name: 'x' } })).toBeNull()
     expect(viaFromMeta({ via: 'call' })).toBeNull()
   })
+})
+
+
+describe('agent sender regression', () => {
+  it.each([
+    ['[From project Example, chat "Check"] body', 'project'],
+    ['[Helper #h1 "Phone player" finished] body', 'helper'],
+    ['[Helpers finished: all 2 ended] body', 'helper'],
+    ['[From Hina, the main agent] body', 'main'],
+  ])('recovers the anchored legacy envelope %s', (text, from) => {
+    expect(legacyVia(text)?.from).toBe(from)
+    expect(isOwnMessage(row({}, text))).toBe(false)
+    expect(isOwnMessage(row({ own: true }, text))).toBe(true)
+    expect(viaOf(row({}, text))?.from).toBe(from)
+  })
+
+  it.each(['hello', 'Buyer PDF branch now abc', 'I saw [Helper #h1 "Test" finished] today', 'From project Example'])('never guesses a sender from ordinary prose: %s', (text) => {
+    expect(isOwnMessage(row({}, text))).toBe(true)
+    expect(viaOf(row({}, text))).toBeNull()
+  })
+
+  it('uses trusted helper and routine tool context, not the words being sent', () => {
+    expect(toolVia({ owner: 'helper:h1', agentLabel: 'Phone player', chat: 'main' })).toEqual({ from: 'helper', id: 'h1', name: 'Phone player', chat: 'main' })
+    expect(toolVia({ owner: 'routine', agentLabel: 'Morning desk' }).from).toBe('routine')
+  })
+
+  it('keeps project identity and tolerates malformed historical metadata', () => {
+    const via = viaFromMeta({ via: { from: 'project', id: 'p1', name: 'Example', icon: { glyph: 'code', color: 'iris' } } })
+    expect(via?.id).toBe('p1')
+    expect(via?.icon).toEqual({ glyph: 'code', color: 'iris' })
+    expect(isOwnMessage({ ...row({}), meta: 'broken', text: '[From project Example] report' })).toBe(false)
+  })
+
+  it('stores automatic deliveries and labels explicit sends for the model', async () => {
+    const seen: string[] = []
+    fake = await startFakeAi((request) => { seen.push(JSON.stringify(request)); return { text: 'Received.' } })
+    store = new Store(':memory:')
+    const runner = new Runner({ store, settings: settingsView({ ...DEFAULT_SETTINGS, hasKey: true, mode: 'api_key', provider: 'openai', model: 'fake-model', allowHttp: true, notifications: false }), secrets: secretsView('test-key'), tools: buildToolset({ store }), providerFactory: () => providerFor({ provider: 'openai', key: 'test-key', baseUrl: fake!.url, allowHttp: true }), timeZone: 'UTC' })
+    runners.push(runner)
+    for (const from of ['helper', 'project', 'routine', 'device', 'system'] as const) {
+      await runner.deliver(`Report ${from}`, MAIN_CHAT, { from, name: `Source ${from}`, id: from, chat: '' })
+      await waitFor(() => !runner.state(MAIN_CHAT).running, 8_000)
+      const found = (await store.list('chat_item')).find((item) => item.text === `Report ${from}`)!
+      expect(viaOf(found)?.from).toBe(from)
+      expect(isOwnMessage(found)).toBe(false)
+    }
+    await runner.send('No header report', [], MAIN_CHAT, undefined, { from: 'helper', name: 'Phone player', chat: '' })
+    await waitFor(() => !runner.state(MAIN_CHAT).running, 8_000)
+    expect(seen.join('\n')).toContain('From the helper Phone player')
+  }, 30_000)
+})
+
+
+it.each([
+  ['helper:h1', 'helper'],
+  ['routine', 'routine'],
+])('message_main from %s keeps its own sender, including in the main thread', async (owner, from) => {
+  store = new Store(':memory:')
+  const sent: unknown[] = []
+  const tool = toolNamed(projectTools({ store, agentName: () => 'Hina', state: () => ({ running: false, waiting: [] }), post: async (chat, text, via) => { sent.push({ chat, text, via }) } }), 'message_main')
+  await tool.run({ message: 'Headerless report' }, testContext({ owner, agentLabel: 'Phone player', chat: MAIN_CHAT }))
+  expect(sent).toEqual([{ chat: MAIN_CHAT, text: 'Headerless report', via: { from, id: owner.replace(/^helper:/, ''), name: 'Phone player', chat: MAIN_CHAT } }])
+})
+
+it('hides the redundant app envelope only when displaying a sender card', () => {
+  expect(senderBody('[From project Example] report')).toBe('report')
+  expect(senderBody('[Helper #h1 "Test" finished]\nreport')).toBe('report')
+  expect(senderBody('I saw [Helper #h1 finished] today')).toBe('I saw [Helper #h1 finished] today')
 })

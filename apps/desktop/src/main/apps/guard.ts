@@ -7,7 +7,7 @@
  * the app in the profile, that one is picked for it. The main agent has no profile: with no account
  * named, the action is held to the strictest of that app's accounts, because Composio picks its default.
  */
-import type { AccountRules, AgentProfileInfo, AppRule, ToolContext } from '@agent/core'
+import type { AccountRules, AgentProfileInfo, AppRule, JsonObject, ToolContext } from '@agent/core'
 
 import { needsYes } from '../ask-rule'
 import { appName } from './catalog'
@@ -62,7 +62,7 @@ const ORDER: Record<AppRule, number> = { allow: 0, ask: 1, never: 2 }
 export class AppGuard {
   constructor(private readonly deps: GuardDeps) {}
 
-  async check(ctx: ToolContext, actions: string[], account: string | null, detail: string): Promise<Verdict> {
+  async check(ctx: ToolContext, actions: string[], account: string | null, detail: string, arguments_: JsonObject = {}): Promise<Verdict> {
     if (actions.length === 0) return { account }
     const profile = this.deps.profileOf?.(ctx) ?? null
     const asks: string[] = []
@@ -148,7 +148,7 @@ export class AppGuard {
     }
     if (account === null && resolved.size === 1) account = [...resolved][0] ?? null
     if (asks.length > 0) {
-      const yes = await ctx.approve(`Let your agent ${asks.join(', ')}?`, detail, undefined, { tool: 'apps_run', input: { slug: actions[0] ?? '', actions } })
+      const yes = await ctx.approve(`Let your agent ${asks.join(', ')}?`, detail, undefined, { tool: 'apps_run', input: { slug: actions[0] ?? '', actions, arguments: arguments_ } })
       if (!yes) return { refuse: 'The person declined, or nobody was around to approve. Not done.', account }
     }
     return { account }

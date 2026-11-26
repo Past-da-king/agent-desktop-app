@@ -1,3 +1,4 @@
+import { childPipeFailure } from '../runtime/safe-pipe'
 /**
  * The Supervisor (docs/workers-and-triggers.md, section 4): starts every enabled worker when the app opens, reads its
  * lines, stores its events, restarts it with backoff when it dies or stops answering, gives up visibly after too many
@@ -434,7 +435,7 @@ export class Supervisor {
       return
     }
     const manifest = this.store.manifest(id)
-    if (manifest !== null && manifest.mode === 'every' && code === 0) {
+    if (manifest !== null && manifest.mode === 'every' && code === 0 && childPipeFailure(child) === undefined) {
       live.state = 'waiting'
       live.nextRunAt = at + (manifest.everyMinutes ?? 5) * 60_000
       this.log(id, 'info', `Finished; next run ${new Date(live.nextRunAt).toISOString()}`)

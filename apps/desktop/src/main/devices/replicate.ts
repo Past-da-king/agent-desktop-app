@@ -14,7 +14,7 @@ import { compareDeviceOrder } from '@agent/core'
  * wins), so A <-> B <-> C converges when A cannot reach C, with no echo storm. Whichever side can reach the other
  * does both directions, so a node behind a firewall still syncs.
  */
-import { SyncClient, changeFromJson, changeToJson, type Change, type DeviceRow } from '@agent/core'
+import { SyncClient, changeFromJson, changeToJson, type Change, type DeviceRow, type PeerTime } from '@agent/core'
 
 import { ENTITY_NAMES } from '../db'
 import type { DevicesHost } from './types'
@@ -44,12 +44,30 @@ const PAGE = 500
 const FIRST_ENTITIES: readonly string[] = ['chat_item', 'turn', 'memory', 'goal', 'task', 'trigger', 'project', 'device', 'device_command', 'turn_lease']
 
 /** The two sync routes on this node. `bundleVersion` rides along on pull answers so peers know when to re-read it. */
-export function registerSyncRoutes(host: DevicesHost, store: ReplicaStore, bundleVersion: () => string = () => ''): void {
+/**
+ * This node's own clock as sync answers report it: the RAW wall clock and whether the OS says it is synced. Peers
+ * sample it (core sync/peer-clock.ts) to correct a wrong clock; raw, so a corrected node never passes on a guess.
+ */
+export interface SyncRouteClock {
+  rawNow(): number
+  isSelfSynced(): boolean | null
+}
+
+const SYSTEM_CLOCK: SyncRouteClock = { rawNow: () => Date.now(), isSelfSynced: () => null }
+
+function clockFields(clock: SyncRouteClock, startedAt: number): { now: number; heldMs: number; clockSynced?: boolean } {
+  const now = clock.rawNow()
+  const synced = clock.isSelfSynced()
+  return { now, heldMs: Math.max(0, now - startedAt), ...(synced === null ? {} : { clockSynced: synced }) }
+}
+
+export function registerSyncRoutes(host: DevicesHost, store: ReplicaStore, bundleVersion: () => string = () => '', clock: SyncRouteClock = SYSTEM_CLOCK): void {
   host.addRoute({
     method: 'POST',
     path: '/v1/sync/push',
     auth: 'node',
     async handle(req) {
+      const startedAt = clock.rawNow()
       const caller = req.deviceId ?? ''
       const body = isRecord(req.body) ? req.body : {}
       const raw = Array.isArray(body['changes']) ? body['changes'] : []
@@ -59,7 +77,7 @@ export function registerSyncRoutes(host: DevicesHost, store: ReplicaStore, bundl
         if (change !== null) changes.push(change)
       }
       if (changes.length > 0) await store.applyRemote(changes, caller)
-      return { status: 200, json: { cursor: store.logSeq() } }
+      return { status: 200, json: { cursor: store.logSeq(), ...clockFields(clock, startedAt) } }
     },
   })
 
@@ -68,6 +86,7 @@ export function registerSyncRoutes(host: DevicesHost, store: ReplicaStore, bundl
     path: '/v1/sync/pull',
     auth: 'node',
     async handle(req) {
+      const startedAt = clock.rawNow()
       const caller = req.deviceId ?? ''
       const since = whole(req.query.get('since') ?? req.query.get('cursor'))
       const wait = Math.min(MAX_WAIT_SECONDS, whole(req.query.get('wait')))
@@ -79,7 +98,7 @@ export function registerSyncRoutes(host: DevicesHost, store: ReplicaStore, bundl
       if (req.signal.aborted) return { status: 499, json: {} }
       return {
         status: 200,
-        json: { changes: result.changes.map(changeToJson), cursor: result.cursor, bundle: bundleVersion(), ...(entities === undefined ? {} : { entities }) },
+        json: { changes: result.changes.map(changeToJson), cursor: result.cursor, bundle: bundleVersion(), ...(entities === undefined ? {} : { entities }), ...clockFields(clock, startedAt) },
       }
     },
   })
@@ -160,6 +179,10 @@ export interface ReplicatorDeps {
   initialBackoffMs?: number
   maxBackoffMs?: number
   log?: (line: string) => void
+  /** Every answer that carried the peer's clock (core PeerClock.sample), with our raw clock around it. */
+  onPeerTime?: (peer: PeerTarget, time: PeerTime) => void
+  /** Our raw clock for those samples (default Date.now; tests pass a skewed one). */
+  rawClock?: () => number
 }
 
 /** A node's rows as a peer should see them: everything a brain or hands device replicates with. */
@@ -466,6 +489,7 @@ class PeerLink {
           if (this.pullController === controller) this.pullController = null
           this.polling = null
         }
+        this.noteTime(client)
         if (pulled.changes.length > 0) await this.deps.store.applyRemote(pulled.changes, this.peer.id)
         // Taken as given, even when it went back: the peer's log was reset and it starts us again from there.
         this.deps.store.setLocalValue(this.key('pull'), String(pulled.cursor))
@@ -522,14 +546,30 @@ class PeerLink {
       const from = this.cursorOf('push')
       const page = this.deps.store.changesAfter(from, PAGE, this.peer.id)
       if (page.cursor === from) return
-      if (page.changes.length > 0) await client.push(this.deps.selfId(), page.changes)
+      if (page.changes.length > 0) {
+        await client.push(this.deps.selfId(), page.changes)
+        this.noteTime(client)
+      }
       this.deps.store.setLocalValue(this.key('push'), String(page.cursor))
     }
   }
 
   private client(url: string, pass: string): SyncClient {
-    if (this.deps.clientFor !== undefined) return this.deps.clientFor(url, this.peer, pass)
-    return new SyncClient(url, pass, pinnedFetch(this.peer.fp))
+    const client = this.deps.clientFor !== undefined ? this.deps.clientFor(url, this.peer, pass) : new SyncClient(url, pass, pinnedFetch(this.peer.fp))
+    if (this.deps.rawClock !== undefined) client.rawClock = this.deps.rawClock
+    return client
+  }
+
+  /** The peer's clock from the answer just read, once per answer. */
+  private noteTime(client: SyncClient): void {
+    const time = client.lastPeerTime
+    if (time === null) return
+    client.lastPeerTime = null
+    try {
+      this.deps.onPeerTime?.(this.peer, time)
+    } catch {
+      // A clock sample is never worth failing a sync pass for.
+    }
   }
 
   private sleep(ms: number): Promise<void> {

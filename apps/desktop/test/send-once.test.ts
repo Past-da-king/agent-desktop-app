@@ -88,6 +88,17 @@ describe('chat.sendOnce: the gate', () => {
     expect(runs).toBe(1)
   })
 
+  it.each([
+    ['35 minutes fast', 35 * 60_000],
+    ['35 minutes slow', -35 * 60_000],
+  ])('takes a new message from a brain whose clock is %s (the age cannot be measured, not stale)', async (_label, skew) => {
+    const at = 5_000_000_000
+    const once = gate(new Set(), () => at + skew)
+    let runs = 0
+    expect(await once({ sendId: ID, sentAt: at }, async () => { runs++ })).toEqual({ accepted: true })
+    expect(runs).toBe(1)
+  })
+
   it('refuses a bad id before doing anything', async () => {
     await expect(gate()({ sendId: 'x y' }, async () => undefined)).rejects.toThrow('bad send id')
   })

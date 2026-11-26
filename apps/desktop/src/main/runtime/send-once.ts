@@ -27,6 +27,12 @@ export const sendScope = new AsyncLocalStorage<SendScope>()
 export const SEND_SETTLE_MS = 200
 /** A frame older than this may already be with another brain. The phone gives up on a brain well before it. */
 export const SEND_MAX_AGE_MS = 15_000
+/**
+ * Past this the two clocks disagree (the phone's and this brain's) and the age above cannot be measured: a brain
+ * 35 minutes fast would call every message stale (26 Nov 2026 clock class). The caller-gone and duplicate checks
+ * still hold such a frame back.
+ */
+export const SEND_CLOCK_DISAGREE_MS = 2 * 60_000
 
 const SEND_ID = /^[A-Za-z0-9_-]{8,64}$/
 
@@ -70,7 +76,10 @@ export function makeSendOnce(deps: SendOnceDeps): (call: SendOnceCall, send: () 
     const same = going.get(sendId)
     if (same !== undefined) return { ...(await same), duplicate: true }
     if (await deps.exists(sendRowId(sendId))) return { accepted: true, duplicate: true }
-    if (call.fresh !== true && typeof call.sentAt === 'number' && received - call.sentAt > SEND_MAX_AGE_MS) return { accepted: false, stale: true }
+    if (call.fresh !== true && typeof call.sentAt === 'number') {
+      const age = received - call.sentAt
+      if (age > SEND_MAX_AGE_MS && age <= SEND_CLOCK_DISAGREE_MS) return { accepted: false, stale: true }
+    }
     const work = new Promise<SendOnceResult>((resolve, reject) => {
       const scope: SendScope = { rowId: sendRowId(sendId), leaseId: sendLeaseId(sendId), rowUsed: false, viaBegin: false, accepted: () => resolve({ accepted: true }) }
       sendScope.run(scope, () => {

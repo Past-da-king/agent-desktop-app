@@ -669,7 +669,7 @@ describe('the runner and the headless node', () => {
     for (const request of fake.requests) expect(systemOf(request)).not.toContain('[Presence (from the app')
     expect(toolNamed(buildToolset({ store, presence: p }), 'meeting_ended')).toBeDefined()
     // Another agent writing into the chat: no note.
-    await runner.receive('main', 'From the project chat: done.', { kind: 'agent', name: 'Project' } as never)
+    await runner.receive('main', 'From the project chat: done.', { from: 'project', name: 'Project', chat: 'c1' })
     await waitFor(() => fake!.requests.length === 4, 10_000)
     expect(lastUserText(fake.requests[3])).not.toContain('[Presence')
   })

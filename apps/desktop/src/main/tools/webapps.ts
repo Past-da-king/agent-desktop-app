@@ -165,7 +165,7 @@ export async function callLearned(app: LearnedApp, tool: LearnedTool, input: Jso
     const keys = Object.keys(input)
     const what = keys.length === 0 ? 'No inputs.' : keys.map((k) => `${k}: ${JSON.stringify(input[k]).slice(0, 600)}`).join('\n')
     const sent = files.length === 0 ? '' : `\nFiles from this computer it hands to the site: ${files.map((f) => `${f.name} (${sizeText(f.size)})`).join(', ')}`
-    const yes = await ctx.approve(`${app.name}: ${tool.description.slice(0, 90)}`, `${what}${sent}`, undefined, { tool: 'webapp_run', input: { app: app.name, tool: tool.name, description: tool.description, sends: /chat\.postMessage|sendMessage|sendMail|\/messages|createPost|\/tweets|publish/i.test(tool.js) } })
+    const yes = await ctx.approve(`${app.name}: ${tool.description.slice(0, 90)}`, `${what}${sent}`, undefined, { tool: 'webapp_run', input: { app: app.name, tool: tool.name, description: tool.description, args: input, sends: /chat\.postMessage|sendMessage|sendMail|\/messages|createPost|\/tweets|publish/i.test(tool.js) } })
     if (!yes) return 'DECLINED, or nobody was around to approve. Do not do it.'
   }
   const label = `${app.name}: ${tool.name.replace(/_/g, ' ')}`

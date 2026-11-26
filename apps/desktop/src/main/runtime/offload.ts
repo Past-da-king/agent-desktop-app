@@ -22,6 +22,7 @@ import { hostname } from 'node:os'
 import { MAIN_CHAT, type DataChange, type DeviceRow, type JobRow } from '@agent/core'
 
 import type { DataStore } from './data'
+import { appNow } from '../clock/app-clock'
 
 export const NODE_BEAT_MS = 20_000
 /** A node row older than this is a brain that is gone or switched off: nothing is placed on it. */
@@ -58,6 +59,8 @@ export interface NodeCapacity {
   active: number
   /** It has a browser for the browser tools (only its own sign-ins, none of another computer's). */
   browser: boolean
+  /** It answers a main-chat message another brain already stored (post with `item`): older brains wrote it twice. */
+  mainPost?: boolean
 }
 
 /**
@@ -230,7 +233,7 @@ export class Offload {
   private readonly routineWait = new Map<string, number>()
 
   constructor(private readonly deps: OffloadDeps) {
-    this.now = deps.now ?? Date.now
+    this.now = deps.now ?? appNow
   }
 
   start(): void {
@@ -311,9 +314,9 @@ export class Offload {
   }
 
   /** A message to one brain. */
-  async send(to: string, op: JobOp, helper: string, extra: { text?: string; item?: string; info?: string } = {}): Promise<void> {
+  async send(to: string, op: JobOp, helper: string, extra: { text?: string; item?: string; info?: string } = {}): Promise<string> {
     const self = this.deps.selfId()
-    await this.deps.store.upsert('job', {
+    const row = await this.deps.store.upsert('job', {
       kind: 'msg',
       device: to,
       from: self,
@@ -325,6 +328,19 @@ export class Offload {
       status: 'sent',
       at: this.now(),
     })
+    return (row as { id: string }).id
+  }
+
+  /**
+   * May the main chat be answered on that brain: our link to it works, its node row is fresh, it can run an account,
+   * and it answers a message another brain stored (mainPost) instead of writing it twice.
+   */
+  async mainReady(id: string): Promise<boolean> {
+    if (!this.up(id)) return false
+    const node = (await this.rows('node')).find((row) => row.device === id)
+    if (node === undefined || this.now() - node.at >= NODE_FRESH_MS) return false
+    const capacity = parseCapacity(node.info)
+    return capacity !== null && capacity.mainPost === true && capacity.accounts.length > 0
   }
 
   /** Handles the messages waiting for this brain, oldest first. */
@@ -561,6 +577,7 @@ export function parseCapacity(info: string): NodeCapacity | null {
       cap: number('cap', 0),
       active: number('active', 0),
       browser: raw['browser'] === true,
+      mainPost: raw['mainPost'] === true,
     }
   } catch {
     return null

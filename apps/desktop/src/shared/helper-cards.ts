@@ -634,6 +634,8 @@ export function helperCards(items: ChatItem[], projects: ProjectRow[], options: 
       ...children.map((child) => child.activityAt),
     )
     if ((closed.get(chat) ?? -1) >= activityAt) continue
+    // A chat no project holds is closed on its own agent row (main/runtime/card-dismiss.ts).
+    if (!projectOf.has(chat) && (metaNumber(agentMeta, 'cardClosedAt') ?? -1) >= activityAt) continue
     if (waiting && options.now !== undefined && options.now - activityAt > WAITING_CARD_MS) continue
     const project = projectOf.get(chat)
     const answer = lastAgentLine(lines)

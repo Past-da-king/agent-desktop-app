@@ -1,3 +1,4 @@
+import type { RequestSource } from '../../shared/request-source'
 /**
  * Workstream B plugged into a running node server (docs/devices-protocol.md s6-s8), in one call:
  *
@@ -8,7 +9,9 @@
  * switched off. Turn leases and crash resume run without it (Devices off); this only adds the parts that need
  * other devices.
  */
-import type { DataChange, DeviceRow, Tool, ToolContext } from '@agent/core'
+import type { DataChange, DeviceRow, PeerClock, Tool, ToolContext } from '@agent/core'
+
+import { appClock } from '../clock/app-clock'
 
 import type { DataStore } from '../runtime/data'
 import { rankedBrains, type TurnLeases } from '../runtime/turns'
@@ -43,7 +46,7 @@ export interface DevicesSyncDeps {
   shareGroups?: () => Partial<Record<string, boolean>>
   preferred?: () => Partial<Record<string, string>>
   /** How a tool another brain runs here reaches the person on this node (ask_user, request_approval, notify). */
-  context?: (chat: string, signal: AbortSignal) => Partial<ToolContext>
+  context?: (chat: string, signal: AbortSignal, owner?: string, request?: RequestSource) => Partial<ToolContext>
   /** Where pictures from other devices are saved. */
   imageDir?: string
   log?: (line: string) => void
@@ -52,6 +55,8 @@ export interface DevicesSyncDeps {
    * rows; once a row is here its addresses go first, and these are still tried after them (mergePeers).
    */
   extraPeers?: () => PeerTarget[]
+  /** This node's corrected clock (main/clock/app-clock.ts): sync answers report it, link answers feed it. */
+  clock?: PeerClock
 }
 
 export interface DevicesSync {
@@ -99,7 +104,8 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
   store.setLocalValue(SELF_ID_KEY, host.self().id)
   const keeper = new BundleKeeper({ ...deps.bundle, local: store })
   keeper.watch()
-  registerSyncRoutes(host, store, () => keeper.version())
+  const clock = deps.clock ?? appClock
+  registerSyncRoutes(host, store, () => keeper.version(), clock)
   const offBundle = registerBundle(host, { keeper, devices: () => store.list('device') })
 
   // Our bundle version each peer last took from us (a push), so a version goes to a peer once.
@@ -113,6 +119,10 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
           peers: async () => mergePeers(await store.list('device'), deps.extraPeers?.() ?? [], host.self().id),
         }),
     pass: deps.pass,
+    rawClock: () => clock.rawNow(),
+    onPeerTime: (peer, time) => {
+      clock.sample({ peer: peer.id, name: peer.name, ...time })
+    },
     ...(deps.onLinkState === undefined ? {} : { onLinkState: deps.onLinkState }),
     onBundleVersion: (peer, _version, url) => {
       const pass = deps.pass()

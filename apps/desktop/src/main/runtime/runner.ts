@@ -1,3 +1,6 @@
+import { parseRequestSource, type RequestSource } from '../../shared/request-source'
+import type { Asker } from '../../shared/approval-policy'
+import { requestById, requestFor, requestFromMessage } from './request-source'
 import type { ApprovalOrigin } from '@agent/core'
 import type { ActsForMe } from './acts-for-me'
 import { needsHim, isRoutedPending } from '../../shared/card-state'
@@ -68,6 +71,7 @@ import { quietTapNote } from './openui-prompt'
 import { prepareMessage, type PreparedMessage } from './attachment-text'
 import type { PendingTakes } from '../dictation/pending'
 import { branchChat, chatOf, chatTag, handoffText, threadFor } from './chat-lines'
+import { FIRST_TURN_ROWS, GAP_KINDS, SEEN_ROWS, gapNote } from './gap-note'
 import {
   CLASSIFIER_SYSTEM,
   alongsideBrief,
@@ -79,7 +83,7 @@ import {
 } from './chat-route'
 import { describeRun, finishRun, runStarted } from './run-detail'
 import { viaLabel, type ChatVia } from '../tools/projects'
-import { callVia, liveFromInput, liveLabel } from '../../shared/sender'
+import { callVia, legacyVia, viaFromMeta, senderOfRow, isOwnMessage, liveFromInput, liveLabel } from '../../shared/sender'
 import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
 import { replyText } from '../notify'
@@ -154,6 +158,18 @@ export const WAITING_FOR_USER = 'Waiting for you'
 export type ProviderFactory = (settings: Settings, apiKey: string) => LlmProvider | null
 
 /** Devices (docs/devices-protocol.md s8), each part optional: turn leases work with Devices off too. */
+/**
+ * The main chat has one brain answering it at a time (devices/offload-wire.ts). `holder` names that brain when it is
+ * another one (null: answer here); `post` sends it a message of his already stored here, by its row id.
+ */
+export interface MainRoute {
+  holder(): Promise<string | null>
+  post(to: string, rowId: string, text: string): Promise<void>
+}
+
+/** How long a send waits to learn who holds the main chat before it just answers here. */
+export const MAIN_ROUTE_WAIT_MS = 1_500
+
 export interface RunnerDevices {
   /** Turn leases: crash resume and failover (runtime/turns.ts). */
   leases?: LeaseHook
@@ -224,6 +240,8 @@ export interface RunnerDeps {
    * thread and project chats, never in the system prompt. Left out: no note.
    */
   presence?: { note(chat: string, meta: string): Promise<string> }
+  /** A small value kept on this computer only (the store's localValue). Left out: kept in memory until the app closes. */
+  local?: { get(key: string): string | null; set(key: string, value: string): void }
   /** Auto-commit and push of a turn's work in a git repo (Settings > Git; git/hook.ts). */
   git?: RunGitHookLike | null
 }
@@ -257,6 +275,8 @@ interface Steer {
  * the rows it writes carry its chat id.
  */
 interface ChatLine {
+  /** Pinned app record for this run; unrelated alongside messages do not replace it. */
+  requestId?: string
   chat: string
   running: boolean
   controller: AbortController | null
@@ -324,6 +344,11 @@ export class Runner {
   private readonly locks: BrainLocks | undefined
   private readonly devices: RunnerDevices | undefined
   private readonly presence: RunnerDeps['presence']
+  private mainRoute: MainRoute | null = null
+  /** When the message each chat is answering now was written: nothing from that moment on is 'earlier'. */
+  private readonly turnRow = new Map<string, string>()
+  private readonly localMarks: RunnerDeps['local']
+  private readonly memoryMarks = new Map<string, string>()
   private readonly git: RunGitHookLike | null
   /** Pictures in a turn: what each model can really do, a fresh routing session to retry on, and the one turn's switch. */
   private readonly vision: VisionRouter
@@ -355,6 +380,7 @@ export class Runner {
   constructor(deps: RunnerDeps) {
     this.acts = deps.acts
     this.store = deps.store
+    this.localMarks = deps.local
     this.settings = deps.settings
     this.secrets = deps.secrets
     this.providerFactory = deps.providerFactory
@@ -500,6 +526,54 @@ export class Runner {
 
   // ---- the person's side ------------------------------------------------------------------
 
+  /** Devices on: the main chat's one holder (devices/offload-wire.ts wrapRunner sets it). */
+  setMainRoute(route: MainRoute | null): void {
+    this.mainRoute = route
+  }
+
+  /** The other brain that answers this chat now, or null to answer here. Never waits long, never throws. */
+  private async elsewhere(chat: string): Promise<string | null> {
+    const route = this.mainRoute
+    if (chat !== MAIN_CHAT || route === null || this.disposing) return null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([route.holder(), new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), MAIN_ROUTE_WAIT_MS) })])
+    } catch {
+      return null
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  /**
+   * A message of his to the main chat that another of his computers stored and sent here, because this brain holds
+   * the main chat now. Its row is already in the chat (written there, it replicates): the turn answers that row and
+   * never writes it again. Never sent on: the brain that holds the chat answers, so two brains cannot pass it back and forth.
+   */
+  async runPosted(chat: string, rowId: string, text: string): Promise<void> {
+    if (this.disposing) return
+    const clean = text.trim()
+    if (clean === '') return
+    // The row normally arrives with the message; give replication a moment so the turn knows when it was sent.
+    let row = await this.store.get('chat_item', rowId).catch(() => null)
+    for (let wait = 0; row === null && wait < 6; wait++) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      row = await this.store.get('chat_item', rowId).catch(() => null)
+    }
+    const line = this.line(chat)
+    const prepared = await prepareMessage(clean, [])
+    if (!line.running) {
+      this.budget?.reset()
+      line.goal = clean
+      line.lastUserAt = this.now()
+      await this.begin(line, prepared.text, prepared.images, null, undefined, { id: rowId, createdAt: row?.createdAt ?? this.now() })
+      return
+    }
+    const sinceLastMs = this.now() - line.lastUserAt
+    line.lastUserAt = this.now()
+    await this.routeBusy(line, rowId, clean, prepared, false, '', sinceLastMs)
+  }
+
   /**
    * Put a message in a chat. When the chat is idle it starts a run. When the chat is busy the message is
    * routed: about the same task, it joins the running work; different work, it runs alongside as its own run
@@ -507,6 +581,7 @@ export class Runner {
    */
   async send(text: string, attachments: Attachment[] = [], chat: string = MAIN_CHAT, origin?: MessageOrigin | JsonObject, via?: ChatVia): Promise<void> {
     const clean = text.trim()
+    via ??= viaFromMeta((origin ?? {}) as Record<string, unknown>) ?? undefined
     if (clean === '' && attachments.length === 0) return
     // The person handed these files over: the agent may open them without asking again.
     if (attachments.length > 0) this.allowFiles(attachments.map((attachment) => attachment.path))
@@ -515,14 +590,24 @@ export class Runner {
     const live = liveFromInput({ live: (origin as { live?: unknown } | undefined)?.live })
     const prepared = await prepareMessage(live === null ? clean : liveLabel(live) + clean, attachments)
     if (live !== null && via === undefined) via = callVia(typeof (origin as { name?: unknown } | undefined)?.name === 'string' ? String((origin as { name: string }).name) : '')
+    if (via !== undefined) prepared.text = `${viaLabel(via)}\n${prepared.text}`
     // Which device it was sent from (docs/devices-protocol.md s8): the wire caller's, else this node's own.
     // Not the person's own words (a call handing over its work): the row says who, so no window draws it as his.
     const meta: JsonObject = {
       attachments: attachments as unknown as JsonObject[],
       ...chatTag(chat),
       ...this.originMeta(origin as JsonObject | undefined),
-      ...(via === undefined ? {} : { via: via as unknown as JsonObject }),
+      ...(via === undefined ? { own: true } : { via: via as unknown as JsonObject }),
       ...(live === null ? {} : { live: live as unknown as JsonObject }),
+    }
+    // Another brain holds the main chat: his row is stored here at once (he sees it go out), that brain answers it.
+    if (attachments.length === 0 && via === undefined && live === null) {
+      const to = await this.elsewhere(chat)
+      if (to !== null && this.mainRoute !== null) {
+        const row = await this.addUserItem(chat, clean, JSON.stringify({ ...meta, answeredOn: to }))
+        await this.mainRoute.post(to, row.id, prepared.text)
+        return
+      }
     }
     const line = this.line(chat)
 
@@ -583,6 +668,13 @@ export class Runner {
     await this.refineDictated(take, said, clean).catch(() => undefined)
     if (this.disposing) return
     const forAgent = settled?.note ? `${said}\n(${settled.note})` : said
+    if (attachments.length === 0) {
+      const to = await this.elsewhere(line.chat)
+      if (to !== null && this.mainRoute !== null) {
+        await this.mainRoute.post(to, rowId, forAgent)
+        return
+      }
+    }
     const prepared = await prepareMessage(forAgent, attachments)
     if (!line.running) {
       this.budget?.reset()
@@ -653,7 +745,7 @@ export class Runner {
       void this.begin(line, said, [], { text: clean, meta })
       return
     }
-    const row = await this.addUserItem(chat, clean, meta)
+    const row = await this.addUserItem(chat, clean, JSON.stringify({ ...JSON.parse(meta), route: 'join', delivered: false }))
     this.pushSteer(line, { text: said, images: [], itemId: row.id, at: this.now() })
     this.emitFor(chat, { type: 'chat_changed' })
   }
@@ -860,19 +952,16 @@ export class Runner {
   }
 
   /**
-   * A finished helper's result, as a new turn in the chat that started it. There is no user bubble: the note is
-   * the turn's first message. While that chat is running it joins the run as a steering note instead.
+   * An internal result retains a sender row and enters the model as a labelled user turn.
+   * While the chat is running it joins at the next boundary and can be recovered after a restart.
    */
-  async deliver(text: string, chat: string = MAIN_CHAT): Promise<void> {
+  async deliver(text: string, chat: string = MAIN_CHAT, via?: ChatVia): Promise<void> {
     const clean = text.trim()
     if (clean === '') return
+    // Completion notes are not his directives and never borrow the last turn's authorization (request-carried approvals).
     const line = this.line(chat)
-    if (line.running) {
-      this.pushSteer(line, { text: clean, images: [], at: this.now() })
-      this.emitFor(chat, { type: 'chat_changed' })
-      return
-    }
-    await this.begin(line, clean, [], null)
+    if (!line.running) line.requestId = ''
+    await this.receive(chat, clean, via ?? legacyVia(clean) ?? { from: 'system', name: 'Agent update', chat: '' })
   }
 
   /** A separate run (a different job sent while the chat was busy) finished; its summary block is in the chat. */
@@ -1102,7 +1191,7 @@ export class Runner {
     const line = this.line(chat)
     const sorted = [...rows].sort((a, b) => a.createdAt - b.createdAt)
     const entries: Steer[] = sorted.map((row) => ({
-      text: joinNote(row.text),
+      text: senderOfRow(row) === null ? joinNote(row.text) : `${viaLabel(senderOfRow(row)!)}\n${row.text}`,
       images: [],
       itemId: row.id,
       at: this.now(),
@@ -1344,16 +1433,17 @@ export class Runner {
     images: string[],
     user: { text: string; meta: string } | null,
     leaseId?: string,
+    posted?: { id: string; createdAt: number },
   ): Promise<void> {
     // Quitting: no new turn starts (his messages wait in their rows, undelivered, for the next start).
     if (this.disposing) return
     line.running = true
     line.lastSaid = ''
     // A message the person sent starts a fresh action budget. A helper's result does not.
-    if (user !== null) {
+    if (user !== null && isOwnMessage({ kind: 'user', ...user })) {
       this.budget?.reset()
       line.goal = user.text
-      if (parseMeta(user.meta)['via'] === undefined) line.lastUserAt = this.now()
+      line.lastUserAt = this.now()
     }
     const controller = new AbortController()
     line.controller = controller
@@ -1365,15 +1455,17 @@ export class Runner {
       const once = scope !== undefined && !scope.rowUsed ? scope : undefined
       if (once !== undefined) once.viaBegin = true
       const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
+      this.turnRow.set(line.chat, userRow?.id ?? posted?.id ?? '')
+      if (userRow !== null) line.requestId = (await requestFromMessage(this.store, userRow.id))?.id ?? ''
       const fixedLease = leaseId ?? once?.leaseId
-      lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
+      lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? posted?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
       line.leaseId = lease
       // The lease is stored before anyone hears the turn started, so a brain that dies right after can be taken over.
       await this.devices?.leases?.settled?.()
       once?.accepted()
       this.emitFor(line.chat, { type: 'run_started' })
       // His own message (not another agent's, not a card answer) carries where he is right now.
-      const presence = userRow !== null && parseMeta(userRow.meta)['via'] === undefined ? await this.presenceNote(line.chat, userRow.meta) : ''
+      const presence = userRow !== null && isOwnMessage(userRow) ? await this.presenceNote(line.chat, userRow.meta) : ''
       const prompt = await this.withContextNotes(line, text, presence)
       await this.gitBegin(line.chat)
       error = await this.drive(line, prompt, images, controller.signal)
@@ -1443,9 +1535,15 @@ export class Runner {
    * How a tool another brain runs on this node reaches the person here (devices/device-tools.ts, s11): its question
    * and approval cards show in the same chat on this node and wait for an answer; a notification shows here.
    */
-  deviceContext(chat: string, signal: AbortSignal): Pick<ToolContext, 'ask' | 'approve' | 'notify'> {
+  deviceContext(chat: string, signal: AbortSignal, owner = '', request?: RequestSource): Pick<ToolContext, 'ask' | 'approve' | 'notify'> {
     const context = this.toolContext(signal, 'main', chat)
-    return { ask: context.ask, approve: context.approve, notify: context.notify }
+    const asker: Asker = owner.startsWith('helper:') ? 'helper' : owner === 'routine' ? 'routine' : owner === 'main' ? 'main' : owner.startsWith('chat:') ? 'project' : 'device'
+    const actor = { asker, key: owner, request }
+    return {
+      ask: async (question, options, card, origin) => this.ask(question, options, signal, chat, card, origin, { ...actor, request: request === undefined ? undefined : await requestById(this.store, request.id) ?? undefined }),
+      approve: async (summary, details, scope, origin) => this.approve(summary, details, signal, scope, chat, origin, { ...actor, request: request === undefined ? undefined : await requestById(this.store, request.id) ?? undefined }),
+      notify: context.notify,
+    }
   }
 
   /** meta.origin for a message: the device it came from (the node server says), else this node itself. */
@@ -1794,6 +1892,9 @@ export class Runner {
     // A message of his that arrived while this turn was being set up: handled now that there is a turn to reach.
     queueMicrotask(() => this.interruptPlan(line))
     let result: { text: string; error?: string }
+    // What another computer of his said and did in this chat since this one's engine last answered here.
+    const gap = await this.crossBrainNote(chat)
+    const prompt = gap === '' ? text : `${gap}\n\n${text}`
     // A project chat works in its project's folder (the engine's working folder, with the access the person chose).
     const folder = chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), chat)
     try {
@@ -1810,7 +1911,7 @@ export class Runner {
           onCut: () => void this.render({ type: 'interrupted', what: 'tool' }, chat),
         }),
         system: await this.cliSystem(text, 'main', undefined, chat, brain.cli),
-        prompt: text,
+        prompt,
         images,
         ...(brain.model === '' ? {} : { model: brain.model }),
         ...(folder === '' ? {} : { folder }),
@@ -1833,6 +1934,7 @@ export class Runner {
         },
       })
     } finally {
+      await this.markHeard(chat).catch(() => undefined)
       signal.removeEventListener('abort', onStop)
       if (line.turn === turn) line.turn = null
       line.inflight.clear()
@@ -1849,6 +1951,59 @@ export class Runner {
       return result.error
     }
     return undefined
+  }
+
+  /** The rows of this chat this computer's engine has seen (their ids), or null when it has never answered here. */
+  private heard(chat: string): Set<string> | null {
+    const key = `ctx_seen:${chat}`
+    const raw = this.localMarks?.get(key) ?? this.memoryMarks.get(key) ?? null
+    if (raw === null) return null
+    try {
+      const ids = JSON.parse(raw) as unknown
+      return Array.isArray(ids) ? new Set(ids.filter((id): id is string => typeof id === 'string')) : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The note of what happened in this chat while this computer's engine was away, or ''. By row id, never by time:
+   * a computer with a wrong clock writes rows that sort before ones this one has already seen (26 Nov 2026).
+   */
+  private async crossBrainNote(chat: string): Promise<string> {
+    const seen = this.heard(chat)
+    const current = this.turnRow.get(chat) ?? ''
+    try {
+      return await gapNote(
+        {
+          between: async () => {
+            if (seen === null) {
+              const conversation = await listWhere(this.store, 'chat_item', { chat, kinds: ['user', 'agent', 'report'], newestFirst: true, limit: FIRST_TURN_ROWS + 1 })
+              const rows = conversation.filter((row) => row.id !== current)
+              if (rows.length === 0) return []
+              const oldest = rows.reduce((at, row) => Math.min(at, row.createdAt), Number.MAX_SAFE_INTEGER)
+              return (await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], since: oldest - 1, limit: 400 })).filter((row) => row.id !== current).sort((a, b) => a.createdAt - b.createdAt)
+            }
+            const newest = await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], newestFirst: true, limit: SEEN_ROWS })
+            return newest.filter((row) => row.id !== current && !seen.has(row.id)).sort((a, b) => a.createdAt - b.createdAt)
+          },
+        },
+        null,
+        0,
+      )
+    } catch {
+      return ''
+    }
+  }
+
+  /** The engine here has now seen everything in the chat. */
+  private async markHeard(chat: string): Promise<void> {
+    const newest = await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], newestFirst: true, limit: SEEN_ROWS })
+    if (newest.length === 0) return
+    const key = `ctx_seen:${chat}`
+    const value = JSON.stringify(newest.map((row) => row.id))
+    this.memoryMarks.set(key, value)
+    this.localMarks?.set(key, value)
   }
 
   private async runCliRoutine(trigger: TriggerRow, brain: Brain & { kind: 'plan' }): Promise<RoutineRunResult> {
@@ -2157,8 +2312,21 @@ export class Runner {
    * A tool run for an agent on another device (docs/devices-protocol.md s11): its questions and approvals show here
    * in the main chat and the answer goes back; its browser work gets a tab of its own.
    */
-  deviceToolContext(signal: AbortSignal): ToolContext {
-    return { ...this.toolContext(signal, 'main', MAIN_CHAT), agentLabel: 'another device', owner: 'device' }
+  /** Remote free-text envelopes cannot establish who asked. Resolve the app's replicated command record. */
+  async recordedDeviceToolContext(signal: AbortSignal, command: { id: string; tool: string; chatId: string }): Promise<ToolContext> {
+    const row = await this.store.get('device_command', command.id)
+    if (row === null || row.kind !== 'tool' || row.tool !== command.tool || row.chat !== command.chatId || (row.status !== 'queued' && row.status !== 'sent')) return this.deviceToolContext(signal)
+    let request: RequestSource | undefined
+    try {
+      const source = parseRequestSource(JSON.parse(row.body ?? '{}'))
+      if (source !== null) request = await requestById(this.store, source.id) ?? undefined
+    } catch { /* Missing evidence never becomes user authorization. */ }
+    return this.deviceToolContext(signal, { chatId: row.chat ?? MAIN_CHAT, owner: row.owner ?? '', ...(request === undefined ? {} : { request }) })
+  }
+
+  deviceToolContext(signal: AbortSignal, command?: { chatId: string; owner?: string; request?: RequestSource }): ToolContext {
+    const chat = command?.chatId || MAIN_CHAT
+    return { ...this.toolContext(signal, 'main', chat), ...this.deviceContext(chat, signal, command?.owner, command?.request), agentLabel: 'another device', owner: 'device', requestId: command?.request?.id ?? '' }
   }
 
   private toolContext(signal: AbortSignal, role: 'main' | 'routine' = 'main', chat: string = MAIN_CHAT): ToolContext {
@@ -2166,6 +2334,7 @@ export class Runner {
       agentLabel: role === 'routine' ? 'routine' : 'main',
       // Each chat drives its own browser tab, as each helper does.
       owner: browserOwnerOf(role, chat),
+      requestId: role === 'routine' ? '' : this.line(chat).requestId ?? '',
       ...(role === 'main' && chat !== MAIN_CHAT ? { chat } : {}),
       activity: async (text, meta) => {
         if (role === 'routine') {
@@ -2210,13 +2379,13 @@ export class Runner {
     return shell === undefined ? {} : { shell }
   }
 
-  private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT, card?: JsonObject, origin?: ApprovalOrigin): Promise<string | null> {
+  private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT, card?: JsonObject, origin?: ApprovalOrigin, actor?: { asker: Asker; key: string; request: RequestSource | undefined }): Promise<string | null> {
     const line = this.line(chat)
     const row = await this.store.upsert('chat_item', {
       kind: 'question',
       text: question,
       // `card`: how the window draws it, when it is more than a question (a project to confirm, tools/projects.ts).
-      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'question', asker: chat === MAIN_CHAT ? 'main' : 'project', askerKey: chat, origin, summary: question, options }), options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'question', asker: actor?.asker ?? (chat === MAIN_CHAT ? 'main' : 'project'), askerKey: actor?.key ?? chat, request: (actor === undefined ? (line.requestId !== undefined ? await requestById(this.store, line.requestId) : await requestFor(this.store, chat)) : actor.request) ?? undefined, origin, summary: question, options }), ...(actor?.asker === 'helper' ? { helper: actor.key.slice(7) } : {}), options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI: the person may answer the moment the card appears.
     const pending = new Promise<string | null>((resolve) => {
@@ -2271,12 +2440,13 @@ export class Runner {
     scope?: 'computer',
     chat: string = MAIN_CHAT,
     origin?: ApprovalOrigin,
+    actor?: { asker: Asker; key: string; request: RequestSource | undefined },
   ): Promise<boolean> {
     const line = this.line(chat)
     const row = await this.store.upsert('chat_item', {
       kind: 'approval',
       text: summary,
-      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'approval', asker: chat === MAIN_CHAT ? 'main' : 'project', askerKey: chat, origin, summary, details }), summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }), ...chatTag(chat) }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'approval', asker: actor?.asker ?? (chat === MAIN_CHAT ? 'main' : 'project'), askerKey: actor?.key ?? chat, request: (actor === undefined ? (line.requestId !== undefined ? await requestById(this.store, line.requestId) : await requestFor(this.store, chat)) : actor.request) ?? undefined, origin, summary, details }), ...(actor?.asker === 'helper' ? { helper: actor.key.slice(7) } : {}), summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI, so an instant decision finds it.
     const pending = new Promise<boolean>((resolve) => {

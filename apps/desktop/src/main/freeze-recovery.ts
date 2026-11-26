@@ -1,3 +1,4 @@
+import { safeSocketEnd, safeSocketWrite } from './runtime/safe-pipe'
 /** Separate process: recovery must not depend on the frozen Electron main thread or its logger. */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -288,7 +289,7 @@ export function startFreezeRecovery(
             if (message.token !== token || socket !== undefined || stopping) { client.destroy(); return }
             accepted = true; socket = client
             if (late) onError(`Freeze watchdog connected late, after ${Math.round(performance.now() - begun)} ms; supervising now.`)
-            const beat = (): void => { if (!client.destroyed) client.write(JSON.stringify({ type: 'beat', memory: process.memoryUsage(), probe: probeNow() }) + '\n') }
+            const beat = (): void => { if (!client.destroyed) safeSocketWrite(client, JSON.stringify({ type: 'beat', memory: process.memoryUsage(), probe: probeNow() }) + '\n') }
             timer = setInterval(beat, 1000); timer.unref(); beat(); settled()
           } else diskMessage(message)
         } catch { client.destroy(); return }
@@ -321,5 +322,5 @@ export function startFreezeRecovery(
     })
   })
   server.unref()
-  return { ready, unavailable: () => existsSync(marker), stop: () => { stopping = true; if (timer) clearInterval(timer); socket?.end(JSON.stringify({ type: 'stop' }) + '\n'); server.close(); settled() } }
+  return { ready, unavailable: () => existsSync(marker), stop: () => { stopping = true; if (timer) clearInterval(timer); socket && safeSocketEnd(socket, JSON.stringify({ type: 'stop' }) + '\n'); server.close(); settled() } }
 }

@@ -1,3 +1,4 @@
+import { installChildPipeGuards, onPipeWarning, onPipeFault, isChildPipeError } from './runtime/safe-pipe'
 import { peerNoteAudio } from './voice/peer-audio'
 import { ActsForMe } from './runtime/acts-for-me'
 import { createWorkersChanged } from './workers/changed'
@@ -68,6 +69,7 @@ import { runTurnstileProbe } from './browser/turnstile-probe'
 import { fallbackUserAgent } from './browser/emulation'
 import { runDevtoolsProbe } from './browser/devtools-probe'
 import { Store } from './db'
+import { appClock, watchOsClock } from './clock/app-clock'
 import { Logger } from './logger'
 import { onDestroyedSkip, safeSend, uncaughtHandler, whileAlive } from './alive'
 import { Notifier } from './notify'
@@ -263,16 +265,20 @@ function showCalmDialog(detail: string, offerRestart: boolean): void {
 onDestroyedSkip((what, error) =>
   logger.warn('Skipped a closed page or window', { what, stack: error instanceof Error ? error.stack : String(error) }),
 )
-process.on(
-  'uncaughtException',
-  uncaughtHandler({
-    log: (message, fields) => logger.error(message, fields),
-    dialog: () => showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true),
-  }),
-)
+installChildPipeGuards()
+onPipeWarning((message, fields) => logger.warn(message, fields))
 
+const handleUnexpected = uncaughtHandler({
+  warn: (message, fields) => logger.warn(message, fields),
+  log: (message, fields) => logger.error(message, fields),
+  dialog: () => showCalmDialog('Your saved work is safe. You can keep going, or restart the app.', true),
+})
+onPipeFault(handleUnexpected)
+process.on('uncaughtException', handleUnexpected)
+// A rejection is only logged, as before: an expected pipe end is a warning, never a dialog.
 process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled promise rejection', { reason: String(reason) })
+  if (reason instanceof Error && isChildPipeError(reason)) logger.warn('Expected closed resource rejection (carried on)', { message: reason.message })
+  else logger.error('Unhandled promise rejection', { reason: String(reason) })
 })
 
 interface WindowState {
@@ -916,7 +922,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
   }, () => devices?.probeTarget() ?? null)
 
   await freezeRecovery?.ready
-  store = new Store(join(dir, 'agent.db'))
+  store = new Store(join(dir, 'agent.db'), () => appClock.now())
+  // Is the OS keeping this clock synced? (w32tm: on 26 Nov 2026 it was stopped and the clock 35 min slow.)
+  watchOsClock()
   // Checkpoints off the main thread (db-checkpoint.ts): a checkpoint inside an ordinary write took up to 2 s.
   store.startCheckpointer({ log: (line, detail) => logger.info(line, detail) })
   // Reads of the big tables run in worker threads (db-reader.ts): no read can hold the window or the links.
@@ -1319,7 +1327,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       await routeLate(
         {
           deliver: async (note, where) => {
-            if (runner !== null) await runner.deliver(note, where)
+            if (runner !== null) await runner.deliver(note, where, { from: 'system', name: 'Linked device', chat: where })
           },
           helper: async (id, note) => (helperManager === null ? 'unknown' : helperManager.lateResult(id, note)),
         },
@@ -1329,7 +1337,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       )
     },
     // ask_user / request_approval another brain runs here show as cards in that chat on this computer.
-    context: (chat, signal) => runner?.deviceContext(chat, signal) ?? {},
+    context: (chat, signal, owner, request) => runner?.deviceContext(chat, signal, owner, request) ?? {},
   }
   const acts: ActsForMe = new ActsForMe({
     store, settings,
@@ -1572,6 +1580,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },
     presence,
+    local: { get: (key) => store?.localValue(key) ?? null, set: (key, value) => store?.setLocalValue(key, value) },
     git: gitHook,
     store,
     settings,
@@ -2155,9 +2164,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
       // This computer lends its own tools to the agents on other devices (protocol s11), group by group.
       deviceTools: new DeviceToolHost({
         tools: () => tools,
-        context: (signal) => {
+        context: (signal, command) => {
           if (runner === null) throw new Error('The agent is not running.')
-          return runner.deviceToolContext(signal)
+          return runner.recordedDeviceToolContext(signal, command)
         },
         shared: () => devices?.shareGroups() ?? DEFAULT_SHARE,
         inbox: join(dir, 'attachments', 'received'),

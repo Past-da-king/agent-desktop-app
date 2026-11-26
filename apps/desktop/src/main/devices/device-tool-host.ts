@@ -19,6 +19,8 @@ export const DEFAULT_SHARE: Readonly<Record<ShareGroup, boolean>> = { browser: t
 
 const DEFAULT_DEADLINE_MS = 120_000
 const BROWSER_DEADLINE_MS = 600_000
+// A person answering (device-tools.ts HUMAN_DEADLINE_MS): ten minutes, not a machine's two.
+const HUMAN_TOOLS = new Set(['request_approval', 'ask_user', 'browser_handoff'])
 /** Files up to this size travel inside the answer (base64); a bigger one is refused rather than half sent. */
 export const MAX_INLINE_FILE = 16 * 1024 * 1024
 const IMAGE_MARKER = /\[\[image:([^\]]+)]]/g
@@ -41,7 +43,7 @@ const READ_ONLY = new Set(['browser_look', 'browser_read', 'browser_wait_for', '
 
 /** The group a tool of this app belongs to, or null when it is not one this node shares. */
 export function groupOf(name: string): ShareGroup | null {
-  if (name.startsWith('browser_')) return 'browser'
+  if (name.startsWith('browser_') || name === 'webapp_run' || name === 'webapp_test') return 'browser'
   return FIXED_GROUPS[name] ?? null
 }
 
@@ -49,7 +51,7 @@ export interface DeviceToolHostDeps {
   /** The app's tools (the main toolset); only the shareable ones are offered. */
   tools: () => Tool[]
   /** A context for one command: ask/approve show their cards in this app, the browser gets its own tab. */
-  context: (signal: AbortSignal, command: DeviceToolCommand) => ToolContext
+  context: (signal: AbortSignal, command: DeviceToolCommand) => ToolContext | Promise<ToolContext>
   /** The person's switches, per group. */
   shared: () => Record<ShareGroup, boolean>
   /** Where file_receive puts what it is given. */
@@ -164,15 +166,22 @@ export class DeviceToolHost {
     if (command === null) return { ok: false, error: 'That is not a tool command.' }
     const found = this.available().get(command.tool)
     if (found === undefined) return { ok: false, error: `${command.tool} is not shared on this device.` }
-    const limit = found.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
+    const limit = HUMAN_TOOLS.has(command.tool) || found.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
     const deadline = Math.min(Math.max(command.deadlineMs > 0 ? command.deadlineMs : DEFAULT_DEADLINE_MS, 1000), limit)
     const controller = new AbortController()
+    const expired = (): Error => new Error(`${command.tool} took longer than ${Math.round(deadline / 1000)} s.`)
+    // Context resolution may cross devices. Cover it with the same deadline as execution,
+    // and refuse late lookup results before they can start a side effect.
+    const timeout = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener('abort', () => reject(expired()), { once: true })
+    })
     const timer = setTimeout(() => controller.abort(), deadline)
     try {
-      const run = found.tool.run(command.args as JsonObject, this.deps.context(controller.signal, command))
-      const timeout = new Promise<never>((_resolve, reject) => {
-        controller.signal.addEventListener('abort', () => reject(new Error(`${command.tool} took longer than ${Math.round(deadline / 1000)} s.`)), { once: true })
-      })
+      const run = (async () => {
+        const context = await this.deps.context(controller.signal, command)
+        if (controller.signal.aborted) throw expired()
+        return found.tool.run(command.args as JsonObject, context)
+      })()
       const text = await Promise.race([run, timeout])
       return { ok: true, value: resultValue(text) }
     } catch (error) {

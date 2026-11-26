@@ -918,6 +918,20 @@ export interface DevicesStatus {
   network?: DevicesNetwork
   /** Windows: reach this computer through WSL while Tailscale on Windows is down. Absent off Windows and on older nodes. */
   wslRelay?: DevicesWslRelay
+  /**
+   * This device's clock against the devices it replicates with (core sync/peer-clock.ts). warn when it differs by more
+   * than two minutes, with a plain line saying which clock is off. Absent on older nodes.
+   */
+  clock?: DevicesClock
+}
+
+export interface DevicesClock {
+  /** The correction applied to new rows here, ms (positive: this clock is slow). */
+  correctionMs: number
+  /** The OS says this clock is synced, or not; null when it cannot say. */
+  selfSynced: boolean | null
+  warn: boolean
+  line: string
 }
 
 export interface DevicesWslRelay {

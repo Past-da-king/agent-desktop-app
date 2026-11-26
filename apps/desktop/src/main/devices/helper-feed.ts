@@ -14,6 +14,7 @@ import { MAIN_CHAT, type ChatItem, type DataChange, type HelperCardsSnapshot, ty
 
 import { cardInfo, helperCards, helperState } from '../../shared/helper-cards'
 import type { Store } from '../db'
+import { appNow } from '../clock/app-clock'
 
 const DEBOUNCE_MS = 250
 /** Steps older than this are not read at start (a helper still working that long has newer ones). */
@@ -86,7 +87,7 @@ export class HelperFeed {
   constructor(private readonly deps: HelperFeedDeps) {}
 
   private now(): number {
-    return this.deps.now?.() ?? Date.now()
+    return this.deps.now?.() ?? appNow()
   }
 
   /** The cards right now (starts the feed on the first call). */

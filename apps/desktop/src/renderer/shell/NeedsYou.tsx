@@ -1,3 +1,4 @@
+import { ApprovalContext } from '../ui/ApprovalContext'
 import { AnsweredForYouLink } from '../views/AnsweredForYou'
 import type { ChatItem } from '@agent/core'
 import { useEffect, useMemo, useState } from 'react'
@@ -76,6 +77,7 @@ export function WaitingCard({ item, source, onOpen }: { item: ChatItem; source: 
       <div className="ny-t" title={title}>
         {title}
       </div>
+      {approval ? <ApprovalContext meta={meta} /> : null}
       {details !== '' ? (
         <pre className="ny-details" tabIndex={0} aria-label="Exactly what will happen">
           {details}

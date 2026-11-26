@@ -1,3 +1,6 @@
+import { DeviceQuestions } from './device-questions'
+import { parseRequestSource, type RequestSource } from '../../shared/request-source'
+import { requestById, requestFor } from '../runtime/request-source'
 import { compareDeviceOrder } from '@agent/core'
 /**
  * Shared device tools (docs/devices-protocol.md s11), the brain side.
@@ -35,6 +38,7 @@ import { OPEN_STATUSES } from './commands'
 import { latestOrigin } from './origin'
 import { MAIN_IDLE_MS, runEnded } from '../browser/run-tabs'
 import type { DeviceTool, DeviceToolGroup, DevicesHost } from './types'
+import { appNow } from '../clock/app-clock'
 
 export const TOOL_GROUPS: readonly DeviceToolGroup[] = ['browser', 'notifications', 'files', 'shell', 'approval', 'phone', 'location', 'other']
 
@@ -53,6 +57,14 @@ export const DEFAULT_SHARE: Readonly<Record<DeviceToolGroup, boolean>> = {
 
 export const DEFAULT_DEADLINE_MS = 120_000
 export const BROWSER_DEADLINE_MS = 600_000
+/** A question, approval or hand-over waits on a person: as long as the phone itself waits for them (RemoteAsk, 10 min). */
+export const HUMAN_DEADLINE_MS = 600_000
+const HUMAN_TOOLS: ReadonlySet<string> = new Set(['request_approval', 'ask_user', 'browser_handoff'])
+/** How long one tool may take on another device. A person answering is not a machine call (26 Nov 2026: approvals died at 2 min). */
+export function deadlineFor(tool: string, group: string): number {
+  if (HUMAN_TOOLS.has(tool)) return HUMAN_DEADLINE_MS
+  return group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
+}
 const QUEUE_TTL_MS = 10 * 60_000
 /** How long a caller waits on an offline device before it is told so (the job stays queued). */
 export const OFFLINE_STATUS_MS = 25_000
@@ -193,6 +205,7 @@ export class DeviceToolHub {
   private offChange: (() => void) | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private readonly now: () => number
+  private readonly questions: DeviceQuestions
   /**
    * Commands waiting for their device to connect, as the change events said. While there are none, the 3 s tick
    * does not read the commands at all (it read them every 3 s for nothing); every 20th tick reads anyway, so one
@@ -205,18 +218,21 @@ export class DeviceToolHub {
   private readonly wasConnected = new Set<string>()
 
   constructor(private readonly deps: DeviceToolHubDeps) {
-    this.now = deps.now ?? Date.now
+    this.now = deps.now ?? appNow
+    this.questions = new DeviceQuestions(deps.store, deps.selfId, this.now)
     this.offChange = deps.store.onChange((change) => {
       if (change.entity !== 'device_command' || change.row === undefined) return
       const row = change.row as DeviceCommandRow
       if (row.kind === 'tool' && row.status === 'queued') this.queued.add(row.id)
       else this.queued.delete(row.id)
+      if (row.status === 'done' || row.status === 'failed' || row.status === 'expired') this.questions.forget(row.id)
       if (row.status === 'done' || row.status === 'failed') void this.settle(row)
     })
   }
 
   attach(host: DevicesHost): void {
     this.host = host
+    host.addRpc('device.ask', (deviceId, args) => this.questions.ask(deviceId, args))
     host.addRpc('device.result', async (deviceId, args) => {
       const [id, ok, value] = args
       if (typeof id !== 'string') throw new Error('device.result needs a command id')
@@ -235,6 +251,7 @@ export class DeviceToolHub {
   }
 
   stop(): void {
+    this.questions.clear()
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
     this.offChange?.()
@@ -243,6 +260,7 @@ export class DeviceToolHub {
 
   /** Keep each connected device's advertised tools on its row, and this node's own. */
   async refresh(): Promise<void> {
+    this.questions.prune()
     const rows = await this.deps.store.list('device')
     const first = !this.seenOnce
     this.seenOnce = true
@@ -380,10 +398,13 @@ export class DeviceToolHub {
       const text = await local.run(args, ctx)
       return { ok: true, state: 'done', device: row.name, text }
     }
-    const deadlineMs = spec.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
+    const deadlineMs = deadlineFor(tool, spec.group)
     const at = this.now()
+    const request = ctx?.requestId === undefined ? await requestFor(this.deps.store, chat, ctx?.owner?.startsWith('helper:') ? ctx.owner.slice(7) : '') : await requestById(this.deps.store, ctx.requestId)
+    const commandId = `cmd_${randomUUID()}`
+    if (ctx !== undefined) this.questions.remember(commandId, ctx, at + QUEUE_TTL_MS + deadlineMs)
     const command = await this.deps.store.upsert('device_command', {
-      id: `cmd_${randomUUID()}`,
+      id: commandId,
       target: row.id,
       kind: 'tool',
       tool,
@@ -394,6 +415,7 @@ export class DeviceToolHub {
       chat,
       brainId: this.deps.selfId(),
       owner: ctx?.owner ?? '',
+      ...(request === null ? {} : { body: JSON.stringify(request) }),
       expiresAt: at + QUEUE_TTL_MS + deadlineMs,
       updatedAt: at,
     } as Partial<DeviceCommandRow> & { target: string })
@@ -537,7 +559,7 @@ function hhmm(ms: number): string {
 }
 
 export function toolPayload(row: DeviceCommandRow): Record<string, unknown> {
-  return { id: row.id, kind: 'tool', tool: row.tool ?? '', args: decodeResult(row.args) ?? {}, chatId: row.chat, deadlineMs: row.deadlineMs ?? DEFAULT_DEADLINE_MS }
+  return { ...(row.owner === undefined ? {} : { owner: row.owner }), ...(row.body === undefined ? {} : { request: decodeResult(row.body) }), id: row.id, kind: 'tool', tool: row.tool ?? '', args: decodeResult(row.args) ?? {}, chatId: row.chat, deadlineMs: row.deadlineMs ?? DEFAULT_DEADLINE_MS }
 }
 
 function encodeResult(value: unknown): string {
@@ -567,7 +589,7 @@ export interface DeviceToolRunnerDeps {
   tools: () => Tool[]
   shareGroups?: () => Partial<Record<string, boolean>>
   /** The context a tool runs with here: the person on this node answers ask_user / request_approval. */
-  context?: (chat: string, signal: AbortSignal) => Partial<ToolContext>
+  context?: (chat: string, signal: AbortSignal, owner?: string, request?: RequestSource) => Partial<ToolContext>
   now?: () => number
   /** The safety sweep's period (tests shorten it). */
   sweepMs?: number
@@ -605,7 +627,7 @@ export class DeviceToolRunner {
   }
 
   async consider(row: DeviceCommandRow): Promise<void> {
-    const now = (this.deps.now ?? Date.now)()
+    const now = (this.deps.now ?? appNow)()
     if (row.kind !== 'tool' || row.target !== this.deps.selfId()) return
     if (row.status !== 'queued' && row.status !== 'sent') return
     if (row.expiresAt <= now || this.running.has(row.id)) return
@@ -621,7 +643,7 @@ export class DeviceToolRunner {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), row.deadlineMs ?? DEFAULT_DEADLINE_MS)
       try {
-        const extra = this.deps.context?.(row.chat, controller.signal) ?? {}
+        const extra = this.deps.context?.(row.chat, controller.signal, row.owner, parseRequestSource(decodeResult(row.body)) ?? undefined) ?? {}
         const ctx: ToolContext = {
           agentLabel: 'device',
           owner: `device:${row.brainId}`,
@@ -650,7 +672,7 @@ export class DeviceToolRunner {
   }
 
   private async finish(id: string, ok: boolean, value: unknown): Promise<void> {
-    await this.deps.store.upsert('device_command', { id, status: ok ? 'done' : 'failed', result: encodeResult(value), note: '', updatedAt: (this.deps.now ?? Date.now)() } as Partial<DeviceCommandRow> & { id: string })
+    await this.deps.store.upsert('device_command', { id, status: ok ? 'done' : 'failed', result: encodeResult(value), note: '', updatedAt: (this.deps.now ?? appNow)() } as Partial<DeviceCommandRow> & { id: string })
   }
 }
 

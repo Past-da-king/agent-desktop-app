@@ -1,3 +1,4 @@
+import { safeSocketEnd, safeSocketWrite } from '../runtime/safe-pipe'
 /**
  * The smallest WebSocket (RFC 6455) this node needs, server side, plus a client for tests and node-to-node calls.
  * Text and binary messages, fragmentation, ping/pong and close. One extension, permessage-deflate (RFC 7692), and only
@@ -193,7 +194,7 @@ export class WsConnection {
 
   private write(opcode: number, payload: Buffer, rsv1 = false): void {
     if (this.closed || this.socket.destroyed) return
-    this.socket.write(encodeFrame(opcode, payload, this.isClient, true, rsv1))
+    safeSocketWrite(this.socket, encodeFrame(opcode, payload, this.isClient, true, rsv1))
   }
 
   /** Bytes read off the socket (or left over from the upgrade request). */
@@ -267,11 +268,11 @@ export function acceptUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer
   const key = req.headers['sec-websocket-key']
   const upgrade = String(req.headers['upgrade'] ?? '').toLowerCase()
   if (typeof key !== 'string' || key === '' || upgrade !== 'websocket' || req.headers['sec-websocket-version'] !== '13') {
-    socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+    safeSocketEnd(socket, 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
     return null
   }
   const deflate = offersDeflate(req.headers['sec-websocket-extensions'])
-  socket.write(
+  safeSocketWrite(socket,
     'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
       `Sec-WebSocket-Accept: ${acceptKey(key)}\r\n` +
       (deflate ? 'Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n' : '') +

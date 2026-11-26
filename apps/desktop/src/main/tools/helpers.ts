@@ -59,8 +59,8 @@ function delegateTool(host: HelperHost): Tool {
       if (tasks.length === 0) return 'No tasks given.'
       // A helper reports back to the chat that started it; one a desk (itself a helper) starts reports to that desk.
       const parent = parentHelperOf(ctx.owner)
-      const origin = { ...(ctx.chat === undefined ? {} : { chat: ctx.chat }), ...(parent === '' ? {} : { helper: parent }) }
-      return ctx.chat === undefined && parent === ''
+      const origin = { ...(ctx.requestId === undefined ? {} : { requestId: ctx.requestId }), ...(ctx.chat === undefined ? {} : { chat: ctx.chat }), ...(parent === '' ? {} : { helper: parent }) }
+      return ctx.requestId === undefined && ctx.chat === undefined && parent === ''
         ? host.delegate(tasks, input['together'] === true)
         : host.delegate(tasks, input['together'] === true, origin)
     },

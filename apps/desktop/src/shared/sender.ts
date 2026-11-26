@@ -1,3 +1,5 @@
+import { PROFILE_COLORS, type ProjectIcon } from '@agent/core'
+
 /**
  * Who really sent a message row (kind 'user'). A row with no `meta.via` is the person's own; any other sender writes
  * `meta.via` so every window draws it as not his (22 Oct 2026: a call's hand-off showed as if he typed it). The phone
@@ -11,7 +13,7 @@
  *   worker   a background worker
  *   system   the app itself
  */
-export const SENDER_KINDS = ['main', 'project', 'call', 'helper', 'routine', 'worker', 'system'] as const
+export const SENDER_KINDS = ['main', 'project', 'call', 'helper', 'routine', 'worker', 'system', 'device', 'desk'] as const
 export type SenderKind = (typeof SENDER_KINDS)[number]
 
 /** Who a message came from, as the receiving chat shows it. */
@@ -23,6 +25,10 @@ export interface ChatVia {
   chat: string
   /** The sending chat's title (a project chat). */
   title?: string
+  id?: string
+  icon?: ProjectIcon
+  /** App-recorded user message this handoff belongs to. */
+  requestId?: string
 }
 
 /** The sender of work a voice call hands to a chat. */
@@ -43,7 +49,13 @@ export function viaFromMeta(meta: Record<string, unknown>): ChatVia | null {
   const name = typeof v['name'] === 'string' ? v['name'] : ''
   if (name === '' && v['from'] !== 'call' && v['from'] !== 'system') return null
   const title = typeof v['title'] === 'string' && v['title'] !== '' ? { title: v['title'] } : {}
-  return { from: v['from'], name, chat: typeof v['chat'] === 'string' ? v['chat'] : '', ...title }
+  const rawIcon = v['icon']
+  let icon: ProjectIcon | undefined
+  if (typeof rawIcon === 'object' && rawIcon !== null && !Array.isArray(rawIcon)) {
+    const i = rawIcon as Record<string, unknown>
+    if (typeof i['glyph'] === 'string' && (PROFILE_COLORS as readonly unknown[]).includes(i['color'])) icon = { glyph: i['glyph'], color: i['color'] as ProjectIcon['color'] }
+  }
+  return { ...(typeof v['requestId'] === 'string' ? { requestId: v['requestId'] } : {}), ...(typeof v['id'] === 'string' ? { id: v['id'] } : {}), ...(icon === undefined ? {} : { icon }), from: v['from'], name, chat: typeof v['chat'] === 'string' ? v['chat'] : '', ...title }
 }
 
 /** The line above a message that is not his: "From your call", "From Hina, the main agent", "From Agent Desktop App". */
@@ -59,6 +71,8 @@ export function senderLine(via: ChatVia): string {
       return `From the helper ${via.name}`
     case 'routine':
       return `From the routine ${via.name}`
+    case 'device':
+    case 'desk':
     case 'worker':
       return `From ${via.name}`
     case 'system':
@@ -78,6 +92,43 @@ export function viaLabel(via: ChatVia): string {
     default:
       return `[${senderLine(via)}]`
   }
+}
+
+/** Read-time recovery only for anchored app-generated envelopes. Never guess from message prose. */
+export function legacyVia(text: string): ChatVia | null {
+  const project = /^\[From project ([^\]\n]+)\]/.exec(text)
+  if (project) return { from: 'project', name: project[1]!.split(', chat "')[0]!, chat: '' }
+  const helper = /^\[Helper #([^ "\]\n]+)(?: "([^"\n]+)")?[^\]\n]*\]/.exec(text)
+  if (helper) return { from: 'helper', id: helper[1]!, name: helper[2] || helper[1]!, chat: '' }
+  if (/^\[Helpers finished:/.test(text)) return { from: 'helper', name: 'Helper results', chat: '' }
+  const main = /^\[From ([^\]\n]+), the main agent\]/.exec(text)
+  if (main) return { from: 'main', name: main[1]!, chat: 'main' }
+  return null
+}
+
+/** Hide only the redundant app envelope in a sender card. Stored and model text remain intact. */
+export function senderBody(text: string): string {
+  return legacyVia(text) === null ? text : text.slice(text.indexOf(']') + 1).trimStart()
+}
+
+/** One definition for whether a stored user row is actually the person's own words. */
+export function senderOfRow(row: { kind: string; text: string; meta: string }): ChatVia | null {
+  if (row.kind !== 'user') return null
+  let meta: Record<string, unknown> = {}
+  try { meta = JSON.parse(row.meta) as Record<string, unknown> } catch { /* Old malformed meta still permits envelope recovery. */ }
+  const sender = viaFromMeta(meta ?? {})
+  if (sender !== null) return sender
+  return meta?.['own'] === true ? null : legacyVia(row.text)
+}
+
+export function isOwnMessage(row: { kind: string; text: string; meta: string }): boolean {
+  return row.kind === 'user' && senderOfRow(row) === null
+}
+
+/** Trusted tool context, not message content, determines who sent an agent action. */
+export function toolVia(ctx: { owner?: string; agentLabel: string; chat?: string }): ChatVia {
+  const owner = ctx.owner ?? 'main'
+  return { from: owner.startsWith('helper:') ? 'helper' : owner === 'routine' ? 'routine' : 'main', id: owner.replace(/^helper:/, ''), name: ctx.agentLabel || 'Agent', chat: ctx.chat ?? 'main' }
 }
 
 // ---- Live voice hand-offs ------------------------------------------------------------------------------------------
