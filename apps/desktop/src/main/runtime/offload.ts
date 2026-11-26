@@ -22,6 +22,7 @@ import { hostname } from 'node:os'
 import { MAIN_CHAT, type DataChange, type DeviceRow, type JobRow } from '@agent/core'
 
 import type { DataStore } from './data'
+import { appNow } from '../clock/app-clock'
 
 export const NODE_BEAT_MS = 20_000
 /** A node row older than this is a brain that is gone or switched off: nothing is placed on it. */
@@ -230,7 +231,7 @@ export class Offload {
   private readonly routineWait = new Map<string, number>()
 
   constructor(private readonly deps: OffloadDeps) {
-    this.now = deps.now ?? Date.now
+    this.now = deps.now ?? appNow
   }
 
   start(): void {

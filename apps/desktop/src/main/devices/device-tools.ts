@@ -35,6 +35,7 @@ import { OPEN_STATUSES } from './commands'
 import { latestOrigin } from './origin'
 import { MAIN_IDLE_MS, runEnded } from '../browser/run-tabs'
 import type { DeviceTool, DeviceToolGroup, DevicesHost } from './types'
+import { appNow } from '../clock/app-clock'
 
 export const TOOL_GROUPS: readonly DeviceToolGroup[] = ['browser', 'notifications', 'files', 'shell', 'approval', 'phone', 'location', 'other']
 
@@ -213,7 +214,7 @@ export class DeviceToolHub {
   private readonly wasConnected = new Set<string>()
 
   constructor(private readonly deps: DeviceToolHubDeps) {
-    this.now = deps.now ?? Date.now
+    this.now = deps.now ?? appNow
     this.offChange = deps.store.onChange((change) => {
       if (change.entity !== 'device_command' || change.row === undefined) return
       const row = change.row as DeviceCommandRow
@@ -613,7 +614,7 @@ export class DeviceToolRunner {
   }
 
   async consider(row: DeviceCommandRow): Promise<void> {
-    const now = (this.deps.now ?? Date.now)()
+    const now = (this.deps.now ?? appNow)()
     if (row.kind !== 'tool' || row.target !== this.deps.selfId()) return
     if (row.status !== 'queued' && row.status !== 'sent') return
     if (row.expiresAt <= now || this.running.has(row.id)) return
@@ -658,7 +659,7 @@ export class DeviceToolRunner {
   }
 
   private async finish(id: string, ok: boolean, value: unknown): Promise<void> {
-    await this.deps.store.upsert('device_command', { id, status: ok ? 'done' : 'failed', result: encodeResult(value), note: '', updatedAt: (this.deps.now ?? Date.now)() } as Partial<DeviceCommandRow> & { id: string })
+    await this.deps.store.upsert('device_command', { id, status: ok ? 'done' : 'failed', result: encodeResult(value), note: '', updatedAt: (this.deps.now ?? appNow)() } as Partial<DeviceCommandRow> & { id: string })
   }
 }
 

@@ -11,6 +11,12 @@ import { PeerClock } from '@agent/core'
 
 export const appClock = new PeerClock()
 
+/**
+ * Time for anything another computer reads: a lease heartbeat, a command's expiry, a last-seen. The operating system's
+ * clock may be wrong (26 Nov 2026: 35 minutes slow); this is corrected against the peers.
+ */
+export const appNow = (): number => appClock.now()
+
 const RECHECK_MS = 10 * 60_000
 
 type Run = (file: string, args: string[]) => Promise<string>

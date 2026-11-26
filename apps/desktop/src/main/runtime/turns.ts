@@ -18,6 +18,7 @@ import type { DeviceRow, TurnLeaseRow } from '@agent/core'
 
 import { listWhere, type DataStore } from './data'
 import { chatTag } from './chat-lines'
+import { appNow } from '../clock/app-clock'
 
 export const HEARTBEAT_MS = 10_000
 export const STALE_MS = 45_000
@@ -99,7 +100,7 @@ export class TurnLeases implements LeaseHook {
   private readyGate: (() => Promise<void>) | undefined
 
   constructor(private readonly deps: TurnLeasesDeps) {
-    this.now = deps.now ?? Date.now
+    this.now = deps.now ?? appNow
     this.failover = deps.health !== undefined && deps.brains !== undefined ? { health: deps.health, brains: deps.brains } : null
     this.readyGate = deps.ready
   }

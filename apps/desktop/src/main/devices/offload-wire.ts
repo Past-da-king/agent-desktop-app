@@ -13,6 +13,7 @@ import type { HelperManager, OffloadLink } from '../runtime/helpers'
 import { Offload, TAKE_BACK_MS, type NodeCapacity, type PlaceResult, type SlotClaim } from '../runtime/offload'
 import type { ChatVia } from '../tools/projects'
 import { devicesState, ownBrainIds } from './sync'
+import { appNow } from '../clock/app-clock'
 
 /** How long an AI account that failed to sign in here is left out of this brain's offer. */
 const CANNOT_RUN_MS = 6 * 3_600_000
@@ -83,7 +84,7 @@ export function brainReachable(links: Array<{ peer: string; ok: boolean }>, isCo
 
 export function startOffload(deps: OffloadWireDeps): OffloadWire {
   const { store, helpers, settings } = deps
-  const now = (): number => Date.now()
+  const now = (): number => appNow()
   const selfId = (): string => devicesState.sync?.selfId() ?? ''
   const isSelf = (id: string): boolean => id !== '' && (id === selfId() || ownBrainIds(store).includes(id))
   const reachable = (id: string): boolean => {

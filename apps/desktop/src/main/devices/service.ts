@@ -33,6 +33,7 @@ import { callAllowed } from './rpc'
 import { wireOf, type HandlerRegistry } from './registry'
 import { DevicesServer, contentTypeFor } from './server'
 import type { BrainRef, DeviceFacts, DeviceKind, DeviceRecord, DeviceRole, DevicesHost, DeviceToolResult, RouteReply, RouteRequest } from './types'
+import { appNow } from '../clock/app-clock'
 
 const SEEN_EVERY_MS = 60_000
 /** How stale the firewall reading may get before a status read looks again (netsh is slow and prints every rule). */
@@ -196,7 +197,7 @@ export class DevicesService {
   private publishedUrls = ''
 
   constructor(private readonly deps: DevicesServiceDeps) {
-    this.now = deps.now ?? Date.now
+    this.now = deps.now ?? appNow
     this.answerOrder = new AnswerOrder({
       selfId: () => this.identity.nodeId,
       brains: () => this.list().filter(row => row.roles.includes('brain') && !row.revoked),

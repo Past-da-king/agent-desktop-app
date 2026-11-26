@@ -17,6 +17,7 @@ import { listWhere, type DataStore } from '../runtime/data'
 /** A device command still in flight: the only ones the pollers look at. */
 export const OPEN_STATUSES = ['queued', 'sent']
 import type { DevicesHost } from './types'
+import { appNow } from '../clock/app-clock'
 
 export const COMMAND_TTL_MS = 10 * 60_000
 const ACK_WAIT_MS = 20_000
@@ -59,7 +60,7 @@ export class DeviceCommands {
   private readonly now: () => number
 
   constructor(private readonly deps: DeviceCommandsDeps) {
-    this.now = deps.now ?? Date.now
+    this.now = deps.now ?? appNow
   }
 
   /** Plug into the node server: the ack RPC, and the delivery loop. */
