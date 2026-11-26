@@ -53,6 +53,14 @@ export const DEFAULT_SHARE: Readonly<Record<DeviceToolGroup, boolean>> = {
 
 export const DEFAULT_DEADLINE_MS = 120_000
 export const BROWSER_DEADLINE_MS = 600_000
+/** A question, approval or hand-over waits on a person: as long as the phone itself waits for them (RemoteAsk, 10 min). */
+export const HUMAN_DEADLINE_MS = 600_000
+const HUMAN_TOOLS: ReadonlySet<string> = new Set(['request_approval', 'ask_user', 'browser_handoff'])
+/** How long one tool may take on another device. A person answering is not a machine call (26 Nov 2026: approvals died at 2 min). */
+export function deadlineFor(tool: string, group: string): number {
+  if (HUMAN_TOOLS.has(tool)) return HUMAN_DEADLINE_MS
+  return group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
+}
 const QUEUE_TTL_MS = 10 * 60_000
 /** How long a caller waits on an offline device before it is told so (the job stays queued). */
 export const OFFLINE_STATUS_MS = 25_000
@@ -380,7 +388,7 @@ export class DeviceToolHub {
       const text = await local.run(args, ctx)
       return { ok: true, state: 'done', device: row.name, text }
     }
-    const deadlineMs = spec.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
+    const deadlineMs = deadlineFor(tool, spec.group)
     const at = this.now()
     const command = await this.deps.store.upsert('device_command', {
       id: `cmd_${randomUUID()}`,

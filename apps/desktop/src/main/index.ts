@@ -1575,6 +1575,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },
     presence,
+    local: { get: (key) => store?.localValue(key) ?? null, set: (key, value) => store?.setLocalValue(key, value) },
     git: gitHook,
     store,
     settings,

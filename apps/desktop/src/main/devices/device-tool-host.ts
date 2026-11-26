@@ -19,6 +19,8 @@ export const DEFAULT_SHARE: Readonly<Record<ShareGroup, boolean>> = { browser: t
 
 const DEFAULT_DEADLINE_MS = 120_000
 const BROWSER_DEADLINE_MS = 600_000
+// A person answering (device-tools.ts HUMAN_DEADLINE_MS): ten minutes, not a machine's two.
+const HUMAN_TOOLS = new Set(['request_approval', 'ask_user', 'browser_handoff'])
 /** Files up to this size travel inside the answer (base64); a bigger one is refused rather than half sent. */
 export const MAX_INLINE_FILE = 16 * 1024 * 1024
 const IMAGE_MARKER = /\[\[image:([^\]]+)]]/g
@@ -164,7 +166,7 @@ export class DeviceToolHost {
     if (command === null) return { ok: false, error: 'That is not a tool command.' }
     const found = this.available().get(command.tool)
     if (found === undefined) return { ok: false, error: `${command.tool} is not shared on this device.` }
-    const limit = found.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
+    const limit = HUMAN_TOOLS.has(command.tool) || found.group === 'browser' ? BROWSER_DEADLINE_MS : DEFAULT_DEADLINE_MS
     const deadline = Math.min(Math.max(command.deadlineMs > 0 ? command.deadlineMs : DEFAULT_DEADLINE_MS, 1000), limit)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), deadline)

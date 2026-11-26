@@ -68,6 +68,7 @@ import { quietTapNote } from './openui-prompt'
 import { prepareMessage, type PreparedMessage } from './attachment-text'
 import type { PendingTakes } from '../dictation/pending'
 import { branchChat, chatOf, chatTag, handoffText, threadFor } from './chat-lines'
+import { FIRST_TURN_ROWS, GAP_KINDS, gapNote } from './gap-note'
 import {
   CLASSIFIER_SYSTEM,
   alongsideBrief,
@@ -224,6 +225,8 @@ export interface RunnerDeps {
    * thread and project chats, never in the system prompt. Left out: no note.
    */
   presence?: { note(chat: string, meta: string): Promise<string> }
+  /** A small value kept on this computer only (the store's localValue). Left out: kept in memory until the app closes. */
+  local?: { get(key: string): string | null; set(key: string, value: string): void }
   /** Auto-commit and push of a turn's work in a git repo (Settings > Git; git/hook.ts). */
   git?: RunGitHookLike | null
 }
@@ -324,6 +327,10 @@ export class Runner {
   private readonly locks: BrainLocks | undefined
   private readonly devices: RunnerDevices | undefined
   private readonly presence: RunnerDeps['presence']
+  /** When the message each chat is answering now was written: nothing from that moment on is 'earlier'. */
+  private readonly turnAt = new Map<string, number>()
+  private readonly localMarks: RunnerDeps['local']
+  private readonly memoryMarks = new Map<string, string>()
   private readonly git: RunGitHookLike | null
   /** Pictures in a turn: what each model can really do, a fresh routing session to retry on, and the one turn's switch. */
   private readonly vision: VisionRouter
@@ -355,6 +362,7 @@ export class Runner {
   constructor(deps: RunnerDeps) {
     this.acts = deps.acts
     this.store = deps.store
+    this.localMarks = deps.local
     this.settings = deps.settings
     this.secrets = deps.secrets
     this.providerFactory = deps.providerFactory
@@ -1365,6 +1373,7 @@ export class Runner {
       const once = scope !== undefined && !scope.rowUsed ? scope : undefined
       if (once !== undefined) once.viaBegin = true
       const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
+      this.turnAt.set(line.chat, userRow?.createdAt ?? this.now())
       const fixedLease = leaseId ?? once?.leaseId
       lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
       line.leaseId = lease
@@ -1794,6 +1803,9 @@ export class Runner {
     // A message of his that arrived while this turn was being set up: handled now that there is a turn to reach.
     queueMicrotask(() => this.interruptPlan(line))
     let result: { text: string; error?: string }
+    // What another computer of his said and did in this chat since this one's engine last answered here.
+    const gap = await this.crossBrainNote(chat)
+    const prompt = gap === '' ? text : `${gap}\n\n${text}`
     // A project chat works in its project's folder (the engine's working folder, with the access the person chose).
     const folder = chat === MAIN_CHAT ? '' : projectFolderOf(await this.store.list('project').catch(() => []), chat)
     try {
@@ -1810,7 +1822,7 @@ export class Runner {
           onCut: () => void this.render({ type: 'interrupted', what: 'tool' }, chat),
         }),
         system: await this.cliSystem(text, 'main', undefined, chat, brain.cli),
-        prompt: text,
+        prompt,
         images,
         ...(brain.model === '' ? {} : { model: brain.model }),
         ...(folder === '' ? {} : { folder }),
@@ -1833,6 +1845,7 @@ export class Runner {
         },
       })
     } finally {
+      await this.markHeard(chat).catch(() => undefined)
       signal.removeEventListener('abort', onStop)
       if (line.turn === turn) line.turn = null
       line.inflight.clear()
@@ -1849,6 +1862,47 @@ export class Runner {
       return result.error
     }
     return undefined
+  }
+
+  private mark(chat: string): number | null {
+    const key = `ctx_to:${chat}`
+    const raw = this.localMarks?.get(key) ?? this.memoryMarks.get(key) ?? null
+    const n = raw === null ? NaN : Number(raw)
+    return Number.isFinite(n) ? n : null
+  }
+
+  /** The note of what happened in this chat while this computer's engine was away, or ''. */
+  private async crossBrainNote(chat: string): Promise<string> {
+    const since = this.mark(chat)
+    const before = this.turnAt.get(chat) ?? this.now()
+    try {
+      return await gapNote(
+        {
+          between: async (from, to) => {
+            if (from !== null) return (await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], since: from, before: to, limit: 400 })).sort((a, b) => a.createdAt - b.createdAt)
+            const conversation = await listWhere(this.store, 'chat_item', { chat, kinds: ['user', 'agent', 'report'], before: to, newestFirst: true, limit: FIRST_TURN_ROWS })
+            const oldest = conversation.reduce((at, row) => Math.min(at, row.createdAt), to)
+            if (conversation.length === 0) return []
+            // The steps taken in between come with them (what each tool did).
+            return (await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], since: oldest - 1, before: to, limit: 400 })).sort((a, b) => a.createdAt - b.createdAt)
+          },
+        },
+        since,
+        before,
+      )
+    } catch {
+      return ''
+    }
+  }
+
+  /** The engine here has now seen everything in the chat: the next gap starts after its newest row. */
+  private async markHeard(chat: string): Promise<void> {
+    const newest = await listWhere(this.store, 'chat_item', { chat, kinds: [...GAP_KINDS], newestFirst: true, limit: 1 })
+    const at = newest[0]?.createdAt
+    if (at === undefined) return
+    const key = `ctx_to:${chat}`
+    this.memoryMarks.set(key, String(at))
+    this.localMarks?.set(key, String(at))
   }
 
   private async runCliRoutine(trigger: TriggerRow, brain: Brain & { kind: 'plan' }): Promise<RoutineRunResult> {

@@ -565,6 +565,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       originLine: async (chat) => (await devicesState.sync?.originLine(chat)) ?? '',
     },
     presence,
+    local: { get: (key) => store.localValue(key), set: (key, value) => store.setLocalValue(key, value) },
     store,
     settings,
     secrets,
