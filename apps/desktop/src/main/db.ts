@@ -36,7 +36,7 @@ import { changedFields, currentWriter, versionFields, type MemoryWriter } from '
 import { redactDeep } from './vault/redact'
 import { cardWinners, withWinners } from './runtime/card-claim'
 import { startCheckpointWorker, type Checkpointer } from './db-checkpoint'
-import { DbReader, type RawRow } from './db-reader'
+import { DbReader, type RawRow, type ReadOptions } from './db-reader'
 
 interface StoredRow {
   cid: string
@@ -277,6 +277,25 @@ export class Store implements SyncStore {
   }
 
   /**
+   * Every row of an entity as the window lists it (shared/light-row.ts lightRow): for chat rows the read workers cut
+   * each run's outputs before the rows come back, so the main thread neither receives nor parses what the list throws
+   * away (26 Nov 2026: the window's first chat list read 566 MB in 11 s). Same rows, same order, same content as
+   * lightRow over list(); without the workers it is list() (the caller applies lightRow as before).
+   */
+  async listLight<E extends EntityName>(entity: E): Promise<Array<EntityMap[E]>> {
+    this.assertEntity(entity)
+    if (entity !== 'chat_item' || !this.canUseReader()) return this.list(entity)
+    await this.turn()
+    const parsed: StoredRow[] = []
+    const sql = `SELECT cid, stamp, deleted, payload FROM rows INDEXED BY rows_created WHERE entity = ? ORDER BY ${CREATED_SQL}, stamp`
+    const done = await this.readInWorker(sql, [entity], `list ${entity} (light)`, null, (row) => parsed.push(storedFromRaw(row)), undefined, { light: true })
+    if (!done) return this.list(entity)
+    const rows = parsed.filter((row) => !row.deleted)
+    const ordered = rows.length > SORT_ROWS_MAX ? rows : sortedRows(rows, false)
+    return rowsOut<EntityMap[E]>(ordered)
+  }
+
+  /**
    * Every row of an entity, read along the primary key in slices with a yield between them, so a big table never
    * holds the event loop (the window, the devices link, timers) for more than a slice.
    */
@@ -327,13 +346,26 @@ export class Store implements SyncStore {
    * A query in a worker, its rows handed over a small chunk at a time. False when no worker could do it (the caller
    * reads on this connection instead), so a failed worker costs a slow read, never a lost one.
    */
-  private async readInWorker(sql: string, args: Array<string | number>, what: string, asked: { stack?: string } | null, onRow: (row: RawRow) => void, capped?: (rows: number) => boolean): Promise<boolean> {
+  private async readInWorker(
+    sql: string,
+    args: Array<string | number>,
+    what: string,
+    asked: { stack?: string } | null,
+    onRow: (row: RawRow) => void,
+    capped?: (rows: number) => boolean,
+    options: ReadOptions = {},
+  ): Promise<boolean> {
     const reader = this.reader
     if (reader === null || !reader.usable) return false
     try {
-      const stats = await reader.read(sql, args, (rows) => {
-        for (const row of rows) onRow(row)
-      })
+      const stats = await reader.read(
+        sql,
+        args,
+        (rows) => {
+          for (const row of rows) onRow(row)
+        },
+        options,
+      )
       this.noteRead({ at: Date.now(), what, caller: '', rows: stats.rows, bytes: stats.bytes, ms: Math.round(stats.ms), thread: 'worker', ...(capped?.(stats.rows) === true ? { capped: true } : {}) }, asked)
       return true
     } catch (error) {
@@ -359,6 +391,20 @@ export class Store implements SyncStore {
   /** The slow reads since `since` (epoch ms), newest last: what the watchdog puts beside its stacks. */
   recentReads(since = 0): ReadNote[] {
     return this.readNotes.filter((note) => note.at >= since)
+  }
+
+  /**
+   * One tiny read through the same queue every list and link waits in (the read workers, else this connection):
+   * resolves when it came back. The freeze supervisor's deep health check (devices/service.ts deepHealth) uses it.
+   */
+  async probe(): Promise<void> {
+    if (this.closed) throw new Error('Store closed')
+    const reader = this.reader
+    if (reader !== null && reader.usable) {
+      await reader.read("SELECT 'probe' AS cid, '' AS stamp, 0 AS deleted, '' AS payload", [], () => undefined)
+      return
+    }
+    this.db.prepare('SELECT 1 AS x').get()
   }
 
   /** Starts the read workers (db-reader.ts). Without them, as in tests, reads stay on this connection. */

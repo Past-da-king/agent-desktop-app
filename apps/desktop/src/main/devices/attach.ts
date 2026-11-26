@@ -21,7 +21,13 @@ export function attachDevicesSync(service: DevicesService, deps: AttachDeps): ()
   const extraPeers = (): ReturnType<NonNullable<AttachDeps['extraPeers']>> => {
     const given = deps.extraPeers?.() ?? []
     const joined = service.joinedPeers().filter((peer) => !given.some((other) => other.id === peer.id))
-    return [...given, ...joined]
+    // The WSL relay's local ways to a device go after the device's own addresses (mergePeers appends them).
+    const relayed = service.relayPeers().filter((peer) => !given.some((other) => other.id === peer.id) && !joined.some((other) => other.id === peer.id))
+    const merged = [...given, ...joined].map((peer) => {
+      const relay = service.relayPeers().find((other) => other.id === peer.id)
+      return relay === undefined ? peer : { ...peer, urls: [...peer.urls, ...relay.urls.filter((url) => !peer.urls.includes(url))] }
+    })
+    return [...merged, ...relayed]
   }
   const pass = (): string | null => {
     const paired = deps.pairedPass?.() ?? null

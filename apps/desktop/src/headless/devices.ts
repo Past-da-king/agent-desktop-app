@@ -16,6 +16,12 @@ import { registerWakeupRpc, WakeDeviceReports } from '../main/wakeups/bridge'
 import { getWakeups } from '../main/wakeups/service'
 import { devicesState } from '../main/devices/sync'
 import { readConfig, writeConfig } from './node-config'
+import { BrainUrlRefresher } from './brain-urls'
+import { pinnedFetch } from '../main/devices/pinned-fetch'
+
+/** How often node.json's brain addresses are checked (once a minute: a dead one is proven dead over ten). */
+const BRAIN_CHECK_MS = 60_000
+const BRAIN_PROBE_MS = 6_000
 import { PASS_SECRET } from './pair'
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -103,6 +109,11 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
       await runtime.actions.openUrl(url)
     },
     notify: (title, body) => runtime.actions.notify(title, body),
+    // The extra addresses live in node.json too (agent-node config --url): keep both the same.
+    onExtraUrls: (urls) => {
+      const config = readConfig(runtime.dataDir)
+      if (JSON.stringify(config.publicUrls) !== JSON.stringify(urls)) writeConfig(runtime.dataDir, { ...config, publicUrls: urls })
+    },
   })
   const node = service
   registerMediaFetch(node.host(), { get: (token) => runtime.shownMedia.get(token) })
@@ -131,7 +142,25 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     // The brains this node paired with, until their device rows replicate here.
     extraPeers: () => readConfig(runtime.dataDir).brains.map((brain) => ({ id: brain.id, name: brain.name, urls: brain.urls, fp: brain.fp })),
   })
+  // node.json's brain addresses follow their replicated device rows, without a restart (brain-urls.ts).
+  const brainUrls = new BrainUrlRefresher({
+    dataDir: runtime.dataDir,
+    rows: () => runtime.store.list('device'),
+    probe: async (url, fp) => {
+      const res = await pinnedFetch(fp, BRAIN_PROBE_MS)(`${url.replace(/\/+$/, '')}/v1/health`, { signal: AbortSignal.timeout(BRAIN_PROBE_MS) })
+      return res.ok
+    },
+    log: (line, detail) => runtime.logger.info(line, detail),
+  })
+  const offRows = runtime.store.onChange((change) => {
+    if (change?.entity === 'device') void brainUrls.refresh()
+  })
+  const brainTimer = setInterval(() => void brainUrls.probeOthers().then(() => brainUrls.refresh()).catch(() => undefined), BRAIN_CHECK_MS)
+  brainTimer.unref()
+  void brainUrls.refresh()
   runtime.onStop(async () => {
+    clearInterval(brainTimer)
+    offRows()
     detach()
     setDevicesService(null)
     await node.stop()
@@ -155,7 +184,13 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
   // Where it listens is set before it starts, so it starts listening once, there.
   await node.configure({ listen: options.listen, port: options.port })
   await node.start()
-  if (options.extraUrls !== undefined && options.extraUrls.length > 0) await node.setExtraUrls(options.extraUrls)
+  // node.json's addresses and the ones set since (devices_addresses, Settings) are one list: a start must not drop
+  // an address added while it ran (26 Nov 2026: a relay address set with devices_addresses was lost on restart).
+  const given = options.extraUrls ?? []
+  const kept = node.status().extraUrls
+  const extra = [...given, ...kept.filter((url) => !given.includes(url))]
+  if (extra.length > 0 && JSON.stringify(extra) !== JSON.stringify(kept)) await node.setExtraUrls(extra)
+  else if (extra.length > 0 && JSON.stringify(extra) !== JSON.stringify(given)) writeConfig(runtime.dataDir, { ...readConfig(runtime.dataDir), publicUrls: extra })
   // A headless node exists to be reached: it always listens (on loopback unless told otherwise).
   if (!node.isEnabled()) await node.setEnabled(true)
   if (firstStart) await node.setShareGroup('shell', true)

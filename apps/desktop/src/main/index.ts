@@ -913,7 +913,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       void store?.upsert('chat_item', { kind: 'notice', text: line, meta: JSON.stringify({ diskHealth: true }) }).then(() => broadcast(EVENTS.chat, { type: 'chat_changed' })).catch(() => undefined)
     }
     if (state.blocked) devices?.handbackScreens()
-  })
+  }, () => devices?.probeTarget() ?? null)
 
   await freezeRecovery?.ready
   store = new Store(join(dir, 'agent.db'))
@@ -2166,6 +2166,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
       firewall: new WindowsFirewall({ platform: process.platform, program: process.execPath }),
       openUrl: (url) => shell.openExternal(url),
       notify: showNotification,
+      // GET /v1/health?deep=1 (the freeze supervisor's question) reads once through the database's read queue.
+      deepCheck: async () => {
+        await store?.probe()
+      },
     })
     devices.registerIpc(ipcMain)
     setDevicesService(devices)

@@ -8,6 +8,7 @@ const listeners = new Set<() => void>()
 const SELF = 'dev_preview_self'
 let enabled = false
 let extraUrls: string[] = []
+let wslRelayOn = false
 let network: DevicesNetwork = { mode: 'none', controlUrl: '', state: 'off', available: true, hasKey: false, addresses: [], dnsName: '', peers: 0, authUrl: '', error: '' }
 
 /** The preview pretends the overlay comes up at once with a made-up address from the documentation range. */
@@ -101,6 +102,13 @@ function status(): DevicesStatus {
     shareGroups: { ...shareGroups },
     firewall: enabled ? firewall : 'not-needed',
     servingTo: '',
+    wslRelay: {
+      available: true,
+      on: wslRelayOn,
+      state: wslRelayOn ? 'running' : 'off',
+      line: wslRelayOn ? 'On: Tailscale on Windows is down, so devices reach this computer through WSL at https://100.64.0.9:7788, and it reaches 1 device through WSL.' : 'Off.',
+      url: wslRelayOn ? 'https://100.64.0.9:7788' : '',
+    },
   }
 }
 
@@ -117,6 +125,11 @@ export const mockDevices: DevicesApi = {
     if (input.mode === 'headscale' && (input.controlUrl ?? network.controlUrl).trim() === '') throw new Error('Add the address of your Headscale server, like https://headscale.example.com.')
     const hasKey = input.authKey === null ? false : typeof input.authKey === 'string' && input.authKey.trim() !== '' ? true : network.hasKey
     network = { ...network, mode: input.mode, controlUrl: input.mode === 'headscale' ? (input.controlUrl ?? network.controlUrl).trim() : network.controlUrl, hasKey }
+    changed()
+    return status()
+  },
+  async setWslRelay(on) {
+    wslRelayOn = on
     changed()
     return status()
   },

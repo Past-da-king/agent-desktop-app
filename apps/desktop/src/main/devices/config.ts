@@ -2,7 +2,7 @@
  * The Devices settings (protocol s2): off by default. Kept in `<userData>/devices/config.json`, apart from
  * settings.json, so the shared Settings shape does not grow a nested object every build has to merge.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname } from 'node:path'
 
@@ -22,6 +22,11 @@ export interface DevicesConfig {
    * their device rows arrive here. A row, once here, always wins (revoked stays revoked).
    */
   peers: JoinedPeer[]
+  /**
+   * Settings > Devices > "Reach this computer through WSL when Tailscale on Windows is down" (devices/wsl-relay.ts).
+   * Off unless the person switches it on.
+   */
+  wslRelay?: boolean
 }
 
 export interface JoinedPeer {
@@ -80,33 +85,83 @@ export function cleanConfig(raw: unknown): DevicesConfig {
     peers.push({ id, name: typeof o['name'] === 'string' ? o['name'].slice(0, 80) : '', urls, fp })
     if (peers.length >= 12) break
   }
-  return { ...(value['orderRepairVersion'] === 1 ? { orderRepairVersion: 1 } : {}), enabled: value['enabled'] === true, port, listen, extraUrls, shareGroups, peers }
+  return {
+    ...(value['orderRepairVersion'] === 1 ? { orderRepairVersion: 1 } : {}),
+    enabled: value['enabled'] === true,
+    port,
+    listen,
+    extraUrls,
+    shareGroups,
+    peers,
+    ...(value['wslRelay'] === true ? { wslRelay: true } : {}),
+  }
 }
 
 export class DevicesConfigFile {
   private state: DevicesConfig
+  /** The file as last read or written (mtime and size): a change made outside the app shows as a different mark. */
+  private mark = ''
 
   constructor(private readonly file: string) {
-    let raw: unknown = null
-    try {
-      raw = JSON.parse(readFileSync(file, 'utf8'))
-    } catch {
-      raw = null
-    }
-    this.state = cleanConfig(raw)
+    this.state = cleanConfig(this.readFile())
   }
 
   get(): DevicesConfig {
-    return { ...this.state, extraUrls: [...this.state.extraUrls], shareGroups: { ...this.state.shareGroups }, peers: this.state.peers.map((p) => ({ ...p, urls: [...p.urls] })) }
+    return {
+      ...this.state,
+      extraUrls: [...this.state.extraUrls],
+      shareGroups: { ...this.state.shareGroups },
+      peers: this.state.peers.map((p) => ({ ...p, urls: [...p.urls] })),
+    }
+  }
+
+  /**
+   * Reads the file again when something outside the app changed it (a hand edit, another program, a restore), so an
+   * address added there is published without a restart (26 Nov 2026: extraUrls added to config.json by hand never
+   * reached the device row). True when the settings changed. Cheap: one stat while nothing changed.
+   */
+  reload(): boolean {
+    if (this.markOf() === this.mark) return false
+    const raw = this.readFile()
+    if (raw === null) return false
+    const next = cleanConfig(raw)
+    const changed = JSON.stringify(next) !== JSON.stringify(this.state)
+    this.state = next
+    return changed
   }
 
   save(patch: Partial<DevicesConfig>): DevicesConfig {
+    // A change made outside the app since the last read is kept: the patch goes on top of the file as it is now.
+    this.reload()
     this.state = cleanConfig({ ...this.state, ...patch })
     mkdirSync(dirname(this.file), { recursive: true })
     const temp = `${this.file}.tmp`
     writeFileSync(temp, JSON.stringify(this.state, null, 2), 'utf8')
     renameSync(temp, this.file)
+    this.mark = this.markOf()
     return this.get()
+  }
+
+  private markOf(): string {
+    try {
+      const info = statSync(this.file)
+      return `${info.mtimeMs}:${info.size}:${info.ino}`
+    } catch {
+      return 'missing'
+    }
+  }
+
+  /** The parsed file, or null when it is missing or not JSON (a half-written edit is not taken). */
+  private readFile(): unknown {
+    const mark = this.markOf()
+    try {
+      const raw: unknown = JSON.parse(readFileSync(this.file, 'utf8'))
+      this.mark = mark
+      return raw
+    } catch {
+      if (mark === 'missing') this.mark = mark
+      return null
+    }
   }
 }
 

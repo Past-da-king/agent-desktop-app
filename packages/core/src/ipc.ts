@@ -916,6 +916,19 @@ export interface DevicesStatus {
   servingTo: string
   /** The optional overlay network (protocol s10); absent where the node has none (a remote view). */
   network?: DevicesNetwork
+  /** Windows: reach this computer through WSL while Tailscale on Windows is down. Absent off Windows and on older nodes. */
+  wslRelay?: DevicesWslRelay
+}
+
+export interface DevicesWslRelay {
+  available: boolean
+  /** The person switched it on (off by default). */
+  on: boolean
+  state: 'off' | 'not-needed' | 'starting' | 'running' | 'unavailable' | 'error'
+  /** One plain line for Settings > Devices. */
+  line: string
+  /** The address other devices reach this computer at through WSL, or ''. */
+  url: string
 }
 
 /** Settings > Devices > Network: none (LAN or a typed address), Tailscale, or the person's own Headscale. */
@@ -978,6 +991,8 @@ export interface DevicesApi {
   setEnabled(on: boolean): Promise<DevicesStatus>
   /** The addresses the person typed that reach this computer (a public name, a VPN address). */
   setExtraUrls(urls: string[]): Promise<DevicesStatus>
+  /** Windows: reach this computer through WSL while Tailscale on Windows is down (off by default). */
+  setWslRelay(on: boolean): Promise<DevicesStatus>
   /** Picks the overlay network (protocol s10) and saves its auth key in the secrets module. */
   setNetwork(input: DevicesNetworkInput): Promise<DevicesStatus>
   /** A new pairing offer (the old one stops working). */

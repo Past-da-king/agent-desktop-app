@@ -407,6 +407,13 @@ export function DevicesSettings(): JSX.Element {
       .finally(() => setAllowing(false))
   }
 
+  const setWslRelay = (on: boolean): void => {
+    void agent.devices
+      .setWslRelay(on)
+      .then(setStatus)
+      .catch((cause: unknown) => toast(message(cause, 'Could not change that.')))
+  }
+
   const share = (group: DeviceShareGroup, on: boolean): void => {
     void agent.devices
       .setShareGroup(group, on)
@@ -478,6 +485,19 @@ export function DevicesSettings(): JSX.Element {
             <Button variant="fill" size="sm" disabled={allowing} onClick={allowFirewall}>
               {allowing ? 'Waiting for Windows...' : 'Allow connections'}
             </Button>
+          </div>
+        ) : null}
+
+        {enabled && !readOnly && status?.wslRelay?.available === true ? (
+          <div className="rowc dv-relay">
+            <div className={`ri${status.wslRelay.state === 'running' ? ' ok' : status.wslRelay.state === 'unavailable' || status.wslRelay.state === 'error' ? ' warn' : ''}`}>
+              <Icon name="link" size={22} />
+            </div>
+            <div className="rt">
+              <b>Reach this computer through WSL when Tailscale is down</b>
+              <span role="status">{status.wslRelay.on ? status.wslRelay.line : 'Off. Only used while Tailscale on Windows is not running; a working direct link is always tried first.'}</span>
+            </div>
+            <Switch on={status.wslRelay.on} label="Reach this computer through WSL when Tailscale is down" onToggle={setWslRelay} />
           </div>
         ) : null}
 

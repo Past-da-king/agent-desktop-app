@@ -455,7 +455,8 @@ export function registerIpc(deps: IpcDeps): () => void {
       const light = rows.map((row) => lightRow(entity, row))
       return entity === 'chat_item' ? boundRows(light as Array<{ kind?: unknown; meta?: unknown; createdAt?: unknown }>, (row) => isOpenCard(row) || isLiveHelper(row, Date.now())) : boundRows(light)
     }
-    return lightRowsSliced(entity, await store.list(entity))
+    // Chat rows come light from the read workers already (db.ts listLight); lightRow then finds nothing to cut.
+    return lightRowsSliced(entity, await (typeof store.listLight === 'function' ? store.listLight(entity) : store.list(entity)))
   })
 
   // A few rows by index (one chat, some kinds, the newest N): what the window and a linked computer ask instead of a

@@ -274,6 +274,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
   'devices.status': free('Devices: on or off, addresses, firewall (Settings > Devices)'),
   'devices.setEnabled': free('Switch Devices on or off', 'on'),
   'devices.setExtraUrls': free('Extra addresses for this computer', 'urls[]'),
+  'devices.setWslRelay': free('Reach this computer through WSL while Tailscale on Windows is down', 'on'),
   'devices.setNetwork': ask('Devices network: none, Tailscale and the like (Settings > Devices > Network)', '{ mode, authKey? }', [0]),
   'devices.offer': free('Add a device: make a pairing link and short code'),
   'devices.cancelOffer': free('Cancel the pairing offer'),

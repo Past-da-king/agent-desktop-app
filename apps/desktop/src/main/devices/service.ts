@@ -14,6 +14,7 @@ import { filterRows } from '../../shared/list-where'
 
 import { DEVICES_CHANNELS, DEVICES_EVENTS } from '../../shared/devices-channels'
 import { qrMatrix } from '../../shared/qr'
+import { WslRelay, type WslRelayDeps } from './wsl-relay'
 import { DevicesConfigFile, advertisedUrls, normaliseUrl, type DevicesConfig, type InterfaceMap, type JoinedPeer } from './config'
 import { cleanRoles, platformOf } from './facts'
 import { joinMesh, loadIdentity, type NodeIdentity } from './identity'
@@ -101,7 +102,23 @@ export interface DevicesServiceDeps {
   /** Device commands other than "tool" that reach this node over its link to the answering brain. */
   openUrl?: (url: string) => Promise<void>
   notify?: (title: string, body: string) => void
+  /**
+   * One round trip through the database's read queue (Store.probe), for GET /v1/health?deep=1: the question the
+   * freeze supervisor asks. Absent: the deep check answers from the server alone.
+   */
+  deepCheck?: () => Promise<void>
+  /** Tests: how long the deep check waits (DEEP_CHECK_MS). */
+  deepCheckMs?: number
+  /** Tests: how the WSL relay runs its commands and forwarders (devices/wsl-relay.ts). */
+  wslRelay?: Pick<WslRelayDeps, 'run' | 'forward'>
+  /** The person changed this node's extra addresses (the headless node keeps them in node.json too). */
+  onExtraUrls?: (urls: string[]) => void
 }
+
+/** How often config.json is looked at for a change made outside the app (one stat while nothing changed). */
+export const CONFIG_CHECK_MS = 5_000
+/** How long the deep health check waits for the database before it says it is stuck. */
+export const DEEP_CHECK_MS = 8_000
 
 const SELF_PASS = 'devicesSelfPass'
 /** headless/pair.ts PASS_SECRET: the pass a headless node got from `agent-node pair`. */
@@ -171,6 +188,11 @@ export class DevicesService {
   /** The optional overlay network (protocol s10); does nothing until the person picks one. */
   readonly net: OverlayNet
   private netWrite: Promise<void> = Promise.resolve()
+  /** Settings > Devices > reach this computer through WSL when Windows Tailscale is down (off by default). */
+  readonly wslRelay: WslRelay
+  private configTimer: NodeJS.Timeout | null = null
+  /** The addresses last published in this node's row and hello: a change says hello again. */
+  private publishedUrls = ''
 
   constructor(private readonly deps: DevicesServiceDeps) {
     this.now = deps.now ?? Date.now
@@ -180,7 +202,7 @@ export class DevicesService {
       health: async (brain) => {
         const row = this.rows.get(brain.id)
         if (row === undefined) return false
-        const health = await probeHealth(row)
+        const health = await probeHealth(this.reachOf(row))
         return health.up && health.ready
       },
       busy: () => this.deps.busy(),
@@ -205,6 +227,16 @@ export class DevicesService {
       // New overlay addresses go into this node's own row, so paired devices learn them.
       onChange: () => {
         // Only while Devices is on: with it off this node has no identity or row yet, and must not make one.
+        if (this.enabled) this.netWrite = this.netWrite.then(() => this.writeSelf()).catch(() => undefined)
+        this.changed()
+      },
+    })
+    this.wslRelay = new WslRelay({
+      platform: deps.platform,
+      ...(deps.log === undefined ? {} : { log: deps.log }),
+      ...(deps.wslRelay ?? {}),
+      // Its address goes in (or out of) this node's row; Settings shows its line.
+      onChange: () => {
         if (this.enabled) this.netWrite = this.netWrite.then(() => this.writeSelf()).catch(() => undefined)
         this.changed()
       },
@@ -342,8 +374,19 @@ export class DevicesService {
     await this.repairOrder()
     this.offStore = this.deps.store.onChange((change) => {
       // A device row that changes as the app closes finds the database shut: that is not an error to report.
-      if (change.entity === 'device') void this.reloadRows().then(() => this.repairOrder()).then(() => this.uplink.tick()).catch(() => undefined)
+      if (change.entity === 'device')
+        void this.reloadRows()
+          .then(() => this.repairOrder())
+          .then(() => {
+            this.applyRelay()
+            return this.uplink.tick()
+          })
+          .catch(() => undefined)
     })
+    if (this.configTimer === null) {
+      this.configTimer = setInterval(() => void this.checkConfig().catch(() => undefined), CONFIG_CHECK_MS)
+      this.configTimer.unref?.()
+    }
     if (this.enabled) {
       await this.switchOn()
       for (const listener of this.switchListeners) listener(true)
@@ -355,6 +398,9 @@ export class DevicesService {
   async stop(): Promise<void> {
     if (this.answerTimer !== null) clearInterval(this.answerTimer)
     this.answerTimer = null
+    if (this.configTimer !== null) clearInterval(this.configTimer)
+    this.configTimer = null
+    this.wslRelay.stop()
     this.offStore?.()
     this.offStore = null
     setOverlayNet(null)
@@ -396,6 +442,7 @@ export class DevicesService {
     this.selfPass()
     await this.writeSelf()
     this.uplink.start()
+    this.applyRelay()
     if (this.answerTimer === null) {
       const check = (): void => {
         if (!this.enabled) return
@@ -426,7 +473,7 @@ export class DevicesService {
     if (!this.enabled) return null
     const first = this.list().find((row) => row.roles.includes('brain') && !row.revoked)
     if (first === undefined || first.id === this.identity.nodeId || first.fp === '' || first.urls.length === 0) return null
-    return { id: first.id, urls: first.urls, fp: first.fp }
+    return { id: first.id, urls: this.reachOf(first).urls, fp: first.fp }
   }
 
   /** The person's switches for which of this node's tools other devices may use. */
@@ -534,6 +581,7 @@ export class DevicesService {
       shareGroups: this.shareGroups(),
       firewall: this.deps.firewall?.needed === true && config.enabled ? this.firewallState : 'not-needed',
       servingTo: this.uplink.target ?? '',
+      ...(this.wslRelay.available || config.wslRelay === true ? { wslRelay: this.wslRelay.status() } : {}),
       answering: config.enabled ? `${[this.answerOrder.line(), this.deps.availability?.()].filter(Boolean).join(' ')}${hasTiedPriorities(this.list().filter(row => row.roles.includes('brain') && !row.revoked)) ? ' Order has tied positions; using pairing order, then device id.' : ''}` : 'Devices is off.',
     }
   }
@@ -547,6 +595,7 @@ export class DevicesService {
       await this.srv?.stop()
       this.error = ''
       setLocalOrigin(null)
+      this.applyRelay()
     }
     this.applyNet()
     for (const listener of this.switchListeners) listener(on)
@@ -558,9 +607,99 @@ export class DevicesService {
     const port = this.config.get().port
     const clean = urls.map((url) => normaliseUrl(url, port)).filter((url): url is string => url !== null)
     this.config.save({ extraUrls: clean })
+    this.deps.onExtraUrls?.(clean)
     if (this.enabled) await this.writeSelf()
     this.changed()
     return this.status()
+  }
+
+  private deepRun: Promise<'ok' | 'stuck'> | null = null
+  /** When the last deep check finished (monotonic); never at first, so the first check always reads. */
+  private deepAt = Number.NEGATIVE_INFINITY
+  private deepLast: 'ok' | 'stuck' = 'ok'
+
+  /** One database round trip at a time, shared by every asker; an answer from the last 2 s is reused. */
+  private deepHealth(): Promise<'ok' | 'stuck'> {
+    const check = this.deps.deepCheck
+    if (check === undefined) return Promise.resolve('ok')
+    if (this.deepRun !== null) return this.deepRun
+    if (performance.now() - this.deepAt < 2_000) return Promise.resolve(this.deepLast)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<'stuck'>((resolve) => {
+      timer = setTimeout(() => resolve('stuck'), this.deps.deepCheckMs ?? DEEP_CHECK_MS)
+      timer.unref?.()
+    })
+    this.deepRun = Promise.race([check().then(() => 'ok' as const, () => 'stuck' as const), deadline]).then((result) => {
+      if (timer !== undefined) clearTimeout(timer)
+      this.deepRun = null
+      this.deepAt = performance.now()
+      this.deepLast = result
+      return result
+    })
+    return this.deepRun
+  }
+
+  /** Where the freeze supervisor asks its question: this server on this computer, or null while it does not listen. */
+  probeTarget(): { host: string; port: number } | null {
+    if (this.srv?.running !== true) return null
+    const listen = this.config.get().listen
+    const host = listen === '0.0.0.0' || listen === '::' || listen === '' ? '127.0.0.1' : listen
+    return { host, port: this.srv.port() }
+  }
+
+  /** Settings > Devices: reach this computer through WSL while Tailscale on Windows is down. */
+  async setWslRelay(on: boolean): Promise<DevicesStatus> {
+    this.config.save({ wslRelay: on })
+    this.applyRelay()
+    this.changed()
+    return this.status()
+  }
+
+  /**
+   * config.json changed outside the app (a hand edit, another program): take it now, not at the next start. Its
+   * addresses go into this node's row and hello at once, so the other devices learn them (26 Nov 2026).
+   */
+  async checkConfig(): Promise<boolean> {
+    if (!this.config.reload()) return false
+    this.deps.log?.('Devices settings changed on disk; taken now')
+    if (this.enabled) await this.writeSelf()
+    this.applyRelay()
+    this.uplink.refresh()
+    this.changed()
+    return true
+  }
+
+  /** The paired brains and hands with addresses: the devices the WSL relay may have to reach. */
+  private relayTargets(): Array<{ id: string; name: string; urls: string[] }> {
+    const self = this.ident?.nodeId ?? ''
+    return this.list()
+      .filter((row) => row.id !== self && !row.revoked && row.urls.length > 0 && (row.roles.includes('brain') || row.roles.includes('hands')))
+      .map((row) => ({ id: row.id, name: row.name, urls: row.urls }))
+  }
+
+  private applyRelay(): void {
+    const config = this.config.get()
+    const port = this.srv?.running === true ? this.srv.port() : config.port
+    this.wslRelay.apply(config.enabled && config.wslRelay === true, port, this.relayTargets())
+  }
+
+  /**
+   * This computer's own extra ways to a paired device (the WSL relay), after the device's own addresses: given to
+   * replication as extra peers, never published.
+   */
+  relayPeers(): JoinedPeer[] {
+    const out: JoinedPeer[] = []
+    for (const row of this.list()) {
+      const urls = this.wslRelay.peerUrls(row.id)
+      if (urls.length > 0 && row.fp !== '') out.push({ id: row.id, name: row.name, urls, fp: row.fp })
+    }
+    return out
+  }
+
+  /** A device's addresses as this computer tries them: its own, then the relay's. */
+  private reachOf<T extends { id: string; urls: string[] }>(row: T): T {
+    const extra = this.wslRelay.peerUrls(row.id).filter((url) => !row.urls.includes(url))
+    return extra.length === 0 ? row : { ...row, urls: [...row.urls, ...extra] }
   }
 
   /** Changes port or listen address (tests and the headless node); restarts the server when it runs. */
@@ -823,6 +962,7 @@ export class DevicesService {
     }
     ipc.handle(DEVICES_CHANNELS.status, async (event) => this.status(wireOf(event)?.deviceId))
     ipc.handle(DEVICES_CHANNELS.setEnabled, async (_event, on) => this.setEnabled(on === true))
+    ipc.handle(DEVICES_CHANNELS.setWslRelay, async (_event, on) => this.setWslRelay(on === true))
     ipc.handle(DEVICES_CHANNELS.setExtraUrls, async (_event, raw) =>
       this.setExtraUrls(Array.isArray(raw) ? raw.filter((u): u is string => typeof u === 'string').slice(0, 12) : []),
     )
@@ -854,6 +994,9 @@ export class DevicesService {
     // addresses only work on the same network (devices try urls in order, with a parallel probe).
     const out = this.net.urls(port)
     for (const url of advertisedUrls(this.config.get(), this.interfaces(), this.ipv6)) if (!out.includes(url)) out.push(url)
+    // The WSL relay last: a direct address that works is always tried before it.
+    const relay = this.wslRelay.inboundUrl()
+    if (relay !== '' && !out.includes(relay)) out.push(relay)
     return out
   }
 
@@ -950,6 +1093,11 @@ export class DevicesService {
       else { const { priority: _priority, ...metadata } = record; await this.saveRow(metadata) }
     }
     setLocalOrigin(originFrom(this.identity.nodeId, facts))
+    // The brain this node is linked to keeps the facts of its hello and writes them back on this row every minute:
+    // say hello again with the new addresses, or the old ones would win there.
+    const published = JSON.stringify(facts.urls)
+    if (this.publishedUrls !== '' && published !== this.publishedUrls) this.uplink.refresh()
+    this.publishedUrls = published
   }
 
   private seen(id: string): void {
@@ -1008,18 +1156,23 @@ export class DevicesService {
       method: 'GET',
       path: '/v1/health',
       auth: 'none',
-      handle: async () => ({
-        status: 200,
-        json: {
-          id: this.identity.nodeId,
-          name: this.deps.nodeName(),
-          version: this.deps.appVersion,
-          roles: ['brain', 'hands'],
-          ready: this.deps.ready(),
-          busy: this.deps.busy(),
-          meshId: this.identity.meshId,
-        },
-      }),
+      handle: async (req) => {
+        // ?deep=1 (the freeze supervisor): also one read through the database's read queue, which every link needs.
+        const deep = req.query.get('deep') === '1' ? await this.deepHealth() : undefined
+        return {
+          status: deep === 'stuck' ? 503 : 200,
+          json: {
+            id: this.identity.nodeId,
+            name: this.deps.nodeName(),
+            version: this.deps.appVersion,
+            roles: ['brain', 'hands'],
+            ready: this.deps.ready(),
+            busy: this.deps.busy(),
+            meshId: this.identity.meshId,
+            ...(deep === undefined ? {} : { deep }),
+          },
+        }
+      },
     })
     host.addRoute({
       method: 'POST',

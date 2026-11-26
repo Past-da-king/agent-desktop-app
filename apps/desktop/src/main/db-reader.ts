@@ -13,6 +13,8 @@
  */
 import { Worker } from 'node:worker_threads'
 
+import { LIGHT_HEAD, LIGHT_INPUT } from '../shared/light-row'
+
 /** The worker's code: plain CommonJS, so it needs no bundle entry of its own. */
 const WORKER_CODE = `
 const { parentPort, workerData } = require('node:worker_threads')
@@ -32,6 +34,35 @@ function statementOf(sql) {
   }
   return s
 }
+// A chat row as the window lists it (shared/light-row.ts lightRow, the same rule, kept in step by a test): a run's
+// stdout and stderr cut to their head, its input to 2,000 characters. Done here, so the main thread neither receives
+// nor parses the outputs it would throw away (26 Nov 2026: the window's first list read 566 MB of chat rows).
+const RUN_MARK = String.fromCharCode(92, 34) + 'run' + String.fromCharCode(92, 34)
+function lightPayload(payload) {
+  // Shorter than the smallest cut (a run output's head): nothing in it can be cut.
+  if (payload.length <= workerData.lightHead || payload.indexOf(RUN_MARK) < 0) return payload
+  let row
+  try { row = JSON.parse(payload) } catch { return payload }
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return payload
+  const meta = row.meta
+  if (typeof meta !== 'string' || !meta.includes('"run"')) return payload
+  let parsed
+  try { parsed = JSON.parse(meta) } catch { return payload }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return payload
+  const run = parsed.run
+  if (typeof run !== 'object' || run === null || Array.isArray(run)) return payload
+  let trimmed = false
+  const cut = (key, cap) => {
+    const value = run[key]
+    if (typeof value !== 'string' || value.length <= cap) return
+    run[key] = value.slice(0, cap)
+    trimmed = true
+  }
+  cut('stdout', workerData.lightHead); cut('stderr', workerData.lightHead); cut('input', workerData.lightInput)
+  if (!trimmed) return payload
+  row.meta = JSON.stringify({ ...parsed, run: { ...run, more: true } })
+  return JSON.stringify(row)
+}
 function finish(job) {
   open = null
   if (job.bytes > 33554432) { try { db.exec('PRAGMA shrink_memory') } catch {} }
@@ -50,7 +81,8 @@ function step() {
         return
       }
       const r = next.value
-      const payload = typeof r.payload === 'string' ? r.payload : ''
+      const stored = typeof r.payload === 'string' ? r.payload : ''
+      const payload = job.light ? lightPayload(stored) : stored
       chunk.push([String(r.cid), String(r.stamp), Number(r.deleted) === 1 ? 1 : 0, payload])
       size += payload.length
       job.bytes += payload.length
@@ -75,7 +107,7 @@ parentPort.on('message', (m) => {
   }
   if (m.next === true) return step()
   try {
-    open = { id: m.id, it: statementOf(m.sql).iterate(...m.args), bytes: 0 }
+    open = { id: m.id, it: statementOf(m.sql).iterate(...m.args), bytes: 0, light: m.light === true }
     step()
   } catch (error) {
     open = null
@@ -108,10 +140,16 @@ export interface ReaderOptions {
   onFail?: (why: string) => void
 }
 
+export interface ReadOptions {
+  /** Chat rows as the window lists them (lightRow): run outputs cut in the worker. */
+  light?: boolean
+}
+
 interface Job {
   id: number
   sql: string
   args: Array<string | number>
+  light: boolean
   onRows: (rows: RawRow[]) => void
   resolve: (stats: ReadStats) => void
   reject: (error: Error) => void
@@ -147,10 +185,10 @@ export class DbReader {
   }
 
   /** Runs a query in a worker. `onRows` gets each chunk in order, on the main thread, between other events. */
-  read(sql: string, args: Array<string | number>, onRows: (rows: RawRow[]) => void): Promise<ReadStats> {
+  read(sql: string, args: Array<string | number>, onRows: (rows: RawRow[]) => void, options: ReadOptions = {}): Promise<ReadStats> {
     if (!this.usable) return Promise.reject(new Error('Reader stopped'))
     return new Promise<ReadStats>((resolve, reject) => {
-      this.waiting.push({ id: this.nextId++, sql, args, onRows, resolve, reject, queuedAt: performance.now(), startedAt: 0, rows: 0, bytes: 0 })
+      this.waiting.push({ id: this.nextId++, sql, args, light: options.light === true, onRows, resolve, reject, queuedAt: performance.now(), startedAt: 0, rows: 0, bytes: 0 })
       this.dispatch()
     })
   }
@@ -176,7 +214,14 @@ export class DbReader {
     try {
       const worker = new Worker(WORKER_CODE, {
         eval: true,
-        workerData: { file: this.options.file, cacheKb: this.options.cacheKb ?? 8192, chunkBytes: this.options.chunkBytes ?? 128 * 1024, chunkRows: this.options.chunkRows ?? 200 },
+        workerData: {
+          file: this.options.file,
+          cacheKb: this.options.cacheKb ?? 8192,
+          chunkBytes: this.options.chunkBytes ?? 128 * 1024,
+          chunkRows: this.options.chunkRows ?? 200,
+          lightHead: LIGHT_HEAD,
+          lightInput: LIGHT_INPUT,
+        },
       })
       worker.unref()
       const slot: Slot = { worker, job: null }
@@ -202,7 +247,7 @@ export class DbReader {
       if (job === undefined) return
       slot.job = job
       job.startedAt = performance.now()
-      slot.worker.postMessage({ id: job.id, sql: job.sql, args: job.args })
+      slot.worker.postMessage({ id: job.id, sql: job.sql, args: job.args, light: job.light })
     }
   }
 
