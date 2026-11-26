@@ -2,11 +2,11 @@
  * Projects in the window: which project a chat belongs to, the ones the rail shows, a project chat id, and the
  * glyphs a project icon can use. Pure, so it is unit tested directly.
  */
-import { MAIN_CHAT, type ChatItem, type ProjectRow } from '@agent/core'
+import { MAIN_CHAT, type ChatItem, type ProjectRow, type ProjectIcon } from '@agent/core'
 
 import type { IconName } from '../ui/Icon'
 import { parseMeta } from './meta'
-import { senderLine, viaFromMeta, type SenderKind } from '../../shared/sender'
+import { senderLine, senderOfRow, type SenderKind } from '../../shared/sender'
 
 /** The project a chat belongs to; null for the main thread or a chat no project holds. */
 export function projectOfChat(projects: ProjectRow[], chat: string): ProjectRow | null {
@@ -120,6 +120,7 @@ export function singleEmoji(text: string): string {
 /** Who sent a message row that is not the person's (shared/sender.ts): a project, the main agent, a call, a helper. */
 export interface Via {
   from: SenderKind
+  icon?: ProjectIcon
   name: string
   chat: string
   title: string
@@ -129,9 +130,9 @@ export interface Via {
 
 /** The sender of a row, or null when the person wrote it himself. */
 export function viaOf(item: ChatItem): Via | null {
-  const via = viaFromMeta(parseMeta(item.meta))
+  const via = senderOfRow(item)
   if (via === null) return null
-  return { from: via.from, name: via.name, chat: via.chat, title: via.title ?? '', line: senderLine(via) }
+  return { ...(via.icon === undefined ? {} : { icon: via.icon }), from: via.from, name: via.name, chat: via.chat, title: via.title ?? '', line: senderLine(via) }
 }
 
 /** The icon beside who sent it. */

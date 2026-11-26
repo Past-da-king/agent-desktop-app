@@ -1322,7 +1322,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       await routeLate(
         {
           deliver: async (note, where) => {
-            if (runner !== null) await runner.deliver(note, where)
+            if (runner !== null) await runner.deliver(note, where, { from: 'system', name: 'Linked device', chat: where })
           },
           helper: async (id, note) => (helperManager === null ? 'unknown' : helperManager.lateResult(id, note)),
         },

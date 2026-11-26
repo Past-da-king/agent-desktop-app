@@ -80,7 +80,7 @@ import {
 } from './chat-route'
 import { describeRun, finishRun, runStarted } from './run-detail'
 import { viaLabel, type ChatVia } from '../tools/projects'
-import { callVia, liveFromInput, liveLabel } from '../../shared/sender'
+import { callVia, legacyVia, viaFromMeta, senderOfRow, isOwnMessage, liveFromInput, liveLabel } from '../../shared/sender'
 import { redactSecrets } from '../logger'
 import { latestDividerAt } from '../memory/chats'
 import { replyText } from '../notify'
@@ -576,6 +576,7 @@ export class Runner {
    */
   async send(text: string, attachments: Attachment[] = [], chat: string = MAIN_CHAT, origin?: MessageOrigin | JsonObject, via?: ChatVia): Promise<void> {
     const clean = text.trim()
+    via ??= viaFromMeta((origin ?? {}) as Record<string, unknown>) ?? undefined
     if (clean === '' && attachments.length === 0) return
     // The person handed these files over: the agent may open them without asking again.
     if (attachments.length > 0) this.allowFiles(attachments.map((attachment) => attachment.path))
@@ -584,13 +585,14 @@ export class Runner {
     const live = liveFromInput({ live: (origin as { live?: unknown } | undefined)?.live })
     const prepared = await prepareMessage(live === null ? clean : liveLabel(live) + clean, attachments)
     if (live !== null && via === undefined) via = callVia(typeof (origin as { name?: unknown } | undefined)?.name === 'string' ? String((origin as { name: string }).name) : '')
+    if (via !== undefined) prepared.text = `${viaLabel(via)}\n${prepared.text}`
     // Which device it was sent from (docs/devices-protocol.md s8): the wire caller's, else this node's own.
     // Not the person's own words (a call handing over its work): the row says who, so no window draws it as his.
     const meta: JsonObject = {
       attachments: attachments as unknown as JsonObject[],
       ...chatTag(chat),
       ...this.originMeta(origin as JsonObject | undefined),
-      ...(via === undefined ? {} : { via: via as unknown as JsonObject }),
+      ...(via === undefined ? { own: true } : { via: via as unknown as JsonObject }),
       ...(live === null ? {} : { live: live as unknown as JsonObject }),
     }
     // Another brain holds the main chat: his row is stored here at once (he sees it go out), that brain answers it.
@@ -738,7 +740,7 @@ export class Runner {
       void this.begin(line, said, [], { text: clean, meta })
       return
     }
-    const row = await this.addUserItem(chat, clean, meta)
+    const row = await this.addUserItem(chat, clean, JSON.stringify({ ...JSON.parse(meta), route: 'join', delivered: false }))
     this.pushSteer(line, { text: said, images: [], itemId: row.id, at: this.now() })
     this.emitFor(chat, { type: 'chat_changed' })
   }
@@ -945,19 +947,13 @@ export class Runner {
   }
 
   /**
-   * A finished helper's result, as a new turn in the chat that started it. There is no user bubble: the note is
-   * the turn's first message. While that chat is running it joins the run as a steering note instead.
+   * An internal result retains a sender row and enters the model as a labelled user turn.
+   * While the chat is running it joins at the next boundary and can be recovered after a restart.
    */
-  async deliver(text: string, chat: string = MAIN_CHAT): Promise<void> {
+  async deliver(text: string, chat: string = MAIN_CHAT, via?: ChatVia): Promise<void> {
     const clean = text.trim()
     if (clean === '') return
-    const line = this.line(chat)
-    if (line.running) {
-      this.pushSteer(line, { text: clean, images: [], at: this.now() })
-      this.emitFor(chat, { type: 'chat_changed' })
-      return
-    }
-    await this.begin(line, clean, [], null)
+    await this.receive(chat, clean, via ?? legacyVia(clean) ?? { from: 'system', name: 'Agent update', chat: '' })
   }
 
   /** A separate run (a different job sent while the chat was busy) finished; its summary block is in the chat. */
@@ -1187,7 +1183,7 @@ export class Runner {
     const line = this.line(chat)
     const sorted = [...rows].sort((a, b) => a.createdAt - b.createdAt)
     const entries: Steer[] = sorted.map((row) => ({
-      text: joinNote(row.text),
+      text: senderOfRow(row) === null ? joinNote(row.text) : `${viaLabel(senderOfRow(row)!)}\n${row.text}`,
       images: [],
       itemId: row.id,
       at: this.now(),
@@ -1436,10 +1432,10 @@ export class Runner {
     line.running = true
     line.lastSaid = ''
     // A message the person sent starts a fresh action budget. A helper's result does not.
-    if (user !== null) {
+    if (user !== null && isOwnMessage({ kind: 'user', ...user })) {
       this.budget?.reset()
       line.goal = user.text
-      if (parseMeta(user.meta)['via'] === undefined) line.lastUserAt = this.now()
+      line.lastUserAt = this.now()
     }
     const controller = new AbortController()
     line.controller = controller
@@ -1460,7 +1456,7 @@ export class Runner {
       once?.accepted()
       this.emitFor(line.chat, { type: 'run_started' })
       // His own message (not another agent's, not a card answer) carries where he is right now.
-      const presence = userRow !== null && parseMeta(userRow.meta)['via'] === undefined ? await this.presenceNote(line.chat, userRow.meta) : ''
+      const presence = userRow !== null && isOwnMessage(userRow) ? await this.presenceNote(line.chat, userRow.meta) : ''
       const prompt = await this.withContextNotes(line, text, presence)
       await this.gitBegin(line.chat)
       error = await this.drive(line, prompt, images, controller.signal)

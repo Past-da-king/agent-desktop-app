@@ -1,3 +1,4 @@
+import { senderBody } from '../../shared/sender'
 import { VoiceNote } from '../voice/VoiceNote'
 import { PROFILE_COLORS, fileSizeLabel, type Attachment, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
 import { useShallow } from 'zustand/react/shallow'
@@ -581,6 +582,7 @@ function UserRow({ item }: { item: ChatItem }): JSX.Element {
   const pending = parseMeta(item.meta)['route'] === 'pending'
   // A message from another chat (the main agent, or a project chat) says who sent it.
   const via = viaOf(item)
+  const body = via === null ? item.text : senderBody(item.text)
   // A dictated message (instant send): what was heard while he spoke, until the whole take is written down in its place.
   const dictation = parseMeta(item.meta)['dictation'] as { id?: string; pending?: boolean; failed?: boolean } | undefined
   const [retrying, setRetrying] = useState(false)
@@ -593,11 +595,11 @@ function UserRow({ item }: { item: ChatItem }): JSX.Element {
     <div className={`u-row${via === null ? '' : ' via'}`}>
       {via === null ? null : (
         <div className="u-via">
-          <Icon name={viaIcon(via)} size={14} />
+          {via.icon === undefined ? <Icon name={viaIcon(via)} size={14} /> : <ProjectTile icon={via.icon} size={22} />}
           {via.line}
         </div>
       )}
-      {item.text !== '' ? <div className="u-msg">{item.text}</div> : null}
+      {body !== '' ? <div className="u-msg">{body}</div> : null}
       {files.length > 0 ? (
         <div className="u-files">
           {files.map((file) => (

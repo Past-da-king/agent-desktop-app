@@ -15,6 +15,8 @@
  */
 import { schema, str, type JsonObject, type Tool } from '@agent/core'
 
+import { toolVia } from '../../shared/sender'
+
 import { RPC_CHANNELS } from '../../shared/rpc-methods'
 import { WORKER_CHANNELS } from '../../shared/workers-channels'
 import { WAKEUP_CHANNELS } from '../../shared/wakeups-channels'
@@ -412,6 +414,8 @@ function actionTool(deps: AppActionDeps): Tool {
       if (rule.kind === 'no') return `${method} is not for the agent: ${rule.why}.`
       if (rule.kind === 'tool') return `Use the ${rule.tool} tool for that (${rule.about}).`
       const args = Array.isArray(input['args']) ? (input['args'] as unknown[]) : input['args'] === undefined ? [] : [input['args']]
+      // Tool-initiated chat sends are agent messages, even when their text has no envelope.
+      if (method === 'chat.send') args[3] = { ...(typeof args[3] === 'object' && args[3] !== null ? args[3] : {}), via: toolVia(ctx) }
       if (rule.firstArgIn !== undefined && !rule.firstArgIn.includes(String(args[0]))) return `${method} works on ${rule.firstArgIn.join(', ')} only; "${String(args[0])}" has its own tools.`
       const invoker = deps.invoker()
       if (invoker === null || !invoker.has(channel)) return `${method} is not available here (this app has no ${areaOf(method)} part running).`
