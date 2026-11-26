@@ -1,3 +1,4 @@
+import { requestById, requestFor } from './request-source'
 import type { ApprovalOrigin } from '@agent/core'
 import type { ActsForMe } from './acts-for-me'
 import { needsHim, isRoutedPending } from '../../shared/card-state'
@@ -110,6 +111,8 @@ export interface ProfileLookup {
 /** What the main agent's tools need from the manager. */
 /** Where a helper was started from: the chat its result and cards go back to. */
 export interface HelperOrigin {
+  /** The originating message pinned by the caller's app-owned context. */
+  requestId?: string
   chat?: string
   /** The helper that started it (a routine's desk): its end notice goes back to that helper, not to a chat. */
   helper?: string
@@ -777,8 +780,9 @@ export class HelperManager implements HelperHost {
               ...(pinnedDevice(task.device) || projectFolder !== '' ? { pinned: true } : {}),
             }
       const token = this.freshToken()
+      const request = origin.requestId === undefined ? await requestFor(this.store, chat, origin.helper ?? '') : await requestById(this.store, origin.requestId)
       const parent = origin.helper === undefined || origin.helper === '' ? {} : { parentHelper: origin.helper }
-      const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name, runToken: token, ...parent, ...where })
+      const id = await this.createHelperRow(label, task.brief, use.model, batch, profile, chat, { pick: use.pick, modelName: use.name, runToken: token, ...(request === null ? {} : { requestId: request.id }), ...parent, ...where })
       if (link !== null && placed !== null && placed.device !== null) {
         this.remote.set(id, { id, label, brief: task.brief, chat, profile: profile.name, startedAt: this.now(), device: placed.device, sentAt: this.now(), pick: use.pick, profileId: profile.id, model: use.model })
         if (batch !== null) this.batchOf.set(id, batch)
@@ -2742,7 +2746,7 @@ export class HelperManager implements HelperHost {
       kind: 'question',
       text: question,
       meta: JSON.stringify({
-        ...this.acts?.stamp({ kind: 'question', asker: 'helper', askerKey: run.id, origin, summary: question, options }),
+        ...this.acts?.stamp({ kind: 'question', asker: 'helper', askerKey: run.id, request: await requestFor(this.store, run.chat, run.id) ?? undefined, origin, summary: question, options }),
         options,
         answer: '',
         helper: run.id,
@@ -2787,7 +2791,7 @@ export class HelperManager implements HelperHost {
       kind: 'approval',
       text: summary,
       meta: JSON.stringify({
-        ...this.acts?.stamp({ kind: 'approval', asker: 'helper', askerKey: run.id, origin, summary, details }),
+        ...this.acts?.stamp({ kind: 'approval', asker: 'helper', askerKey: run.id, request: await requestFor(this.store, run.chat, run.id) ?? undefined, origin, summary, details }),
         summary,
         details: details ?? '',
         decision: '',

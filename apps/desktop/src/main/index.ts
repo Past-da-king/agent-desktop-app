@@ -1337,7 +1337,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
       )
     },
     // ask_user / request_approval another brain runs here show as cards in that chat on this computer.
-    context: (chat, signal) => runner?.deviceContext(chat, signal) ?? {},
+    context: (chat, signal, owner, request) => runner?.deviceContext(chat, signal, owner, request) ?? {},
   }
   const acts: ActsForMe = new ActsForMe({
     store, settings,
@@ -2164,9 +2164,9 @@ async function startServices(win: BrowserWindow): Promise<void> {
       // This computer lends its own tools to the agents on other devices (protocol s11), group by group.
       deviceTools: new DeviceToolHost({
         tools: () => tools,
-        context: (signal) => {
+        context: (signal, command) => {
           if (runner === null) throw new Error('The agent is not running.')
-          return runner.deviceToolContext(signal)
+          return runner.recordedDeviceToolContext(signal, command)
         },
         shared: () => devices?.shareGroups() ?? DEFAULT_SHARE,
         inbox: join(dir, 'attachments', 'received'),

@@ -27,6 +27,8 @@ export interface ChatVia {
   title?: string
   id?: string
   icon?: ProjectIcon
+  /** App-recorded user message this handoff belongs to. */
+  requestId?: string
 }
 
 /** The sender of work a voice call hands to a chat. */
@@ -53,7 +55,7 @@ export function viaFromMeta(meta: Record<string, unknown>): ChatVia | null {
     const i = rawIcon as Record<string, unknown>
     if (typeof i['glyph'] === 'string' && (PROFILE_COLORS as readonly unknown[]).includes(i['color'])) icon = { glyph: i['glyph'], color: i['color'] as ProjectIcon['color'] }
   }
-  return { ...(typeof v['id'] === 'string' ? { id: v['id'] } : {}), ...(icon === undefined ? {} : { icon }), from: v['from'], name, chat: typeof v['chat'] === 'string' ? v['chat'] : '', ...title }
+  return { ...(typeof v['requestId'] === 'string' ? { requestId: v['requestId'] } : {}), ...(typeof v['id'] === 'string' ? { id: v['id'] } : {}), ...(icon === undefined ? {} : { icon }), from: v['from'], name, chat: typeof v['chat'] === 'string' ? v['chat'] : '', ...title }
 }
 
 /** The line above a message that is not his: "From your call", "From Hina, the main agent", "From Agent Desktop App". */

@@ -1,3 +1,6 @@
+import { parseRequestSource, type RequestSource } from '../../shared/request-source'
+import type { Asker } from '../../shared/approval-policy'
+import { requestById, requestFor, requestFromMessage } from './request-source'
 import type { ApprovalOrigin } from '@agent/core'
 import type { ActsForMe } from './acts-for-me'
 import { needsHim, isRoutedPending } from '../../shared/card-state'
@@ -272,6 +275,8 @@ interface Steer {
  * the rows it writes carry its chat id.
  */
 interface ChatLine {
+  /** Pinned app record for this run; unrelated alongside messages do not replace it. */
+  requestId?: string
   chat: string
   running: boolean
   controller: AbortController | null
@@ -1448,6 +1453,7 @@ export class Runner {
       if (once !== undefined) once.viaBegin = true
       const userRow = user !== null ? await this.addUserItem(line.chat, user.text, user.meta) : null
       this.turnRow.set(line.chat, userRow?.id ?? posted?.id ?? '')
+      if (userRow !== null) line.requestId = (await requestFromMessage(this.store, userRow.id))?.id ?? ''
       const fixedLease = leaseId ?? once?.leaseId
       lease = this.devices?.leases?.begin({ kind: 'turn', chatId: line.chat, messageId: userRow?.id ?? posted?.id ?? '', prompt: user?.text ?? text, ...(fixedLease === undefined ? {} : { id: fixedLease }) }) ?? null
       line.leaseId = lease
@@ -1526,9 +1532,15 @@ export class Runner {
    * How a tool another brain runs on this node reaches the person here (devices/device-tools.ts, s11): its question
    * and approval cards show in the same chat on this node and wait for an answer; a notification shows here.
    */
-  deviceContext(chat: string, signal: AbortSignal): Pick<ToolContext, 'ask' | 'approve' | 'notify'> {
+  deviceContext(chat: string, signal: AbortSignal, owner = '', request?: RequestSource): Pick<ToolContext, 'ask' | 'approve' | 'notify'> {
     const context = this.toolContext(signal, 'main', chat)
-    return { ask: context.ask, approve: context.approve, notify: context.notify }
+    const asker: Asker = owner.startsWith('helper:') ? 'helper' : owner === 'routine' ? 'routine' : owner === 'main' ? 'main' : owner.startsWith('chat:') ? 'project' : 'device'
+    const actor = { asker, key: owner, request }
+    return {
+      ask: async (question, options, card, origin) => this.ask(question, options, signal, chat, card, origin, { ...actor, request: request === undefined ? undefined : await requestById(this.store, request.id) ?? undefined }),
+      approve: async (summary, details, scope, origin) => this.approve(summary, details, signal, scope, chat, origin, { ...actor, request: request === undefined ? undefined : await requestById(this.store, request.id) ?? undefined }),
+      notify: context.notify,
+    }
   }
 
   /** meta.origin for a message: the device it came from (the node server says), else this node itself. */
@@ -2297,8 +2309,21 @@ export class Runner {
    * A tool run for an agent on another device (docs/devices-protocol.md s11): its questions and approvals show here
    * in the main chat and the answer goes back; its browser work gets a tab of its own.
    */
-  deviceToolContext(signal: AbortSignal): ToolContext {
-    return { ...this.toolContext(signal, 'main', MAIN_CHAT), agentLabel: 'another device', owner: 'device' }
+  /** Remote free-text envelopes cannot establish who asked. Resolve the app's replicated command record. */
+  async recordedDeviceToolContext(signal: AbortSignal, command: { id: string; tool: string; chatId: string }): Promise<ToolContext> {
+    const row = await this.store.get('device_command', command.id)
+    if (row === null || row.kind !== 'tool' || row.tool !== command.tool || row.chat !== command.chatId || (row.status !== 'queued' && row.status !== 'sent')) return this.deviceToolContext(signal)
+    let request: RequestSource | undefined
+    try {
+      const source = parseRequestSource(JSON.parse(row.body ?? '{}'))
+      if (source !== null) request = await requestById(this.store, source.id) ?? undefined
+    } catch { /* Missing evidence never becomes user authorization. */ }
+    return this.deviceToolContext(signal, { chatId: row.chat ?? MAIN_CHAT, owner: row.owner ?? '', ...(request === undefined ? {} : { request }) })
+  }
+
+  deviceToolContext(signal: AbortSignal, command?: { chatId: string; owner?: string; request?: RequestSource }): ToolContext {
+    const chat = command?.chatId || MAIN_CHAT
+    return { ...this.toolContext(signal, 'main', chat), ...this.deviceContext(chat, signal, command?.owner, command?.request), agentLabel: 'another device', owner: 'device', requestId: command?.request?.id ?? '' }
   }
 
   private toolContext(signal: AbortSignal, role: 'main' | 'routine' = 'main', chat: string = MAIN_CHAT): ToolContext {
@@ -2306,6 +2331,7 @@ export class Runner {
       agentLabel: role === 'routine' ? 'routine' : 'main',
       // Each chat drives its own browser tab, as each helper does.
       owner: browserOwnerOf(role, chat),
+      requestId: role === 'routine' ? '' : this.line(chat).requestId ?? '',
       ...(role === 'main' && chat !== MAIN_CHAT ? { chat } : {}),
       activity: async (text, meta) => {
         if (role === 'routine') {
@@ -2350,13 +2376,13 @@ export class Runner {
     return shell === undefined ? {} : { shell }
   }
 
-  private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT, card?: JsonObject, origin?: ApprovalOrigin): Promise<string | null> {
+  private async ask(question: string, options: string[], signal: AbortSignal, chat: string = MAIN_CHAT, card?: JsonObject, origin?: ApprovalOrigin, actor?: { asker: Asker; key: string; request: RequestSource | undefined }): Promise<string | null> {
     const line = this.line(chat)
     const row = await this.store.upsert('chat_item', {
       kind: 'question',
       text: question,
       // `card`: how the window draws it, when it is more than a question (a project to confirm, tools/projects.ts).
-      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'question', asker: chat === MAIN_CHAT ? 'main' : 'project', askerKey: chat, origin, summary: question, options }), options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'question', asker: actor?.asker ?? (chat === MAIN_CHAT ? 'main' : 'project'), askerKey: actor?.key ?? chat, request: (actor === undefined ? (line.requestId !== undefined ? await requestById(this.store, line.requestId) : await requestFor(this.store, chat)) : actor.request) ?? undefined, origin, summary: question, options }), ...(actor?.asker === 'helper' ? { helper: actor.key.slice(7) } : {}), options, answer: '', ...(card === undefined ? {} : { card }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI: the person may answer the moment the card appears.
     const pending = new Promise<string | null>((resolve) => {
@@ -2411,12 +2437,13 @@ export class Runner {
     scope?: 'computer',
     chat: string = MAIN_CHAT,
     origin?: ApprovalOrigin,
+    actor?: { asker: Asker; key: string; request: RequestSource | undefined },
   ): Promise<boolean> {
     const line = this.line(chat)
     const row = await this.store.upsert('chat_item', {
       kind: 'approval',
       text: summary,
-      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'approval', asker: chat === MAIN_CHAT ? 'main' : 'project', askerKey: chat, origin, summary, details }), summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }), ...chatTag(chat) }),
+      meta: JSON.stringify({ ...this.acts?.stamp({ kind: 'approval', asker: actor?.asker ?? (chat === MAIN_CHAT ? 'main' : 'project'), askerKey: actor?.key ?? chat, request: (actor === undefined ? (line.requestId !== undefined ? await requestById(this.store, line.requestId) : await requestFor(this.store, chat)) : actor.request) ?? undefined, origin, summary, details }), ...(actor?.asker === 'helper' ? { helper: actor.key.slice(7) } : {}), summary, details: details ?? '', decision: '', ...(scope === undefined ? {} : { scope }), ...chatTag(chat) }),
     })
     // Register the waiter before telling the UI, so an instant decision finds it.
     const pending = new Promise<boolean>((resolve) => {

@@ -1,4 +1,5 @@
 import { senderBody } from '../../shared/sender'
+import { ApprovalContext } from '../ui/ApprovalContext'
 import { VoiceNote } from '../voice/VoiceNote'
 import { PROFILE_COLORS, fileSizeLabel, type Attachment, type ChatItem, type ProfileColor, type ProjectIcon } from '@agent/core'
 import { useShallow } from 'zustand/react/shallow'
@@ -458,6 +459,7 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
           {approved ? 'APPROVED' : 'DECLINED'}
         </div>
         <div className="tt">{summary}</div>
+        <ApprovalContext meta={meta} />
         {details.trim() !== '' ? (
           <details className="appr-kept in-card">
             <summary>{approved ? 'What was approved' : 'What was declined'}</summary>
@@ -485,6 +487,7 @@ function ApprovalRow({ item }: { item: ChatItem }): JSX.Element {
         APPROVE BEFORE I DO THIS
       </div>
       <div className="tt">{summary}</div>
+      <ApprovalContext meta={meta} />
       {details ? <pre>{details}</pre> : null}
       <div className="acts appr-acts">
         <Button disabled={sending} onClick={() => decide('approve')}>

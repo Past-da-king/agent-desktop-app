@@ -1,3 +1,4 @@
+import type { RequestSource } from '../../shared/request-source'
 /**
  * Workstream B plugged into a running node server (docs/devices-protocol.md s6-s8), in one call:
  *
@@ -45,7 +46,7 @@ export interface DevicesSyncDeps {
   shareGroups?: () => Partial<Record<string, boolean>>
   preferred?: () => Partial<Record<string, string>>
   /** How a tool another brain runs here reaches the person on this node (ask_user, request_approval, notify). */
-  context?: (chat: string, signal: AbortSignal) => Partial<ToolContext>
+  context?: (chat: string, signal: AbortSignal, owner?: string, request?: RequestSource) => Partial<ToolContext>
   /** Where pictures from other devices are saved. */
   imageDir?: string
   log?: (line: string) => void

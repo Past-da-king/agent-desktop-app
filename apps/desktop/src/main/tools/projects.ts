@@ -1,3 +1,4 @@
+import { requestById, requestFor } from '../runtime/request-source'
 /**
  * Projects as tools, so the one main agent can work across them (21 Oct 2026). In the main thread it lists
  * projects and what each chat is doing, starts a chat in a project with a brief, and sends a message into one; a
@@ -210,7 +211,8 @@ function projectChatStart(deps: ProjectToolDeps): Tool {
       await deps.store.upsert('project', { id: project.id, chats: [...project.chats, chat] })
       const device = text(input['device'])
       await deps.place?.(chat, project, brief, device === '' ? undefined : device)
-      await deps.post(chat, brief, viaOf(ctx, projects, deps))
+      const request = ctx.requestId === undefined ? await requestFor(deps.store, ctx.chat ?? MAIN_CHAT, ctx.owner?.startsWith('helper:') ? ctx.owner.slice(7) : '') : await requestById(deps.store, ctx.requestId)
+      await deps.post(chat, brief, { ...viaOf(ctx, projects, deps), ...(request === null ? {} : { requestId: request.id }) })
       return `Started a chat in ${project.name} (chat ${chat}). It is working on it and will write back with what it finds; project_list shows how it is going.`
     },
   }
@@ -234,7 +236,8 @@ function projectChatSend(deps: ProjectToolDeps): Tool {
       if (project === null) return `No project chat ${chat}. project_list shows the chats.`
       const message = text(input['message'])
       if (message === '') return 'Pass the message.'
-      await deps.post(chat, message, viaOf(ctx, projects, deps))
+      const request = ctx.requestId === undefined ? await requestFor(deps.store, ctx.chat ?? MAIN_CHAT, ctx.owner?.startsWith('helper:') ? ctx.owner.slice(7) : '') : await requestById(deps.store, ctx.requestId)
+      await deps.post(chat, message, { ...viaOf(ctx, projects, deps), ...(request === null ? {} : { requestId: request.id }) })
       return `Sent to the chat in ${project.name}.`
     },
   }

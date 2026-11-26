@@ -114,7 +114,7 @@ export const APP_ACTION_POLICY: Readonly<Record<string, AppActionRule>> = {
     freeFirstArgs: ['trigger'],
   },
   // Chat
-  'chat.send': free('Send a message into a chat (main, a project chat, a quick chat)', 'text, attachments[], chatId'),
+  'chat.send': tool('Send an agent message with its real sender recorded', 'project_chat_send'),
   'chat.stop': free('Stop a chat that is working (Stop button)', 'chatId'),
   'chat.state': free('Is a chat working, and what is it waiting on', 'chatId'),
   'chat.states': free('Every chat that is working now'),

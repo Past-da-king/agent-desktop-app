@@ -827,7 +827,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       noteBack: async (chat, text, owner) => {
         await routeLate({ deliver: (note, where) => theRunner.deliver(note, where, { from: 'system', name: 'Linked device', chat: where }), helper: (id, note) => helpers.lateResult(id, note) }, chat, text, owner)
       },
-      context: (chat, signal) => theRunner.deviceContext(chat, signal),
+      context: (chat, signal, owner, request) => theRunner.deviceContext(chat, signal, owner, request),
     },
     connectedApps,
     ipc,
