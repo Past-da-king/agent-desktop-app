@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { agent } from '../bridge'
 import { parseMeta } from '../lib/meta'
 import { Icon } from '../ui/Icon'
+import { seekPosition, spokenPosition, wavDurationMs } from './seek'
 import { VoiceIcon } from './VoiceIcon'
 
 const SPEEDS = [1, 1.5, 2] as const
@@ -33,8 +34,11 @@ function scriptForReading(script: string): string {
 export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: string }): JSX.Element {
   const meta = parseMeta(item.meta)
   const file = typeof meta['file'] === 'string' ? meta['file'] : ''
-  const given = typeof meta['durationMs'] === 'number' ? meta['durationMs'] : 0
+  const given = typeof meta['durationMs'] === 'number' && Number.isFinite(meta['durationMs']) ? Math.max(0, meta['durationMs']) : 0
   const audio = useRef<HTMLAudioElement | null>(null)
+  const loading = useRef<Promise<HTMLAudioElement | null> | null>(null)
+  const total = useRef(given)
+  const disposed = useRef(false)
   const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'paused' | 'missing' | 'broken'>('idle')
   const [at, setAt] = useState(0)
   const [length, setLength] = useState(given)
@@ -44,6 +48,7 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
 
   useEffect(
     () => () => {
+      disposed.current = true
       const el = audio.current
       if (el !== null) {
         el.pause()
@@ -54,19 +59,28 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
     [],
   )
 
-  const load = async (): Promise<HTMLAudioElement | null> => {
+  const loadOnce = async (): Promise<HTMLAudioElement | null> => {
     if (audio.current !== null) return audio.current
     setState('loading')
     const bytes = file === '' ? null : await agent.voice.noteAudio(file).catch(() => null)
+    if (disposed.current) return null
     if (bytes === null) {
       setState('missing')
       return null
+    }
+    const fallback = wavDurationMs(new Uint8Array(bytes))
+    if (fallback > 0) {
+      total.current = fallback
+      setLength(fallback)
     }
     const el = new Audio(URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'audio/wav' })))
     el.playbackRate = speed
     el.addEventListener('timeupdate', () => setAt(el.currentTime * 1000))
     el.addEventListener('loadedmetadata', () => {
-      if (Number.isFinite(el.duration)) setLength(el.duration * 1000)
+      if (Number.isFinite(el.duration) && el.duration > 0) {
+        total.current = el.duration * 1000
+        setLength(total.current)
+      }
     })
     el.addEventListener('ended', () => {
       setState('paused')
@@ -75,12 +89,24 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
     })
     el.addEventListener('pause', () => setState((s) => (s === 'playing' ? 'paused' : s)))
     audio.current = el
+    el.preload = 'metadata'
+    setState('idle')
     return el
   }
 
+  const load = (): Promise<HTMLAudioElement | null> => {
+    loading.current ??= loadOnce()
+    return loading.current
+  }
+
+  useEffect(() => {
+    disposed.current = false
+    if (given <= 0) void load()
+  }, [])
+
   const toggle = async (): Promise<void> => {
     const el = await load()
-    if (el === null) return
+    if (el === null || disposed.current) return
     if (!el.paused) {
       el.pause()
       return
@@ -90,18 +116,19 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
     el.playbackRate = speed
     try {
       await el.play()
-      setState('playing')
+      if (!disposed.current && !el.paused) setState('playing')
     } catch {
       // The sound arrived but would not play: that is not "not on this computer".
       setState('broken')
     }
   }
 
-  const seek = async (fraction: number): Promise<void> => {
+  const seek = async (input: number | string): Promise<void> => {
     const el = await load()
-    if (el === null || length <= 0) return
-    el.currentTime = (fraction * length) / 1000
-    setAt(fraction * length)
+    if (el === null || disposed.current || total.current <= 0) return
+    const target = seekPosition(el.currentTime * 1000, total.current, input)
+    el.currentTime = target / 1000
+    setAt(target)
   }
 
   const nextSpeed = (): void => {
@@ -121,7 +148,7 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
           className="vnote-play"
           onClick={() => void toggle()}
           disabled={state === 'missing'}
-          aria-label={live ? 'Pause the voice note' : 'Play the voice note'}
+          aria-label={live ? 'Pause voice note' : 'Play voice note'}
         >
           {state === 'loading' ? <span className="vnote-spin" /> : <Icon name={live ? 'pause' : 'play'} size={22} />}
         </button>
@@ -133,13 +160,22 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
           aria-valuemin={0}
           aria-valuemax={Math.round(length / 1000)}
           aria-valuenow={Math.round(at / 1000)}
+          aria-valuetext={`${spokenPosition(at)} of ${spokenPosition(length)}`}
           onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId)
             const rect = event.currentTarget.getBoundingClientRect()
             void seek(Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)))
           }}
+          onPointerMove={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+            const rect = event.currentTarget.getBoundingClientRect()
+            void seek((event.clientX - rect.left) / rect.width)
+          }}
           onKeyDown={(event) => {
-            if (event.key === 'ArrowRight') void seek(Math.min(1, done + 0.05))
-            if (event.key === 'ArrowLeft') void seek(Math.max(0, done - 0.05))
+            if (['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+              event.preventDefault()
+              void seek(event.key)
+            }
             if (event.key === ' ' || event.key === 'Enter') {
               event.preventDefault()
               void toggle()
@@ -150,7 +186,7 @@ export function VoiceNote({ item, agentName }: { item: ChatItem; agentName: stri
             <i key={i} className={i / wave.length < done ? 'on' : ''} style={{ height: `${Math.round(h * 100)}%` }} />
           ))}
         </div>
-        <span className="vnote-time">{state === 'missing' ? 'Not on this computer' : state === 'broken' ? 'Could not play' : clock(live || at > 0 ? at : length)}</span>
+        <span className="vnote-time">{state === 'missing' ? 'Not on this computer' : state === 'broken' ? 'Could not play' : `${clock(at)} / ${clock(length)}`}</span>
         <button type="button" className="vnote-speed" onClick={nextSpeed} aria-label={`Speed ${speed} times, change`}>
           {speed}x
         </button>
