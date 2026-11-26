@@ -143,9 +143,10 @@ describe('app_action tool', () => {
 })
 
 
-it('agent chat.send marks headerless text with its trusted helper identity', async () => {
+it('agent chat.send goes through project_chat_send, which records its real sender (never the raw window send)', async () => {
   const invoker = fakeInvoker()
   const tool = toolNamed(appActionTools({ invoker: () => invoker }), 'app_action')
-  await tool.run({ method: 'chat.send', args: ['Headerless report', [], 'main'] }, testContext({ owner: 'helper:h1', agentLabel: 'Phone player', chat: 'main' }))
-  expect(invoker.calls[0]?.args[3]).toEqual({ via: { from: 'helper', id: 'h1', name: 'Phone player', chat: 'main' } })
+  const out = String(await tool.run({ method: 'chat.send', args: ['Headerless report', [], 'main'] }, testContext({ owner: 'helper:h1', agentLabel: 'Phone player', chat: 'main' })))
+  expect(out).toContain('project_chat_send')
+  expect(invoker.calls).toEqual([])
 })

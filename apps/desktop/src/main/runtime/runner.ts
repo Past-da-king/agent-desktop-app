@@ -958,6 +958,9 @@ export class Runner {
   async deliver(text: string, chat: string = MAIN_CHAT, via?: ChatVia): Promise<void> {
     const clean = text.trim()
     if (clean === '') return
+    // Completion notes are not his directives and never borrow the last turn's authorization (request-carried approvals).
+    const line = this.line(chat)
+    if (!line.running) line.requestId = ''
     await this.receive(chat, clean, via ?? legacyVia(clean) ?? { from: 'system', name: 'Agent update', chat: '' })
   }
 
