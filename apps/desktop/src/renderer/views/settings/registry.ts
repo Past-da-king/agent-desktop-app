@@ -150,6 +150,8 @@ export const ROWS: readonly RowSpec[] = [
   { key: DEVELOPER_KEY, section: 'privacy', label: 'Developer settings', description: 'Shows Git and developer and Advanced below. Leave it off unless you are building or debugging.', control: 'switch', icon: 'code', sample: true, terms: ['git', 'shortcut', 'developer', 'advanced', 'hidden'] },
 
   // ---- Git and developer (shown only while Developer settings is on) ----
+  { key: 'prGateEnabled', section: 'git', label: 'PR gate', description: 'Cooperative guard for app shell, code, engine, learned-app paths and the gh shim. Requires review evidence; existing credentials and the GitHub web UI can bypass it.', control: 'switch', icon: 'shield', sample: true, terms: ['pull request', 'vet', 'review', 'attestation'] },
+  { key: 'prGateSkillPages', section: 'git', label: 'PR gate skill pages', description: 'Memory page titles to read live before a review action.', control: 'block', icon: 'file', sample: ['Review policy'], terms: ['pull request', 'checklist', 'policy'] },
   { key: 'gitAutoCommit', section: 'git', label: 'Commit after each run', description: 'Only the files that run changed, on the branch the project is on.', control: 'switch', icon: 'branch', sample: true, terms: ['commit', 'version'] },
   { key: 'gitAutoPush', section: 'git', label: 'Push after the commit', description: 'Does nothing while Commit after each run is off.', control: 'switch', icon: 'branch', sample: false, terms: ['push', 'github'] },
   { key: 'gitMaxFileMb', section: 'git', label: 'Biggest file', description: 'Files bigger than this are never committed.', control: 'select', icon: 'file', sample: 25, terms: ['size', 'large'] },

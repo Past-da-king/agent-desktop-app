@@ -136,6 +136,7 @@ export type RpcMethod = (deviceId: string, args: unknown[]) => Promise<unknown>
 
 /** What the node server gives the parts that plug into it. */
 export interface DevicesHost {
+  pairedRoles?(deviceId: string): DeviceRole[] | null
   addRoute(route: DevicesRoute): void
   addRpc(name: string, method: RpcMethod): void
   /** Send an event to every connection of one device (device commands) or, with null, to all. */
@@ -155,10 +156,16 @@ export interface DevicesHost {
 }
 
 /** Pass hashes (never the passes). Kept in the secrets store; shared with brains through the bundle (s6). */
+export interface PairingAuthority {
+  pairedAt: number
+  deniedAt: number
+  roles: DeviceRole[]
+}
 export interface PassTable {
   /** deviceId to sha256(pass) as hex. */
   all(): Record<string, string>
-  set(deviceId: string, hash: string): void
-  remove(deviceId: string): void
-  replaceAll(table: Record<string, string>): void
+  set(deviceId: string, hash: string, pairedAt?: number): void
+  remove(deviceId: string, deniedAt?: number): void
+  replaceAll(table: Record<string, string>, authority?: Record<string, PairingAuthority>): void
+  authority?(): Record<string, PairingAuthority>
 }

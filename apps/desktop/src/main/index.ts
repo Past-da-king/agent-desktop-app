@@ -1293,6 +1293,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const recordings = new Recordings({ root: join(dir, 'voice-notes', 'recordings'), log: (message, fields) => logger.info(message, fields) })
   recordingsStore = recordings
   const helperToolset = buildWorkerToolset({
+    prGateSecrets: secrets,
     media: { show: (path) => shownMedia.show(path), selfId: () => devicesState.sync?.selfId() ?? '', origin: (chat) => latestOrigin(store!, chat) },
     voiceNotes: () => voice,
     appControl,
@@ -1488,6 +1489,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     for (const event of ['lock-screen', 'unlock-screen', 'resume'] as const) powerMonitor.on(event as 'resume', () => wakeupService?.kick())
   }
   const tools = buildToolset({
+    prGateSecrets: secrets,
     cards: { waiting: () => acts.waiting(), answer: (args) => acts.answer(args) },
     showMe: () => showMe?.service ?? null,
     screenControl: screenControlOf,

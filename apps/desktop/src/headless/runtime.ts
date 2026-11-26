@@ -379,6 +379,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const gitKv = { get: (key: string) => store.localValue(key), set: (key: string, value: string) => store.setLocalValue(key, value) }
   const workerToolList = guardTools([
     ...browserTools(buildWorkerToolset({
+      prGateSecrets: secrets,
       media,
       git: { kv: gitKv, hook: () => gitHook },
         voiceNotes,
@@ -485,6 +486,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   wakeups.start()
   const tools = guardTools(browserTools([
     ...buildToolset({
+      prGateSecrets: secrets,
       media,
       voiceNotes,
       cards: { waiting: () => acts.waiting(), answer: (args) => acts.answer(args) },

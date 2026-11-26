@@ -1,5 +1,6 @@
 import { ownRunTree } from '../runtime/run-tree'
 import { childPipeFailure, registerChildPipeCleanup } from '../runtime/safe-pipe'
+import { ghExecutionEnv } from '../runtime/pr-gate-exec'
 /**
  * `shell_run`: the agent may use this computer's shell, but only with the person's explicit yes,
  * every single time, with the exact command on the card. There is no "always allow" (PLAN.md 7).
@@ -247,7 +248,7 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       schema: schema(['command'], {
         command: str('The exact command line to run'),
         cwd: str('Folder to run it in, defaults to the person\'s home folder'),
-        timeoutSec: int('Seconds before it is stopped, default 60, at most 600'),
+        timeoutSec: int('Seconds before it is stopped, default 60, at most 600 normally; plan fallback supports up to 21600'),
         shell: {
           type: 'string',
           description: 'Which shell to use, when you need a particular one. Only one found on this computer.',
@@ -275,9 +276,9 @@ function shellRunTool(deps: ShellToolDeps): Tool {
       const timeoutSec = clamp(
         Math.trunc(number(input['timeoutSec'], DEFAULT_TIMEOUT_SEC)),
         1,
-        MAX_TIMEOUT_SEC,
+        ctx.commandFallback ? 6 * 60 * 60 : MAX_TIMEOUT_SEC,
       )
-      const cwd = text(input['cwd']).trim() || undefined
+      const cwd = text(input['cwd']).trim() || ctx.commandFallback?.cwd || undefined
       if (cwd !== undefined) {
         const info = await fs.stat(cwd).catch(() => null)
         if (info === null || !info.isDirectory()) return `${cwd} is not a folder.`
@@ -349,12 +350,15 @@ function declinedRun(command: string, note: string): ToolRun {
 async function runCommand(request: RunRequest): Promise<string> {
   const platform = request.deps.platform ?? process.platform
   // A vault value the command names comes in here, after the clean-up that drops anything looking like a key.
-  const env = { ...sanitiseEnv({ ...(request.deps.env ?? process.env) }), ...vaultEnv() }
+  const env = ghExecutionEnv({
+    ...sanitiseEnv({ ...(request.deps.env ?? process.env) }),
+    ...vaultEnv(),
+  })
 
   // No folder named means the person's home folder, as the tool tells the model, never the app's install folder.
   const cwd = request.cwd ?? (request.deps.home ?? homedir)()
   // A script reads all the output (ToolContext.resultLimit); a model reads the first MAX_OUTPUT_CHARS.
-  const sink = new OutputSink(resultLimitOf(request.ctx, MAX_OUTPUT_CHARS))
+  const sink = new OutputSink(resultLimitOf(request.ctx, request.ctx.commandFallback?.outputChars ?? MAX_OUTPUT_CHARS))
   // The person's copy: stdout and stderr apart, longer than the model's, start and end kept.
   const out = new StreamCapture()
   const err = new StreamCapture()
@@ -469,33 +473,11 @@ async function runCommand(request: RunRequest): Promise<string> {
 
 class OutputSink {
   total = 0
-  private readonly parts: string[] = []
-  private length = 0
-  private cut = false
-
-  constructor(private readonly limit: number) {}
-
-  push(chunk: Buffer): void {
-    const text = chunk.toString('utf8')
-    this.total += text.length
-    if (this.length >= this.limit) {
-      this.cut = true
-      return
-    }
-    const room = this.limit - this.length
-    const piece = text.slice(0, room)
-    this.parts.push(piece)
-    this.length += piece.length
-    if (piece.length < text.length) this.cut = true
-  }
-
-  text(): string {
-    return this.parts.join('')
-  }
-
-  truncated(): boolean {
-    return this.cut || this.total > this.limit
-  }
+  private readonly capture: StreamCapture
+  constructor(private readonly limit: number) { this.capture = new StreamCapture(limit) }
+  push(chunk: Buffer): void { this.total += chunk.toString('utf8').length; this.capture.push(chunk) }
+  text(): string { return this.capture.text() }
+  truncated(): boolean { return this.total > this.limit }
 }
 
 function messageOf(error: unknown): string {

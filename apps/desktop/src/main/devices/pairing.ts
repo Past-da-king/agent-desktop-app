@@ -127,11 +127,18 @@ export function parsePairUri(uri: string): PairUriParts | null {
   }
 }
 
+export interface PairHost {
+  id: string
+  name: string
+  roles?: string[]
+  prGatePublicKey?: string
+}
+
 export interface PairDeps {
   offers: PairingOffers
   passes: PassTable
   meshId: string
-  node: { id: string; name: string }
+  node: PairHost
   /** Writes (or rewrites) the new device's row. */
   saveDevice(row: DeviceRecord): Promise<void>
   /** Every brain the new device may try, this node included, by priority. */
@@ -142,7 +149,7 @@ export interface PairDeps {
 }
 
 export type PairAnswer =
-  | { status: 200; json: { deviceId: string; pass: string; meshId: string; node: { id: string; name: string }; brains: BrainRef[] } }
+  | { status: 200; json: { deviceId: string; pass: string; meshId: string; node: PairHost; brains: BrainRef[] } }
   | { status: 400 | 403 | 410; json: { error: string } }
 
 const NODE_ID = /^dev_[A-Za-z0-9_-]{8,64}$/
@@ -165,8 +172,9 @@ export async function handlePair(body: unknown, deps: PairDeps): Promise<PairAns
   // A node (it shows a certificate) keeps the id it already has, so every node in the mesh knows it by one name.
   const asked = typeof value['nodeId'] === 'string' ? value['nodeId'] : ''
   const deviceId = facts.fingerprint !== '' && NODE_ID.test(asked) && asked !== deps.node.id ? asked : newId('dev_')
+  const known = deps.passes.authority?.()[deviceId]
+  const pairedAt = Math.max(now, (known?.deniedAt ?? -1) + 1, (known?.pairedAt ?? -1) + 1)
   const pass = newPass()
-  deps.passes.set(deviceId, hashPass(pass))
   const priority = roles.includes('brain') ? await deps.nextPriority() : 0
   await deps.saveDevice({
     id: deviceId,
@@ -178,9 +186,10 @@ export async function handlePair(body: unknown, deps: PairDeps): Promise<PairAns
     urls: facts.urls,
     fp: facts.fingerprint,
     facts,
-    pairedAt: now,
+    pairedAt,
     lastSeen: now,
     revoked: false,
   })
+  deps.passes.set(deviceId, hashPass(pass), pairedAt)
   return { status: 200, json: { deviceId, pass, meshId: deps.meshId, node: deps.node, brains: await deps.brains() } }
 }

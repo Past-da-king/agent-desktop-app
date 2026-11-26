@@ -202,6 +202,8 @@ export interface ToolContext {
    * Inside run_script it is the script's large limit, so a script reads the whole result as data (script.ts).
    */
   resultLimit?: number
+  /** Native command fallback supplied by the plan host, never by model arguments. */
+  commandFallback?: { cwd: string; timeoutSec: number; outputChars: number }
 }
 
 /** How much a tool hands back: the run's own limit (a script's) when it has one, else the tool's default for a model. */

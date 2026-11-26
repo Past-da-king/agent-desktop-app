@@ -1,0 +1,184 @@
+/** Parsed execution identities for the cooperative gh pass. No credentials are carried. */
+import { parse } from 'shell-quote'
+import { realpathSync, readFileSync, statSync } from 'node:fs'
+import { resolve, join } from 'node:path'
+import { homedir } from 'node:os'
+import type { JsonObject } from '@agent/core'
+export function executionCwd(cwd: string): string {
+  if (cwd === '*') return cwd
+  try {
+    return realpathSync(cwd)
+  } catch {
+    return resolve(cwd)
+  }
+}
+export function ghExecutionKey(args: string[], cwd: string): string {
+  return JSON.stringify({ args, cwd: executionCwd(cwd) })
+}
+export function ghOperations(
+  tool: string,
+  input: JsonObject,
+  fallback: string,
+): string[] {
+  const out: string[] = []
+  const native = input['_engineCwdUntracked'] === true
+  const inspect = (text: string, initial: string, depth = 0): void => {
+    if (depth > 8) return
+    let cwd = initial
+    try {
+      const words = parse(text, (name) => '$' + name),
+        parts: string[][] = [[]]
+      for (const word of words) {
+        if (typeof word === 'string') parts[parts.length - 1]!.push(word)
+        else if ('op' in word) {
+          if (/^(?:>|>>|<|>&|<&|&>)$/.test(word.op)) {
+            const part = parts[parts.length - 1]!
+            const fd = part[part.length - 1] ?? ''
+            if (
+              /^\d+$/.test(fd) &&
+              new RegExp('(?:^|\\s)' + fd + '(?=[<>])').test(text)
+            )
+              part.pop()
+          }
+          parts.push([])
+        }
+      }
+      for (const original of parts) {
+        const part = [...original]
+        while (part.length) {
+          if (/^[A-Za-z_][A-Za-z_0-9]*=/.test(part[0]!)) {
+            part.shift()
+            continue
+          }
+          const wrapper = part[0]!.split(/[\\/]/).pop()!.toLowerCase()
+          if (wrapper === 'env') {
+            part.shift()
+            while (part[0]?.startsWith('-')) {
+              const flag = part.shift()
+              if (flag === '-u' || flag === '--unset') part.shift()
+            }
+            continue
+          }
+          if (wrapper === 'timeout') {
+            part.shift()
+            while (part[0]?.startsWith('-')) {
+              const flag = part.shift()
+              if (['-s', '--signal', '-k', '--kill-after'].includes(flag!))
+                part.shift()
+            }
+            part.shift()
+            continue
+          }
+          if (wrapper === 'sudo' || wrapper === 'nohup') {
+            part.shift()
+            while (part[0]?.startsWith('-')) {
+              const flag = part.shift()
+              if (['-u', '-g', '-h', '-p', '-C'].includes(flag!)) part.shift()
+            }
+            continue
+          }
+          break
+        }
+        const exe = (part[0] ?? '')
+          .split(/[\\/]/)
+          .pop()!
+          .replace(/\.exe$/i, '')
+          .toLowerCase()
+        if (exe === 'cd' && part[1]) {
+          cwd = resolve(
+            cwd,
+            part[1] === '~'
+              ? homedir()
+              : part[1].startsWith('~/')
+                ? join(homedir(), part[1].slice(2))
+                : part[1],
+          )
+          continue
+        }
+        if (exe === 'gh')
+          out.push(ghExecutionKey(part.slice(1), native ? '*' : cwd))
+        else if (exe === 'npx' && ['tsx', 'ts-node'].includes(part[1] ?? ''))
+          inspect(part.slice(1).join(' '), cwd, depth + 1)
+        else if (
+          ['node', 'python', 'python3', 'tsx', 'ts-node'].includes(exe)
+        ) {
+          const at = part.findIndex((word) =>
+            ['-e', '--eval', '-c'].includes(word),
+          )
+          if (at >= 0)
+            out.push(...codeOperations(part[at + 1] ?? '', native ? '*' : cwd))
+          else {
+            let file: string | undefined
+            for (let at = 1; at < part.length; at++) {
+              if (
+                ['-r', '--require', '--import', '--loader'].includes(part[at]!)
+              ) {
+                at++
+                continue
+              }
+              if (/\.(?:py|js|mjs|cjs|ts|mts|cts)$/.test(part[at]!)) {
+                file = part[at]
+                break
+              }
+            }
+            if (file)
+              try {
+                const path = resolve(cwd, file)
+                if (statSync(path).size <= 1_000_000)
+                  out.push(
+                    ...codeOperations(
+                      readFileSync(path, 'utf8'),
+                      native ? '*' : cwd,
+                    ),
+                  )
+              } catch {
+                /* inspected best effort */
+              }
+          }
+        } else if (['bash', 'sh', 'pwsh', 'powershell'].includes(exe)) {
+          const at = part.findIndex((word) =>
+            ['-c', '-lc', '-command'].includes(word.toLowerCase()),
+          )
+          if (at >= 0) inspect(part.slice(at + 1).join(' '), cwd, depth + 1)
+        }
+      }
+    } catch {
+      /* Unknown wrappers do not acquire a broad execution pass. */
+    }
+  }
+  const cwd = tool === 'run_code' ? '*' : String(input['cwd'] ?? fallback)
+  if (tool === 'run_code')
+    out.push(...codeOperations(String(input['code'] ?? ''), cwd))
+  else inspect(String(input['command'] ?? input['cmd'] ?? ''), cwd)
+  return out
+}
+
+function codeOperations(code: string, cwd: string): string[] {
+  const out: string[] = []
+  for (const match of code.matchAll(
+    /(?:execFileSync|execFile|spawnSync|spawn|subprocess\.(?:run|call|Popen))\s*\(\s*(?:(['"])([^'"]+)\1\s*,\s*)?\[([^\]]*)\]/g,
+  )) {
+    // A partial argv is never an execution identity.
+    if (match[3]!.replace(/(['"])([^'"]*)\1/g, '').replace(/[\s,]/g, '') !== '')
+      continue
+    const words = [...match[3]!.matchAll(/(['"])([^'"]*)\1/g)].map(
+      (value) => value[2]!,
+    )
+    if (match[2]) words.unshift(match[2])
+    if (
+      words[0]
+        ?.split(/[\\/]/)
+        .pop()
+        ?.replace(/\.exe$/i, '') === 'gh'
+    )
+      out.push(ghExecutionKey(words.slice(1), cwd))
+  }
+  for (const match of code.matchAll(
+    /(?:os\.system|execSync|exec)\s*\(\s*(['"])([^'"\n]*)\1/g,
+  )) {
+    const tail = code.slice((match.index ?? 0) + match[0].length).trimStart()
+    if (tail.startsWith('+')) continue
+    out.push(...ghOperations('shell_run', { command: match[2]!, cwd }, cwd))
+  }
+  return out
+}

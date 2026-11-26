@@ -1,3 +1,4 @@
+import { withGhExecution } from './pr-gate-exec'
 /**
  * The piece the Runner talks to when the agent runs on the person's own plan (Claude or ChatGPT) instead
  * of an API key. It owns the local tool server, finds the engine each SDK ships with (unpacked from the
@@ -13,6 +14,7 @@ import { dirname, join, sep } from 'node:path'
 import { accountsOf } from '@agent/core'
 import type { AgentEvent, AiAccount, AiAccountStatus, AiUsageWindow, JsonObject, Settings, Tool, ToolContext } from '@agent/core'
 
+import { gateForTools } from './pr-gate'
 import {
   AccountHomes,
   UsageStore,
@@ -23,11 +25,11 @@ import {
   identityOf,
   type HomeEntry,
 } from './account-home'
-import { isLimitFailure, planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
+import { engineFolders, isLimitFailure, planModels, runCliTurn, type CliId, type PlanModel } from './cli-agent'
 import { engineAccess } from './engine-policy'
 import { startToolServer, type ToolServer } from './mcp-server'
 import { HELD_STEP, type TurnMessages } from './note-tools'
-import { REPLACED_BY_SDK, sdkPermission } from './sdk-permissions'
+import { REPLACED_BY_SDK, sdkPermission, type Permission } from './sdk-permissions'
 import { SIGN_IN_CHECK_MS, SIGN_IN_RETRY_MS, isSignInFailure, loginFileDead, signInVerdict } from './sign-in-check'
 import { addClaudeRoot } from './run-detail'
 import { usableFolder } from './work-folder'
@@ -116,6 +118,51 @@ const NOT_ON_CLI = /^(delegate|helper_|helpers_)/
 /** Whether a thread may hand work to helpers: not a helper's own session, not a routine. */
 export function threadDelegates(thread: string): boolean {
   return !thread.startsWith('helper:') && thread !== 'routine'
+}
+
+export function planToolContext(
+  request: Pick<CliTurnRequest, 'cli' | 'context' | 'folder'>,
+  settings: Settings,
+): ToolContext {
+  if (request.cli !== 'codex' || !settings.prGateEnabled) return request.context
+  return {
+    ...request.context,
+    commandFallback: {
+      cwd: usableFolder(request.folder) ?? process.cwd(),
+      timeoutSec: 3600,
+      outputChars: 150_000,
+    },
+  }
+}
+export function planPermission(
+  request: Pick<CliTurnRequest, 'tools' | 'context' | 'folder'> & { workDir?: string },
+  settings: () => Settings,
+  base: (name: string, input: Record<string, unknown>) => Promise<Permission>,
+): (name: string, input: Record<string, unknown>) => Promise<Permission> {
+  return async (name, input) => {
+    if (settings().prGateEnabled && (name === 'Bash' || name === 'PowerShell')) {
+      const gate = gateForTools(request.tools)
+      if (!gate)
+        return { allow: false, message: 'PR gate unavailable. Use the app shell_run tool.' }
+      const held = await gate.check(
+        name,
+        {
+          ...(input as JsonObject),
+          // Native shells retain cd between calls. The actor-bound turn scope matches
+          // exact argv when the hook cannot observe that current directory.
+          _engineCwdUntracked: typeof input['cwd'] !== 'string',
+          cwd:
+            typeof input['cwd'] === 'string'
+              ? input['cwd']
+              : engineFolders({ workDir: request.workDir ?? process.cwd(), folder: usableFolder(request.folder) }).cwd,
+        },
+        request.context,
+        { deferExecution: true },
+      )
+      if (held) return { allow: false, message: held }
+    }
+    return base(name, input)
+  }
 }
 
 /** The tools a plan session is given: no delegate for a helper unless it was granted on purpose (a desk). */
@@ -482,7 +529,7 @@ export class CliHost {
       tools: toolsForTurn(request),
       // A script reaches the app's own shell and file tools even where Claude's replace them for the model.
       scriptTools: scriptToolsForTurn(request),
-      context: request.context,
+      context: planToolContext(request,this.settings()),
       onCall: request.onCall,
       onResult: request.onResult,
     })
@@ -536,20 +583,33 @@ export class CliHost {
           ...(folder === undefined ? {} : { folder }),
           // Read when the turn starts: Run without asking frees the engine's own tools, as it frees Claude's.
           access: engineAccess(settings().shell),
+          appCommandsOnly: settings().prGateEnabled,
           signal: request.signal,
           onEvent: request.onEvent,
           ...(messages === undefined ? {} : { messages }),
           permission: async (name, input) => {
             // A message is on its way: this step waits for the model to read it. The message itself never travels here.
             if (messages?.hold() === true) return { allow: false as const, message: HELD_STEP }
-            return permission(name, input)
+            return planPermission({ ...request, workDir: dir },settings,permission)(name,input)
           },
         })
       mkdirSync(dir, { recursive: true })
-      let result = await run(stored)
-      if (result.error === 'SESSION_LOST') result = await run(null)
-      if (continues && result.sessionId !== null && (this.forgotten.get(request.thread) ?? 0) === generation) {
-        this.saveSessions({ ...this.sessions(), [key]: result.sessionId, [`${key}#rev`]: String(PROMPT_REVISION) })
+      const guardedRun = (session: string | null) =>
+        withGhExecution(gateForTools(request.tools), request.context, () =>
+          run(session),
+        )
+      let result = await guardedRun(stored)
+      if (result.error === 'SESSION_LOST') result = await guardedRun(null)
+      if (
+        continues &&
+        result.sessionId !== null &&
+        (this.forgotten.get(request.thread) ?? 0) === generation
+      ) {
+        this.saveSessions({
+          ...this.sessions(),
+          [key]: result.sessionId,
+          [`${key}#rev`]: String(PROMPT_REVISION),
+        })
       }
       // A turn that ends on a dead login settles it for this computer at once; one that ran proves it works.
       if (isSignInFailure(result.error)) this.refuse(request.cli, request.accountId)

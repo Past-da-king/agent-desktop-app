@@ -190,7 +190,7 @@ function settingsVerdict(input: Record<string, unknown>): Verdict {
   const values = typeof input['values'] === 'object' && input['values'] !== null ? (input['values'] as Record<string, unknown>) : {}
   const keys = Object.keys(values)
   if (keys.length === 0) return HIM('unknown', 'No setting named.')
-  if (keys.includes('actsForMe')) return HIM('own-setting', 'Only he turns this on or off.')
+  if (keys.some(key => ['actsForMe','prGateEnabled','prGateSkillPages'].includes(key))) return HIM('own-setting', 'Only he turns this on or off.')
   // How much the agent may do on this computer, or what a screen share shows, is the person's own boundary.
   if (keys.some((key) => ['shell', 'grantedFolders', 'agentRealInput', 'inputLockIdleSeconds', 'hideChatFromCapture', 'hideGuidesFromCapture', 'syncUrl', 'baseUrl', 'allowHttp'].includes(key))) {
     return HIM('own-setting', 'A boundary only he moves.')
@@ -268,6 +268,8 @@ function classifyUnrequested(facts: CardFacts): Verdict {
       return AGENT('read', 'A read.')
     case 'files_delete':
       return pathVerdict(str(input['path']), true)
+    case 'pr_gate_policy':
+      return HIM('own-setting', 'Only the person changes the PR gate policy.')
     case 'settings_set':
       return settingsVerdict(input)
     case 'app_action':
