@@ -5,6 +5,7 @@ import type { ChildProcess } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
 
 const pipeFailure = Symbol.for('agent.childPipeFailure')
+const socketOwned = Symbol.for('agent.socketOwnerHandles')
 const failures = new WeakMap<object, Error>()
 const ownerCleanup = new WeakMap<object, () => void>()
 
@@ -34,7 +35,7 @@ export function onPipeWarning(log: typeof warn): void { warn = log }
 
 /** Shared warning/tag boundary for errors relayed from the off-thread process host. */
 export function reportPipeFailure(error: Error): void {
-  if (!codes.has(codeOf(error))) { fault(error); return }
+  if (!codes.has(codeOf(error))) { if (Reflect.get(error, socketOwned) !== true) fault(error); return }
   Reflect.set(error, pipeFailure, true)
   warn('Process pipe ended', { message: error.message, code: codeOf(error) })
 }
@@ -178,14 +179,23 @@ export function installChildPipeGuards(): void {
   syncBuiltinESMExports()
 }
 
+/** A socket whose owner listens for errors keeps handling every unexpected error itself: only expected EOF/EPIPE
+ * style failures are absorbed here, so a socket error the owner already handles never becomes a crash dialog. */
+function guardSocket(socket: Writable): void {
+  guardPipe(socket, (error) => {
+    if (socket.listenerCount('error') > 1) Reflect.set(error, socketOwned, true)
+    socket.destroy(error)
+  })
+}
+
 /** Socket close/error listeners remain responsible for request rejection and reconnect state. */
 export function safeSocketWrite(socket: Writable, data: string | Uint8Array): boolean {
-  guardPipe(socket, (error) => socket.destroy(error))
+  guardSocket(socket)
   return socket.write(data)
 }
 
 /** Rejection/control responses also write bytes through end(data), before normal socket owners exist. */
 export function safeSocketEnd(socket: Writable, data: string | Uint8Array): void {
-  guardPipe(socket, (error) => socket.destroy(error))
+  guardSocket(socket)
   socket.end(data)
 }

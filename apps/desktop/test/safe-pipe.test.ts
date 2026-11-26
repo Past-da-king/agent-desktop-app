@@ -9,7 +9,7 @@ import { Supervisor } from '../src/main/workers/supervisor'
 import { waitFor } from '../../../packages/core/test/helpers'
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
-import { guardChild, guardPipe, childPipeFailure, isChildPipeError, safeSocketWrite, createPipeGuard } from '../src/main/runtime/safe-pipe'
+import { guardChild, guardPipe, childPipeFailure, isChildPipeError, safeSocketWrite, safeSocketEnd, createPipeGuard } from '../src/main/runtime/safe-pipe'
 import { uncaughtHandler, uncaughtPolicy } from '../src/main/alive'
 
 function pipeError(code: string): Error {
@@ -311,5 +311,27 @@ describe('review round three regressions', () => {
     expect(close).toHaveBeenCalledExactlyOnceWith(7, null)
     child.emit('close', 7, null)
     expect(close).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('review round eight regressions', () => {
+  it('a socket error its owner already handles is not reported as a real fault, an ownerless one still is', async () => {
+    const api = await import('../src/main/runtime/safe-pipe')
+    const fault = vi.fn()
+    api.onPipeFault(fault)
+    try {
+      const owned = new PassThrough(), ownerSaw = vi.fn()
+      owned.on('error', ownerSaw)
+      const badFd = Object.assign(new Error('write EBADF'), { code: 'EBADF', errno: -9, syscall: 'write' })
+      api.safeSocketWrite(owned, 'frame')
+      owned.emit('error', badFd)
+      expect(ownerSaw).toHaveBeenCalled()
+      expect(fault).not.toHaveBeenCalled()
+
+      const ownerless = new PassThrough(), distinct = Object.assign(new Error('write EBADF'), { code: 'EBADF' })
+      api.safeSocketEnd(ownerless, 'bye')
+      ownerless.emit('error', distinct)
+      expect(fault).toHaveBeenCalledExactlyOnceWith(distinct)
+    } finally { api.onPipeFault(() => undefined) }
   })
 })
