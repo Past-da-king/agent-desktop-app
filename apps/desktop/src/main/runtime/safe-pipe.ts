@@ -115,7 +115,7 @@ export function guardChild<T extends ChildProcess>(child: T): T {
       }
     }
   }
-  for (const stream of new Set([child.stdin, child.stdout, child.stderr, ...child.stdio])) guardPipe(stream, ended)
+  for (const stream of new Set([child.stdin, child.stdout, child.stderr, ...child.stdio])) guardOwnedStream(stream, ended)
   return child
 }
 
@@ -179,13 +179,27 @@ export function installChildPipeGuards(): void {
   syncBuiltinESMExports()
 }
 
-/** A socket whose owner listens for errors keeps handling every unexpected error itself: only expected EOF/EPIPE
- * style failures are absorbed here, so a socket error the owner already handles never becomes a crash dialog. */
-function guardSocket(socket: Writable): void {
-  guardPipe(socket, (error) => {
-    if (socket.listenerCount('error') > 1) Reflect.set(error, socketOwned, true)
-    socket.destroy(error)
+const hadOwner = new WeakMap<object, boolean>()
+
+/** True when something other than our guard listens for this stream's errors: it was there before the guard
+ * (a once listener is gone by the time it fires) or was added since (the guard's own listener is one). */
+function ownedStream(stream: Readable | Writable): boolean {
+  return hadOwner.get(stream) === true || stream.listenerCount('error') > 1
+}
+
+/** A stream whose owner handles errors keeps handling every unexpected one itself: only expected EOF/EPIPE
+ * style failures are absorbed here, so an error the owner already handles never becomes a crash dialog. */
+export function guardOwnedStream(stream: Readable | Writable | null | undefined, ended: (error: Error) => void): void {
+  if (stream == null) return
+  if (!hadOwner.has(stream)) hadOwner.set(stream, stream.listenerCount('error') > 0)
+  guardPipe(stream, (error) => {
+    if (!codes.has(codeOf(error)) && ownedStream(stream)) { Reflect.set(error, socketOwned, true); return }
+    ended(error)
   })
+}
+
+function guardSocket(socket: Writable): void {
+  guardOwnedStream(socket, (error) => socket.destroy(error))
 }
 
 /** Socket close/error listeners remain responsible for request rejection and reconnect state. */

@@ -109,7 +109,7 @@ export function uncaughtHandler(hooks: UncaughtHooks): (error: Error) => void {
       message: error?.message,
       stack: error?.stack,
     })
-    const now = hooks.now?.() ?? Date.now()
+    const now = hooks.now?.() ?? performance.now()
     if (policy === 'dialog' && now - lastDialog >= 30_000) {
       lastDialog = now
       hooks.dialog()

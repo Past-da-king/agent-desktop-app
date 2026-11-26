@@ -77,3 +77,11 @@ Real shell and code fixtures exit their leader first while a grandchild inherits
 Shell, code, environment probes and real workers share `runtime/run-tree.ts`, which owns a per-run `treeSettled` latch. Its synchronous path checks the detached group with `kill(-pgid, 0)` and signals the group without an asynchronous gap. ESRCH or a successful owned group kill settles the tree, clears deadline/abort handlers, and makes all subsequent EOF, timeout and cancellation cleanup calls no-ops. Normal close observes the group before releasing ownership; a still-live group is cleaned before owner completion. Leader exit alone does not release ownership. Windows keeps the existing live-leader tree mechanism and releases its owner at close, with baseline limitations unchanged.
 
 Two real shell/code controls complete normally, intercept `process.kill`, then inject the first late EOF, abort and wait past the deadline: neither probes nor signals are allowed after settlement. Both fail on 0e3c35b and pass after repair. Existing real leader-first grandchild tests continue to pass. Final relevant-file run is 112 passed, zero failures/skips. Native Windows proof and full/combined runs remain pending under the existing hold.
+
+## Seventh and eighth independent review repairs
+
+Owned streams: a socket or child stream whose owner already listens for errors (ws.ts, socks.ts, net.ts, the Claude SDK's stderr listener) keeps handling every unexpected error itself. The guard remembers whether an owner existed when it was installed (a `once` listener is gone by the time it fires) or has been added since, and in that case tags the error so it never reaches the real-fault handler and never kills the child. Expected EOF/EPIPE style failures are still absorbed as before. Ownerless streams keep the previous behaviour.
+
+`unhandledRejection` stays log-only as on devices; an expected pipe rejection is a warning. The 30-second fault-dialog limiter uses a monotonic clock. A version probe answers at its timeout even when the cleanup could not release the tree (Windows leader already gone, EPERM); the close-time cleanup keeps its latch.
+
+Not covered: the off-thread relay still forwards a stream error from its worker isolate to the owner without the owned-stream check, and the worker script keeps its own copy of the five expected codes. Native Windows proof is pending.

@@ -1,4 +1,4 @@
-import { installChildPipeGuards, onPipeWarning, onPipeFault } from './runtime/safe-pipe'
+import { installChildPipeGuards, onPipeWarning, onPipeFault, isChildPipeError } from './runtime/safe-pipe'
 import { peerNoteAudio } from './voice/peer-audio'
 import { ActsForMe } from './runtime/acts-for-me'
 import { createWorkersChanged } from './workers/changed'
@@ -274,7 +274,11 @@ const handleUnexpected = uncaughtHandler({
 })
 onPipeFault(handleUnexpected)
 process.on('uncaughtException', handleUnexpected)
-process.on('unhandledRejection', (reason) => handleUnexpected(reason instanceof Error ? reason : new Error(String(reason))))
+// A rejection is only logged, as before: an expected pipe end is a warning, never a dialog.
+process.on('unhandledRejection', (reason) => {
+  if (reason instanceof Error && isChildPipeError(reason)) logger.warn('Expected closed resource rejection (carried on)', { message: reason.message })
+  else logger.error('Unhandled promise rejection', { reason: String(reason) })
+})
 
 interface WindowState {
   width: number

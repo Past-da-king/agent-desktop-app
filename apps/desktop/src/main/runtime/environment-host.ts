@@ -81,17 +81,19 @@ export const execVersion: ExecFn = (file, args, options) =>
     let stdout = ''
     let stderr = ''
     let settled = false
-    const finish = (error: Error | null): void => {
+    const finish = (error: Error | null, release = true): void => {
       if (settled) return
       settled = true
-      tree.release()
+      if (release) tree.release()
       clearTimeout(timer)
       if (error !== null && stdout.trim() === '' && stderr.trim() === '') reject(error)
       else resolve({ stdout, stderr })
     }
     const timer = setTimeout(() => {
       tree.kill()
-      if (tree.settled) finish(new Error('version check timed out'))
+      // Cleanup was attempted. If the tree is still not ours to release (Windows leader already gone, EPERM),
+      // the probe still answers at its deadline and the close-time cleanup keeps the latch.
+      finish(new Error('version check timed out'), tree.settled)
     }, options.timeoutMs)
 
     child.stdout?.on('data', (chunk: Buffer) => {
