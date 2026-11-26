@@ -23,6 +23,19 @@ describe('owners that already handle errors never turn them into faults', () => 
     expect(fault).not.toHaveBeenCalled()
   })
 
+  it('a once owner covers one error only: the next error with no owner left is a real fault again', () => {
+    const fault = vi.fn()
+    onPipeFault(fault)
+    const socket = new PassThrough(), owner = vi.fn()
+    socket.once('error', owner)
+    safeSocketWrite(socket, 'greeting')
+    socket.emit('error', ioError('EIO'))
+    expect(fault).not.toHaveBeenCalled()
+    const second = ioError('EBADF')
+    socket.emit('error', second)
+    expect(fault).toHaveBeenCalledExactlyOnceWith(second)
+  })
+
   it('an owner that removed every listener and re-added its own still owns a write callback error', async () => {
     const fault = vi.fn()
     onPipeFault(fault)

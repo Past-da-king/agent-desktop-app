@@ -184,7 +184,11 @@ const hadOwner = new WeakMap<object, boolean>()
 /** True when something other than our guard listens for this stream's errors: it was there before the guard
  * (a once listener is gone by the time it fires) or was added since (the guard's own listener is one). */
 function ownedStream(stream: Readable | Writable): boolean {
-  return hadOwner.get(stream) === true || stream.listenerCount('error') > 1
+  const listening = stream.listenerCount('error') > 1
+  const owned = hadOwner.get(stream) === true || listening
+  // A once owner covers one error: with no listener left, a later error is ownerless again, as on devices.
+  if (!listening) hadOwner.set(stream, false)
+  return owned
 }
 
 /** A stream whose owner handles errors keeps handling every unexpected one itself: only expected EOF/EPIPE
