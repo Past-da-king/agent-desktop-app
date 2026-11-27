@@ -1156,7 +1156,7 @@ export class DevicesService {
   }
 
   async outboundCall(method: 'outbound.claim' | 'outbound.report', args: unknown[], caller = this.identity.nodeId): Promise<unknown> {
-    if ((this.deps.kind ?? 'desktop') !== 'server') {
+    if ((this.deps.kind ?? 'desktop') !== 'server' && (caller !== this.identity.nodeId || await this.hasOtherBrain())) {
       if (caller !== this.identity.nodeId || this.uplink.target === null) throw new Error('Send held: authority unreachable')
       const answer = await this.uplink.rpcCall(method, args, 5000) as { role?: string; nodeId?: string; value?: unknown }
       if (answer?.role !== 'headless' || answer.nodeId !== this.uplink.target) throw new Error('Send held: authority unreachable')
@@ -1172,6 +1172,15 @@ export class DevicesService {
       value = this.outboundClaims.finish(key, caller, outcome as Finish)
     }
     return caller === this.identity.nodeId ? value : { role: 'headless', nodeId: this.identity.nodeId, value }
+  }
+
+  /** Another brain could run the same turn: then only the server may grant a send. Alone, this node is the authority. */
+  private async hasOtherBrain(): Promise<boolean> {
+    const self = this.identity.nodeId
+    if (this.config.get().peers.some((peer) => peer.id !== self)) return true
+    // Read the stored rows, not the cache: a cache not loaded yet must never make a linked node look alone.
+    const rows = await this.deps.store.list('device')
+    return rows.some((row) => row.id !== self && !row.revoked && row.roles.includes('brain'))
   }
 
   private mountRoutes(): void {
