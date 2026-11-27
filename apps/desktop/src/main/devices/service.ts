@@ -1156,27 +1156,25 @@ export class DevicesService {
   }
 
   private outboundAuthority(): string {
-    const configured = this.config.get().outbound?.authorityNodeId
-    if (configured) return configured
     const servers = this.list().filter(row => !row.revoked && row.kind === 'server' && row.roles.includes('brain')).map(row => row.id)
     if ((this.deps.kind ?? 'desktop') === 'server') servers.push(this.identity.nodeId)
-    const authorityNodeId = [...new Set(servers)].sort()[0] ?? this.identity.nodeId
-    this.config.save({ outbound: { authorityNodeId } })
-    return authorityNodeId
+    const unique = [...new Set(servers)]
+    if (unique.length !== 1) throw new Error('Send held: authority unavailable or ambiguous')
+    return unique[0]!
   }
 
-  async outboundCall(method: 'outbound.claim' | 'outbound.report', args: unknown[], forwarded = false): Promise<unknown> {
+  async outboundCall(method: 'outbound.claim' | 'outbound.report', args: unknown[], caller = this.identity.nodeId): Promise<unknown> {
     const authority = this.outboundAuthority()
     if (authority !== this.identity.nodeId) {
-      if (forwarded || this.uplink.target === null) throw new Error('Send held: authority unreachable')
-      return this.uplink.rpcCall(method, [...args, true], 5000)
+      if (caller !== this.identity.nodeId || this.uplink.target !== authority) throw new Error('Send held: authority unreachable')
+      return this.uplink.rpcCall(method, args, 5000)
     }
-    const [key, owner, outcome] = args
-    if (typeof key !== 'string' || !/^[a-f0-9]{64}$/.test(key) || typeof owner !== 'string' || owner.length < 1 || owner.length > 200) throw new Error('Invalid outbound claim')
+    const [key, outcome] = args
+    if (typeof key !== 'string' || !/^[a-f0-9]{64}$/.test(key)) throw new Error('Invalid outbound claim')
     this.outboundClaims ??= new OutboundClaims(join(this.dir, 'outbound-claims.sqlite'))
-    if (method === 'outbound.claim') return this.outboundClaims.claim(key, owner)
+    if (method === 'outbound.claim') return this.outboundClaims.claim(key, caller)
     if (typeof outcome !== 'object' || outcome === null || !['sent', 'failed', 'unknown'].includes(String((outcome as {state?: unknown}).state))) throw new Error('Invalid outbound result')
-    return this.outboundClaims.finish(key, owner, outcome as Finish)
+    return this.outboundClaims.finish(key, caller, outcome as Finish)
   }
 
   private mountRoutes(): void {
@@ -1184,8 +1182,7 @@ export class DevicesService {
     for (const method of ['outbound.claim', 'outbound.report'] as const) {
       host.addRpc(method, async (deviceId, args) => {
         if (!this.rolesOf(deviceId)?.includes('brain')) throw new Error('Not available')
-        const forwarded = args[method === 'outbound.claim' ? 2 : 3] === true
-        return this.outboundCall(method, args, forwarded)
+        return this.outboundCall(method, args, deviceId)
       })
     }
     host.addRoute({
