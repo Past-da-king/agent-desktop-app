@@ -12,6 +12,8 @@ import { randomUUID } from 'node:crypto'
 
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite'
 
+import { isDiskFullError } from '@agent/core'
+import { guardDiskWrites } from './db-disk-guard'
 import {
   Hlc,
   compareStamps,
@@ -192,11 +194,15 @@ export class Store implements SyncStore {
   private archiveTimer: ReturnType<typeof setTimeout> | null = null
   /** The newest chat row's createdAt (any device's), read once and then kept as rows land; null until read. */
   private newestChatAt: number | null = null
+  /** Told when a write fails because the disk is full (27 Nov 2026: the app must know, not just the caller). */
+  private diskFull: ((error: unknown) => void) | null = null
 
   constructor(file: string, clock: () => number = Date.now) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true })
     this.now = clock
-    this.db = new DatabaseSync(file)
+    // Every write goes through the guard: a full disk is noticed once and reported, whatever started the write, and
+    // the caller still gets the error it expects (db-disk-guard.ts).
+    this.db = guardDiskWrites(new DatabaseSync(file), (error) => this.diskFull?.(error))
     this.db.exec('PRAGMA journal_mode = WAL')
     // Writes run on the main thread. FULL synced the log on every commit, and one write on a busy disk took up to
     // 1.4 s (30 Oct 2026 hangs). NORMAL in WAL mode syncs only at checkpoints: never corrupt, at worst the last
@@ -459,7 +465,13 @@ export class Store implements SyncStore {
       this.db.exec('COMMIT')
       return out
     } catch (error) {
-      this.db.exec('ROLLBACK')
+      try {
+        this.db.exec('ROLLBACK')
+      } catch {
+        // SQLite rolls some failures back by itself (a full disk, SQLITE_FULL, does): a rollback with nothing left to
+        // roll back must never replace the reason the write failed (27 Nov 2026: the phone was shown "cannot rollback
+        // - no transaction is active" instead of "database or disk is full").
+      }
       this.dropList(null)
       throw error
     } finally {
@@ -840,6 +852,11 @@ export class Store implements SyncStore {
     this.db.close()
   }
 
+  /** Where a full-disk write failure is reported (the disk watch), so this node can say it is out. */
+  setDiskFullHandler(handler: ((error: unknown) => void) | null): void {
+    this.diskFull = handler
+  }
+
   /**
    * Checkpoints move to a worker thread (db-checkpoint.ts): the main connection stops checkpointing inside its own
    * writes. If the worker cannot run, the main connection checkpoints again as before.
@@ -851,6 +868,8 @@ export class Store implements SyncStore {
     this.checkpointer = startCheckpointWorker(this.file, {
       everyMs: options.everyMs,
       onReport: (report) => {
+        // A checkpoint that cannot write because the drive is full is the same news as a failed write.
+        if (!report.ok && report.error !== undefined && isDiskFullError(report.error)) this.diskFull?.(new Error(report.error))
         if (report.ok && (report.ms ?? 0) > 1_000 && Date.now() - slowLogged > 60_000) {
           slowLogged = Date.now()
           options.log?.('Slow checkpoint (off the main thread)', { ms: report.ms, pages: report.log })

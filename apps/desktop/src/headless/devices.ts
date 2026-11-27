@@ -90,7 +90,8 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     appVersion: options.version,
     nodeName: () => options.name,
     platform: process.platform,
-    ready: () => canRunTurns(runtime),
+    // A node whose own disk is full cannot save a message: it is not ready, and the phone moves down the order.
+    ready: () => canRunTurns(runtime) && !runtime.disk.blocked(),
     busy: () => runtime.busy(),
     // No web UI on a server: /app/ answers that there is nothing here.
     rendererDir: join(runtime.dataDir, 'no-web-ui'),
@@ -142,6 +143,12 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
     // The brains this node paired with, until their device rows replicate here.
     extraPeers: () => readConfig(runtime.dataDir).brains.map((brain) => ({ id: brain.id, name: brain.name, urls: brain.urls, fp: brain.fp })),
   })
+  // This node's own disk filling up (27 Nov 2026): a phone talking to it is handed to the next brain at once, and every
+  // paired device hears why, instead of each message failing with a disk-full error.
+  const offDisk = runtime.diskWatch.onChangeState((state) => {
+    if (state.blocked) node.handbackScreens()
+    node.stateChanged()
+  })
   // node.json's brain addresses follow their replicated device rows, without a restart (brain-urls.ts).
   const brainUrls = new BrainUrlRefresher({
     dataDir: runtime.dataDir,
@@ -159,6 +166,7 @@ export async function startHeadlessDevices(runtime: HeadlessRuntime, options: He
   brainTimer.unref()
   void brainUrls.refresh()
   runtime.onStop(async () => {
+    offDisk()
     clearInterval(brainTimer)
     offRows()
     detach()

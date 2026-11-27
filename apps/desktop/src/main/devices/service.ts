@@ -23,6 +23,7 @@ import { OverlayNet, setOverlayNet } from './net'
 import { originFrom, setLocalOrigin } from './origin'
 import { formatShortCode, handlePair, pairUri, parsePairUri, PairingOffers } from './pairing'
 import { pinnedFetch } from './pinned-fetch'
+import { isDiskFullError } from '@agent/core'
 import { devicesState, probeHealth } from './sync'
 import { AnswerOrder } from './answer-order'
 import { SecretPassTable, hashPass, newPass, type SecretsLike } from './passes'
@@ -289,7 +290,19 @@ export class DevicesService {
             session.close(4011, 'this brain is not ready')
             return Promise.reject(new Error(this.deps.availability?.() || 'This device is not ready to answer.'))
           }
-          return callAllowed(this.deps.registry, this.server.added(), { deviceId: session.deviceId, origin: () => session.origin(), get open() { return session.open }, roles: this.rolesOf(session.deviceId) }, method, args)
+          const call = callAllowed(this.deps.registry, this.server.added(), { deviceId: session.deviceId, origin: () => session.origin(), get open() { return session.open }, roles: this.rolesOf(session.deviceId) }, method, args)
+          // A write that failed because this node's disk is full (27 Nov 2026) is this node failing, not the message
+          // being wrong: the caller is let go at once, so it tries the next brain in the order instead of this one
+          // again, and never gets the same error message after message.
+          return call.catch((error: unknown) => {
+            if (isDiskFullError(error) && !this.deps.ready()) {
+              // The reason goes back to the caller first (it is what the person is shown), then the link is let go, so
+              // the phone tries the next brain in the order. Never message after message against the same full disk.
+              const close = setTimeout(() => session.close(4011, 'this brain is not ready'), 100)
+              close.unref?.()
+            }
+            throw error
+          })
         },
         onConnections: () => this.changed(),
         onSeen: (id) => this.seen(id),
@@ -321,6 +334,21 @@ export class DevicesService {
   /** The brain this node is serving its tools to right now, or null. */
   servingTo(): string | null {
     return this.uplink.target
+  }
+
+  /**
+   * This node's own readiness changed in a way its devices must hear about now, not at their next probe: a full disk,
+   * a main process in recovery (27 Nov 2026). The order is checked again at once, and every connected device is told.
+   */
+  stateChanged(): void {
+    this.changed()
+    const before = this.answerOrder.line()
+    void this.answerOrder
+      .tick()
+      .then(() => {
+        if (before !== this.answerOrder.line()) this.changed()
+      })
+      .catch(() => undefined)
   }
 
   handbackScreens(): void {

@@ -75,6 +75,8 @@ import { buildToolset, buildWorkerToolset } from '../main/runtime/toolset'
 import { getDevicesService } from '../main/devices/service'
 import type { AppControlDeps } from '../main/tools/app-control'
 import { registryInvoker } from '../main/tools/app-actions'
+import { DiskHealth } from '../main/disk-health'
+import { DiskWatch } from '../main/disk-watch'
 import { wireDecisions } from '../main/decisions'
 import { Secrets } from '../main/secrets'
 import { SettingsStore } from '../main/settings'
@@ -197,6 +199,10 @@ export interface HeadlessRuntime {
   actions: DeviceActions
   /** True while any chat has a turn running. */
   busy(): boolean
+  /** This node's own disk (27 Nov 2026): a full drive takes it out of the answer order instead of failing silently. */
+  disk: DiskHealth
+  /** Reads and watches that disk; also the place a full-disk write failure is reported. */
+  diskWatch: DiskWatch
   /** Run this first when the runtime stops (the devices sync). */
   onStop(fn: () => void | Promise<void>): void
   /** Stop timers, wait for running turns and helpers (up to `graceMs`), close the database. */
@@ -253,6 +259,20 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   const account = new AccountService(store, settings, secrets)
   const disposeStore = store.onChange(() => account.nudge())
   const filePicks = new Set<string>()
+
+  // This node's own disk (27 Nov 2026: the drive filled up, every message from the phone failed with ENOSPC, and the
+  // phone kept trying this computer). Watched every couple of minutes and at once when a write fails: below the line
+  // it stops taking new work and says so, once, and its devices hear it and move to the next brain in the order.
+  const disk = new DiskHealth({ name: () => settings.get().deviceName?.trim() || 'This node' })
+  const diskWatch = new DiskWatch({
+    health: disk,
+    path: () => dir,
+    notify: (title, body) => actions.notify(title, body),
+    note: (text) => void store.upsert('chat_item', { kind: 'notice', text, meta: JSON.stringify({ diskHealth: true }) }).catch(() => undefined),
+    log: (line, detail) => logger.warn(line, detail),
+  })
+  store.setDiskFullHandler((error) => diskWatch.writeFailed(error))
+  diskWatch.start()
 
   const environment = hostEnvironment()
   if (options.quiet !== true) void environment.scan().catch(() => undefined)
@@ -799,6 +819,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
   return {
     acts,
     dataDir: dir,
+    disk,
+    diskWatch,
     logger,
     store,
     settings,
@@ -865,6 +887,7 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       disposeStore()
       theRunner.dispose()
       account.dispose()
+      diskWatch.stop()
       chatIndex.close()
       store.close()
     },
