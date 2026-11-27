@@ -172,6 +172,7 @@ import { getDevicesHost } from './devices/service'
 import { copyVerdict, defaultInstalledExe, isInstalledCopy } from './install-guard'
 import { startWatchdog, type Watchdog } from './watchdog'
 import { DiskHealth } from './disk-health'
+import { DiskWatch } from './disk-watch'
 import { startFreezeRecovery, type FreezeRecovery } from './freeze-recovery'
 import { autoHelperCap, busyReason, DEFAULT_LIMITS, ResourceMonitor, shortOf, type ResourceLimits } from './runtime/resources'
 import { warmRecall } from './runtime/recall'
@@ -887,7 +888,9 @@ const dialogs: DialogLike = {
 
 let watchdog: Watchdog | null = null
 let freezeRecovery: FreezeRecovery | null = null
-const diskHealth = new DiskHealth()
+// The drive holding app data: what this node says about itself, and the one notice the person gets (27 Nov 2026).
+const diskHealth = new DiskHealth({ name: () => settingsStore?.get().deviceName?.trim() || 'This computer' })
+let diskWatch: DiskWatch | null = null
 let resourceMonitor: ResourceMonitor | null = null
 
 /** The helper queue's view of this computer: thresholds from Settings, read live. */
@@ -909,16 +912,10 @@ async function startServices(win: BrowserWindow): Promise<void> {
   const dir = app.getPath('userData')
   mkdirSync(dir, { recursive: true })
 
+  // The supervisor reads the drive every 15 s while the app runs; the watch reads it on its own too, and reacts to a
+  // write that failed, so a full disk is never missed because one reader was not running.
   if (app.isPackaged) freezeRecovery = startFreezeRecovery(dir, process.execPath, process.argv.slice(1), why => logger.warn('Freeze recovery problem', { why }), (free, total) => {
-    const state = diskHealth.sample(free, total)
-    if (!state.changed) return
-    const line = diskHealth.line()
-    logger.warn('App data disk state changed', { freeGb: free, totalGb: total, answering: !state.blocked })
-    if (line !== '') {
-      showNotification('Agent disk space', line)
-      void store?.upsert('chat_item', { kind: 'notice', text: line, meta: JSON.stringify({ diskHealth: true }) }).then(() => broadcast(EVENTS.chat, { type: 'chat_changed' })).catch(() => undefined)
-    }
-    if (state.blocked) devices?.handbackScreens()
+    diskWatch?.sample(free, total, 'supervisor')
   }, () => devices?.probeTarget() ?? null)
 
   await freezeRecovery?.ready
@@ -931,6 +928,25 @@ async function startServices(win: BrowserWindow): Promise<void> {
   store.startReader({ log: (line, detail) => logger.warn(line, detail) })
   const settings = new SettingsStore(join(dir, 'settings.json'))
   settingsStore = settings
+  // The disk this app writes to, watched every couple of minutes and the instant a write fails because it is full.
+  diskWatch = new DiskWatch({
+    health: diskHealth,
+    path: () => dir,
+    notify: (title, body) => showNotification(title, body),
+    note: (text) => {
+      const opened = store
+      if (opened === null) return
+      void opened.upsert('chat_item', { kind: 'notice', text, meta: JSON.stringify({ diskHealth: true }) }).then(() => broadcast(EVENTS.chat, { type: 'chat_changed' })).catch(() => undefined)
+    },
+    // A phone talking to a full computer is handed to the next brain in the order, and every paired device hears why now.
+    onChange: (state) => {
+      if (state.blocked) devices?.handbackScreens()
+      devices?.stateChanged()
+    },
+    log: (line, detail) => logger.warn(line, detail),
+  })
+  store.setDiskFullHandler((error) => diskWatch?.writeFailed(error))
+  diskWatch.start()
   const privacy = new CapturePrivacy(() => settings.get())
   capturePrivacy = privacy
   if (mainWindow !== null && !mainWindow.isDestroyed()) privacy.register(mainWindow, 'main')
@@ -957,7 +973,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
     // It frees memory later but costs a little now, so it holds off only when things are truly tight.
     busy: () => {
       const now = resourceMonitor?.now() ?? null
-      return now !== null && (now.freeRamGb < 0.5 || (now.freeDiskGb >= 0 && now.freeDiskGb < 2))
+      return diskHealth.blocked() || (now !== null && (now.freeRamGb < 0.5 || (now.freeDiskGb >= 0 && now.freeDiskGb < 2)))
     },
     log: (line, detail) => logger.info(line, detail),
   })
@@ -1968,9 +1984,18 @@ async function startServices(win: BrowserWindow): Promise<void> {
     apps,
     pasted: {
       save: async (name, mime, bytes) => {
-        const saved = savePastedFile(join(app.getPath('userData'), 'attachments'), name, mime, bytes)
-        filePicks.add(saved.path)
-        return saved
+        // A picture or file from a phone is a real write to this drive: if it cannot be written the disk is full, and
+        // this node is out (27 Nov 2026), not just that one file.
+        // Read the drive before writing to it (one cheap call): a file that cannot fit is found out before, not after.
+        await diskWatch?.check('big-write').catch(() => undefined)
+        try {
+          const saved = savePastedFile(join(app.getPath('userData'), 'attachments'), name, mime, bytes)
+          filePicks.add(saved.path)
+          return saved
+        } catch (error) {
+          diskWatch?.writeFailed(error)
+          throw error
+        }
       },
       clipboardFiles: () => clipboardAttachments(clipboard),
     },
@@ -2260,6 +2285,8 @@ if (refuseToStart) {
   })
 
   app.on('before-quit', () => {
+    diskWatch?.stop()
+    diskWatch = null
     freezeRecovery?.stop()
     freezeRecovery = null
     disposeActs?.()
