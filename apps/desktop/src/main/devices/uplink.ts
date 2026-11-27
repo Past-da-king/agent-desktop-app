@@ -74,6 +74,13 @@ export function connectPinned(url: string, fp: string, pass: string, timeoutMs =
   })
 }
 
+export class AuthorityUnreachableError extends Error {
+  constructor(message = 'Send held: authority unreachable') {
+    super(message)
+    this.name = 'AuthorityUnreachableError'
+  }
+}
+
 export class Uplink {
   private conn: WsConnection | null = null
   private connectedTo: string | null = null
@@ -81,6 +88,7 @@ export class Uplink {
   private busy = false
   private next = 1
   private running = false
+  private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>()
 
   constructor(private readonly deps: UplinkDeps) {}
 
@@ -141,9 +149,7 @@ export class Uplink {
     this.connectedTo = id
     conn.onClose(() => {
       if (this.conn === conn) {
-        this.conn = null
-        this.connectedTo = null
-        this.deps.onState?.(null)
+        this.drop()
       }
     })
     conn.onMessage((message) => {
@@ -164,11 +170,41 @@ export class Uplink {
     this.conn.sendText(JSON.stringify({ type: 'call', id: `u${this.next++}`, method, args }))
   }
 
+  /** Request a response over the authenticated, pinned node link. */
+  rpcCall(method: string, params: unknown[], timeoutMs = 8000): Promise<unknown> {
+    const conn = this.conn
+    if (conn?.isOpen !== true) return Promise.reject(new AuthorityUnreachableError())
+    const id = `u${this.next++}`
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new AuthorityUnreachableError())
+      }, timeoutMs)
+      this.pending.set(id, { resolve, reject, timer })
+      try {
+        conn.sendText(JSON.stringify({ type: 'call', id, method, args: params }))
+      } catch {
+        clearTimeout(timer)
+        this.pending.delete(id)
+        reject(new AuthorityUnreachableError())
+      }
+    })
+  }
+
   private async onText(text: string): Promise<void> {
     let frame: Record<string, unknown>
     try {
       frame = JSON.parse(text) as Record<string, unknown>
     } catch {
+      return
+    }
+    if (frame['type'] === 'result' && typeof frame['id'] === 'string') {
+      const waiting = this.pending.get(frame['id'])
+      if (waiting === undefined) return
+      this.pending.delete(frame['id'])
+      clearTimeout(waiting.timer)
+      if (frame['ok'] === true) waiting.resolve(frame['value'])
+      else waiting.reject(new Error(typeof frame['error'] === 'string' ? frame['error'] : 'RPC refused'))
       return
     }
     if (frame['type'] !== 'event' || frame['name'] !== 'device.command') return
@@ -187,6 +223,11 @@ export class Uplink {
   }
 
   private drop(): void {
+    for (const waiting of this.pending.values()) {
+      clearTimeout(waiting.timer)
+      waiting.reject(new AuthorityUnreachableError())
+    }
+    this.pending.clear()
     const conn = this.conn
     this.conn = null
     if (this.connectedTo !== null) this.deps.onState?.(null)
