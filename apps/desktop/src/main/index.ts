@@ -1,5 +1,6 @@
 import { installChildPipeGuards, onPipeWarning, onPipeFault, isChildPipeError } from './runtime/safe-pipe'
 import { peerNoteAudio } from './voice/peer-audio'
+import { vaultBackupKeys } from './voice/keyring'
 import { ActsForMe } from './runtime/acts-for-me'
 import { createWorkersChanged } from './workers/changed'
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -2000,6 +2001,7 @@ async function startServices(win: BrowserWindow): Promise<void> {
   allowMicrophone(win.webContents.session, (id) => id === win.webContents.id || dictation?.pill.isPill(id) === true)
   voice = new VoiceService({
     noteDevice: () => devicesState.sync?.selfId() ?? '',
+    backupKeys: () => vaultBackupKeys(vault),
     remoteNoteAudio: (file) => peerNoteAudio(store!, file),
     secrets,
     settings,

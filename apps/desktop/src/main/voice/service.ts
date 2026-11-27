@@ -42,8 +42,10 @@ import {
   voiceNoteAudio,
   wavOf,
   OUTPUT_RATE,
+  type GeminiDeps,
   type ModelChoice,
 } from './gemini'
+import { VoiceKeyring } from './keyring'
 import { LiveSession, type SocketFactory, type SocketLike } from './live'
 import type { RecordingHandle, Recordings } from '../recordings/store'
 
@@ -78,6 +80,11 @@ export interface VoiceDeps {
   timeZone?: string
   /** Where voice notes are saved on this computer. */
   notesDir?: string
+  /**
+   * The Vault's backup voice keys, in the order they should be tried after the voice key in Settings
+   * (voice/keyring.ts). Read on every call, so a key added to the Vault works for the next note.
+   */
+  backupKeys?: () => string[]
   /** Device that owns a saved note, and read-only fallback for replicated notes. */
   noteDevice?: () => string
   remoteNoteAudio?: (file: string) => Promise<Buffer | null>
@@ -117,10 +124,17 @@ export class VoiceService {
   private callRec: RecordingHandle | null = null
   private visuals: CallVisual[] = []
   private handoffs = 0
+  /** Every key a voice note may speak with, and which of them are resting after a quota (voice/keyring.ts). */
+  private readonly ring: VoiceKeyring
 
   constructor(deps: VoiceDeps) {
     this.deps = deps
     this.now = deps.now ?? Date.now
+    this.ring = new VoiceKeyring({
+      primary: () => this.key(),
+      backups: () => deps.backupKeys?.() ?? [],
+      now: () => this.now(),
+    })
   }
 
   private key(): string | null {
@@ -128,8 +142,20 @@ export class VoiceService {
     return value === null || value.trim() === '' ? null : value.trim()
   }
 
-  private gemini(): { key: () => string | null; fetchImpl?: typeof fetch } {
-    return { key: () => this.key(), ...(this.deps.fetchImpl === undefined ? {} : { fetchImpl: this.deps.fetchImpl }) }
+  private gemini(): GeminiDeps {
+    return {
+      key: () => this.key(),
+      // The voice key first, then the Vault backups, with the ones resting after a quota left out.
+      keyList: () => this.ring.keys(),
+      keyExhausted: (key, until) => this.ring.exhausted(key, until),
+      now: () => this.now(),
+      ...(this.deps.fetchImpl === undefined ? {} : { fetchImpl: this.deps.fetchImpl }),
+    }
+  }
+
+  /** Any key this computer can speak with: the voice key in Settings, or a Vault backup. */
+  private anyKey(): boolean {
+    return this.key() !== null || this.ring.keys().length > 0
   }
 
   setKey(raw: string): void {
@@ -163,7 +189,7 @@ export class VoiceService {
       timeoutMs?: number
     } = {},
   ): Promise<VoiceResult<{ text: string }>> {
-    if (this.key() === null) return { ok: false, error: 'Add a Gemini key in Settings to talk.' }
+    if (!this.anyKey()) return { ok: false, error: 'Add a Gemini key in Settings to talk.' }
     if (pcm.length === 0) return { ok: true, text: '' }
     if (pcm.length > MAX_DICTATION_BYTES) return { ok: false, error: 'That recording is too long. Keep it under ten minutes.' }
     const timeout = AbortSignal.timeout(options.timeoutMs ?? transcribeLimitMs(pcm.length))
@@ -190,7 +216,7 @@ export class VoiceService {
 
   /** A voice note: the agent's own script said in `style`, saved as a WAV under notesDir. */
   async note(script: string, style: string): Promise<{ ok: true; file: string; durationMs: number } | { ok: false; error: string }> {
-    if (this.key() === null) return { ok: false, error: 'Add a Gemini key in Settings to send voice notes.' }
+    if (!this.anyKey()) return { ok: false, error: 'Add a Gemini key in Settings to send voice notes.' }
     const dir = this.deps.notesDir
     if (dir === undefined) return { ok: false, error: 'Voice notes are not available in this build.' }
     try {
@@ -227,7 +253,7 @@ export class VoiceService {
   }
 
   async speak(text: string): Promise<VoiceResult<{ data: string }>> {
-    if (this.key() === null) return { ok: false, error: 'Add a Gemini key in Settings to talk.' }
+    if (!this.anyKey()) return { ok: false, error: 'Add a Gemini key in Settings to talk.' }
     try {
       const pcm = await speakText(this.gemini(), text, this.deps.settings.get().voiceName || 'Kore', this.choice)
       return { ok: true, data: pcm.toString('base64') }
