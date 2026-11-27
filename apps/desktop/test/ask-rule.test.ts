@@ -3,7 +3,7 @@
  * Only what deletes or cannot be undone, costs money, goes live / DNS or touches secrets asks first; asking for
  * every change is the person's opt-in. Every case here went red on the old defaults.
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -59,12 +59,33 @@ describe('the rule', () => {
 })
 
 describe('learned apps', () => {
-  it('WhatsApp send_message and send_media (with a file) run without a card', async () => {
+  it('holds learned person-sends including trusted and mislabeled tools before execution', async () => {
+    const send = tool('send_message', 'Send a message to a person')
+    const denied = testContext({ approve: async () => false })
+    let runs = 0
+    const fake: PageRunner = { ensure: async () => undefined, run: async () => { runs++; return {ok:true,v:'sent'} }, evaluate: async () => null }
+    expect(learnedAsks(app([send]), send)).toBe(true)
+    expect(learnedAsks(app([send], {trusted:true}), send)).toBe(true)
+    expect(learnedAsks(app([send]), {...send,readOnly:true})).toBe(true)
+    expect(await callLearned(app([send]), send, {to:'person@example.org',text:'hello'}, denied, fake)).toContain('DECLINED')
+    expect(runs).toBe(0)
+  })
+  it('raises a card with the actual file before a learned send', async () => {
+    const file = join(dir, 'proof.txt'); writeFileSync(file, 'sample')
+    const send = tool('send_media', 'Send a file to a person', {params:{file:{type:'file'}}})
+    let details = ''
+    const ctx = testContext({approve: async (_summary, text) => {details = text ?? ''; return false}})
+    const result = await callLearned(app([send]), send, {to:'person@example.org',file}, ctx, runner)
+    expect(result).toContain('DECLINED')
+    expect(details).toContain('proof.txt')
+    expect(details).toContain('person@example.org')
+  })
+  it('WhatsApp sends raise a card', async () => {
     const send = tool('send_media', 'Send a photo, video, document, audio file or voice note to a chat.', { params: { file: { type: 'file' } } })
     const { ctx, asked } = counting()
-    expect(learnedAsks(app([send]), send)).toBe(false)
+    expect(learnedAsks(app([send]), send)).toBe(true)
     expect(await callLearned(app([send]), tool('send_message', 'Send a text message to a chat'), {}, ctx, runner)).toBe('done')
-    expect(asked).toEqual([])
+    expect(asked).toHaveLength(1)
   })
   it('a tool that deletes, or one saved with asks_first, still asks; a trusted app never does', async () => {
     const del = tool('delete_message', 'Delete a message for everyone')

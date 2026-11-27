@@ -89,7 +89,7 @@ function requestApprovalTool(): Tool {
     spec: {
       name: 'request_approval',
       description:
-        'Ask the user to approve something that changes the outside world (sending, buying, deleting, running a command) and wait for their decision. Pass the exact content they are approving.',
+        'Ask for approval and wait for the decision. For a person-send request, pass the exact recipient in recipient and the exact outgoing text in details. The main agent reviews the card; the user decides unless their verified request explicitly authorizes the same send.',
       schema: schema(['summary'], {
         summary: str('One line saying exactly what will happen'),
         details: str('The exact content, command or list that will go out'),

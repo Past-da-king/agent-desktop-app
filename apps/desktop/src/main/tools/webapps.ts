@@ -6,10 +6,8 @@
  * is built once at start and shared by the runner, the helpers and the CLI host, so saved tools run
  * through webapp_run (app, tool, args) instead; webapp_list names them all.
  *
- * Asking (main/ask-rule.ts, 23 Oct 2026): ordinary changes (send, post, reply, edit) run without a card.
- * A tool asks the person first only when it deletes or cannot be undone, costs money, or touches going live / DNS
- * or secrets (its name or description says so, or it was saved with asks_first), or when the person switched
- * "Ask before each change" on for that app in Connections. A trusted app never asks.
+ * Asking (main/ask-rule.ts, 23 Oct 2026): outbound messages and file transfers raise a card.
+ * Send-like operations and files ask even for trusted apps; other changes follow the configured ask rules.
  */
 import { clipResult, enumOf, int, resultLimitOf, schema, str, type JsonObject, type JsonValue, type Tool, type ToolContext } from '@agent/core'
 
@@ -27,7 +25,7 @@ The idea: map the app once, then write tools so next time you call a tool instea
 1. OPEN IT. browser_open the site. If it needs a sign-in, a QR code or a code, use browser_handoff and let the person do it; the session stays signed in for next time.
 2. WATCH WHAT IT SENDS. Your tab records every request, like DevTools. browser_network clear=true, do the real action in the page (search, open an item, load the next page), then browser_network api=true (url= a word in the address). browser_network_get with an id shows the whole request and reply, and browser_fetch tries a call again with your own changes. Look for JSON endpoints: those are the best thing to build on.
 3. LOOK INSIDE. browser_eval runs JavaScript in the page and returns what you return: read the DOM (document.querySelector...), find stable selectors and aria-labels, call the site's own endpoints with fetch(url, {credentials:'include'}). Prefer in this order: (a) the site's internal JSON endpoints with fetch, (b) data the page already holds, (c) reading and driving the DOM. Avoid coordinates and visible-text guesses that break when the page changes. Never print tokens or cookie values.
-4. WRITE SMALL TOOLS. One tool per thing: search_items, get_item, list_messages... Each tool is the BODY of an async function that sees \`args\` and returns something JSON-able (trim lists to what matters). Throw an Error with a plain message when it cannot work (not signed in, element missing). Mark read_only=true only if it changes nothing; sending, posting, deleting, buying are read_only=false. Ordinary changes (send, post, reply, edit) run without asking; set asks_first=true on a tool that deletes, cannot be undone, costs money, deploys, touches DNS, or handles secrets, so the person is asked before each run.
+4. WRITE SMALL TOOLS. One tool per thing: search_items, get_item, list_messages... Each tool is the BODY of an async function that sees \`args\` and returns something JSON-able (trim lists to what matters). Throw an Error with a plain message when it cannot work (not signed in, element missing). Mark read_only=true only if it changes nothing; sending, posting, deleting, buying are read_only=false. Sending, posting and files raise an approval card; set asks_first=true on a tool that deletes, cannot be undone, costs money, deploys, touches DNS, or handles secrets, so the person is asked before each run.
 5. TEST BEFORE SAVING. Run the body with browser_eval first (set const args = {...} at the top for the test), then save with webapp_save, then run each tool once with webapp_test. If a tool fails, fix it and save again (same name replaces).
 6. IT SAVES FOR NEXT TIME. webapp_save saves the tool set straight away (no card). After that you and your helpers call them with webapp_run. If the site changes and a tool breaks, remap that tool and save again.
 
@@ -37,7 +35,7 @@ WHO MAY RUN THEM: a learned app follows the browser sign-in. You, General helper
 
 BACKSLASHES: your tool call is JSON, and backslashes inside code are the main reason a save fails. Write code that needs none: [0-9] not \\d, [.] not \\., [/] not \\/, single quotes inside selectors, and new RegExp(...) built from those.
 
-Rules: never put a password, token or cookie value in a tool or in your reply. Reading, sending and posting are fine; deleting, paying, deploying, DNS and secrets go through approval. If a site's terms forbid automation, or it needs a CAPTCHA every time, say so instead of working around it.`
+Rules: never put a password, token or cookie value in a tool or in your reply. Reading is fine; sending and posting require approval; deleting, paying, deploying, DNS and secrets go through approval. If a site's terms forbid automation, or it needs a CAPTCHA every time, say so instead of working around it.`
 
 export const EXAMPLE =
   "e.g. Hacker News: const r = await fetch('https://hacker-news.firebaseio.com/v0/topstories.json'); const ids = (await r.json()).slice(0, args.limit || 10); return ids;"
@@ -142,18 +140,21 @@ export function toolFromInput(raw: unknown): LearnedTool {
   }
 }
 
-/**
- * Whether running this tool asks the person first (main/ask-rule.ts): never for a trusted app or a reading tool;
- * always when the person asked to be asked for this app; else only for a tool that deletes, cannot be undone,
- * costs money, deploys, touches DNS or secrets.
- */
+/** Outbound tools always ask, including tools marked trusted or read-only. */
+export function learnedSends(tool: LearnedTool): boolean {
+  const words = `${tool.name} ${tool.description}`.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ')
+  return /\b(send|post|reply|publish|forward|share|broadcast|comment|tweet|dm)\b/i.test(words) ||
+    /chat\.postMessage|sendMessage|sendMail|\/messages|createPost|\/tweets|publish/i.test(tool.js)
+}
+
 export function learnedAsks(app: LearnedApp, tool: LearnedTool): boolean {
+  if (learnedSends(tool)) return true
   if (app.trusted || tool.readOnly) return false
   if (app.askFirst === true) return true
   return tool.asksFirst === true || needsYes(`${tool.name} ${tool.description}`)
 }
 
-/** Runs one saved tool. Only what deletes, costs money, goes live or touches secrets asks first (learnedAsks). */
+/** Run one saved tool, asking before recognized outbound operations or files. */
 export async function callLearned(app: LearnedApp, tool: LearnedTool, input: JsonObject, ctx: ToolContext, runner: PageRunner): Promise<string> {
   const missing = tool.required.filter((r) => input[r] === undefined || input[r] === null)
   if (missing.length > 0) return `Missing input: ${missing.join(', ')}.`
@@ -161,11 +162,12 @@ export async function callLearned(app: LearnedApp, tool: LearnedTool, input: Jso
   const prepared = await prepareFileArgs(tool.params, input)
   if (!prepared.ok) return `Error: ${prepared.error}`
   const files = prepared.files
-  if (learnedAsks(app, tool)) {
+  const outgoing = learnedSends(tool) || files.length > 0
+  if (outgoing || learnedAsks(app, tool)) {
     const keys = Object.keys(input)
-    const what = keys.length === 0 ? 'No inputs.' : keys.map((k) => `${k}: ${JSON.stringify(input[k]).slice(0, 600)}`).join('\n')
+    const what = keys.length === 0 ? 'No inputs.' : keys.map((k) => `${k}: ${JSON.stringify(input[k])}`).join('\n')
     const sent = files.length === 0 ? '' : `\nFiles from this computer it hands to the site: ${files.map((f) => `${f.name} (${sizeText(f.size)})`).join(', ')}`
-    const yes = await ctx.approve(`${app.name}: ${tool.description.slice(0, 90)}`, `${what}${sent}`, undefined, { tool: 'webapp_run', input: { app: app.name, tool: tool.name, description: tool.description, args: input, sends: /chat\.postMessage|sendMessage|sendMail|\/messages|createPost|\/tweets|publish/i.test(tool.js) } })
+    const yes = await ctx.approve(`${app.name}: ${tool.description.slice(0, 90)}`, `${what}${sent}`, undefined, { tool: 'webapp_run', input: { app: app.name, tool: tool.name, description: tool.description, args: input, sends: outgoing } })
     if (!yes) return 'DECLINED, or nobody was around to approve. Do not do it.'
   }
   const label = `${app.name}: ${tool.name.replace(/_/g, ' ')}`
@@ -306,8 +308,8 @@ function runTool(store: LearnedStore, runner: PageRunner, name: 'webapp_run' | '
       name,
       description:
         name === 'webapp_run'
-          ? `Run one tool of a web app you taught yourself (see webapp_list). Reading and ordinary changes (send, post, reply, edit) run straight away; a tool that deletes, cannot be undone, costs money, deploys, touches DNS or secrets asks the person first (and every change does for an app the person set to ask first). A file on this computer goes in as its full path (an input of type file) or as {"${FILE_KEY}": "C:/path/video.mp4"}: the app moves the bytes into the page itself, any size up to 1 GB, never base64 through you.`
-          : 'Run one tool of a saved web app now, to check it works. Same rules as webapp_run: only deleting, paying, deploying, DNS or secrets ask the person first; files go in as a path.',
+          ? `Run one tool of a web app you taught yourself (see webapp_list). Reading and ordinary changes run straight away; sending, posting and files ask first; a tool that deletes, cannot be undone, costs money, deploys, touches DNS or secrets asks the person first (and every change does for an app the person set to ask first). A file on this computer goes in as its full path (an input of type file) or as {"${FILE_KEY}": "C:/path/video.mp4"}: the app moves the bytes into the page itself, any size up to 1 GB, never base64 through you.`
+          : 'Run one saved web app tool with the same approval rules as webapp_run; files go in as a path.',
       schema: schema(['app', 'tool'], {
         app: str("The app's name"),
         tool: str("The tool's name, e.g. search_items"),

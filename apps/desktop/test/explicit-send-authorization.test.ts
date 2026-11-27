@@ -19,6 +19,10 @@ describe('explicit send authorization', () => {
   it('refuses an unspecified extra field that could change the outgoing operation', () => {
     expect(classifyCard({ ...base, origin: { tool: 'request_approval', input: { summary: 'Send email', recipient: 'ben@example.org', details: 'The meeting is at ten.', additional_payload: 'surprise' } } }).lane).toBe('him')
   })
+  it('keeps monetary or secret actions with the person even when send and exact content match', () => {
+    const value = { ...base, summary: 'Send money', request: { ...base.request!, text: 'Send "pay 100 dollars" to ben@example.org' }, origin: { tool: 'request_approval', input: { summary: 'Send money', recipient: 'ben@example.org', details: 'pay 100 dollars' } } }
+    expect(classifyCard(value).lane).toBe('him')
+  })
   it('refuses an additional recipient or attachment', () => {
     expect(classifyCard({ ...base, origin: { tool: 'request_approval', input: { summary: 'Send email', recipient: 'ben@example.org', details: 'The meeting is at ten.', attachment: '/tmp/extra.pdf' } } }).lane).toBe('him')
   })

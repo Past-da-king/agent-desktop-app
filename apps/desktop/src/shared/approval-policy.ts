@@ -311,7 +311,8 @@ function requestedSend(facts: CardFacts): boolean {
   if (!/^(?:(?:please\s+)|(?:(?:can|could|would|will)\s+you\s+)|(?:i\s+(?:want|need)\s+you\s+to\s+))*(send)\b/i.test(request)) return false
   if (/\b(do not|don't|never|without|not yet|nothing|hold|draft|prepare|approve|approval|pending|if|unless|after|when|once|before|until|find|search|read|show)\b/i.test(request)) return false
   const operation = operationWords(`${facts.origin.tool} ${str(facts.origin.input['slug'])} ${str(facts.origin.input['action'])} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`)
-  if (MONEY_WORDS.test(operation) || HANDS_WORDS.test(operation) || SECRET_WORDS.test(operation)) return false
+  const protectedText = `${operation} ${request} ${allText(facts)}`
+  if (MONEY_WORDS.test(protectedText) || HANDS_WORDS.test(protectedText) || SECRET_WORDS.test(protectedText)) return false
   // Only inspect structured outbound inputs we can completely account for. Unknown fields may
   // add recipients or content, so they must remain a person decision.
   const input = facts.origin.input

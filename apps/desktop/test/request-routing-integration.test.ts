@@ -133,6 +133,20 @@ it('the main agent can approve a send carried by the actual request naming its r
  expect((await x.acts.list())[0]!.reason).toContain(user.text)
 })
 
+it('refuses approval if the source user row changed after the card was raised', async () => {
+  const x = setup()
+  const user = await x.store.upsert('chat_item', { kind: 'user', text: 'Send "Exact update content" to ben@example.org', meta: '{}' })
+  const ctx = x.runner.deviceToolContext(x.controller.signal, { chatId: 'main', owner: 'helper:child', request: { id: user.id, at: user.createdAt, text: user.text } })
+  const approval = withOrigin(coreTools({store: x.store})).find((tool) => tool.spec.name === 'request_approval')!
+  const pending = approval.run({ summary: 'Send update', recipient: 'ben@example.org', details: 'Exact update content' }, ctx)
+  await waitFor(async () => (await x.acts.waiting()).length === 1)
+  const [card] = await x.acts.waiting()
+  await x.store.upsert('chat_item', { ...user, text: 'Draft the update' })
+  expect(await x.acts.answer({ id: card!.id, action: 'approve', reason: user.text })).toMatchObject({ ok: false })
+  x.controller.abort()
+  await pending
+})
+
 it.each([
   ['Reply "Exact update content" to ben@example.org', 'Exact update content'],
   ['Send "Another message" to ben@example.org', 'Exact update content'],
