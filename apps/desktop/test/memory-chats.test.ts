@@ -106,6 +106,27 @@ describe('past chat search', () => {
     }
   })
 
+  it('reads a chat through bounded indexed queries without listing the table', async () => {
+    const first = await store.upsert('chat_item', { kind: 'user', text: 'A message in the target chat', meta: JSON.stringify({ chat: 'target' }) })
+    await store.upsert('chat_item', { kind: 'agent', text: 'Target answer', meta: JSON.stringify({ chat: 'target' }) })
+    for (let i = 0; i < 20; i += 1) await store.upsert('chat_item', { kind: 'activity', text: 'unrelated', meta: JSON.stringify({ chat: 'other', helper: 'h' }) })
+    const original = store.list.bind(store)
+    const originalWhere = store.listWhere.bind(store)
+    store.list = (async (entity: string) => {
+      if (entity === 'chat_item') throw new Error('full chat table read')
+      return original(entity as never)
+    }) as typeof store.list
+    const queries: Array<{ chat?: string; limit?: number }> = []
+    store.listWhere = (async (entity: string, where: { chat?: string; limit?: number }) => {
+      if (entity === 'chat_item') queries.push(where)
+      return originalWhere(entity as never, where)
+    }) as typeof store.listWhere
+    const result = await toolNamed(chatTools({ store, search: async () => [] }), 'chat_read').run({ chat_id: first.id }, testContext())
+    expect(result).toContain('Target answer')
+    expect(queries.length).toBeGreaterThan(0)
+    expect(queries.every((query) => query.chat === 'target' && (query.limit ?? 0) <= 500 && (query.limit ?? 0) > 0)).toBe(true)
+  })
+
   it('chats_search and chat_read give the agent ids, dates and numbered messages', async () => {
     const lines: Array<[string, string]> = [['user', 'Plan the Lisbon trip in March with a budget of R18,000 all in']]
     for (let i = 1; i <= 50; i += 1) lines.push([i % 2 === 0 ? 'user' : 'agent', `Lisbon detail number ${i}`])

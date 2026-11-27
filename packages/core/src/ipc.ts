@@ -1150,6 +1150,8 @@ export interface ListWhere {
   /** Only rows created before this time (ms): the page above the oldest one shown. */
   before?: number
   limit?: number
+  /** Number of matching rows to skip, for bounded reads. */
+  offset?: number
   newestFirst?: boolean
   /**
    * Every matching chat row, past the store's cap of the newest 10,000 (Store.listWhere). Only for a read that truly

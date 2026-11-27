@@ -51,6 +51,8 @@ export function filterRows<R>(input: readonly R[], where: ListWhere): R[] {
   if (where.since !== undefined && where.since > 0) rows = rows.filter((row) => Number(row['createdAt']) > (where.since ?? 0))
   if (where.before !== undefined && where.before > 0) rows = rows.filter((row) => Number(row['createdAt']) < (where.before ?? 0))
   if (where.newestFirst === true) rows = [...rows].reverse()
-  if (where.limit !== undefined && where.limit > 0) rows = rows.slice(0, Math.floor(where.limit))
+  const offset = Math.max(0, Math.floor(where.offset ?? 0))
+  if (where.limit !== undefined && where.limit > 0) rows = rows.slice(offset, offset + Math.floor(where.limit))
+  else if (offset > 0) rows = rows.slice(offset)
   return rows as unknown as R[]
 }
