@@ -1,3 +1,4 @@
+import { withOutboundClaims } from './outbound-dispatch'
 /**
  * The one tool registry. Every group is one line, so a later milestone adds its tools by appending a
  * single line here (routines in M7, files/shell in M8, browser in M9, helpers in M10).
@@ -236,7 +237,7 @@ export function withOrigin(tools: Tool[]): Tool[] {
 
 export function buildWorkerToolset(deps: ToolsetDeps): Tool[] {
   // The vault guard sits outermost of all: what any tool returns, on any path, has vault values taken out.
-  return guardTools(withOrigin(workerToolsets(deps)), deps.vault)
+  return withOutboundClaims(guardTools(withOrigin(workerToolsets(deps)), deps.vault))
 }
 
 function workerToolsets(deps: ToolsetDeps): Tool[] {

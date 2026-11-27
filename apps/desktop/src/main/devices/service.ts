@@ -1155,26 +1155,23 @@ export class DevicesService {
     return ok ? target : null
   }
 
-  private outboundAuthority(): string {
-    const servers = this.list().filter(row => !row.revoked && row.kind === 'server' && row.roles.includes('brain')).map(row => row.id)
-    if ((this.deps.kind ?? 'desktop') === 'server') servers.push(this.identity.nodeId)
-    const unique = [...new Set(servers)]
-    if (unique.length !== 1) throw new Error('Send held: authority unavailable or ambiguous')
-    return unique[0]!
-  }
-
   async outboundCall(method: 'outbound.claim' | 'outbound.report', args: unknown[], caller = this.identity.nodeId): Promise<unknown> {
-    const authority = this.outboundAuthority()
-    if (authority !== this.identity.nodeId) {
-      if (caller !== this.identity.nodeId || this.uplink.target !== authority) throw new Error('Send held: authority unreachable')
-      return this.uplink.rpcCall(method, args, 5000)
+    if ((this.deps.kind ?? 'desktop') !== 'server') {
+      if (caller !== this.identity.nodeId || this.uplink.target === null) throw new Error('Send held: authority unreachable')
+      const answer = await this.uplink.rpcCall(method, args, 5000) as { role?: string; nodeId?: string; value?: unknown }
+      if (answer?.role !== 'headless' || answer.nodeId !== this.uplink.target) throw new Error('Send held: authority unreachable')
+      return answer.value
     }
     const [key, outcome] = args
     if (typeof key !== 'string' || !/^[a-f0-9]{64}$/.test(key)) throw new Error('Invalid outbound claim')
     this.outboundClaims ??= new OutboundClaims(join(this.dir, 'outbound-claims.sqlite'))
-    if (method === 'outbound.claim') return this.outboundClaims.claim(key, caller)
-    if (typeof outcome !== 'object' || outcome === null || !['sent', 'failed', 'unknown'].includes(String((outcome as {state?: unknown}).state))) throw new Error('Invalid outbound result')
-    return this.outboundClaims.finish(key, caller, outcome as Finish)
+    let value: unknown
+    if (method === 'outbound.claim') value = this.outboundClaims.claim(key, caller)
+    else {
+      if (typeof outcome !== 'object' || outcome === null || !['sent', 'failed', 'unknown'].includes(String((outcome as {state?: unknown}).state))) throw new Error('Invalid outbound result')
+      value = this.outboundClaims.finish(key, caller, outcome as Finish)
+    }
+    return caller === this.identity.nodeId ? value : { role: 'headless', nodeId: this.identity.nodeId, value }
   }
 
   private mountRoutes(): void {
