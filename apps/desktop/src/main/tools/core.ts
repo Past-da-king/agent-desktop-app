@@ -93,12 +93,15 @@ function requestApprovalTool(): Tool {
       schema: schema(['summary'], {
         summary: str('One line saying exactly what will happen'),
         details: str('The exact content, command or list that will go out'),
+        recipient: str('For a person-send approval: the exact recipient'),
       }),
     },
     run: async (input, ctx) => {
       const summary = text(input['summary']).trim()
       if (summary === '') return 'Describe what you are asking to do in summary.'
-      const approved = await ctx.approve(summary, text(input['details']).trim() || undefined)
+      const recipient = text(input['recipient']).trim()
+      const details = text(input['details']).trim()
+      const approved = await ctx.approve(summary, [recipient === '' ? '' : `Recipient: ${recipient}`, details].filter(Boolean).join('\n') || undefined)
       return approved ? 'The user approved.' : 'The user declined.'
     },
   }

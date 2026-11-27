@@ -308,12 +308,21 @@ function requestedSend(facts: CardFacts): boolean {
   if (facts.request === undefined || facts.origin === undefined) return false
   const request = facts.request.text.trim()
   // Eligibility requires an affirmative send directive, never a mention, prohibition, read, draft or conditional.
-  if (!/^(?:(?:please\s+)|(?:(?:can|could|would|will)\s+you\s+)|(?:i\s+(?:want|need)\s+you\s+to\s+))*(send|email|message|reply|forward|share|post|publish)\b/i.test(request)) return false
+  if (!/^(?:(?:please\s+)|(?:(?:can|could|would|will)\s+you\s+)|(?:i\s+(?:want|need)\s+you\s+to\s+))*(send)\b/i.test(request)) return false
   if (/\b(do not|don't|never|without|not yet|nothing|hold|draft|prepare|approve|approval|pending|if|unless|after|when|once|before|until|find|search|read|show)\b/i.test(request)) return false
   const operation = operationWords(`${facts.origin.tool} ${str(facts.origin.input['slug'])} ${str(facts.origin.input['action'])} ${str(facts.origin.input['tool'])} ${str(facts.origin.input['description'])}`)
   if (MONEY_WORDS.test(operation) || HANDS_WORDS.test(operation) || SECRET_WORDS.test(operation)) return false
+  // Only inspect structured outbound inputs we can completely account for. Unknown fields may
+  // add recipients or content, so they must remain a person decision.
+  const input = facts.origin.input
+  if (facts.origin.tool !== 'request_approval') return false
+  const payload = input
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return false
+  const allowed = /^(summary|details|recipient)$/i
+  if (Object.keys(payload).some((key) => !allowed.test(key)) || typeof input['recipient'] !== 'string' || typeof input['details'] !== 'string') return false
   const recipients: string[] = []
   let protectedInput = false
+  const contents: string[] = []
   const visit = (value: unknown, recipient = false, depth = 0): void => {
     if (depth > 8) { protectedInput = true; return }
     if (recipient && value !== null && typeof value !== 'object' && typeof value !== 'string') protectedInput = true
@@ -322,12 +331,21 @@ function requestedSend(facts: CardFacts): boolean {
     if (Array.isArray(value)) { for (const item of value) visit(item, recipient, depth + 1); return }
     if (typeof value === 'object' && value !== null) for (const [key, child] of Object.entries(value)) {
       const words = operationWords(key)
+      // Unknown attachment formats cannot be tied to the request safely. Hold these for the person.
+      if (/attachment|file|document|media|image|video|audio|link|url|html/i.test(key) && child != null && child !== '' && (!Array.isArray(child) || child.length > 0)) protectedInput = true
+      if (/^(body|text|message|content|subject|details)$/i.test(key)) {
+        if (typeof child !== 'string' || child.trim() === '') protectedInput = true
+        else contents.push(child)
+      }
       if (MONEY_WORDS.test(words) || HANDS_WORDS.test(words) || SECRET_WORDS.test(words) || /^(amount|currency|funds)$/i.test(key)) protectedInput = true
       visit(child, recipient || /^(to|cc|bcc)$|recipient|receiver|destination|target|email|phone|address|channel|chat/i.test(key), depth + 1)
     }
   }
-  visit(facts.origin.input)
+  visit(payload)
   const text = facts.request.text.toLowerCase()
+  // Exact quoted text binds the card to the user's actual instruction, not merely its recipient.
+  const quotes = [...request.matchAll(/"([^"\n]+)"/g)].map((match) => match[1])
+  if (contents.length === 0 || !contents.every((content) => quotes.includes(content))) return false
   return !protectedInput && recipients.length > 0 && recipients.every((recipient) => {
     if (recipient.length < 3) return false
     const escaped = recipient.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -338,6 +356,6 @@ function requestedSend(facts: CardFacts): boolean {
 export function classifyCard(facts: CardFacts): Verdict {
   const verdict = classifyUnrequested(facts)
   return verdict.rule === 'outbound' && TASK_ASKERS.includes(facts.asker) && requestedSend(facts)
-    ? AGENT('requested-outbound', 'The originating user request explicitly names this send and every recipient.')
+    ? AGENT('requested-outbound', 'The originating user request explicitly names this send, its exact content and every recipient.')
     : verdict
 }

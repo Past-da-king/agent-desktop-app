@@ -38,6 +38,7 @@ import {
 import { staleReason, type StaleFacts, type StaleReason } from '../../shared/stale-card'
 import { CardDecidedError } from './card-claim'
 import { chatOf } from './chat-lines'
+import { requestById } from './request-source'
 import { listWhere, type DataStore } from './data'
 
 export const BY_MAIN = 'main agent'
@@ -208,7 +209,7 @@ export class ActsForMe {
     if (lines.length === 0) return
     await this.deps.postToMain(
       [
-        `[Approvals for Ayanda] ${lines.length} card${lines.length === 1 ? ' is' : 's are'} waiting for you to answer on his behalf ("Agent acts for me" is on). Call cards_waiting for the full text, then card_answer for each: approve, decline, answer a question from what you know, or escalate to him when it is truly worth his eyes. Reasons are one line. Anything that sends text to a person, spends money or needs his own hands is refused by card_answer and is already his.`,
+        `[Approvals for Ayanda] ${lines.length} card${lines.length === 1 ? ' is' : 's are'} waiting for you to answer on his behalf ("Agent acts for me" is on). Call cards_waiting for the full text, then card_answer for each: approve, decline, answer a question from what you know, or escalate to him when it is truly worth his eyes. Reasons are one line. Only a matching explicit send instruction may be approved for a person; use the complete user instruction as the reason. Money and his own hands stay with him.`,
         ...lines,
       ].join('\n'),
     )
@@ -266,7 +267,7 @@ export class ActsForMe {
   }
 
   private async answerOnce(args: AnswerArgs): Promise<ActResult> {
-    const reason = args.reason.trim().replace(/\s+/g, ' ').slice(0, 300)
+    const reason = args.reason.trim().replace(/\s+/g, ' ')
     if (reason === '') return { ok: false, message: 'Say why in one line (reason).' }
     const row = await this.deps.store.get('chat_item', args.id)
     if (row === null || !isCardRow(row)) return { ok: false, message: 'Refused: there is no such card.' }
@@ -287,6 +288,15 @@ export class ActsForMe {
     if (verdict.lane !== 'agent' || meta['lane'] === 'him') {
       const why = verdict.lane !== 'agent' ? verdict.why : String(meta['laneWhy'] ?? 'It is his.')
       return { ok: false, message: `Refused: ${why} This card is Ayanda's to answer; it stays on his Needs you panel.` }
+    }
+
+    if (verdict.rule === 'requested-outbound' && args.action === 'approve') {
+      const source = parseRequestSource(meta['request'])
+      const verified = source === null ? null : await requestById(this.deps.store, source.id)
+      if (verified === null || verified.at !== source?.at || verified.text !== source.text) return { ok: false, message: 'Refused: the originating user instruction could not be verified.' }
+      const quotedReason = args.reason.trim().replace(/\s+/g, ' ')
+      const instruction = source?.text.trim().replace(/\s+/g, ' ') ?? ''
+      if (instruction === '' || quotedReason !== instruction) return { ok: false, message: 'Refused: quote the complete originating user instruction as the reason.' }
     }
 
     const asker = this.labelOf(row)
@@ -315,7 +325,7 @@ export class ActsForMe {
       by: BY_MAIN,
       decision: args.action,
       ...(args.action === 'answer' ? { answer: args.answer.trim() } : {}),
-      reason: [reason, this.requestText(meta)].filter(Boolean).join('\n'),
+      reason: [verdict.rule === 'requested-outbound' ? reason : reason.slice(0, 300), this.requestText(meta)].filter(Boolean).join('\n'),
       asker,
       summary,
       undo,

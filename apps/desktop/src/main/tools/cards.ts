@@ -60,7 +60,7 @@ export function cardTools(deps: CardToolDeps): Tool[] {
       spec: {
         name: 'card_answer',
         description:
-          "Answer a card for Ayanda: approve or decline an approval, answer a question (from memory or what you know), or escalate it to him when it is truly worth his eyes. Always give a one-line reason: it is shown in his Answered for you list. The app refuses a card that is his: text sent to a person, money, his own hands (sign-in, passkey, phone, card), secrets, anything unknown, and your own cards. Do not try to get around a refusal.",
+          "Answer a card for Ayanda: approve or decline an approval, answer a question (from memory or what you know), or escalate it to him when it is truly worth his eyes. For an explicitly requested person-send approval, use the complete originating user instruction as the reason. Always give a one-line reason: it is shown in his Answered for you list. The app refuses a card that is his: text sent to a person unless the exact send was requested, money, his own hands (sign-in, passkey, phone, card), secrets, anything unknown, and your own cards. Do not try to get around a refusal.",
         schema: schema(['id', 'action', 'reason'], {
           id: str('The card id from cards_waiting'),
           action: str('approve, decline, answer or escalate'),

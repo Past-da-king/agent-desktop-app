@@ -1,3 +1,5 @@
+import { coreTools } from '../src/main/tools/core'
+import { withOrigin } from '../src/main/runtime/toolset'
 import { DeviceToolHub, toolPayload } from '../src/main/devices/device-tools'
 import { toolCommand } from '../src/main/devices/device-tool-host'
 import { testContext } from './support'
@@ -115,16 +117,38 @@ it('phone hands ask through the originating context with its stored request, ign
 
 it('the main agent can approve a send carried by the actual request naming its recipient', async () => {
  const x = setup()
- const user = await x.store.upsert('chat_item', { kind: 'user', text: 'Send the update to ben@example.org', meta: '{}' })
+ const user = await x.store.upsert('chat_item', { kind: 'user', text: 'Send "Exact update content" to ben@example.org', meta: '{}' })
  const request = { id: user.id, at: user.createdAt, text: user.text }
  const ctx = x.runner.deviceToolContext(x.controller.signal, { chatId: 'main', owner: 'helper:child', request })
- const pending = ctx.approve('Send update', 'Exact update content', undefined, { tool: 'webapp_run', input: { tool: 'send_email', args: { to: 'ben@example.org', body: 'Exact update content' } } })
+ const approval = withOrigin(coreTools({store: x.store})).find((tool) => tool.spec.name === 'request_approval')!
+ const pending = approval.run({ summary: 'Send update to ben@example.org', recipient: 'ben@example.org', details: 'Exact update content' }, ctx)
  await waitFor(async () => (await x.acts.waiting()).length === 1)
  const [card] = await x.acts.waiting()
  expect(card!.rule).toBe('requested-outbound')
- expect(await x.acts.answer({ id: card!.id, action: 'approve', reason: 'The originating request names this recipient and action' })).toMatchObject({ ok: true })
- expect(await pending).toBe(true)
+ expect(card!.details).toContain('Recipient: ben@example.org')
+ expect(card!.details).toContain('Exact update content')
+ expect(await x.acts.answer({ id: card!.id, action: 'approve', reason: 'The originating request names this recipient and action' })).toMatchObject({ ok: false })
+ expect(await x.acts.answer({ id: card!.id, action: 'approve', reason: user.text })).toMatchObject({ ok: true })
+ expect(await pending).toContain('approved')
  expect((await x.acts.list())[0]!.reason).toContain(user.text)
+})
+
+it.each([
+  ['Reply "Exact update content" to ben@example.org', 'Exact update content'],
+  ['Send "Another message" to ben@example.org', 'Exact update content'],
+])('holds the real approval tool for unmatched instructions: %s', async (instruction, details) => {
+  const x = setup()
+  const user = await x.store.upsert('chat_item', { kind: 'user', text: instruction, meta: '{}' })
+  const ctx = x.runner.deviceToolContext(x.controller.signal, { chatId: 'main', owner: 'helper:child', request: { id: user.id, at: user.createdAt, text: user.text } })
+  const approval = withOrigin(coreTools({store: x.store})).find((tool) => tool.spec.name === 'request_approval')!
+  const pending = approval.run({ summary: 'Send update to ben@example.org', recipient: 'ben@example.org', details }, ctx)
+  await waitFor(async () => (await x.store.list('chat_item')).some((row) => row.kind === 'approval'))
+  const row = (await x.store.list('chat_item')).find((item) => item.kind === 'approval')!
+  expect(needsHim(row)).toBe(true)
+  expect(await x.acts.answer({ id: row.id, action: 'approve', reason: user.text })).toMatchObject({ ok: false })
+  expect(x.events.some((event) => event.type === 'needs_you')).toBe(true)
+  x.controller.abort()
+  await pending
 })
 
 it('resolves request provenance from the actual hub-produced command, not a hand-built envelope', async () => {

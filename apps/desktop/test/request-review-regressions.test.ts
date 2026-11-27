@@ -7,7 +7,7 @@ import { stampCard, isRoutedPending, verdictOfRow } from '../src/shared/card-sta
 import { settingsView, secretsView } from './support'
 const stores: Store[] = []
 afterEach(() => stores.splice(0).forEach((s) => s.close()))
-const facts: CardFacts = { kind: 'approval', asker: 'helper', summary: 'Send email', request: { id: 'real', at: 1, text: 'Send the update to ben@example.org' }, origin: { tool: 'webapp_run', input: { tool: 'send_email', args: { to: 'ben@example.org' } } } }
+const facts: CardFacts = { kind: 'approval', asker: 'helper', summary: 'Send email', request: { id: 'real', at: 1, text: 'Send "Status update" to ben@example.org' }, origin: { tool: 'request_approval', input: { summary: 'Send email', recipient: 'ben@example.org', details: 'Status update' } } }
 it('uses the verified request to authorize the actual explicitly named send recipient', () => {
  expect(classifyCard(facts)).toMatchObject({ lane: 'agent', rule: 'requested-outbound' })
  expect(classifyCard({ ...facts, request: { ...facts.request!, text: 'Send it to notben@example.org' } }).lane).toBe('him')
