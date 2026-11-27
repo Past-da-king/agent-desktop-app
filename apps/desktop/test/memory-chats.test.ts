@@ -15,6 +15,8 @@ import { CliHost } from '../src/main/runtime/cli-host'
 import { Runner } from '../src/main/runtime/runner'
 import { buildToolset } from '../src/main/runtime/toolset'
 import { chatTools } from '../src/main/tools/chats'
+import { chatSegments, SEGMENT_ROWS } from '../src/main/memory/chats'
+import { listWhere } from '../src/main/runtime/data'
 import { secretsView, settingsView, testContext, toolNamed } from './support'
 
 let store: Store
@@ -128,6 +130,50 @@ describe('past chat search', () => {
     expect(range).not.toContain('[48]')
     expect(await toolNamed(tools, 'chat_read').run({ chat_id: 'nope' }, testContext())).toBe('No chat with id nope.')
     expect(await toolNamed(tools, 'chats_search').run({ query: 'kangaroo' }, testContext())).toContain('No earlier chat')
+  })
+
+  it('chat_read never reads helpers\' steps: they are left out in SQL, and the chats come out the same (27 Nov 2026 freeze)', async () => {
+    // Two chats side by side, helper cards and thousands of their steps between the messages, main-agent steps,
+    // branch markers, look-alike metas and a divider that files the first chat from another one.
+    await store.upsert('chat_item', { kind: 'activity', text: 'early helper step', meta: JSON.stringify({ helper: 'h0' }) })
+    for (let i = 0; i < 40; i += 1) {
+      await store.upsert('chat_item', { kind: i % 2 === 0 ? 'user' : 'agent', text: `Durban move line ${i}`, meta: i % 3 === 0 ? JSON.stringify({ chat: 'pc9' }) : '{}' })
+      await store.upsert('chat_item', { kind: 'helper', text: 'helper card', meta: JSON.stringify({ helper: 'h1', brief: 'x'.repeat(500) }) })
+      for (let j = 0; j < 25; j += 1) await store.upsert('chat_item', { kind: 'activity', text: 'y'.repeat(400), meta: JSON.stringify({ helper: `h${j}`, chat: i % 3 === 0 ? 'pc9' : 'main' }) })
+      await store.upsert('chat_item', { kind: 'activity', text: 'main step', meta: JSON.stringify({ helper: i % 4 === 0 ? '' : 0 }) })
+      if (i % 7 === 0) await store.upsert('chat_item', { kind: 'branch', text: '', meta: '{}' })
+      if (i % 11 === 0) await store.upsert('chat_item', { kind: 'activity', text: 'odd meta', meta: 'not json' })
+    }
+    const first = chatSegments(await store.list('chat_item'))[0]
+    await store.upsert('chat_item', { kind: 'notice', text: 'New chat', meta: JSON.stringify({ divider: true, chat: 'pc9', memory: { chat: first?.id, status: 'done' }, title: 'Durban move', summary: 'Planning the move.' }) })
+    await store.upsert('chat_item', { kind: 'user', text: 'After the divider', meta: JSON.stringify({ chat: 'pc9' }) })
+
+    const shape = (list: ReturnType<typeof chatSegments>) =>
+      list.map((segment) => ({ id: segment.id, chat: segment.chat, start: segment.startDivider?.id ?? null, end: segment.endDivider?.id ?? null, items: segment.items.map((item) => item.id), startedAt: segment.startedAt, endedAt: segment.endedAt }))
+    const whole = chatSegments(await store.list('chat_item'))
+    const read = await listWhere(store, 'chat_item', SEGMENT_ROWS)
+    expect(shape(chatSegments(read))).toEqual(shape(whole))
+    expect(read.some((row) => row.kind === 'helper' || row.kind === 'branch' || (row.kind === 'activity' && /"helper":"h/.test(row.meta)))).toBe(false)
+    expect(read.length).toBeLessThan(200)
+
+    // The tool itself: never the whole chat table, and the same answer as before.
+    const reads: string[] = []
+    const watched = new Proxy(store, {
+      get(target, key) {
+        if (key === 'list') return (entity: string) => (reads.push(entity), target.list(entity as never))
+        const value = Reflect.get(target, key) as unknown
+        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value
+      },
+    })
+    const tools = chatTools({ store: watched, search: (query, limit) => memory.searchChats(query, limit) })
+    for (const segment of whole) {
+      const answer = await toolNamed(tools, 'chat_read').run({ chat_id: segment.id, from: 1, to: 60 }, testContext())
+      expect(answer).toContain(`chat ${segment.id}:`)
+    }
+    const filed = whole.find((segment) => segment.id === first?.id)
+    expect(filed?.endDivider).not.toBeNull()
+    expect(await toolNamed(tools, 'chat_read').run({ chat_id: first?.id ?? '' }, testContext())).toContain('summary: Planning the move.')
+    expect(reads.filter((entity) => entity === 'chat_item')).toEqual([])
   })
 })
 

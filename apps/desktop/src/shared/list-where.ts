@@ -33,6 +33,15 @@ export function filterRows<R>(input: readonly R[], where: ListWhere): R[] {
     const except = new Set(where.exceptKinds)
     rows = rows.filter((row) => !except.has(String(row['kind'])))
   }
+  if (where.withoutHelperSteps === true) rows = rows.filter((row) => {
+    if (row['kind'] === 'helper') return false
+    if (row['kind'] !== 'activity') return true
+    try {
+      const meta: unknown = JSON.parse(String(row['meta'] ?? ''))
+      const helper = typeof meta === 'object' && meta !== null && !Array.isArray(meta) ? (meta as Record<string, unknown>)['helper'] : undefined
+      return typeof helper !== 'string' || helper === ''
+    } catch { return true }
+  })
   if (where.statuses !== undefined) {
     const statuses = new Set(where.statuses)
     rows = rows.filter((row) => statuses.has(String(row['status'])))

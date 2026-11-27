@@ -1340,6 +1340,15 @@ function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args
     clauses.push(`${KIND_SQL} NOT IN (${except.map(() => '?').join(', ')})`)
     args.push(...except)
   }
+  if (where.withoutHelperSteps === true) {
+    // memory/chats.ts isHelperStep, inside SQLite: a helper card, or a step whose meta.helper is a non-empty string.
+    // The kind is tested first, so only activity rows have their meta looked into (27 Nov 2026 freeze: parsing the
+    // meta of 340,000 helper steps on the main thread for every chat_read held the PC for 52 s).
+    clauses.push(`${KIND_SQL} != 'helper'`)
+    clauses.push(
+      `(${KIND_SQL} != 'activity' OR CASE WHEN json_valid(json_extract(payload, '$.meta')) AND json_type(json_extract(payload, '$.meta'), '$.helper') = 'text' THEN json_extract(json_extract(payload, '$.meta'), '$.helper') = '' ELSE 1 END)`,
+    )
+  }
   if (where.statuses !== undefined) {
     if (where.statuses.length === 0) return null
     const statuses = [...new Set(where.statuses)]
@@ -1369,7 +1378,7 @@ function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args
       ? 'rows_thread_at'
       : where.chat !== undefined
         ? 'rows_chat_kind_at'
-        : wanted.length > 0 || except.length > 0
+        : wanted.length > 0 || except.length > 0 || where.withoutHelperSteps === true
           ? 'rows_kind_at'
           : where.statuses !== undefined
             ? 'rows_status_at'

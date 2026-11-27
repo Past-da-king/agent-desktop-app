@@ -1138,6 +1138,8 @@ export interface ListWhere {
   kinds?: string[]
   /** Leave out rows of these kinds (a chat's `activity` steps hold nearly all of its bytes). */
   exceptKinds?: string[]
+  /** Leave out what chatSegments drops as a helper's own (memory/chats.ts isHelperStep): `helper` cards, and steps whose `meta.helper` is a non-empty string. */
+  withoutHelperSteps?: boolean
   /** Rows whose `status` is one of these (device commands, turn leases). An empty list matches none. */
   statuses?: string[]
   /**

@@ -8,7 +8,7 @@ import type { ChatItem, ChatMemoryNote, PastChatHit } from '@agent/core'
 
 import type { DataStore } from '../runtime/data'
 import type { ChatIndex } from './chat-index'
-import { chatSegments, hasSubstance, isDividerRow, memoryNote, parseMeta, transcript } from './chats'
+import { chatSegments, hasSubstance, isDividerRow, memoryNote, parseMeta, SEGMENT_ROWS, transcript } from './chats'
 import { DEFAULT_DAILY_AT, dayKey, dueDay, runDaily, undoChange } from './daily'
 import { asWriter } from './history'
 import { FILE_SYSTEM, candidatesFor, fileEntries, filePrompt, parseDigest, type ChatDigest, type Complete } from './summarise'
@@ -160,7 +160,7 @@ export class MemoryService {
   }
 
   private async compress(dividerId: string, segmentId: string): Promise<void> {
-    const items = await this.deps.store.list('chat_item')
+    const items = await listWhere(this.deps.store, 'chat_item', SEGMENT_ROWS)
     const segment = chatSegments(items).find((item) => item.id === segmentId)
     let carry = ''
     let status: 'done' | 'failed' = 'failed'
@@ -215,7 +215,7 @@ export class MemoryService {
     if (divider === null) return
     const note = memoryNote(divider)
     if (note === null) return
-    const items = await this.deps.store.list('chat_item')
+    const items = await listWhere(this.deps.store, 'chat_item', SEGMENT_ROWS)
     const segment = chatSegments(items).find((item) => item.id === note.chat)
     if (segment === undefined) {
       await this.writeNote(divider, { chat: note.chat, status: 'failed', error: 'That chat is no longer here.' })

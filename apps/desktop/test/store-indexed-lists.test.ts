@@ -12,6 +12,7 @@ import { MAIN_CHAT, type ChatItem, type ListWhere, type RunState } from '@agent/
 import { Store } from '../src/main/db'
 import { listWhere as plainListWhere, type DataStore } from '../src/main/runtime/data'
 import { ProjectAgentRows, rowIdFor } from '../src/main/runtime/project-agents'
+import { SEGMENT_ROWS } from '../src/main/memory/chats'
 
 const stores: Store[] = []
 afterEach(() => {
@@ -37,6 +38,8 @@ const SHAPES: Array<[entity: 'chat_item' | 'turn' | 'job', where: ListWhere]> = 
   ['chat_item', { kind: 'user', newestFirst: true, limit: 1 }],
   ['chat_item', { chat: 'pc1', exceptKinds: ['activity'] }],
   ['chat_item', { exceptKinds: ['activity'] }],
+  ['chat_item', { withoutHelperSteps: true }],
+  ['chat_item', SEGMENT_ROWS],
   ['turn', { thread: 'main' }],
   ['turn', { thread: 'main', since: 1_000 }],
   ['job', { kind: 'x' }],
@@ -50,6 +53,12 @@ async function seed(store: Store): Promise<void> {
       const chat = chats[i % chats.length]!
       const meta = chat === MAIN_CHAT ? (i % 8 === 0 ? '{}' : i % 8 === 4 ? 'not json' : JSON.stringify({ state: 'done' })) : JSON.stringify({ chat, state: 'done' })
       await store.upsert('chat_item', { id: `r${i}`, kind: kinds[i % kinds.length]!, text: `row ${i}`, meta, createdAt: 500 + i * 7 } as never)
+    }
+    // Helper steps and their look-alikes (memory/chats.ts isHelperStep): only a non-empty string helper is one.
+    const helperMetas = [{ helper: 'h1' }, { helper: 'h2', chat: 'pc1' }, { helper: '' }, { helper: 7 }, { helper: null }, { helper: { id: 'h' } }, ['helper'], 'not json', { chat: 'pc2' }]
+    for (let i = 0; i < 90; i++) {
+      const meta = helperMetas[i % helperMetas.length]!
+      await store.upsert('chat_item', { id: `h${i}`, kind: i % 10 === 9 ? 'branch' : 'activity', text: `step ${i}`, meta: typeof meta === 'string' ? meta : JSON.stringify(meta), createdAt: 503 + i * 31 } as never)
     }
     for (let i = 0; i < 60; i++) await store.upsert('turn', { id: `t${i}`, thread: i % 2 === 0 ? 'main' : 'chat:pc1', role: 'user', json: '{}', createdAt: 900 + i * 10 } as never)
   })

@@ -4,8 +4,8 @@
  */
 import { int, schema, str, type PastChatHit, type Tool } from '@agent/core'
 
-import type { DataStore } from '../runtime/data'
-import { chatSegments, clip, segmentSummary, segmentTitle, speaker, spokenRows } from '../memory/chats'
+import { listWhere, type DataStore } from '../runtime/data'
+import { chatSegments, clip, SEGMENT_ROWS, segmentSummary, segmentTitle, speaker, spokenRows } from '../memory/chats'
 
 export interface ChatToolDeps {
   store: DataStore
@@ -64,7 +64,7 @@ function chatRead(deps: ChatToolDeps): Tool {
     run: async (input) => {
       const id = typeof input['chat_id'] === 'string' ? input['chat_id'].trim() : ''
       if (id === '') return 'Pass the chat id from chats_search.'
-      const segment = chatSegments(await deps.store.list('chat_item')).find((item) => item.id === id)
+      const segment = chatSegments(await listWhere(deps.store, 'chat_item', SEGMENT_ROWS)).find((item) => item.id === id)
       if (segment === undefined) return `No chat with id ${id}.`
       const rows = spokenRows(segment)
       const from = Math.max(1, typeof input['from'] === 'number' ? Math.trunc(input['from']) : 1)

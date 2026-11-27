@@ -6,7 +6,7 @@
  * The divider that CLOSES a chat carries how that chat was filed into memory (`meta.memory`, a ChatMemoryNote) and
  * its short summary (`meta.summary`, `meta.title`), so the summary syncs with the rest of the chat.
  */
-import type { ChatItem, ChatMemoryNote } from '@agent/core'
+import type { ChatItem, ChatMemoryNote, ListWhere } from '@agent/core'
 
 export interface ChatSegment {
   id: string
@@ -44,6 +44,14 @@ function isHelperStep(item: ChatItem): boolean {
   const helper = parseMeta(item.meta)['helper']
   return typeof helper === 'string' && helper !== ''
 }
+
+/**
+ * The chat rows chatSegments keeps, as one read: branch markers and helpers' own steps are left out inside SQLite
+ * (db.ts listWhereSql), so they are never sent to, parsed or looked through on the main thread. Helper steps are
+ * nearly every row and byte of the chat table (27 Nov 2026: 341,859 rows, 582 MB read by each chat_read, 52 s with
+ * the main thread in parseMeta < isHelperStep). Same segments as chatSegments over the whole table, in the same order.
+ */
+export const SEGMENT_ROWS: ListWhere = { exceptKinds: ['branch', 'helper'], withoutHelperSteps: true, all: true }
 
 /**
  * Every chat, oldest first. Several chats run side by side now (each row's `meta.chat`, see
