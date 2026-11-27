@@ -163,6 +163,13 @@ function real(path: string): string | null {
   }
 }
 
+/** Only a server node grants sends: an answer that is not the connected server's own is no answer at all. */
+export function authorityValue(answer: unknown, target: string | null): unknown {
+  const reply = typeof answer === 'object' && answer !== null ? answer as { role?: unknown; nodeId?: unknown; value?: unknown } : {}
+  if (target === null || reply.role !== 'headless' || reply.nodeId !== target) throw new Error('Send held: authority unreachable')
+  return reply.value
+}
+
 export class DevicesService {
   private outboundClaims: OutboundClaims | null = null
   private ident: NodeIdentity | null = null
@@ -1158,9 +1165,7 @@ export class DevicesService {
   async outboundCall(method: 'outbound.claim' | 'outbound.report', args: unknown[], caller = this.identity.nodeId): Promise<unknown> {
     if ((this.deps.kind ?? 'desktop') !== 'server' && (caller !== this.identity.nodeId || await this.hasOtherBrain())) {
       if (caller !== this.identity.nodeId || this.uplink.target === null) throw new Error('Send held: authority unreachable')
-      const answer = await this.uplink.rpcCall(method, args, 5000) as { role?: string; nodeId?: string; value?: unknown }
-      if (answer?.role !== 'headless' || answer.nodeId !== this.uplink.target) throw new Error('Send held: authority unreachable')
-      return answer.value
+      return authorityValue(await this.uplink.rpcCall(method, args, 5000), this.uplink.target)
     }
     const [key, outcome] = args
     if (typeof key !== 'string' || !/^[a-f0-9]{64}$/.test(key)) throw new Error('Invalid outbound claim')
