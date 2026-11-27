@@ -228,7 +228,6 @@ export class Store implements SyncStore {
       CREATE INDEX IF NOT EXISTS rows_thread_at ON rows(entity, json_extract(payload, '$.thread'), ${CREATED_SQL});
       CREATE INDEX IF NOT EXISTS rows_kind_at ON rows(entity, ${KIND_SQL}, ${CREATED_SQL});
       CREATE INDEX IF NOT EXISTS rows_chat_kind_at ON rows(entity, ${CHAT_KEY}, ${KIND_SQL}, ${CREATED_SQL});
-      CREATE INDEX IF NOT EXISTS rows_chat_at ON rows(entity, ${CHAT_KEY}, ${CREATED_SQL}, stamp);
       -- Device commands and turn leases are polled by status every few seconds; read the open ones, not the history.
       CREATE INDEX IF NOT EXISTS rows_status_at ON rows(entity, ${STATUS_SQL}, ${CREATED_SQL});
       -- Full bodies of old finished steps whose row was made light (archiveSlice): never read by a list.
@@ -1369,7 +1368,7 @@ function listWhereSql(entity: EntityName, where: ListWhere): { sql: string; args
     where.thread !== undefined
       ? 'rows_thread_at'
       : where.chat !== undefined
-        ? (wanted.length === 0 ? 'rows_chat_at' : 'rows_chat_kind_at')
+        ? 'rows_chat_kind_at'
         : wanted.length > 0 || except.length > 0
           ? 'rows_kind_at'
           : where.statuses !== undefined
