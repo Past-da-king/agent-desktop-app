@@ -69,6 +69,29 @@ describe('end-of-day slot', () => {
   })
 })
 
+describe('bounded daily chat reads', () => {
+  it('reads today in bounded pages without listing the whole chat table', async () => {
+    for (let i = 0; i < 510; i += 1) await store.upsert('chat_item', { kind: 'user', text: `daily message ${i}`, meta: '{}' })
+    const original = store.list.bind(store)
+    const originalWhere = store.listWhere.bind(store)
+    const offsets: number[] = []
+    store.list = (async (entity: string) => {
+      if (entity === 'chat_item') throw new Error('full table read')
+      return original(entity as never)
+    }) as typeof store.list
+    store.listWhere = (async (entity: string, where: { offset?: number }) => {
+      if (entity === 'chat_item') offsets.push(where.offset ?? 0)
+      return originalWhere(entity as never, where)
+    }) as typeof store.listWhere
+    const { memory, prompts } = service((system) => isWhere(system) ? where('A sufficiently detailed daily note for the next session.') : JSON.stringify({ changes: [] }))
+    const result = await memory.runNow()
+    expect(result.ok, result.message).toBe(true)
+    expect(offsets).toEqual([0, 500])
+    expect(prompts[0]).toContain('daily message 0')
+    expect(prompts[0]).toContain('daily message 509')
+  })
+})
+
 describe('end-of-day pass', () => {
   it('compiles today into one pinned "Where we are" page that replaces yesterday and reaches new chats', async () => {
     await store.upsert('memory', { id: WHERE_ID, title: 'Where we are', body: '**Goals**\n- Old goal from yesterday.', kind: 'project', topics: 'continuation, daily, 2026-10-20', pinned: true, source: 'agent' })

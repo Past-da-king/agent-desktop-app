@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto'
 
 import type { ChatItem, GoalRow, MemoryRow, TaskRow } from '@agent/core'
 
-import type { DataStore } from '../runtime/data'
+import { listWhere, type DataStore } from '../runtime/data'
 import { terms } from '../runtime/recall'
 import { chatSegments, clip, spokenRows, transcript } from './chats'
 import { mostlySecret, redactSecrets } from './redact'
@@ -129,7 +129,17 @@ function logChange(action: UpkeepChange['action'], memoryId: string, title: stri
 /** Step 1: today's chats into the "Where we are" page. Returns the changes made, or null when there was nothing. */
 export async function compileDay(deps: DailyDeps, window: { day: string; from: number; to: number }): Promise<{ changes: UpkeepChange[]; chats: number; filed: number; body: string } | null> {
   const now = (deps.now ?? Date.now)()
-  const items = await deps.store.list('chat_item')
+  const items: ChatItem[] = []
+  const pageSize = 500
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await listWhere(deps.store, 'chat_item', {
+      since: Math.max(0, window.from - 1), before: window.to, kinds: ['user', 'agent', 'report', 'call', 'voice_note', 'notice'],
+      limit: pageSize, offset,
+    })
+    items.push(...page)
+    if (page.length < pageSize) break
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
   const chats = todayChats(items, window.from, window.to)
   if (chats.length === 0) return null
 
