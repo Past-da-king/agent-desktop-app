@@ -40,3 +40,15 @@ Live desktop and agent-node installations are deliberately outside this change. 
 The second gap was independent of tool discovery: chat replication copies the row, not the WAV file. A phone or desktop connected to a different brain therefore asked the wrong local voice folder. New notes name their producing device in audioDevice. The shared voice.noteAudio handler now reads locally first, then retrieves a replicated note from its still-trusted paired producer over the existing TLS-pinned authenticated RPC. A local-only argument prevents relay loops. Old notes without provenance can be looked up among paired brains. Unknown filenames, invalid paths, disabled Devices and revoked peers never authorize a remote read; revocation and endpoint identity are checked again after the reply. No audio is embedded in chat rows and no third-party store is used. The pairing pass is the same pass replication uses, including on newly joined nodes.
 
 The peer-audio regressions first failed because the module did not exist, then passed. A two-process built-node proof paired isolated nodes, replicated a note, fetched its exact WAV through the reader node, revoked the producer and confirmed the reader then returned null. All test processes were stopped. Neither live service was used for the mesh proof.
+
+## When a key runs out of allowance (27 November 2026)
+
+Google's free speech allowance is ten calls a day for each speech model of each key. One exhausted key took every voice note down until midnight in California, although the Vault already held backup keys made for exactly that. A voice note now walks an ordered list: the voice key in Settings (`geminiKey`), then every Vault item named `Gemini API key: A.O.S voice-note backup ...`, in Vault order.
+
+- A key that answers 429 or RESOURCE_EXHAUSTED rests until its allowance is back: the next midnight in Pacific time for a daily quota, and a minute (or the provider's own "retry in", capped at ten minutes) for a per-minute one.
+- The same script goes to the next key. Each speech model keeps its own turn as before, so a model out of quota still hands over to the next model of the same key.
+- Only when every key is resting does the note fail, with one plain line instead of a per-key error.
+- Keys are read at runtime from the key store and the Vault on every call, so a key added to the Vault works for the next note with no restart. `voice/keyring.ts` remembers a fingerprint of each resting key and nothing else: no key goes into settings, chat, logs or a request body.
+- A refused key (400, 401, 403) does not fall through to a backup; that refusal is the answer, so a wrong key is never hidden behind a working one.
+- Still on the voice key alone: Live call tokens (`mintLiveToken`), the Files API upload used for dictations too long to send inline, and dictation chunking. Everything that goes through `post()` rotates keys already.
+- Tests: `apps/desktop/test/voice-key-fallback.test.ts`. They fail on the source before this change (7 of 14) and on mutation controls that stop asking the backups, stop remembering a resting key, or give a key no rest at all.

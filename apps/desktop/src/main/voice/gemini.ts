@@ -5,6 +5,8 @@
  * Model ids drift, so every job has an ordered list and the first one the key can reach wins. The
  * check lists the models the key can see and remembers the best of each list for this session.
  */
+import { restUntil, type QuotaKind } from './keyring'
+
 export const GEMINI_BASE = 'https://generativelanguage.googleapis.com'
 export const LIVE_URL = `${GEMINI_BASE.replace('https://', 'wss://')}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
 
@@ -25,6 +27,14 @@ const MAX_TTS_CHARS = 4_000
 export interface GeminiDeps {
   key: () => string | null
   fetchImpl?: typeof fetch
+  /**
+   * Every key a call may use, in order (voice/keyring.ts: the voice key in Settings, then the Vault backups, with the
+   * ones resting after a quota left out). Absent: just `key()`.
+   */
+  keyList?: () => string[]
+  /** A key that answered out of quota: it is not tried again until then (ms since epoch). */
+  keyExhausted?: (key: string, until: number) => void
+  now?: () => number
 }
 
 /** The models the check found, so later calls skip ids that would 404. */
@@ -44,9 +54,18 @@ export const DEFAULT_CHOICE: ModelChoice = {
 
 export class GeminiError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  /** Set when this key is out of allowance: 'day' until the daily quota resets, 'minute' for a short wait. */
+  readonly quota: QuotaKind | null
+  /** What the provider asked us to wait, when it said. */
+  readonly retryAfterMs: number | null
+  /** Every key this app holds is out of quota: there was nothing left to try. */
+  readonly allKeys: boolean
+  constructor(status: number, message: string, detail: { quota?: QuotaKind; retryAfterMs?: number; allKeys?: boolean } = {}) {
     super(message)
     this.status = status
+    this.quota = detail.quota ?? null
+    this.retryAfterMs = detail.retryAfterMs ?? null
+    this.allKeys = detail.allKeys === true
   }
 }
 
@@ -55,7 +74,10 @@ export function explain(error: unknown): string {
   if (error instanceof GeminiError) {
     if (error.status === 400 && /api key/i.test(error.message)) return 'That Gemini key was not accepted.'
     if (error.status === 401 || error.status === 403) return 'That Gemini key was not accepted.'
-    if (error.status === 429) return 'Gemini says this key is out of quota for now. Try again later.'
+    if (error.status === 429) {
+      if (error.allKeys) return 'Every Gemini key this app can use is out of quota for now. Add another key in Settings, Voice, or try again later.'
+      return 'Gemini says this key is out of quota for now. Try again later.'
+    }
     if (error.status === 0) return 'Could not reach Gemini. Check the connection.'
     if (error.status === -1) return error.message === 'cancelled' ? 'Cancelled.' : 'Gemini took too long to answer.'
     if (error.status === 503) return 'Gemini is busy right now. Try again in a moment.'
@@ -64,15 +86,86 @@ export function explain(error: unknown): string {
   return 'Could not reach Gemini. Check the connection.'
 }
 
+/**
+ * Whether a refusal means this key is out of allowance, and for how long. Google's free speech allowance is per day
+ * ("limit: 10 requests per day on Free Tier", RESOURCE_EXHAUSTED); a per-minute rate limit clears in a minute.
+ */
+export function quotaOf(status: number, body: string): { quota: QuotaKind; retryAfterMs: number | null } | null {
+  if (status !== 429) return null
+  const text = body.toLowerCase()
+  // "limit: 10 requests per day on Free Tier" is the daily allowance; a rate limit clears in a minute.
+  const quota: QuotaKind = /per day|per-day|requests per day|daily quota|quota per day/.test(text) ? 'day' : 'minute'
+  return { quota, retryAfterMs: retryDelayOf(text) }
+}
+
+/** What a 429 said to wait: "retryDelay": "33s", or the plain "Please retry in 9h29m19s". */
+function retryDelayOf(text: string): number | null {
+  const plain = /"retrydelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(text)
+  if (plain !== null) return Math.round(Number(plain[1]) * 1000)
+  const spelled = /retry in ((?:\d+d)?(?:\d+h)?(?:\d+m)?(?:\d+s)?)/.exec(text)?.[1] ?? ''
+  if (spelled === '') return null
+  let ms = 0
+  for (const match of spelled.matchAll(/(\d+)d|(\d+)h|(\d+)m|(\d+)s/g)) {
+    const [days, hours, minutes, seconds] = [match[1], match[2], match[3], match[4]]
+    if (days !== undefined) ms += Number(days) * 86_400_000
+    if (hours !== undefined) ms += Number(hours) * 3_600_000
+    if (minutes !== undefined) ms += Number(minutes) * 60_000
+    if (seconds !== undefined) ms += Number(seconds) * 1000
+  }
+  return ms > 0 ? ms : null
+}
+
+/** A refusal as an error that carries whether the key is out of allowance. */
+function providerError(status: number, body: string): GeminiError {
+  const quota = quotaOf(status, body)
+  return new GeminiError(status, errorMessage(body), quota === null ? {} : { quota: quota.quota, ...(quota.retryAfterMs === null ? {} : { retryAfterMs: quota.retryAfterMs }) })
+}
+
+/**
+ * The keys one request may use, in order. When the voice service supplies a key list (voice/keyring.ts, the main voice
+ * key then the Vault backups) that is used as given, resting keys already left out; otherwise the single key.
+ */
+function keysFor(deps: GeminiDeps): string[] {
+  if (deps.keyList !== undefined) {
+    return [...new Set((deps.keyList() ?? []).map((key) => key.trim()).filter((key) => key !== ''))]
+  }
+  const single = deps.key()
+  return single === null || single.trim() === '' ? [] : [single.trim()]
+}
+
+/**
+ * One provider request, tried on each key in turn. A key that answers out of allowance is remembered as resting until
+ * its allowance is back, and the SAME request goes to the next key (27 Nov 2026: one exhausted key took every voice
+ * note down for the rest of the day). Any other refusal is the answer, so a wrong key is never hidden behind a good one.
+ */
+async function withKey<T>(deps: GeminiDeps, run: (key: string) => Promise<T>): Promise<T> {
+  const keys = keysFor(deps)
+  if (keys.length === 0) throw new GeminiError(429, 'every key is out of quota', { allKeys: true })
+  let last: GeminiError | null = null
+  for (const key of keys) {
+    try {
+      return await run(key)
+    } catch (error) {
+      if (!(error instanceof GeminiError) || error.quota === null) throw error
+      last = error
+      const at = (deps.now ?? Date.now)()
+      deps.keyExhausted?.(key, restUntil(error.quota, at, error.retryAfterMs ?? undefined))
+    }
+  }
+  throw new GeminiError(429, last === null ? 'every key is out of quota' : last.message, { allKeys: true })
+}
+
 async function post(deps: GeminiDeps, model: string, body: unknown, signal?: AbortSignal): Promise<Record<string, unknown>> {
-  const key = deps.key()
-  if (key === null || key.trim() === '') throw new GeminiError(401, 'No key')
+  return withKey(deps, (key) => postOn(deps, key, model, body, signal))
+}
+
+async function postOn(deps: GeminiDeps, key: string, model: string, body: unknown, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const fetcher = deps.fetchImpl ?? fetch
   let response: Response
   try {
     response = await fetcher(`${GEMINI_BASE}/v1beta/models/${model}:generateContent`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': key.trim() },
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify(body),
       ...(signal === undefined ? {} : { signal }),
     })
@@ -86,7 +179,7 @@ async function post(deps: GeminiDeps, model: string, body: unknown, signal?: Abo
   } catch {
     throw new GeminiError(signal?.aborted === true ? -1 : 0, 'unreachable')
   }
-  if (!response.ok) throw new GeminiError(response.status, errorMessage(text))
+  if (!response.ok) throw providerError(response.status, text)
   try {
     return JSON.parse(text) as Record<string, unknown>
   } catch {
@@ -171,13 +264,14 @@ export function chooseModels(listed: string[]): ModelChoice {
 
 /** The check: list the models the key can see (one cheap, real call) and pick the best of each list. */
 export async function checkKey(deps: GeminiDeps): Promise<{ ok: boolean; message: string; choice?: ModelChoice }> {
-  const key = deps.key()
-  if (key === null || key.trim() === '') return { ok: false, message: 'Add a Gemini key first.' }
+  // Listing the models costs no speech allowance, so the first key that is not resting is enough.
+  const key = keysFor(deps)[0]
+  if (key === undefined) return { ok: false, message: 'Add a Gemini key first.' }
   const fetcher = deps.fetchImpl ?? fetch
   let response: Response
   try {
     response = await fetcher(`${GEMINI_BASE}/v1beta/models?pageSize=1000`, {
-      headers: { 'x-goog-api-key': key.trim() },
+      headers: { 'x-goog-api-key': key },
     })
   } catch {
     return { ok: false, message: 'Could not reach Gemini. Check the connection.' }
@@ -262,53 +356,54 @@ export async function voiceNoteAudio(
 ): Promise<{ pcm: Buffer; model: string }> {
   const said = script.trim().slice(0, MAX_NOTE_CHARS)
   if (said === '') throw new GeminiError(400, 'Nothing to say')
-  const key = deps.key()
-  if (key === null || key.trim() === '') throw new GeminiError(401, 'No key')
-  const fetcher = deps.fetchImpl ?? fetch
-  // Each speech model has its own daily quota, so a model that is out of quota hands over to the next one.
-  return eachModel(preferring(choice.tts, choice.speech ?? TTS_MODELS), [404, 429], async (model) => {
-    let response: Response | null = null
-    try {
-      response = await fetcher(`${GEMINI_BASE}/v1beta/interactions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-goog-api-key': key.trim() },
-        body: JSON.stringify({
-          model,
-          input: [
-            {
-              type: 'user_input',
-              content: [{ type: 'text', text: said, ...(style.trim() === '' ? {} : { annotations: [{ type: 'speech_metadata', style: style.trim().slice(0, 300) }] }) }],
-            },
-          ],
-          response_format: { type: 'audio' },
-          generation_config: { speech_config: [{ voice }] },
-        }),
-        signal: AbortSignal.timeout(240_000),
+  if (keysFor(deps).length === 0) throw new GeminiError(401, 'No key')
+  // Each speech model has its own daily quota, and each key has its own allowance: a model that is out of quota hands
+  // over to the next model, and a key that is out of quota hands the same script to the next key (voice/keyring.ts).
+  return eachModel(preferring(choice.tts, choice.speech ?? TTS_MODELS), [404, 429], async (model) =>
+    withKey(deps, async (key) => {
+      let response: Response | null = null
+      try {
+        response = await (deps.fetchImpl ?? fetch)(`${GEMINI_BASE}/v1beta/interactions`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+          body: JSON.stringify({
+            model,
+            input: [
+              {
+                type: 'user_input',
+                content: [{ type: 'text', text: said, ...(style.trim() === '' ? {} : { annotations: [{ type: 'speech_metadata', style: style.trim().slice(0, 300) }] }) }],
+              },
+            ],
+            response_format: { type: 'audio' },
+            generation_config: { speech_config: [{ voice }] },
+          }),
+          signal: AbortSignal.timeout(240_000),
+        })
+      } catch {
+        response = null
+      }
+      if (response !== null && response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { steps?: Array<{ type?: string; content?: Array<{ type?: string; data?: string }> }> }
+        const audio = (body.steps ?? [])
+          .filter((step) => step.type === 'model_output')
+          .flatMap((step) => step.content ?? [])
+          .filter((part) => part.type === 'audio' && typeof part.data === 'string')
+          .pop()
+        if (audio?.data !== undefined) return { pcm: stripWav(Buffer.from(audio.data, 'base64')), model }
+      }
+      if (response !== null && (response.status === 401 || response.status === 403 || response.status === 429)) {
+        throw providerError(response.status, await response.text().catch(() => ''))
+      }
+      // This model does not take the Interactions request: the plain script, with no tags to read out.
+      const body = await postOn(deps, key, model, {
+        contents: [{ role: 'user', parts: [{ text: stripTags(said) }] }],
+        generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
       })
-    } catch {
-      response = null
-    }
-    if (response !== null && response.ok) {
-      const body = (await response.json().catch(() => ({}))) as { steps?: Array<{ type?: string; content?: Array<{ type?: string; data?: string }> }> }
-      const audio = (body.steps ?? [])
-        .filter((step) => step.type === 'model_output')
-        .flatMap((step) => step.content ?? [])
-        .filter((part) => part.type === 'audio' && typeof part.data === 'string')
-        .pop()
-      if (audio?.data !== undefined) return { pcm: stripWav(Buffer.from(audio.data, 'base64')), model }
-    }
-    if (response !== null && (response.status === 401 || response.status === 403 || response.status === 429)) {
-      throw new GeminiError(response.status, errorMessage(await response.text().catch(() => '')))
-    }
-    // This model does not take the Interactions request: the plain script, with no tags to read out.
-    const body = await post(deps, model, {
-      contents: [{ role: 'user', parts: [{ text: stripTags(said) }] }],
-      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } } },
-    })
-    const data = inlineAudio(body)
-    if (data === null) throw new GeminiError(502, 'No audio came back')
-    return { pcm: stripWav(Buffer.from(data, 'base64')), model }
-  })
+      const data = inlineAudio(body)
+      if (data === null) throw new GeminiError(502, 'No audio came back')
+      return { pcm: stripWav(Buffer.from(data, 'base64')), model }
+    }),
+  )
 }
 
 /** 24 kHz mono PCM16 in a WAV container, which every player opens. */
