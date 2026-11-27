@@ -7,6 +7,7 @@ import { networkInterfaces } from 'node:os'
 import { dirname } from 'node:path'
 
 export interface DevicesConfig {
+  outbound?: { authorityNodeId: string }
   orderRepairVersion?: number
   /** "Let my other devices connect". */
   enabled: boolean
@@ -86,6 +87,7 @@ export function cleanConfig(raw: unknown): DevicesConfig {
     if (peers.length >= 12) break
   }
   return {
+    ...(typeof (value['outbound'] as Record<string, unknown> | undefined)?.['authorityNodeId'] === 'string' ? { outbound: { authorityNodeId: (value['outbound'] as { authorityNodeId: string }).authorityNodeId } } : {}),
     ...(value['orderRepairVersion'] === 1 ? { orderRepairVersion: 1 } : {}),
     enabled: value['enabled'] === true,
     port,
