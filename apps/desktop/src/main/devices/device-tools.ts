@@ -1,4 +1,5 @@
 import { DeviceQuestions } from './device-questions'
+import type { TransferSender } from './transfer-sender'
 import { parseRequestSource, type RequestSource } from '../../shared/request-source'
 import { requestById, requestFor } from '../runtime/request-source'
 import { compareDeviceOrder } from '@agent/core'
@@ -15,9 +16,9 @@ import { compareDeviceOrder } from '@agent/core'
  * The agent waits up to the deadline (120 s, browser 600 s). A result that comes later is posted to the chat.
  */
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 
 import {
   MAIN_CHAT,
@@ -163,6 +164,7 @@ export interface ToolOutcome {
 }
 
 export interface DeviceToolHubDeps {
+  transfers?: () => TransferSender | null
   store: DataStore & { onChange(listener: (change: DataChange) => void): () => void }
   selfId: () => string
   /** This node's own tools that others may use (already filtered by its share switches), run in place for "self". */
@@ -404,6 +406,23 @@ export class DeviceToolHub {
 
   /** Call one tool on one device and wait for its answer (up to the deadline). */
   async call(ref: string, tool: string, args: JsonObject, chat: string = MAIN_CHAT, ctx?: ToolContext): Promise<ToolOutcome> {
+    if (tool === 'send_file' && this.deps.transfers !== undefined) {
+      const transfers = this.deps.transfers()
+      if (transfers === null) return { ok: false, state: 'failed', text: 'Transfers are unavailable while Devices is off.', device: '' }
+      const path = typeof args['path'] === 'string' ? args['path'].trim() : ''
+      if (path === '' || !isAbsolute(path) || !existsSync(path) || !statSync(path).isFile()) return { ok: false, state: 'failed', text: 'send_file needs the full path of an existing file on this computer.', device: '' }
+      const target = await this.resolveFileTarget(ref, chat)
+      if ('error' in target) return { ok: false, state: 'failed', text: target.error, device: '' }
+      if (target.id === this.deps.selfId()) return { ok: true, state: 'done', text: `The file is already on this computer: ${path}`, device: target.name }
+      const name = (typeof args['name'] === 'string' && args['name'].trim() !== '' ? args['name'].trim() : basename(path)).slice(0, 200)
+      try {
+        const row = await transfers.enqueue(path, target.id, name)
+        void transfers.tick().catch(() => undefined)
+        return { ok: true, state: 'waiting', text: `Transfer ${row.id}: queued for ${target.name}. Use transfer_status to check progress.`, device: target.name }
+      } catch (error) {
+        return { ok: false, state: 'failed', text: `Could not queue the file: ${error instanceof Error ? error.message : String(error)}`, device: target.name }
+      }
+    }
     // What connected devices offer right now (a phone that just said hello).
     await this.refresh().catch(() => undefined)
     const found = await this.resolve(ref, tool, chat)

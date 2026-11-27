@@ -320,3 +320,23 @@ it('resumes when the phone is ahead of the relay after an acknowledgement was lo
   }
   expect(await relay.deliver(id, (chunk) => phone.receive(chunk))).toMatchObject({ status: 'received', bytes: data.length })
 })
+
+it('routes device_tool send_file through the queue even when the phone advertises no such tool', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'agent-device-send-'))
+  dirs.push(dir)
+  const source = join(dir, 'report.pdf')
+  await writeFile(source, 'hello')
+  const store = new Store(':memory:')
+  const host = await startTestHost('sender')
+  await store.upsert('device', { id: 'phone', name: 'Phone', kind: 'phone', platform: 'android', roles: ['screen'], priority: 1, urls: [], fp: '', facts: {}, pairedAt: 1, lastSeen: 1, revoked: false, tools: [] })
+  const calls: string[] = []
+  const sender = { enqueue: async (_path: string, target: string) => { calls.push(target); return { id: 'transfer-id' } }, tick: async () => {} }
+  const hub = new DeviceToolHub({ store, selfId: () => 'sender', noteBack: () => {}, transfers: () => sender as never })
+  hub.attach(host)
+  try {
+    const result = await hub.call('phone', 'send_file', { path: source }, 'main')
+    expect(result.state).toBe('waiting')
+    expect(result.text).toContain('transfer-id')
+    expect(calls).toEqual(['phone'])
+  } finally { hub.stop(); await host.close(); store.close() }
+})

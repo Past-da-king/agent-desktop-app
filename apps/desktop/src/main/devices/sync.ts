@@ -157,9 +157,11 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
   commands.attach(host)
 
   const local = deps.localTools ?? (() => [])
+  let transferSender: TransferSender | null = null
   const tools = new DeviceToolHub({
     store,
     selfId: () => host.self().id,
+    transfers: () => transferSender,
     localTools: local,
     noteBack: deps.noteBack,
     ...(deps.shareGroups === undefined ? {} : { shareGroups: deps.shareGroups }),
@@ -191,6 +193,7 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
       status: (id) => relay.status(host.self().id, id),
     },
   })
+  transferSender = transfers
   let transferTimer: ReturnType<typeof setInterval> | null = null
   const startTransfers = (): void => {
     if (transferTimer !== null) return
