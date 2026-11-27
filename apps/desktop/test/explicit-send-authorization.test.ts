@@ -16,6 +16,14 @@ describe('explicit send authorization', () => {
   ])('keeps unapproved or mismatched content with the person: %s', (text) => {
     expect(classifyCard({ ...base, request: { ...base.request!, text } }).lane).toBe('him')
   })
+  it('does not mistake an address in the quoted body for the recipient', () => {
+    const facts = { ...base, request: { ...base.request!, text: 'Send "ben@example.org" to alice@example.org' }, origin: { tool: 'request_approval', input: { summary: 'Send email', recipient: 'ben@example.org', details: 'ben@example.org' } } }
+    expect(classifyCard(facts).lane).toBe('him')
+  })
+  it('keeps content too large for the stored origin evidence with the person', () => {
+    const details = 'x'.repeat(1501)
+    expect(classifyCard({ ...base, request: { ...base.request!, text: `Send "${details}" to ben@example.org` }, origin: {tool: 'request_approval', input: {summary: 'Send email', recipient: 'ben@example.org', details}} }).lane).toBe('him')
+  })
   it('refuses an unspecified extra field that could change the outgoing operation', () => {
     expect(classifyCard({ ...base, origin: { tool: 'request_approval', input: { summary: 'Send email', recipient: 'ben@example.org', details: 'The meeting is at ten.', additional_payload: 'surprise' } } }).lane).toBe('him')
   })

@@ -343,14 +343,15 @@ function requestedSend(facts: CardFacts): boolean {
     }
   }
   visit(payload)
-  const text = facts.request.text.toLowerCase()
+  // Only a recipient outside the quoted message and introduced as a recipient counts.
+  const text = facts.request.text.replace(/"[^"\n]*"/g, ' ').toLowerCase()
   // Exact quoted text binds the card to the user's actual instruction, not merely its recipient.
   const quotes = [...request.matchAll(/"([^"\n]+)"/g)].map((match) => match[1])
-  if (contents.length === 0 || !contents.every((content) => quotes.includes(content))) return false
+  if (contents.length === 0 || !contents.every((content) => content.length <= 1500 && quotes.includes(content))) return false
   return !protectedInput && recipients.length > 0 && recipients.every((recipient) => {
     if (recipient.length < 3) return false
     const escaped = recipient.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    return new RegExp(`(^|[^\\p{L}\\p{N}\\p{M}@._+\\-])${escaped}($|[^\\p{L}\\p{N}\\p{M}@._+\\-])`, 'iu').test(text)
+    return new RegExp(`\\b(?:to|cc|bcc)\\s+${escaped}($|[^\\p{L}\\p{N}\\p{M}@._+\\-])`, 'iu').test(text)
   })
 }
 
