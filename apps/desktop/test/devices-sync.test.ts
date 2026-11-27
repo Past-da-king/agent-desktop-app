@@ -4,7 +4,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { X509Certificate } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -17,6 +17,7 @@ import { Secrets } from '../src/main/secrets'
 import { SettingsStore } from '../src/main/settings'
 import { ProfileStore } from '../src/main/apps/profiles'
 import { fingerprintOf } from '../src/main/devices/pinned-fetch'
+import { TransferInbox } from '../src/main/devices/file-transfer'
 import { registerDevicesSync, type DevicesSync } from '../src/main/devices/sync'
 import { buildSystemPrompt as buildPrompt } from '../src/main/runtime/prompt'
 import { facts, startTestHost } from './devices-host'
@@ -105,3 +106,51 @@ describe.skipIf(!hasOpenssl())('registerDevicesSync', () => {
     expect(buildPrompt({ settings: DEFAULT_SETTINGS, now: new Date(0), platform: 'linux', memories: [], goals: [], tasks: [], latestUserText: 'hi', timeZone: 'UTC' })).not.toContain('THE DEVICE THE USER IS ON')
   }, 30_000)
 })
+
+it.skipIf(!hasOpenssl())('routes 50 MB from one registered node through another to its connected fake phone', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-relay-mesh-'))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  const ids = ['relay_a', 'relay_b'] as const
+  const certs = { relay_a: makeCert(dir, 'a'), relay_b: makeCert(dir, 'b') }
+  const hosts = await Promise.all(ids.map((id) => startTestHost(id, facts(id), certs[id])))
+  for (const host of hosts) cleanups.push(() => host.close())
+  const syncs: DevicesSync[] = []
+  for (const [i, id] of ids.entries()) {
+    const host = hosts[i]!
+    for (const other of ids) host.passes.set('pass-' + other, { deviceId: other, node: true })
+    const store = new Store(':memory:')
+    const settings = new SettingsStore(join(dir, id + '-settings.json'))
+    const secrets = new Secrets(join(dir, id + '-secrets'), plain)
+    for (const [j, other] of ids.entries()) await store.upsert('device', { id: other, name: other, kind: 'desktop', platform: 'linux', roles: ['brain'], priority: j, urls: [hosts[j]!.url], fp: certs[other].fp, facts: {}, pairedAt: 1, lastSeen: 1, revoked: false })
+    const sync = registerDevicesSync(host, {
+      store, pass: () => 'pass-' + id, imageDir: join(dir, id, 'from'),
+      bundle: { settings: { get: () => settings.get(), save: (p) => settings.save(p), onChange: (l) => settings.onChange(() => l()) }, secrets, profiles: new ProfileStore(join(dir, id + '-profiles.json')) },
+      noteBack: () => undefined,
+    })
+    syncs.push(sync)
+    cleanups.push(() => { sync.stop(); store.close() })
+  }
+  const receiver = new TransferInbox(join(dir, 'phone'))
+  const b = hosts[1]!
+  b.connected.add('phone')
+  b.facts.set('phone', { ...facts('Phone', { kind: 'phone', platform: 'android' }), tools: [{ name: 'receive_file', description: '', params: {}, group: 'files', readOnly: false }] })
+  let seen = 0
+  let busy = false
+  const timer = setInterval(() => {
+    if (busy) return
+    const events = b.events.filter((event) => event.name === 'device.command' && event.deviceId === 'phone')
+    const event = events[seen++]
+    if (event === undefined) { seen--; return }
+    busy = true
+    const payload = event.payload as { id: string; args: Parameters<TransferInbox['receive']>[0] }
+    void receiver.receive(payload.args).then((reply) => b.rpc.get('device.result')?.('phone', [payload.id, true, reply])).finally(() => { busy = false })
+  }, 5)
+  cleanups.push(() => clearInterval(timer))
+  const source = join(dir, 'large.bin')
+  writeFileSync(source, Buffer.alloc(50 * 1024 * 1024, 71))
+  const transfer = await syncs[0]!.transfers.enqueue(source, 'phone', 'large.bin')
+  expect(hosts[0]!.isConnected('phone')).toBe(false)
+  await syncs[0]!.transfers.tick()
+  expect(await syncs[0]!.transfers.status(transfer.id)).toMatchObject({ status: 'sending' })
+  await waitFor(async () => (await syncs[0]!.transfers.status(transfer.id)).status === 'delivered', 60000)
+}, 90000)

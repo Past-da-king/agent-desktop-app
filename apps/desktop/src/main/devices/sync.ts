@@ -1,3 +1,8 @@
+import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { TransferRelay, registerTransferRelayRoutes } from './transfer-relay'
+import { TransferSender } from './transfer-sender'
+import type { TransferReply } from './file-transfer'
 import type { RequestSource } from '../../shared/request-source'
 /**
  * Workstream B plugged into a running node server (docs/devices-protocol.md s6-s8), in one call:
@@ -65,6 +70,9 @@ export interface DevicesSync {
   commands: DeviceCommands
   /** Shared device tools (s11): devices_list, device_tool and the router. */
   tools: DeviceToolHub
+  transfers: TransferSender
+  startTransfers(): void
+  stopTransfers(): void
   /** This node's device id, as other nodes know it. */
   selfId(): string
   /** Is that device connected to this node now (it dialled in: a server behind a userspace VPN does)? */
@@ -161,6 +169,42 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
     reachable: (id) => replicator.status().some((link) => link.peer === id && link.ok),
   })
   tools.attach(host)
+  const transferRoot = deps.imageDir === undefined ? join(tmpdir(), 'agent-file-transfers', host.self().id) : join(dirname(deps.imageDir), 'file-transfers')
+  const relay = new TransferRelay(join(transferRoot, 'inbox'), async (target, chunk): Promise<TransferReply> => {
+    const value = await tools.callEphemeral(target, 'receive_file', { ...chunk })
+    if (typeof value !== 'object' || value === null) throw new Error('Invalid phone response')
+    const reply = value as Record<string, unknown>
+    if (reply['status'] === 'partial' && typeof reply['nextIndex'] === 'number') return { status: 'partial', nextIndex: reply['nextIndex'] }
+    if (reply['status'] === 'received' && typeof reply['bytes'] === 'number' && typeof reply['path'] === 'string') return { status: 'received', bytes: reply['bytes'], path: reply['path'] }
+    if (reply['status'] === 'hash_mismatch') return { status: 'hash_mismatch' }
+    throw new Error('Invalid phone response')
+  })
+  registerTransferRelayRoutes(host, relay)
+  const transfers = new TransferSender({
+    directory: join(transferRoot, 'outbox'),
+    peers: async () => mergePeers(await store.list('device'), deps.extraPeers?.() ?? [], host.self().id),
+    pass: deps.pass,
+    fetchFor: (peer) => pinnedFetch(peer.fp, 70_000),
+    local: {
+      connected: (target) => host.isConnected(target),
+      receive: (target, chunk) => relay.receive(host.self().id, target, chunk),
+      status: (id) => relay.status(host.self().id, id),
+    },
+  })
+  let transferTimer: ReturnType<typeof setInterval> | null = null
+  const startTransfers = (): void => {
+    if (transferTimer !== null) return
+    const run = (): void => { void relay.tick().catch(() => undefined); void transfers.tick().catch(() => undefined) }
+    run()
+    transferTimer = setInterval(run, 3000)
+    transferTimer.unref?.()
+  }
+  const stopTransfers = (): void => {
+    if (transferTimer !== null) clearInterval(transferTimer)
+    transferTimer = null
+  }
+  startTransfers()
+
   const runner = new DeviceToolRunner({
     store,
     selfId: () => host.self().id,
@@ -182,6 +226,9 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
   return {
     replicator,
     keeper,
+    transfers,
+    startTransfers,
+    stopTransfers,
     commands,
     tools,
     isConnected: (id) => host.isConnected(id),
@@ -195,6 +242,7 @@ export function registerDevicesSync(host: DevicesHost, deps: DevicesSyncDeps): D
     },
     stop: () => {
       replicator.stop()
+      stopTransfers()
       commands.stop()
       tools.stop()
       runner.stop()

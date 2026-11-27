@@ -190,3 +190,23 @@ describe('device commands and the tools that use them', () => {
     await waitFor(() => true)
   })
 })
+
+it('queues send_file for an explicitly selected phone and exposes transfer status', async () => {
+  const { store, commands } = await setup({ connected: false })
+  const dir = mkdtempSync(join(tmpdir(), 'agent-send-'))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'report.pdf')
+  writeFileSync(file, 'pdf')
+  const calls: string[] = []
+  const transfers = {
+    enqueue: async (_path: string, target: string) => { calls.push(target); return { id: 'transfer-id', status: 'queued' } },
+    status: async () => ({ id: 'transfer-id', status: 'sending', nextIndex: 1, chunkSize: 512, size: 2048 }),
+  }
+  const tools = deviceTools({ store, selfId: () => 'dev_pc', commands: () => commands, openLocal: () => {}, transfers: () => transfers as never, resolveTarget: async () => ({ id: 'dev_phone', name: 'Test Phone' }) })
+  const result = await toolNamed(tools, 'send_file').run({ path: file, device: 'phone' }, testContext())
+  expect(result).toContain('transfer-id')
+  expect(result).toContain('queued')
+  expect(calls).toEqual(['dev_phone'])
+  const progress = await toolNamed(tools, 'transfer_status').run({ transferId: 'transfer-id' }, testContext())
+  expect(progress).toContain('25%')
+})

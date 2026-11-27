@@ -37,11 +37,12 @@ export function attachDevicesSync(service: DevicesService, deps: AttachDeps): ()
     if (sync === null) {
       const { pairedPass: _pairedPass, ...rest } = deps
       sync = registerDevicesSync(service.host(), { ...rest, extraPeers, pass, onLinkState: () => service.linksChanged() })
-    } else sync.replicator.start()
+    } else { sync.replicator.start(); sync.startTransfers() }
     devicesState.sync = sync
   }
   const off = (): void => {
     sync?.replicator.stop()
+    sync?.stopTransfers()
     devicesState.sync = null
   }
   // Settings shows a device this node dials as linked while that link works, not only devices that dial in.

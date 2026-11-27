@@ -11,6 +11,7 @@ import { basename, isAbsolute } from 'node:path'
 
 import { MAIN_CHAT, schema, str, type Tool } from '@agent/core'
 
+import type { TransferSender } from '../devices/transfer-sender'
 import type { DataStore } from '../runtime/data'
 import { fileUrl, type DeviceCommands } from '../devices/commands'
 import { latestOrigin } from '../devices/origin'
@@ -21,12 +22,14 @@ export interface DeviceToolDeps {
   selfId: () => string
   /** The command sender, once the node server is running; null when Devices is off. */
   commands: () => DeviceCommands | null
+  transfers?: () => TransferSender | null
+  resolveTarget?: (ref: string, chat: string) => Promise<{ id: string; name: string } | { error: string }>
   /** Opens a link in the person's own browser on this computer. */
   openLocal: (url: string) => void
 }
 
 export function deviceTools(deps: DeviceToolDeps): Tool[] {
-  return [openUrlTool(deps), sendFileTool(deps)]
+  return [openUrlTool(deps), sendFileTool(deps), transferStatusTool(deps)]
 }
 
 function openUrlTool(deps: DeviceToolDeps): Tool {
@@ -62,7 +65,7 @@ function sendFileTool(deps: DeviceToolDeps): Tool {
       name: 'send_file',
       description:
         'Send a file on this computer to the device the user is using right now (their phone when they wrote from it). It lands in their downloads. When they are on this computer, the file is already here: give them its path.',
-      schema: schema(['path'], { path: str('Full path of the file on this computer'), name: str('File name to show, optional') }),
+      schema: schema(['path'], { path: str('Full path of the file on this computer'), name: str('File name to show, optional'), device: str('Optional linked device name or id') }),
     },
     run: async (input, ctx) => {
       const path = typeof input['path'] === 'string' ? input['path'].trim() : ''
@@ -72,6 +75,22 @@ function sendFileTool(deps: DeviceToolDeps): Tool {
       const chat = ctx.chat ?? MAIN_CHAT
       const origin = await latestOrigin(deps.store, chat)
       const commands = deps.commands()
+      const explicit = typeof input['device'] === 'string' ? input['device'].trim() : ''
+      const transfers = deps.transfers?.() ?? null
+      if (transfers !== null) {
+        const found = explicit === '' ? (origin === null ? null : { id: origin.deviceId, name: origin.name }) : await deps.resolveTarget?.(explicit, chat) ?? null
+        if (found === null) return explicit === '' ? `The user is on this computer, so the file is already here: ${path}` : 'Could not find the requested device.'
+        if ('error' in found) return found.error
+        if (found.id === deps.selfId()) return `The user is on this computer, so the file is already here: ${path}`
+        try {
+          const transfer = await transfers.enqueue(path, found.id, name)
+          void transfers.tick?.().catch(() => undefined)
+          return `Transfer ${transfer.id}: queued for ${found.name}. Use transfer_status to check progress.`
+        } catch (error) {
+          return `Could not queue ${name}: ${error instanceof Error ? error.message : String(error)}`
+        }
+      }
+      if (deps.transfers !== undefined && transfers === null && (explicit !== '' || (origin !== null && origin.deviceId !== deps.selfId()))) return 'Transfers are unavailable while Devices is off.'
       if (origin === null || origin.deviceId === deps.selfId() || commands === null) {
         return `The user is on this computer, so the file is already here: ${path}`
       }
@@ -80,6 +99,27 @@ function sendFileTool(deps: DeviceToolDeps): Tool {
       if (outcome.status === 'done') return `Sent ${name} to the user's ${origin.name}.`
       if (outcome.status === 'failed') return `The user's ${origin.name} could not take ${name}${outcome.note === '' ? '' : `: ${outcome.note}`}.`
       return outcome.note
+    },
+  }
+}
+
+function transferStatusTool(deps: DeviceToolDeps): Tool {
+  return {
+    spec: {
+      name: 'transfer_status',
+      description: 'Check the status of a file transfer by its transfer id.',
+      schema: schema(['transferId'], { transferId: str('Transfer id returned by send_file') }),
+    },
+    run: async (input) => {
+      const id = typeof input['transferId'] === 'string' ? input['transferId'] : ''
+      const transfers = deps.transfers?.() ?? null
+      if (transfers === null) return 'Transfers are unavailable while Devices is off.'
+      try {
+        const row = await transfers.status(id)
+        const percent = row.size === 0 ? (row.nextIndex > 0 ? 100 : 0) : Math.min(100, Math.floor(row.nextIndex * row.chunkSize * 100 / row.size))
+        const stage = row.status === 'sending' ? (percent === 100 ? ' 100% uploaded, waiting for phone' : ` ${percent}% uploaded`) : ''
+        return `Transfer ${row.id}: ${row.status}${stage}${row.reason === undefined ? '' : ` (${row.reason})`}`
+      } catch { return 'Transfer not found.' }
     },
   }
 }

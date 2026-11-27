@@ -196,6 +196,7 @@ interface Waiter {
 
 export class DeviceToolHub {
   private host: DevicesHost | null = null
+  private readonly ephemeral = new Map<string, { target: string; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private readonly waiters = new Map<string, Waiter>()
   /**
    * Late results already handed on, by command id. Marked before the first await: two change events for the same
@@ -251,6 +252,11 @@ export class DeviceToolHub {
   }
 
   stop(): void {
+    for (const pending of this.ephemeral.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(new Error('Devices stopped'))
+    }
+    this.ephemeral.clear()
     this.questions.clear()
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
@@ -377,6 +383,25 @@ export class DeviceToolHub {
     return [...able].sort((a, b) => (heavy ? Number(phone(a)) - Number(phone(b)) : 0) || compareDeviceOrder(a, b))[0] ?? null
   }
 
+  /** Transfer chunks stay on the wire, not in the replicated command history. */
+  async callEphemeral(target: string, tool: string, args: JsonObject): Promise<unknown> {
+    if (tool !== 'receive_file') throw new Error('This channel is only for file reception')
+    const host = this.host
+    if (host === null || !host.isConnected(target)) throw new Error('Device connection unavailable')
+    const facts = host.factsOf(target)
+    if (!cleanTools(facts?.tools).some((item) => item.name === tool)) throw new Error('Device does not offer receive_file')
+    const id = `file_${randomUUID()}`
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.ephemeral.delete(id)
+        reject(new Error('Device did not confirm the chunk'))
+      }, this.deps.waitMs ?? DEFAULT_DEADLINE_MS)
+      timer.unref?.()
+      this.ephemeral.set(id, { target, resolve, reject, timer })
+      host.emit(target, 'device.command', { id, kind: 'tool', tool, args, chatId: MAIN_CHAT, deadlineMs: DEFAULT_DEADLINE_MS })
+    })
+  }
+
   /** Call one tool on one device and wait for its answer (up to the deadline). */
   async call(ref: string, tool: string, args: JsonObject, chat: string = MAIN_CHAT, ctx?: ToolContext): Promise<ToolOutcome> {
     // What connected devices offer right now (a phone that just said hello).
@@ -436,8 +461,32 @@ export class DeviceToolHub {
     return this.outcome(done, row.name)
   }
 
+  async resolveFileTarget(ref: string, chat: string): Promise<{ id: string; name: string } | { error: string }> {
+    if (ref.toLowerCase() === 'best') {
+      const origin = await latestOrigin(this.deps.store, chat)
+      if (origin !== null && origin.deviceId !== this.deps.selfId()) {
+        const row = await this.deps.store.get('device', origin.deviceId)
+        if (row !== null && !row.revoked) return { id: row.id, name: row.name }
+      }
+      const rows = (await this.deps.store.list('device')).filter((row) => !row.revoked && (row.kind === 'phone' || row.kind === 'tablet')).sort(compareDeviceOrder)
+      if (rows[0] !== undefined) return { id: rows[0].id, name: rows[0].name }
+      return { error: 'No linked phone was found.' }
+    }
+    const result = await this.resolve(ref, 'receive_file', chat)
+    return 'error' in result ? result : { id: result.row.id, name: result.row.name }
+  }
+
   /** A device's answer over RPC. Only the target may answer its command. */
   async result(deviceId: string, id: string, ok: boolean, value: unknown): Promise<boolean> {
+    const pending = this.ephemeral.get(id)
+    if (pending !== undefined) {
+      if (pending.target !== deviceId) return false
+      this.ephemeral.delete(id)
+      clearTimeout(pending.timer)
+      if (ok) pending.resolve(value)
+      else pending.reject(new Error(typeof value === 'string' ? value : 'Device rejected the chunk'))
+      return true
+    }
     const row = await this.deps.store.get('device_command', id)
     if (row === null || row.target !== deviceId) return false
     if (row.status === 'done' || row.status === 'failed' || row.status === 'expired') return true
@@ -746,6 +795,7 @@ export function withDeviceArg(tools: Tool[], hub: () => DeviceToolHub | null): T
   return tools.map((tool) => {
     const name = tool.spec.name
     const browser = name.startsWith('browser_')
+    if (name === 'send_file' && (tool.spec.schema['properties'] as Record<string, unknown> | undefined)?.['device'] !== undefined) return tool
     if (!browser && !DEVICE_ARG_TOOLS.has(name)) return tool
     const props = (tool.spec.schema['properties'] ?? {}) as JsonObject
     return {

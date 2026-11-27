@@ -512,6 +512,8 @@ export async function startHeadlessRuntime(options: HeadlessOptions): Promise<He
       devices: {
         selfId: () => devicesState.sync?.selfId() ?? '',
         commands: () => devicesState.sync?.commands ?? null,
+        transfers: () => devicesState.sync?.transfers ?? null,
+        resolveTarget: async (ref, chat) => devicesState.sync?.tools.resolveFileTarget(ref, chat) ?? { error: 'Devices is off.' },
         // No screen here: a link the person should see goes to the device they asked from (device commands).
         openLocal: (url) => {
           void actions.openUrl(url)

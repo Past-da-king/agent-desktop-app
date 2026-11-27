@@ -1523,6 +1523,8 @@ async function startServices(win: BrowserWindow): Promise<void> {
     devices: {
       selfId: () => devicesState.sync?.selfId() ?? '',
       commands: () => devicesState.sync?.commands ?? null,
+      transfers: () => devicesState.sync?.transfers ?? null,
+      resolveTarget: async (ref, chat) => devicesState.sync?.tools.resolveFileTarget(ref, chat) ?? { error: 'Devices is off.' },
       openLocal: (url) => {
         if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
       },
