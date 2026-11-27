@@ -15,10 +15,20 @@ export function withOutboundClaims(tools: Tool[]): Tool[] {
       const key = createHash('sha256').update(JSON.stringify([ctx.requestId, url, input['body'] ?? ''])).digest('hex')
       let claim: { state?: string }
       try { claim = await service.outboundCall('outbound.claim', [key]) as { state?: string } } catch { return 'Send held: authority unreachable.' }
-      if (claim.state !== 'granted') return claim.state === 'sent' ? 'Already sent.' : 'Send held: already in progress or outcome unknown.'
+      for (let i = 0; claim.state === 'in_progress' && i < 50; i++) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        try { claim = await service.outboundCall('outbound.claim', [key]) as { state?: string; result?: string } } catch { return 'Send held: authority unreachable.' }
+      }
+      if (claim.state !== 'granted') return claim.state === 'sent' ? 'already_sent: ' + String((claim as { result?: string }).result ?? '') : 'Send held: already in progress or outcome unknown.'
       try {
         const result = await tool.run(input, ctx)
-        await service.outboundCall('outbound.report', [key, { state: 'unknown' }]).catch(() => undefined)
+        let receipt: string | undefined
+        const body = result.match(/\nBody(?: \([^\n]*\))?:\n([^\n]+)/)?.[1]
+        try {
+          const parsed = JSON.parse(body ?? '') as { ok?: unknown; ts?: unknown }
+          if (parsed.ok === true && typeof parsed.ts === 'string' && /^\d+\.\d+$/.test(parsed.ts)) receipt = parsed.ts
+        } catch { /* keep unknown when the provider response is not conclusive */ }
+        await service.outboundCall('outbound.report', [key, receipt ? { state: 'sent', result: receipt } : { state: 'unknown' }]).catch(() => undefined)
         return result
       } catch (error) {
         await service.outboundCall('outbound.report', [key, { state: 'unknown' }]).catch(() => undefined)
