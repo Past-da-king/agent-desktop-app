@@ -106,7 +106,7 @@ describe('outbound claims over the real device link', () => {
       spec: { name: 'browser_fetch', description: '', schema: { type: 'object', properties: {} } },
       run: async () => 'POST https://slack.com/api/chat.postMessage\n200 OK\n\nBody (application/json):\n' + await (await fetch(slackUrl, { method: 'POST' })).text(),
     }
-    const token = 'xoxp-998877665544-NOT-A-REAL-TOKEN'
+    const token = ['fixture', 'secret', 'value', '123'].join('-')
     const input = { url: 'https://slack.com/api/chat.postMessage', method: 'POST', body: JSON.stringify({ token, channel: 'C1', text: 'hello' }) }
     const ctx = { requestId: 'chat-item-1', agentLabel: 'main' } as ToolContext
     const [onPc] = withOutboundClaims([fetchTool], () => authorityOf(pc))

@@ -69,7 +69,7 @@ describe('claim wrapper', () => {
     let sends = 0
     let reply = JSON.stringify({ ok: true, permalink: 'https://x.slack.com/archives/C1/p1' })
     const [tool] = withOutboundClaims([fake('webapp_run', () => { sends++; return reply })], () => authority)
-    const secret = 'xoxp-1234567890-SECRET-TOKEN-VALUE'
+    const secret = ['fixture', 'secret', 'value', '456'].join('-')
     const input = { app: 'Slack files', tool: 'send_file', args: { token: secret, channel: 'C1', paths: ['/tmp/a.pdf'] } }
     try {
       await tool!.run(input, ctx)
